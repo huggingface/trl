@@ -16,7 +16,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
-        with: { ref: v0.23-release }
+        with: { ref: v0.24-release }
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5

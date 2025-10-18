@@ -28,6 +28,7 @@ class BaseTrainer(Trainer):
     _tag_names = []
     _name = "Base"
     _paper = {}
+    _template_file = None
 
     def create_model_card(
         self,
@@ -78,6 +79,7 @@ class BaseTrainer(Trainer):
             comet_url=get_comet_experiment_url(),
             trainer_name=self._name,
             trainer_citation=self._paper.get("citation"),
+            template_file=self._template_file,
             paper_title=self._paper.get("title"),
             paper_id=self._paper.get("id"),
         )

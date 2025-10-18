@@ -90,35 +90,33 @@ def setup_chat_format(
     format: Optional[Literal["chatml"]] = "chatml",
     resize_to_multiple_of: Optional[int] = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+    # docstyle-ignore
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
     embedding layer of the model based on the new special tokens.
 
-    <Tip warning="true">
-
-    This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
-
-    </Tip>
+    > [!WARNING]
+    > This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
 
     If the model already has a chat template, this will throw an error. If you want to overwrite it, please set
     `tokenizer.chat_template` to `None`.
 
     Args:
-        model (`~transformers.PreTrainedModel`): The model to be modified.
-        tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
+        model ([`~transformers.PreTrainedModel`]): The model to be modified.
+        tokenizer ([`~transformers.PreTrainedTokenizer`]): The tokenizer to be modified.
         format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
         resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
-        model (`~transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The modified model.
-        tokenizer (`~transformers.PreTrainedTokenizer`):
+        tokenizer ([`~transformers.PreTrainedTokenizer`]):
             The modified tokenizer.
     """
     warnings.warn(
         "The `setup_chat_format` function is deprecated and will be removed in version 0.26.0. Please use "
         "`clone_chat_template` instead.",
-        DeprecationWarning,
+        FutureWarning,
     )
     # check if model already had a chat template
     if tokenizer.chat_template is not None:
@@ -180,9 +178,9 @@ def clone_chat_template(
       the embedding dimensions.
 
     Args:
-        model (`PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             Model to update.
-        tokenizer (`PreTrainedTokenizer`):
+        tokenizer ([`~transformers.PreTrainedTokenizer`]):
             Tokenizer to update.
         source_tokenizer_path (`str`):
             Path or identifier of the pretrained tokenizer to clone from.
@@ -191,9 +189,9 @@ def clone_chat_template(
             new vocabulary size to the nearest multiple of this value.
 
     Returns:
-        model (`PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             Updated model with resized token embeddings and EOS token configured.
-        tokenizer (`~transformers.PreTrainedTokenizer`):
+        tokenizer ([`~transformers.PreTrainedTokenizer`]):
             Updated tokenizer with the chat template and special tokens applied.
         added_tokens (`list[int]`):
             List of tokens that were added to the tokenizer from the source tokenizer.
@@ -223,7 +221,8 @@ def clone_chat_template(
     # Set the EOS token from the source tokenizer (important for generation)
     tokenizer.eos_token = tokenizer_source.eos_token
     model.config.eos_token_id = tokenizer.eos_token_id
-    model.generation_config.eos_token_id = tokenizer.eos_token_id
+    if model.generation_config is not None:  # for SequenceClassification models, generation_config is None
+        model.generation_config.eos_token_id = tokenizer.eos_token_id
 
     # Resize model embeddings to include any new tokens, optionally rounding up to a multiple
     model.resize_token_embeddings(
@@ -317,7 +316,7 @@ def unwrap_model_for_generation(
     Args:
         model (`Union[DistributedDataParallel, DeepSpeedEngine]`):
             Model to be unwrapped.
-        accelerator (`~accelerate.Accelerator`):
+        accelerator ([`~accelerate.Accelerator`]):
             Accelerator instance managing the model.
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which

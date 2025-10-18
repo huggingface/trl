@@ -81,7 +81,7 @@ This guide provides an overview of the dataset formats and types supported by ea
     <td>Stepwise supervision</td>
     <td>
       <pre><code>{"prompt": "Which number is larger, 9.8 or 9.11?",
- "completions": ["The fractional part of 9.8 is 0.8.", 
+ "completions": ["The fractional part of 9.8 is 0.8.",
                  "The fractional part of 9.11 is 0.11.",
                  "0.11 is greater than 0.8.",
                  "Hence, 9.11 > 9.8."],
@@ -289,31 +289,28 @@ prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the
 
 For examples of prompt-only datasets, refer to the [Prompt-only datasets collection](https://huggingface.co/collections/trl-lib/prompt-only-datasets-677ea25245d20252cea00368).
 
-<Tip>
-
-While both the prompt-only and language modeling types are similar, they differ in how the input is handled. In the prompt-only type, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling type, the input is treated as a complete sentence or sequence. These two types are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each type:
-
-```python
-from transformers import AutoTokenizer
-from trl import apply_chat_template
-
-tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-
-# Example for prompt-only type
-prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
-apply_chat_template(prompt_only_example, tokenizer)
-# Output: {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
-
-# Example for language modeling type
-lm_example = {"messages": [{"role": "user", "content": "What color is the sky?"}]}
-apply_chat_template(lm_example, tokenizer)
-# Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
-```
-
-- The prompt-only output includes a `'<|assistant|>\n'`, indicating the beginning of the assistant’s turn and expecting the model to generate a completion.
-- In contrast, the language modeling output treats the input as a complete sequence and terminates it with `'<|endoftext|>'`, signaling the end of the text and not expecting any additional content.
-
-</Tip>
+> [!TIP]
+> While both the prompt-only and language modeling types are similar, they differ in how the input is handled. In the prompt-only type, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling type, the input is treated as a complete sentence or sequence. These two types are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each type:
+>
+> ```python
+> from transformers import AutoTokenizer
+> from trl import apply_chat_template
+>
+> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+>
+> # Example for prompt-only type
+> prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
+> apply_chat_template(prompt_only_example, tokenizer)
+> # Output: {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
+>
+> # Example for language modeling type
+> lm_example = {"messages": [{"role": "user", "content": "What color is the sky?"}]}
+> apply_chat_template(lm_example, tokenizer)
+> # Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
+> ```
+>
+> - The prompt-only output includes a `'<|assistant|>\n'`, indicating the beginning of the assistant’s turn and expecting the model to generate a completion.
+> - In contrast, the language modeling output treats the input as a complete sequence and terminates it with `'<|endoftext|>'`, signaling the end of the text and not expecting any additional content.
 
 #### Prompt-completion
 
@@ -390,30 +387,27 @@ For examples of stepwise supervision datasets, refer to the [Stepwise supervisio
 
 Choosing the right dataset type depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset types supported by each TRL trainer.
 
-| Trainer                 | Expected dataset type                                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------ |
-| [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
-| [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
-| [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
-| [`GKDTrainer`]          | [Prompt-completion](#prompt-completion)                                                                |
-| [`GRPOTrainer`]         | [Prompt-only](#prompt-only)                                                                            |
-| [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
-| [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                                                                            |
-| [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                                                                            |
-| [`ORPOTrainer`]         | [Preference (explicit prompt recommended)](#preference)                                                |
-| [`PPOTrainer`]          | Tokenized language modeling                                                                            |
-| [`PRMTrainer`]          | [Stepwise supervision](#stepwise-supervision)                                                          |
-| [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference)                                                |
-| [`RLOOTrainer`]         | [Prompt-only](#prompt-only)                                                                            |
-| [`SFTTrainer`]          | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion)                     |
-| [`XPOTrainer`]          | [Prompt-only](#prompt-only)                                                                            |
+| Trainer | Expected dataset type |
+| --- | --- |
+| [`BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
+| [`CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`DPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`GKDTrainer`] | [Prompt-completion](#prompt-completion) |
+| [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
+| [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
+| [`NashMDTrainer`] | [Prompt-only](#prompt-only) |
+| [`OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
+| [`ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`PPOTrainer`] | Tokenized language modeling |
+| [`PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
+| [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
+| [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
+| [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
+| [`XPOTrainer`] | [Prompt-only](#prompt-only) |
 
-<Tip>
-
-TRL trainers only support standard dataset formats, [for now](https://github.com/huggingface/trl/issues/2071). If you have a conversational dataset, you must first convert it into a standard format.
-For more information on how to work with conversational datasets, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
-
-</Tip>
+> [!TIP]
+> TRL trainers only support standard dataset formats, [for now](https://github.com/huggingface/trl/issues/2071). If you have a conversational dataset, you must first convert it into a standard format.
+> For more information on how to work with conversational datasets, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
 ## Working with conversational datasets in TRL
 
@@ -422,7 +416,7 @@ Fortunately, TRL offers tools to easily handle this conversion, which are detail
 
 ### Converting a conversational dataset into a standard dataset
 
-To convert a conversational dataset into a standard dataset, you need to _apply a chat template_ to the dataset. A chat template is a predefined structure that typically includes placeholders for user and assistant messages. This template is provided by the tokenizer of the model you use.
+To convert a conversational dataset into a standard dataset, you need to *apply a chat template* to the dataset. A chat template is a predefined structure that typically includes placeholders for user and assistant messages. This template is provided by the tokenizer of the model you use.
 
 For detailed instructions on using chat templating, refer to the [Chat templating section in the `transformers` documentation](https://huggingface.co/docs/transformers/en/chat_templating).
 
@@ -465,27 +459,21 @@ dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 #  'completion': ['It is blue.<|end|>\n<|endoftext|>', 'In the sky.<|end|>\n<|endoftext|>']}
 ```
 
-<Tip warning={true}>
+> [!WARNING]
+> We recommend using the [`apply_chat_template`] function instead of calling `tokenizer.apply_chat_template` directly. Handling chat templates for non-language modeling datasets can be tricky and may result in errors, such as mistakenly placing a system prompt in the middle of a conversation.
+> For additional examples, see [#1930 (comment)](https://github.com/huggingface/trl/pull/1930#issuecomment-2292908614). The [`apply_chat_template`] is designed to handle these intricacies and ensure the correct application of chat templates for various tasks.
 
-We recommend using the [`apply_chat_template`] function instead of calling `tokenizer.apply_chat_template` directly. Handling chat templates for non-language modeling datasets can be tricky and may result in errors, such as mistakenly placing a system prompt in the middle of a conversation.
-For additional examples, see [#1930 (comment)](https://github.com/huggingface/trl/pull/1930#issuecomment-2292908614). The [`apply_chat_template`] is designed to handle these intricacies and ensure the correct application of chat templates for various tasks.
-
-</Tip>
-
-<Tip warning={true}>
-
-It's important to note that chat templates are model-specific. For example, if you use the chat template from [meta-llama/Meta-Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct) with the above example, you get a different output:
-
-```python
-apply_chat_template(example, AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct"))
-# Output:
-# {'prompt': '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n',
-#  'completion': 'It is blue.<|im_end|>\n'}
-```
-
-Always use the chat template associated with the model you're working with. Using the wrong template can lead to inaccurate or unexpected results.
-
-</Tip>
+> [!WARNING]
+> It's important to note that chat templates are model-specific. For example, if you use the chat template from [meta-llama/Meta-Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct) with the above example, you get a different output:
+>
+> ```python
+> apply_chat_template(example, AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct"))
+> # Output:
+> # {'prompt': '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n',
+> #  'completion': 'It is blue.<|im_end|>\n'}
+> ```
+>
+> Always use the chat template associated with the model you're working with. Using the wrong template can lead to inaccurate or unexpected results.
 
 ## Using any dataset with TRL: preprocessing and conversion
 
@@ -531,15 +519,15 @@ This section provides example code to help you convert between different dataset
 
 For simplicity, some of the examples below do not follow this recommendation and use the standard format. However, the conversions can be applied directly to the conversational format without modification.
 
-| From \ To                       | Language modeling                                                       | Prompt-completion                                                       | Prompt-only                                                       | Preference with implicit prompt                           | Preference                                                | Unpaired preference                                                       | Stepwise supervision |
-| ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------- |
-| Language modeling               | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
-| Prompt-completion               | [🔗](#from-prompt-completion-to-language-modeling-dataset)               | N/A                                                                     | [🔗](#from-prompt-completion-to-prompt-only-dataset)               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
-| Prompt-only                     | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
-| Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A                                                       | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) | N/A                  |
-| Preference                      | [🔗](#from-preference-to-language-modeling-dataset)                      | [🔗](#from-preference-to-prompt-completion-dataset)                      | [🔗](#from-preference-to-prompt-only-dataset)                      | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A                                                       | [🔗](#from-preference-to-unpaired-preference-dataset)                      | N/A                  |
-| Unpaired preference             | [🔗](#from-unpaired-preference-to-language-modeling-dataset)             | [🔗](#from-unpaired-preference-to-prompt-completion-dataset)             | [🔗](#from-unpaired-preference-to-prompt-only-dataset)             | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
-| Stepwise supervision            | [🔗](#from-stepwise-supervision-to-language-modeling-dataset)            | [🔗](#from-stepwise-supervision-to-prompt-completion-dataset)            | [🔗](#from-stepwise-supervision-to-prompt-only-dataset)            | N/A                                                       | N/A                                                       | [🔗](#from-stepwise-supervision-to-unpaired-preference-dataset)            | N/A                  |
+| From \ To | Language modeling | Prompt-completion | Prompt-only | Preference with implicit prompt | Preference | Unpaired preference | Stepwise supervision |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Language modeling | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Prompt-completion | [🔗](#from-prompt-completion-to-language-modeling-dataset) | N/A | [🔗](#from-prompt-completion-to-prompt-only-dataset) | N/A | N/A | N/A | N/A |
+| Prompt-only | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) | N/A |
+| Preference | [🔗](#from-preference-to-language-modeling-dataset) | [🔗](#from-preference-to-prompt-completion-dataset) | [🔗](#from-preference-to-prompt-only-dataset) | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A | [🔗](#from-preference-to-unpaired-preference-dataset) | N/A |
+| Unpaired preference | [🔗](#from-unpaired-preference-to-language-modeling-dataset) | [🔗](#from-unpaired-preference-to-prompt-completion-dataset) | [🔗](#from-unpaired-preference-to-prompt-only-dataset) | N/A | N/A | N/A | N/A |
+| Stepwise supervision | [🔗](#from-stepwise-supervision-to-language-modeling-dataset) | [🔗](#from-stepwise-supervision-to-prompt-completion-dataset) | [🔗](#from-stepwise-supervision-to-prompt-only-dataset) | N/A | N/A | [🔗](#from-stepwise-supervision-to-unpaired-preference-dataset) | N/A |
 
 ### From prompt-completion to language modeling dataset
 
@@ -715,13 +703,10 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
-<Tip warning={true}>
-
-Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
-Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
-This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
-
-</Tip>
+> [!WARNING]
+> Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+> Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+> This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
 
 ### From preference to language modeling dataset
 
@@ -856,13 +841,10 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
-<Tip warning={true}>
-
-Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
-Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
-This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
-
-</Tip>
+> [!WARNING]
+> Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+> Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+> This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
 
 ### From unpaired preference to language modeling dataset
 
@@ -1061,3 +1043,23 @@ An example of a conversational vision dataset is the [openbmb/RLAIF-V-Dataset](h
   width="100%"
   height="560px"
 ></iframe>
+
+> [!NOTE]
+> Mixing text-only and vision-language data in the dataset is possible, but it requires `transformers` version 4.57.0 or later. Example:
+>
+> ```python
+> dataset = Dataset.from_dict({
+>     "prompt": [
+>         [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky in the image?"}]}],
+>         [{"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]}],
+>     ],
+>     "completion": [
+>         [{"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]}],
+>         [{"role": "assistant", "content": [{"type": "text", "text": "Paris."}]}],
+>     ],
+>     "images": [
+>         [PIL.Image.open("path/to/sky_image1.png")],
+>         [],
+>     ],
+> })
+> ```

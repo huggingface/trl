@@ -31,6 +31,7 @@ _fastapi_available = _is_package_available("fastapi")
 _joblib_available = _is_package_available("joblib")
 _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
 _llm_blender_available = _is_package_available("llm_blender")
+_math_verify_available = _is_package_available("math_verify")
 _mergekit_available = _is_package_available("mergekit")
 _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
@@ -61,6 +62,10 @@ def is_llm_blender_available() -> bool:
     return _llm_blender_available
 
 
+def is_math_verify_available() -> bool:
+    return _math_verify_available
+
+
 def is_mergekit_available() -> bool:
     return _mergekit_available
 
@@ -82,13 +87,10 @@ def is_uvicorn_available() -> bool:
 
 
 def is_vllm_available() -> bool:
-    if _vllm_available and (
-        version.parse(_vllm_version) < version.parse("0.10.0")
-        or version.parse(_vllm_version) > version.parse("0.10.2")
-    ):
+    if _vllm_available and version.parse(_vllm_version) != version.parse("0.10.2"):
         warnings.warn(
-            "TRL currently only supports vLLM versions `0.10.0`, `0.10.1`, and `0.10.2`. You have version "
-            f"{_vllm_version} installed. We recommend to install one of these versions to avoid compatibility issues.",
+            f"TRL currently only supports vLLM version `0.10.2`. You have version {_vllm_version} installed. We "
+            "recommend to install this version to avoid compatibility issues.",
             UserWarning,
         )
     return _vllm_available

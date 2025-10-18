@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import inspect
+import os
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from pathlib import Path
@@ -79,17 +81,17 @@ class ORPOTrainer(BaseTrainer):
     Initialize ORPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
-            The model to train, preferably an `AutoModelForSequenceClassification`.
-        args (`ORPOConfig`):
+        model ([`~transformers.PreTrainedModel`]):
+            The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
+        args ([`ORPOConfig`]):
             The ORPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
@@ -144,6 +146,13 @@ class ORPOTrainer(BaseTrainer):
         peft_config: Optional[dict] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
     ):
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
@@ -463,7 +472,7 @@ class ORPOTrainer(BaseTrainer):
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
             num_diff_tokens = sum(
-                [a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])]
+                a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])
             )
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:

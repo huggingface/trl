@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import itertools
 import textwrap
-import unittest
 from time import strftime
 
 from datasets import Dataset, DatasetDict
@@ -33,6 +33,7 @@ from trl.data_utils import (
     maybe_unpair_preference_dataset,
     pack_dataset,
     prepare_multimodal_messages,
+    prepare_multimodal_messages_vllm,
     truncate_dataset,
     unpair_preference_dataset,
 )
@@ -40,14 +41,14 @@ from trl.data_utils import (
 from .testing_utils import TrlTestCase
 
 
-class PrepareMultimodalMessagesTester(unittest.TestCase):
+class TestPrepareMultimodalMessages:
     def test_basic_user_assistant_conversation(self):
         """Test basic conversation with user and assistant messages."""
         messages = [
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
-        image = Image.new("RGB", (32, 32), color="red")
+        image = Image.new("RGB", (10, 10), color="blue")
         messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
@@ -61,7 +62,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             },
         ]
 
-        self.assertEqual(messages, expected)
+        assert messages == expected
 
     def test_first_user_message_gets_image(self):
         """Test that only the first user message gets an image."""
@@ -71,7 +72,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "How about the grass?"},
         ]
 
-        image = Image.new("RGB", (32, 32), color="red")
+        image = Image.new("RGB", (10, 10), color="blue")
         messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
@@ -89,7 +90,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             },
         ]
 
-        self.assertEqual(messages, expected)
+        assert messages == expected
 
     def test_multiple_images(self):
         """Test that multiple images are added to the first user message."""
@@ -97,7 +98,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
-        images = [Image.new("RGB", (32, 32), color=color) for color in ["red", "green", "blue"]]
+        images = [Image.new("RGB", (10, 10), color=color) for color in ["red", "green", "blue"]]
         messages = prepare_multimodal_messages(messages, images=images)
 
         expected = [
@@ -116,7 +117,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             },
         ]
 
-        self.assertEqual(messages, expected)
+        assert messages == expected
 
     def test_system_message_transformation(self):
         """Test that system messages are properly transformed."""
@@ -125,7 +126,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "What color is the sky?"},
         ]
 
-        image = Image.new("RGB", (32, 32), color="red")
+        image = Image.new("RGB", (10, 10), color="blue")
         messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
@@ -139,7 +140,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             },
         ]
 
-        self.assertEqual(messages, expected)
+        assert messages == expected
 
     def test_already_prepared_messages_unchanged(self):
         """Test that messages with list content are not modified."""
@@ -149,10 +150,10 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
         ]
 
-        image = Image.new("RGB", (32, 32), color="red")
+        image = Image.new("RGB", (10, 10), color="blue")
         messages = prepare_multimodal_messages(messages, images=[image])
 
-        expected = messages = [
+        expected = [
             {
                 "role": "system",
                 "content": [{"type": "text", "text": "You are a helpful assistant"}],
@@ -167,10 +168,129 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             },
         ]
 
-        self.assertEqual(messages, expected)
+        assert messages == expected
+
+    def test_mixed_prepared_and_unprepared_messages(self):
+        """Test handling of mixed prepared and unprepared messages."""
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {"role": "user", "content": "What about the grass?"},
+        ]
+
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = prepare_multimodal_messages(messages, images=[image])
+
+        expected = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are a helpful assistant"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
+        ]
+
+        assert messages == expected
 
 
-class IsConversationalTester(TrlTestCase):
+class TestPrepareMultimodalMessagesVLLM:
+    def test_single_image_conversion(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                    {"type": "text", "text": "What color is the sky?"},
+                ],
+            }
+        ]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        # Original should remain unchanged (deepcopy test)
+        assert messages[0]["content"][0]["type"] == "image"
+
+        # Converted version should have correct structure
+        assert result[0]["content"][0]["type"] == "image_pil"
+        assert "image_pil" in result[0]["content"][0]
+        assert "image" not in result[0]["content"][0]
+        assert isinstance(result[0]["content"][0]["image_pil"], Image.Image)
+        assert result[0]["content"][1]["type"] == "text"
+
+    def test_mixed_content_conversion(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is the sky?"},
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                ],
+            }
+        ]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        # The image part should be converted, text should be unchanged
+        assert result[0]["content"][0]["type"] == "text"
+        assert result[0]["content"][1]["type"] == "image_pil"
+
+    def test_no_images(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "What color is the sky?"}]}]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        # Should be identical since there are no images
+        assert result == messages
+        # And a deepcopy — not the same object
+        assert result is not messages
+        assert result[0] is not messages[0]
+
+    def test_multiple_messages(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is the sky?"},
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
+        ]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        assert result[0]["content"][1]["type"] == "image_pil"
+        assert result[1]["content"][0]["type"] == "text"
+        assert result[1]["content"][0]["text"] == "It is blue."
+
+    def test_deepcopy_integrity(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is the sky?"},
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                ],
+            },
+        ]
+        original = copy.deepcopy(messages)
+
+        _ = prepare_multimodal_messages_vllm(messages)
+
+        # Original should not be mutated
+        assert messages == original
+
+
+class TestIsConversational(TrlTestCase):
     conversational_examples = [
         {  # Language modeling
             "messages": [
@@ -273,14 +393,14 @@ class IsConversationalTester(TrlTestCase):
 
     @parameterized.expand(itertools.product(conversational_examples))
     def test_conversational(self, example):
-        self.assertTrue(is_conversational(example))
+        assert is_conversational(example)
 
     @parameterized.expand(itertools.product(non_conversational_examples))
     def test_non_conversational(self, example):
-        self.assertFalse(is_conversational(example))
+        assert not is_conversational(example)
 
 
-class IsConversationalFromValueTester(TrlTestCase):
+class TestIsConversationalFromValue(TrlTestCase):
     def test_positive_1(self):
         example = {
             "conversations": [
@@ -288,7 +408,7 @@ class IsConversationalFromValueTester(TrlTestCase):
                 {"from": "assistant", "value": "It is blue."},
             ],
         }
-        self.assertTrue(is_conversational_from_value(example))
+        assert is_conversational_from_value(example)
 
     def test_negative_1(self):
         example = {
@@ -297,14 +417,14 @@ class IsConversationalFromValueTester(TrlTestCase):
                 {"role": "assistant", "content": "It is blue."},
             ],
         }
-        self.assertFalse(is_conversational_from_value(example))
+        assert not is_conversational_from_value(example)
 
     def test_negative_2(self):
         example = {"text": "The sky is blue."}
-        self.assertFalse(is_conversational_from_value(example))
+        assert not is_conversational_from_value(example)
 
 
-class ApplyChatTemplateTester(TrlTestCase):
+class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
         "trl-internal-testing/tiny-DbrxForCausalLM",
@@ -375,24 +495,24 @@ class ApplyChatTemplateTester(TrlTestCase):
         result = apply_chat_template(example, tokenizer)
 
         # Checking if the result is a dictionary
-        self.assertIsInstance(result, dict)
+        assert isinstance(result, dict)
 
         # The chat template should be applied to the following keys
         for key in ["prompt", "chosen", "rejected", "completion"]:
             if key in example:
-                self.assertIn(key, result)
-                self.assertIsInstance(result[key], str)
+                assert key in result
+                assert isinstance(result[key], str)
 
         # Exception for messages, the key is "text" once the chat template is applied
         if "messages" in example:
-            self.assertIn("text", result)
-            self.assertIsInstance(result["text"], str)
+            assert "text" in result
+            assert isinstance(result["text"], str)
 
         # The label should be kept
         if "label" in example:
-            self.assertIn("label", result)
-            self.assertIsInstance(result["label"], bool)
-            self.assertEqual(result["label"], example["label"])
+            assert "label" in result
+            assert isinstance(result["label"], bool)
+            assert result["label"] == example["label"]
 
     # both conversational and non-conversational examples
     @parameterized.expand(itertools.product(tokenizers, conversational_examples + non_conversational_examples))
@@ -401,24 +521,47 @@ class ApplyChatTemplateTester(TrlTestCase):
         result = maybe_apply_chat_template(example, tokenizer)
 
         # Checking if the result is a dictionary
-        self.assertIsInstance(result, dict)
+        assert isinstance(result, dict)
 
         # The chat template should be applied to the following keys
         for key in ["prompt", "chosen", "rejected", "completion"]:
             if key in example:
-                self.assertIn(key, result)
-                self.assertIsInstance(result[key], str)
+                assert key in result
+                assert isinstance(result[key], str)
 
         # Exception for messages, the key is "text" once the chat template is applied
         if "messages" in example:
-            self.assertIn("text", result)
-            self.assertIsInstance(result["text"], str)
+            assert "text" in result
+            assert isinstance(result["text"], str)
 
         # The label should be kept
         if "label" in example:
-            self.assertIn("label", result)
-            self.assertIsInstance(result["label"], bool)
-            self.assertEqual(result["label"], example["label"])
+            assert "label" in result
+            assert isinstance(result["label"], bool)
+            assert result["label"] == example["label"]
+
+    def test_apply_chat_template_with_chat_template_kwargs(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+
+        example = {
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            # with this tokenizer, when you pass enable_thinking=False, it will add "<think>\n\n</think>\n\n"
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        result = apply_chat_template(example, tokenizer)
+
+        # docstyle-ignore
+        expected = textwrap.dedent("""\
+        <|im_start|>user
+        What color is the sky?<|im_end|>
+        <|im_start|>assistant
+        <think>
+
+        </think>
+
+        """)
+
+        assert result["prompt"] == expected
 
     def test_apply_chat_template_with_tools(self):
         tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
@@ -443,16 +586,16 @@ class ApplyChatTemplateTester(TrlTestCase):
         result_with_tools = apply_chat_template(test_case, tokenizer, tools=[get_current_temperature])
 
         # Verify tools are included in the output
-        self.assertIn("get_current_temperature", result_with_tools["prompt"])
+        assert "get_current_temperature" in result_with_tools["prompt"]
 
         # Test without tools
         result_without_tools = apply_chat_template(test_case, tokenizer, tools=None)
 
         # Verify tools are not included in the output
-        self.assertNotIn("get_current_temperature", result_without_tools["prompt"])
+        assert "get_current_temperature" not in result_without_tools["prompt"]
 
 
-class ApplyChatTemplateHarmonyTester(TrlTestCase):
+class TestApplyChatTemplateHarmony(TrlTestCase):
     def test_language_modeling(self):
         messages = {
             "messages": [
@@ -482,7 +625,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
 
-        self.assertEqual(output["text"], expected)
+        assert output["text"] == expected
 
     def test_prompt_only(self):
         messages = {
@@ -512,7 +655,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
 
-        self.assertEqual(output["prompt"], expected)
+        assert output["prompt"] == expected
 
     def test_prompt_completion(self):
         messages = {
@@ -546,8 +689,8 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
         <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
 
-        self.assertEqual(output["prompt"], expected_prompt)
-        self.assertEqual(output["completion"], expected_completion)
+        assert output["prompt"] == expected_prompt
+        assert output["completion"] == expected_completion
 
     def test_preference(self):
         messages = {
@@ -585,9 +728,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
         expected_chosen = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
         expected_rejected = "<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>"
 
-        self.assertEqual(output["prompt"], expected_prompt)
-        self.assertEqual(output["chosen"], expected_chosen)
-        self.assertEqual(output["rejected"], expected_rejected)
+        assert output["prompt"] == expected_prompt
+        assert output["chosen"] == expected_chosen
+        assert output["rejected"] == expected_rejected
 
     def test_preference_with_implicit_prompt(self):
         messages = {
@@ -637,8 +780,8 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>""")
 
-        self.assertEqual(output["chosen"], expected_chosen)
-        self.assertEqual(output["rejected"], expected_rejected)
+        assert output["chosen"] == expected_chosen
+        assert output["rejected"] == expected_rejected
 
     def test_unpaired_preference(self):
         messages = {
@@ -673,12 +816,12 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
         <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
 
-        self.assertEqual(output["prompt"], expected_prompt)
-        self.assertEqual(output["completion"], expected_completion)
-        self.assertTrue(output["label"])
+        assert output["prompt"] == expected_prompt
+        assert output["completion"] == expected_completion
+        assert output["label"]
 
 
-class UnpairPreferenceDatasetTester(TrlTestCase):
+class TestUnpairPreferenceDataset(TrlTestCase):
     paired_dataset = Dataset.from_dict(
         {
             "prompt": ["The sky is", "The sun is"],
@@ -698,61 +841,49 @@ class UnpairPreferenceDatasetTester(TrlTestCase):
     def test_unpair_preference_dataset(self):
         # Test that a paired dataset is correctly converted to unpaired
         unpaired_dataset = unpair_preference_dataset(self.paired_dataset)
-        self.assertEqual(
-            unpaired_dataset.to_dict(),
-            self.unpaired_dataset.to_dict(),
-            "The paired dataset should be converted to unpaired.",
+        assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
+            "The paired dataset should be converted to unpaired."
         )
 
     def test_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
         unpaired_dataset_dict = unpair_preference_dataset(paired_dataset_dict)
-        self.assertEqual(
-            unpaired_dataset_dict["abc"].to_dict(),
-            self.unpaired_dataset.to_dict(),
-            "The paired dataset should be converted to unpaired.",
+        assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
+            "The paired dataset should be converted to unpaired."
         )
 
     def test_maybe_unpair_preference_dataset(self):
         # Test that a paired dataset is correctly converted to unpaired with maybe_unpair_preference_dataset
         unpaired_dataset = maybe_unpair_preference_dataset(self.paired_dataset)
-        self.assertEqual(
-            unpaired_dataset.to_dict(),
-            self.unpaired_dataset.to_dict(),
-            "The paired dataset should be converted to unpaired.",
+        assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
+            "The paired dataset should be converted to unpaired."
         )
 
     def test_maybe_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired with maybe_unpair_preference_dataset
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
         unpaired_dataset_dict = maybe_unpair_preference_dataset(paired_dataset_dict)
-        self.assertEqual(
-            unpaired_dataset_dict["abc"].to_dict(),
-            self.unpaired_dataset.to_dict(),
-            "The paired dataset should be converted to unpaired.",
+        assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
+            "The paired dataset should be converted to unpaired."
         )
 
     def test_maybe_unpair_preference_dataset_already_paired(self):
         # Test that a paired dataset remains unchanged with maybe_unpair_preference_dataset
         unpaired_dataset = maybe_unpair_preference_dataset(self.unpaired_dataset)
-        self.assertEqual(
-            unpaired_dataset.to_dict(),
-            self.unpaired_dataset.to_dict(),
-            "The unpaired dataset should remain unchanged.",
+        assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
+            "The unpaired dataset should remain unchanged."
         )
 
     def test_maybe_unpair_preference_dataset_dict_already_paired(self):
         # Test that a paired dataset dict remains unchanged with maybe_unpair_preference_dataset
         unpaired_dataset_dict = maybe_unpair_preference_dataset(DatasetDict({"abc": self.unpaired_dataset}))
-        self.assertEqual(
-            unpaired_dataset_dict["abc"].to_dict(),
-            self.unpaired_dataset.to_dict(),
-            "The unpaired dataset should remain unchanged.",
+        assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
+            "The unpaired dataset should remain unchanged."
         )
 
 
-class ExtractPromptTester(TrlTestCase):
+class TestExtractPrompt(TrlTestCase):
     example_implicit_prompt_conversational = {
         "chosen": [
             {"role": "user", "content": "What color is the sky?"},
@@ -790,56 +921,42 @@ class ExtractPromptTester(TrlTestCase):
     def test_extract_prompt_conversational(self):
         # Test that the prompt is correctly extracted from the dataset
         example_extracted_prompt = extract_prompt(self.example_implicit_prompt_conversational)
-        self.assertEqual(
-            example_extracted_prompt,
-            self.example_explicit_prompt_conversational,
-            "The prompt is not correctly extracted from the dataset.",
+        assert example_extracted_prompt == self.example_explicit_prompt_conversational, (
+            "The prompt is not correctly extracted from the dataset."
         )
 
     def test_maybe_extract_prompt_conversational(self):
         # Test that the prompt is correctly extracted from the dataset with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt_conversational)
-        self.assertEqual(
-            example_extracted_prompt,
-            self.example_explicit_prompt_conversational,
-            "The prompt is not correctly extracted from the dataset.",
+        assert example_extracted_prompt == self.example_explicit_prompt_conversational, (
+            "The prompt is not correctly extracted from the dataset."
         )
 
     def test_maybe_extract_prompt_conversational_already_explicit(self):
         # Test that the prompt remains unchanged with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_conversational)
-        self.assertEqual(
-            example_extracted_prompt,
-            self.example_explicit_prompt_conversational,
-            "The prompt should remain unchanged.",
+        assert example_extracted_prompt == self.example_explicit_prompt_conversational, (
+            "The prompt should remain unchanged."
         )
 
     def test_extract_prompt_standard(self):
         # Test that the prompt is correctly extracted from the dataset
         example_extracted_prompt = extract_prompt(self.example_implicit_prompt_standard)
-        self.assertEqual(
-            example_extracted_prompt,
-            self.example_explicit_prompt_standard,
-            "The prompt is not correctly extracted from the dataset.",
+        assert example_extracted_prompt == self.example_explicit_prompt_standard, (
+            "The prompt is not correctly extracted from the dataset."
         )
 
     def test_maybe_extract_prompt_standard(self):
         # Test that the prompt is correctly extracted from the dataset with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt_standard)
-        self.assertEqual(
-            example_extracted_prompt,
-            self.example_explicit_prompt_standard,
-            "The prompt is not correctly extracted from the dataset.",
+        assert example_extracted_prompt == self.example_explicit_prompt_standard, (
+            "The prompt is not correctly extracted from the dataset."
         )
 
     def test_maybe_extract_prompt_standard_already_explicit(self):
         # Test that the prompt remains unchanged with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_standard)
-        self.assertEqual(
-            example_extracted_prompt,
-            self.example_explicit_prompt_standard,
-            "The prompt should remain unchanged.",
-        )
+        assert example_extracted_prompt == self.example_explicit_prompt_standard, "The prompt should remain unchanged."
 
 
 class TestPackDatasetWrapped(TrlTestCase):
@@ -855,7 +972,7 @@ class TestPackDatasetWrapped(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
-        self.assertEqual(dataset.to_dict(), expected_output)
+        assert dataset.to_dict() == expected_output
 
     def test_with_iterable_dataset(self):
         examples = {
@@ -870,7 +987,7 @@ class TestPackDatasetWrapped(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         num_examples = len(examples[next(iter(examples))])
-        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
 
 
 class TestPackDatasetBfd(TrlTestCase):
@@ -887,7 +1004,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
-        self.assertEqual(dataset.to_dict(), expected_output)
+        assert dataset.to_dict() == expected_output
 
     def test_with_iterable_dataset(self):
         examples = {
@@ -903,7 +1020,7 @@ class TestPackDatasetBfd(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         num_examples = len(examples[next(iter(examples))])
-        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
 
     def test_with_truncation(self):
         examples = {
@@ -918,7 +1035,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "seq_lengths": [[4], [4], [2, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
-        self.assertEqual(dataset.to_dict(), expected_output)
+        assert dataset.to_dict() == expected_output
 
     def test_with_non_power_of_2(self):
         examples = {
@@ -933,7 +1050,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "seq_lengths": [[5], [4, 1], [3]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
-        self.assertEqual(dataset.to_dict(), expected_output)
+        assert dataset.to_dict() == expected_output
 
 
 class TestTruncateExamples(TrlTestCase):
@@ -949,7 +1066,7 @@ class TestTruncateExamples(TrlTestCase):
             "attention_mask": [[0, 1], [0, 0], [1]],
         }
         dataset = truncate_dataset(dataset, max_length)
-        self.assertEqual(dataset.to_dict(), expected_output)
+        assert dataset.to_dict() == expected_output
 
     def test_with_iterable_dataset(self):
         examples = {
@@ -964,7 +1081,7 @@ class TestTruncateExamples(TrlTestCase):
         }
         dataset = truncate_dataset(dataset, max_length)
         num_examples = len(examples[next(iter(examples))])
-        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
 
     def test_with_extra_column(self):
         examples = {
@@ -980,7 +1097,7 @@ class TestTruncateExamples(TrlTestCase):
             "my_column": ["a", "b", "c"],
         }
         dataset = truncate_dataset(dataset, max_length)
-        self.assertEqual(dataset.to_dict(), expected_output)
+        assert dataset.to_dict() == expected_output
 
 
 class TestMaybeConvertToChatML(TrlTestCase):
@@ -998,7 +1115,7 @@ class TestMaybeConvertToChatML(TrlTestCase):
                 {"role": "assistant", "content": "It is blue."},
             ]
         }
-        self.assertEqual(maybe_convert_to_chatml(example), expected_output)
+        assert maybe_convert_to_chatml(example) == expected_output
 
     def test_without_conversations_key(self):
         # Same as before, but we don't rename the keys
@@ -1010,12 +1127,12 @@ class TestMaybeConvertToChatML(TrlTestCase):
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "completion": [{"role": "assistant", "content": "It is blue."}],
         }
-        self.assertEqual(maybe_convert_to_chatml(example), expected_output)
+        assert maybe_convert_to_chatml(example) == expected_output
 
     def test_not_conversional(self):
         # When not needed, the example should remain unchanged
         example = {"text": "The sky is blue."}
-        self.assertEqual(maybe_convert_to_chatml(example), example)
+        assert maybe_convert_to_chatml(example) == example
 
     def test_already_chatml(self):
         # When the example is already in ChatML format, it should remain unchanged
@@ -1025,9 +1142,4 @@ class TestMaybeConvertToChatML(TrlTestCase):
                 {"role": "assistant", "content": "It is blue."},
             ]
         }
-        self.assertEqual(maybe_convert_to_chatml(example), example)
-
-
-# Run the tests
-if __name__ == "__main__":
-    unittest.main()
+        assert maybe_convert_to_chatml(example) == example

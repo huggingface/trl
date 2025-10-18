@@ -17,6 +17,7 @@ import math
 import os
 import textwrap
 import time
+import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -123,7 +124,7 @@ class PPOTrainer(BaseTrainer):
             [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
         callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
             Callbacks to use during training.
-        peft_config ([`~peft.config.PeftConfig`], *optional*):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
             will be wrapped with the specified PEFT adapter.
     """
@@ -146,9 +147,7 @@ class PPOTrainer(BaseTrainer):
     def __init__(
         self,
         args: PPOConfig,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ],
+        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
         model: nn.Module,
         ref_model: Optional[nn.Module],
         reward_model: nn.Module,
@@ -161,6 +160,13 @@ class PPOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         peft_config: Optional["PeftConfig"] = None,
     ) -> None:
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "

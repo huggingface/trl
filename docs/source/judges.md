@@ -1,10 +1,7 @@
 # Judges
 
-<Tip warning={true}>
-
-TRL Judges is an experimental API which is subject to change at any time.
-
-</Tip>
+> [!WARNING]
+> TRL Judges is an experimental API which is subject to change at any time.
 
 TRL provides judges to easily compare two completions.
 
@@ -16,7 +13,7 @@ pip install trl[judges]
 
 ## Using the provided judges
 
-TRL provides several judges out of the box. For example, you can use the `HfPairwiseJudge` to compare two completions using a pre-trained model from the Hugging Face model hub:
+TRL provides several judges out of the box. For example, you can use the [`HfPairwiseJudge`] to compare two completions using a pre-trained model from the Hugging Face model hub:
 
 ```python
 from trl import HfPairwiseJudge

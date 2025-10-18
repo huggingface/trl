@@ -76,6 +76,9 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
         else:
             images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
 
         (
             prompt_ids,
@@ -300,6 +303,8 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
             if "image_sizes" in forward_kwargs:
                 output["image_sizes"] = forward_kwargs["image_sizes"]
+            if "token_type_ids" in forward_kwargs:
+                output["token_type_ids"] = forward_kwargs["token_type_ids"]
             if images is not None:
                 output["images"] = images
             return output

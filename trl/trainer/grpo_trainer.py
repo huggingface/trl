@@ -46,7 +46,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
+from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
 from ..data_utils import (
     apply_chat_template,
@@ -199,7 +199,7 @@ class GRPOTrainer(BaseTrainer):
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
-        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*):
+        reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
             - A single processing class: Used when `reward_funcs` contains only one reward function.
@@ -303,7 +303,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side="left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -319,10 +319,6 @@ class GRPOTrainer(BaseTrainer):
         self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.image_token = getattr(processing_class, "image_token", None)
-        self.image_token_id = getattr(processing_class, "image_token_id", None)
-        self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
-        self.vision_end_token_id = getattr(model.config, "vision_end_token_id", None)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -577,7 +573,8 @@ class GRPOTrainer(BaseTrainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
-                    # enforce_eager=True,
+                    # Important so temperature scaling/logit tweaking affects the TIS log probs
+                    logprobs_mode="processed_logprobs",
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
@@ -829,6 +826,7 @@ class GRPOTrainer(BaseTrainer):
         num_images=None,
         pixel_attention_mask=None,
         image_sizes=None,
+        token_type_ids=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -856,6 +854,8 @@ class GRPOTrainer(BaseTrainer):
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
                 model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+            if token_type_ids is not None:
+                model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1154,6 +1154,9 @@ class GRPOTrainer(BaseTrainer):
                 broadcast_object_list(obj_list, from_process=0)
                 all_prompt_ids, all_completion_ids, all_logprobs = obj_list[0]
 
+                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
+
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
@@ -1228,15 +1231,20 @@ class GRPOTrainer(BaseTrainer):
                     self.llm.sleep(level=1)
 
         elif self.use_transformers_paged:
-            # Re-process inputs for paged generation if needed
-            # Note: images are already validated and preprocessed above
-            paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
-            previous_attn = self.model_wrapped.config._attn_implementation
-
-            if is_flash_attn_2_available():
-                self.model_wrapped.config._attn_implementation = "paged_attention"
+            processor_kwargs = {
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "return_dict": True,
+                "add_special_tokens": False,
+            }
+            if is_conversational({"prompt": prompts[0]}):
+                generate_inputs = self.processing_class.apply_chat_template(
+                    conversation=prompts, **processor_kwargs, tokenize=True
+                )
             else:
-                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
+            generate_inputs["inputs"] = generate_inputs.pop("input_ids")
+
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1252,18 +1260,15 @@ class GRPOTrainer(BaseTrainer):
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
                     all_outputs = unwrapped_model.generate_batch(
-                        paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
+                        **generate_inputs, generation_config=self.generation_config, progress_bar=False
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = paged_prompt_inputs.input_ids
-            # Restore the original attention implementation, training mode
-            self.model_wrapped.config._attn_implementation = previous_attn
+            prompt_ids = generate_inputs["inputs"]
             logprobs = None  # not used in this case
 
         else:
             # Regular generation path
-            self.processing_class.truncation_side = "left"
             processor_kwargs = {
                 "return_tensors": "pt",
                 "padding": True,
@@ -1271,6 +1276,7 @@ class GRPOTrainer(BaseTrainer):
                 "max_length": self.max_prompt_length,
                 "truncation": True,
                 "return_dict": True,
+                "add_special_tokens": False,
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
@@ -1419,6 +1425,9 @@ class GRPOTrainer(BaseTrainer):
             images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
         else:
             images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
 
         # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
         # [{"role": "user", "content": "What color is the sky?"}] to
@@ -1471,6 +1480,13 @@ class GRPOTrainer(BaseTrainer):
             forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
         else:
             forward_kwargs = {}
+
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
 
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
@@ -1653,6 +1669,8 @@ class GRPOTrainer(BaseTrainer):
             output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
         if "image_sizes" in forward_kwargs:
             output["image_sizes"] = forward_kwargs["image_sizes"]
+        if "token_type_ids" in forward_kwargs:
+            output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
         return output
@@ -1730,6 +1748,7 @@ class GRPOTrainer(BaseTrainer):
             num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
+            token_type_ids=inputs.get("token_type_ids"),
         )
 
         if self.top_entropy_quantile < 1.0:

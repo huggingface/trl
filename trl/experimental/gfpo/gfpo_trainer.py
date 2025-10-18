@@ -18,7 +18,7 @@ from typing import Any, Callable
 import torch
 from accelerate.utils import gather_object
 
-from ...data_utils import is_conversational
+from ...data_utils import apply_chat_template, is_conversational
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin, nanstd, pad
 
@@ -76,14 +76,13 @@ class GFPOTrainer(_GRPOTrainer):
             images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
         else:
             images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
 
-        (
-            prompt_ids_list,
-            completion_ids_list,
-            num_items_in_batch,
-            sampling_per_token_logps_list,
-            forward_kwargs,
-        ) = self._generate(prompts, images)
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list = self._generate(
+            prompts, images
+        )
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -114,6 +113,24 @@ class GFPOTrainer(_GRPOTrainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         num_images = [len(img_list) for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
 
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
@@ -352,6 +369,8 @@ class GFPOTrainer(_GRPOTrainer):
             output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
         if "image_sizes" in forward_kwargs:
             output["image_sizes"] = forward_kwargs["image_sizes"]
+        if "token_type_ids" in forward_kwargs:
+            output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
         return output

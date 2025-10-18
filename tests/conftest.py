@@ -12,7 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from setuptools import setup
+import gc
+
+import pytest
+import torch
 
 
-setup()
+@pytest.fixture(autouse=True)
+def cleanup_gpu():
+    """
+    Automatically cleanup GPU memory after each test.
+
+    This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
+    models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
+    """
+    yield
+    # Cleanup after test
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
