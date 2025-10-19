@@ -19,7 +19,6 @@ from time import strftime
 
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
-from PIL import Image
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
