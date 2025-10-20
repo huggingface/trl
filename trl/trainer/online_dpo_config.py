@@ -369,7 +369,6 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
 
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 

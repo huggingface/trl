@@ -1250,6 +1250,7 @@ def empty_cache() -> None:
     else:
         torch.cuda.empty_cache()
 
+
 def generate_model_card(
     base_model: Optional[str],
     model_name: str,
