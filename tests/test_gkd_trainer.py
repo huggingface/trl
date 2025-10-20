@@ -259,7 +259,7 @@ class TestGKDTrainer(TrlTestCase):
 
         # Ensure liger fused JSD path is enabled; if not, skip (runtime may lack system libs)
         if not getattr(trainer, "use_liger_gkd_loss", False):
-            self.skipTest("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
+            pytest.skip("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
 
         trainer.train()
 

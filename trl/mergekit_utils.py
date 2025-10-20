@@ -264,7 +264,7 @@ def merge_models(config: MergeConfig, out_path: str):
     Merge two models using mergekit
 
     Args:
-        config (`MergeConfig`): The merge configuration.
+        config ([`MergeConfig`]): The merge configuration.
         out_path (`str`): The output path for the merged model.
     """
     if not is_mergekit_available():

@@ -1,5 +1,8 @@
 # Best of N sampling: Alternative ways to get better model output without RL based fine-tuning
 
+> [!WARNING]
+> Best-of-N sampling is deprecated and will be removed in TRL 0.25.0.
+
 Within the extras module is the `best-of-n` sampler class that serves as an alternative method of generating better model output.
 As to how it fares against the RL based fine-tuning, please look in the `examples` directory for a comparison example
 
@@ -44,7 +47,7 @@ best_of_n = BestOfNSampler(model, tokenizer, queries_to_scores, length_sampler=o
 ```
 
 There is the option of setting the generation settings (like `temperature`, `pad_token_id`) at the time of instance creation as opposed to when calling the `generate` method.
-This is done by passing a `GenerationConfig` from the `transformers` library at the time of initialization
+This is done by passing a [`~transformers.GenerationConfig`] from the `transformers` library at the time of initialization
 
 ```python
 
