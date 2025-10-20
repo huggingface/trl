@@ -118,6 +118,7 @@ class TestDatasetFormatting(TrlTestCase):
         assert formatting_func is None
 
 
+@pytest.mark.filterwarnings("ignore::FutureWarning")
 class TestSetupChatFormat(TrlTestCase):
     def setup_method(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
