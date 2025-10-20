@@ -510,7 +510,7 @@ class GRPOTrainer(BaseTrainer):
                 if rollout_func is not None:
                     raise ValueError("rollout_func must be None when vllm_mode is not 'async_server'")
 
-            if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
+            if self.vllm_mode in ["server", "async_server"]:
                 if self.accelerator.is_main_process:
                     if args.vllm_server_base_url is not None:
                         base_url = args.vllm_server_base_url

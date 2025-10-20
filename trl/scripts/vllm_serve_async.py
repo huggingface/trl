@@ -73,8 +73,6 @@ if is_vllm_available():
     from vllm.logger import init_logger
     from vllm.utils import FlexibleArgumentParser, set_ulimit, is_valid_ipv6_address
     from vllm.v1.engine.async_llm import AsyncLLM
-    from vllm.reasoning import ReasoningParserManager
-    from vllm.entrypoints.openai.tool_parsers import ToolParserManager
     from vllm.entrypoints.openai.api_server import (
         build_app,
         build_async_engine_client,
@@ -222,22 +220,6 @@ async def run_server(args, **uvicorn_kwargs):
 
     logger.info("vLLM API server version %s", VLLM_VERSION)
     logger.info("args: %s", args)
-
-    if args.tool_parser_plugin and len(args.tool_parser_plugin) > 3:
-        ToolParserManager.import_tool_parser(args.tool_parser_plugin)
-
-    valid_tool_parses = ToolParserManager.tool_parsers.keys()
-    if args.enable_auto_tool_choice \
-        and args.tool_call_parser not in valid_tool_parses:
-        raise KeyError(f"invalid tool call parser: {args.tool_call_parser} "
-                       f"(chose from {{ {','.join(valid_tool_parses)} }})")
-
-    valid_reasoning_parses = ReasoningParserManager.reasoning_parsers.keys()
-    if args.enable_reasoning \
-        and args.reasoning_parser not in valid_reasoning_parses:
-        raise KeyError(
-            f"invalid reasoning parser: {args.reasoning_parser} "
-            f"(chose from {{ {','.join(valid_reasoning_parses)} }})")
 
     # workaround to make sure that we bind the port before the engine is set up.
     # This avoids race conditions with ray.
