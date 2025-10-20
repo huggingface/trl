@@ -22,8 +22,8 @@ from parameterized import parameterized
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from transformers.utils import is_peft_available
 
-from trl import BCOConfig, BCOTrainer
-from trl.trainer.bco_trainer import _process_tokens, _tokenize
+from trl.experimental.bco import BCOConfig, BCOTrainer
+from trl.experimental.bco.bco_trainer import _process_tokens, _tokenize
 
 from .testing_utils import TrlTestCase, require_no_wandb, require_peft, require_sklearn
 
@@ -32,6 +32,7 @@ if is_peft_available():
     from peft import LoraConfig
 
 
+@pytest.mark.low_priority
 class TestBCOTrainer(TrlTestCase):
     @parameterized.expand(
         [

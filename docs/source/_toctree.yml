@@ -59,9 +59,11 @@
     title: Multi Adapter RLHF
   title: Examples
 - sections:
+  - local: bco_trainer
+    title: BCO
+  title: Experimental
+- sections:
   - sections: # Sorted alphabetically
-    - local: bco_trainer
-      title: BCO
     - local: cpo_trainer
       title: CPO
     - local: dpo_trainer
