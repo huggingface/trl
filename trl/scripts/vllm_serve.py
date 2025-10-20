@@ -13,17 +13,21 @@
 # limitations under the License.
 
 import argparse
+import base64
 import logging
 import os
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from io import BytesIO
 from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
+import torch.distributed.distributed_c10d as c10d
+from transformers import is_torch_xpu_available, is_vision_available
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -45,6 +49,10 @@ if is_pydantic_available():
 
 if is_uvicorn_available():
     import uvicorn
+
+
+if is_vision_available():
+    from PIL import Image
 
 
 if is_vllm_available():
@@ -71,21 +79,22 @@ class WeightSyncWorkerExtension:
     """
     A vLLM worker extension that enables weight synchronization between a client and multiple server workers.
 
-    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` to handle
-    efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
-    from a client process and distribute them to all worker processes participating in model inference.
+    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` or
+    `ProcessGroupXCCL` to handle efficient GPU-based communication using NCCL. The primary purpose of this class is to
+    receive updated model weights from a client process and distribute them to all worker processes participating in
+    model inference.
     """
 
     # The following attributes are initialized when `init_communicator` method is called.
-    pynccl_comm = None  # Communicator for weight updates
+    communicator = None  # Communicator for weight updates
     client_rank = None  # Source rank for broadcasting updated weights
 
-    def init_communicator(self, host: str, port: int, world_size: int) -> None:
+    def init_communicator(self, host: str, port: int, world_size: int, client_device_uuid: str) -> None:
         """
         Initializes the weight update communicator using a stateless process group.
 
-        This method creates a `StatelessProcessGroup` that allows external training processes to
-        communicate with vLLM workers without interfering with the global torch distributed group.
+        This method creates a `StatelessProcessGroup` that allows external training processes to communicate with vLLM
+        workers without interfering with the global torch distributed group.
 
         Args:
             host (`str`):
@@ -94,43 +103,72 @@ class WeightSyncWorkerExtension:
                 Port number to be used for communication.
             world_size (`int`):
                 Total number of participating processes in the update group.
+            client_device_uuid (`str`):
+                UUID of the device of client main process. Used to assert that devices are different from vllm workers
+                devices.
         """
-        if self.pynccl_comm is not None:
+        if self.communicator is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
+        # TODO: will remove after torch xpu 2.9 support uuid in get_device_properties
+        if torch.cuda.is_available() or (
+            is_torch_xpu_available() and hasattr(torch.xpu.get_device_properties(self.device), "uuid")
+        ):
+            accelerator_module = torch.xpu if is_torch_xpu_available() else torch.cuda
+            if client_device_uuid == str(accelerator_module.get_device_properties(self.device).uuid):
+                raise RuntimeError(
+                    f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
+                    "roles/ranks within the same communicator. This setup is unsupported and will likely lead to program "
+                    "hangs or incorrect behavior. Ensure that trainer is using different devices than vLLM server."
+                )
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
-        # Create a stateless process group to manage communication between training processes and vLLM workers.
-        pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
-
-        # Initialize the NCCL-based communicator for weight synchronization.
-        self.pynccl_comm = PyNcclCommunicator(pg, device=self.device)
+        if is_torch_xpu_available():
+            store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
+            prefixed_store = c10d.PrefixStore("client2server", store)
+            pg = c10d.ProcessGroupXCCL(
+                store=prefixed_store,
+                rank=rank,
+                size=world_size,
+            )
+            self.communicator = pg
+        else:
+            # Create a stateless process group to manage communication between training processes and vLLM workers.
+            # Initialize the NCCL-based communicator for weight synchronization.
+            pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
+            self.communicator = PyNcclCommunicator(pg, device=self.device)
 
         # The client process that sends updated weights has the highest rank (world_size - 1).
         self.client_rank = world_size - 1
 
-    def update_named_param(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
+    def update_named_param(self, name: str, dtype: str, shape: Sequence[int]) -> None:
         """
         Receives updated weights from the client process and updates the named parameter in the model.
 
         Args:
             name (`str`):
                 Name of the weight tensor being updated.
-            dtype (`torch.dtype`):
-                Data type of the weight tensor (e.g., `torch.float32`).
+            dtype (`str`):
+                Data type of the weight tensor as a string (e.g., `"torch.float32"`).
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
-        if self.pynccl_comm is None:
+        if self.communicator is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
+        dtype = getattr(torch, dtype.split(".")[-1])
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
-        # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.pynccl_comm.broadcast(weight, src=self.client_rank)
-        self.pynccl_comm.group.barrier()
+        if is_torch_xpu_available():
+            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weight, root=self.client_rank)
+            self.communicator.barrier()
+        else:
+            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weight, src=self.client_rank)
+            self.communicator.group.barrier()
 
         # Load the received weights into the model.
         self.model_runner.model.load_weights(weights=[(name, weight)])
@@ -142,9 +180,9 @@ class WeightSyncWorkerExtension:
         This method deletes the NCCL communicator to release associated resources.
         """
 
-        if self.pynccl_comm is not None:
-            del self.pynccl_comm
-            self.pynccl_comm = None  # Ensure attribute is reset to None
+        if self.communicator is not None:
+            del self.communicator
+            self.communicator = None  # Ensure attribute is reset to None
             self.client_rank = None  # Ensure attribute is reset to None
 
 
@@ -156,7 +194,7 @@ class ScriptArguments:
     Args:
         model (`str`):
             Model name or path to load the model from.
-        revision (`str` or `None`, *optional*, defaults to `None`):
+        revision (`str`, *optional*):
             Revision to use for the model. If not specified, the default branch will be used.
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
@@ -174,18 +212,25 @@ class ScriptArguments:
         dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
             based on the model configuration. Find the supported values in the vLLM documentation.
-        max_model_len (`int` or `None`, *optional*, defaults to `None`):
+        max_model_len (`int`, *optional*):
             If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
-        enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
+        enable_prefix_caching (`bool`, *optional*):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
-        enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
+        enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
         kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for KV cache. If set to `"auto"`, the dtype will default to the model data type.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to trust remote code when loading models. Set to `True` to allow executing code from model
+            repositories. This is required for some custom models but introduces security risks.
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
@@ -246,7 +291,7 @@ class ScriptArguments:
         },
     )
     enforce_eager: Optional[bool] = field(
-        default=None,
+        default=False,
         metadata={
             "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
             "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
@@ -259,11 +304,26 @@ class ScriptArguments:
             "help": "Data type to use for KV cache. If set to 'auto', the dtype will default to the model data type."
         },
     )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to trust remote code when loading models. Set to True to allow executing code from model "
+            "repositories. This is required for some custom models but introduces security risks."
+        },
+    )
     log_level: str = field(
         default="info",
         metadata={
             "help": "Log level for uvicorn. Possible choices: 'critical', 'error', 'warning', 'info', 'debug', "
             "'trace'."
+        },
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
+            "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
+            "model implementation."
         },
     )
 
@@ -291,6 +351,8 @@ def llm_worker(
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        trust_remote_code=script_args.trust_remote_code,
+        model_impl=script_args.vllm_model_impl,
     )
 
     # Send ready signal to parent process
@@ -321,15 +383,30 @@ def chunk_list(lst: list, n: int) -> list[list]:
     Split list `lst` into `n` evenly distributed sublists.
 
     Example:
-        >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
-        [[1, 2, 3], [4, 5, 6]]
-        >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
-        [[1, 2], [3, 4], [5], [6]]
-        >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
-        [[1], [2], [3], [4], [5], [6], [], []]
+    ```python
+    >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
+    [[1, 2, 3], [4, 5, 6]]
+
+    >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
+    [[1, 2], [3, 4], [5], [6]]
+
+    >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
+    [[1], [2], [3], [4], [5], [6], [], []]
+    ```
     """
     k, r = divmod(len(lst), n)
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
+
+
+def sanitize_logprob(logprob):
+    import math
+
+    value = logprob.logprob
+    if math.isnan(value):
+        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
+        return None
+
+    return value
 
 
 def main(script_args: ScriptArguments):
@@ -410,6 +487,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
+        images: Optional[list[str]] = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -417,10 +495,14 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        truncate_prompt_tokens: Optional[int] = None
         guided_decoding_regex: Optional[str] = None
+        generation_kwargs: dict = field(default_factory=dict)
 
     class GenerateResponse(BaseModel):
+        prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
+        logprobs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -430,10 +512,35 @@ def main(script_args: ScriptArguments):
         Args:
             request (`GenerateRequest`):
                 - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
+                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
+                  along with prompts.
+                - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
+                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
+                  generation.
+                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead
+                  to more random outputs.
+                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the
+                  diversity of the generated text.
+                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables
+                  top-k sampling.
+                - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
+                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
+                  completion.
+                - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
+                  by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
+                  truncation). If set to `None`, truncation is disabled.
+                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
+                  model will only generate tokens that match this regex pattern.
+                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
+                  `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
+                  keys that conflict with the other parameters, they will override them.
 
         Returns:
             `GenerateResponse`:
+                - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
+                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
+                  generated completions.
 
         Example request:
         ```json
@@ -442,29 +549,45 @@ def main(script_args: ScriptArguments):
 
         Example response:
         ```json
-        {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
+        {
+          "prompt_ids": [[101, 102], [201, 202]],
+          "completion_ids": [[103, 104, 105], [203, 204, 205]],
+          "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]
+        }
         ```
         """
+        request.images = request.images or [None] * len(request.prompts)
+
+        prompts = []
+        for prompt, image in zip(request.prompts, request.images):
+            row = {"prompt": prompt}
+            if image is not None:
+                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+            prompts.append(row)
 
         # Guided decoding, if enabled
         if request.guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(backend="outlines", regex=request.guided_decoding_regex)
+            guided_decoding = GuidedDecodingParams(regex=request.guided_decoding_regex)
         else:
             guided_decoding = None
 
-        # Sampling parameters
-        sampling_params = SamplingParams(
-            n=request.n,
-            repetition_penalty=request.repetition_penalty,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            min_p=request.min_p,
-            max_tokens=request.max_tokens,
-            guided_decoding=guided_decoding,
-        )
+        generation_kwargs = {
+            "n": request.n,
+            "repetition_penalty": request.repetition_penalty,
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "top_k": request.top_k,
+            "min_p": request.min_p,
+            "max_tokens": request.max_tokens,
+            "truncate_prompt_tokens": request.truncate_prompt_tokens,
+            "guided_decoding": guided_decoding,
+            "logprobs": 0,
+        }
+        generation_kwargs.update(request.generation_kwargs)
+        sampling_params = SamplingParams(**generation_kwargs)
+
         # Evenly distribute prompts across DP ranks
-        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
 
         # Send the prompts to each worker
         for connection, prompts in zip(connections, chunked_prompts):
@@ -484,32 +607,43 @@ def main(script_args: ScriptArguments):
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
+        prompt_ids = [output.prompt_token_ids for output in all_outputs]
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids}
+        logprobs: list[list[float]] = [
+            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
+            for outputs in all_outputs
+            for output in outputs.outputs
+        ]
+        return {"prompt_ids": prompt_ids, "completion_ids": completion_ids, "logprobs": logprobs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str
         port: int
         world_size: int
+        client_device_uuid: str
 
     @app.post("/init_communicator/")
     async def init_communicator(request: InitCommunicatorRequest):
         """
-        Initializes the communicator for synchronizing model weights between a client and multiple server
-        workers.
+        Initializes the communicator for synchronizing model weights between a client and multiple server workers.
 
         Args:
             request (`InitCommunicatorRequest`):
                 - `host` (`str`): Hostname or IP address of the master node.
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
+                - `client_device_uuid` (`str`): UUID of the device of client main process. Used to assert that devices
+                  are different from vLLM workers devices.
         """
         world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
 
         # The function init_communicator is called this way: init_communicator(host, port, world_size)
         # So with collective_rpc we need to call it this way:
         # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
-        kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
+        kwargs = {
+            "method": "init_communicator",
+            "args": (request.host, request.port, world_size, request.client_device_uuid),
+        }
         for connection in connections:
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
@@ -534,11 +668,10 @@ def main(script_args: ScriptArguments):
                 - `shape` (list of `int`): Shape of the weight
 
         """
-        # The function update_named_param is called this way: update_named_param("name", torch.float32, (10, 10))
+        # The function update_named_param is called this way: update_named_param("name", "torch.float32", (10, 10))
         # So with collective_rpc we need to call it this way:
-        # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
-        dtype = torch.__getattribute__(request.dtype.split(".")[-1])
-        kwargs = {"method": "update_named_param", "args": (request.name, dtype, tuple(request.shape))}
+        # llm.collective_rpc("update_named_param", args=("name", "torch.float32", (10, 10)))
+        kwargs = {"method": "update_named_param", "args": (request.name, request.dtype, tuple(request.shape))}
         for connection in connections:
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
@@ -570,7 +703,7 @@ def main(script_args: ScriptArguments):
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
     if subparsers is not None:
         parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:

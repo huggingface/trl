@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 import torch
 from transformers import AutoTokenizer, GenerationConfig
@@ -21,12 +20,14 @@ from trl import AutoModelForCausalLMWithValueHead
 from trl.core import LengthSampler
 from trl.extras import BestOfNSampler
 
+from .testing_utils import TrlTestCase
+
 
 def queries_to_scores(list_of_strings):
     return [torch.rand(1).item() for _ in list_of_strings]
 
 
-class BestOfNSamplerTester(unittest.TestCase):
+class TestBestOfNSampler(TrlTestCase):
     """
     Tests the BestOfNSampler class
     """
@@ -73,8 +74,8 @@ class BestOfNSamplerTester(unittest.TestCase):
 
         for q, expected_length in various_queries_formats:
             results = best_of_n.generate(q)
-            self.assertIsInstance(results, list)
-            self.assertEqual(len(results), expected_length)
+            assert isinstance(results, list)
+            assert len(results) == expected_length
 
     def test_different_sample_sizes_and_n_candidates_values(self):
         r"""
@@ -109,4 +110,4 @@ class BestOfNSamplerTester(unittest.TestCase):
             tokenized_queries = [self.tokenizer.encode(query) for query in queries]
             results = best_of_n.generate(tokenized_queries)
             for result in results:
-                self.assertEqual(len(result), expected)
+                assert len(result) == expected

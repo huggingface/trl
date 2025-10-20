@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl",
+#     "peft",
+#     "trackio",
+#     "kernels",
+# ]
+# ///
+
 """
 Run the ORPO training script with the following command with some example arguments.
 In general, the optimal configuration for ORPO will be similar to that of DPO without the need for a reference model:
@@ -19,47 +28,47 @@ In general, the optimal configuration for ORPO will be similar to that of DPO wi
 # regular:
 python examples/scripts/orpo.py \
     --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --model_name_or_path gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 8e-6 \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
-    --output_dir="gpt2-aligned-orpo" \
+    --output_dir "gpt2-aligned-orpo" \
     --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
     --logging_first_step \
     --no_remove_unused_columns
 
 # peft:
 python examples/scripts/orpo.py \
     --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --model_name_or_path gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 8e-5 \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
-    --output_dir="gpt2-lora-aligned-orpo" \
+    --output_dir "gpt2-lora-aligned-orpo" \
     --optim rmsprop \
     --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_r 16 \
+    --lora_alpha 16
 """
+
+import os
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import ModelConfig, ORPOConfig, ORPOTrainer, ScriptArguments, get_peft_config
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

@@ -2,16 +2,20 @@
 
 TRL provides a powerful command-line interface (CLI) to fine-tune large language models (LLMs) using methods like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and more. The CLI abstracts away much of the boilerplate, letting you launch training jobs quickly and reproducibly.
 
+## Commands
+
 Currently supported commands are:
 
-#### Training Commands
+### Training Commands
 
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
+- `trl reward`: train a Reward Model
+- `trl rloo`: fine-tune a LLM with RLOO
 - `trl sft`: fine-tune a LLM with SFT
 
-#### Other Commands
+### Other Commands
 
 - `trl env`: get the system information
 - `trl vllm-serve`: serve a model with vLLM
@@ -38,6 +42,15 @@ trl sft \
 trl dpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name anthropic/hh-rlhf
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized
 ```
 
 </hfoption>
@@ -75,6 +88,21 @@ Launch with:
 
 ```bash
 trl dpo --config dpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
 ```
 
 </hfoption>
@@ -137,6 +165,33 @@ Launch with:
 ```bash
 trl dpo --config dpo_config.yaml
 ```
+
+</hfoption>
+<hfoption id="Reward inline">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --num_processes 4
+```
+
+</hfoption>
+<hfoption id="Reward w/ config file">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
 </hfoption>
 </hfoptions>
 
@@ -144,22 +199,22 @@ trl dpo --config dpo_config.yaml
 
 The `--accelerate_config` flag lets you easily configure distributed training with [🤗 Accelerate](https://github.com/huggingface/accelerate). This flag accepts either:
 
-* the name of a predefined config profile (built into TRL), or
-* a path to a custom Accelerate YAML config file.
+- the name of a predefined config profile (built into TRL), or
+- a path to a custom Accelerate YAML config file.
 
 #### Predefined Config Profiles
 
 TRL provides several ready-to-use Accelerate configs to simplify common training setups:
 
-| Name         | Description                         |
-| ------------ | ----------------------------------- |
-| `fsdp1`      | Fully Sharded Data Parallel Stage 1 |
-| `fsdp2`      | Fully Sharded Data Parallel Stage 2 |
-| `zero1`      | DeepSpeed ZeRO Stage 1              |
-| `zero2`      | DeepSpeed ZeRO Stage 2              |
-| `zero3`      | DeepSpeed ZeRO Stage 3              |
-| `multi_gpu`  | Multi-GPU training                  |
-| `single_gpu` | Single-GPU training                 |
+| Name | Description |
+| --- | --- |
+| `fsdp1` | Fully Sharded Data Parallel Stage 1 |
+| `fsdp2` | Fully Sharded Data Parallel Stage 2 |
+| `zero1` | DeepSpeed ZeRO Stage 1 |
+| `zero2` | DeepSpeed ZeRO Stage 2 |
+| `zero3` | DeepSpeed ZeRO Stage 3 |
+| `multi_gpu` | Multi-GPU training |
+| `single_gpu` | Single-GPU training |
 
 To use one of these, just pass the name to `--accelerate_config`. TRL will automatically load the corresponding config file from `trl/accelerate_config/`.
 
@@ -216,39 +271,95 @@ Launch with:
 ```bash
 trl dpo --config dpo_config.yaml
 ```
+
+</hfoption>
+<hfoption id="Reward inline">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+</hfoption>
+<hfoption id="Reward w/ config file">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
 </hfoption>
 </hfoptions>
 
-## Chat Interface
+### Using dataset mixtures
 
-<Tip warning={true}>
+You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
 
-The chat interface is deprecated and will be removed in TRL 0.19. Use `transformers-cli chat` instead. For more information, see the [Transformers documentation, chat with text generation models](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
+<hfoptions id="dataset_mixtures">
+<hfoption id="SFT">
 
-</Tip>
+```yaml
+# sft_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: stanfordnlp/imdb
+  - path: roneneldan/TinyStories
+```
 
-The chat CLI lets you quickly load the model and talk to it. Simply run the following:
+Launch with:
 
-<pre><code>$ trl chat --model_name_or_path Qwen/Qwen1.5-0.5B-Chat 
-<strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
-What is the best programming language?
+```bash
+trl sft --config sft_config.yaml
+```
 
-<strong><span style="color: blue;">&lt;Qwen/Qwen1.5-0.5B-Chat&gt;:</span></strong>
-There isn't a "best" programming language, as everyone has different style preferences, needs, and preferences. However, some people commonly use   
-languages like Python, Java, C++, and JavaScript, which are popular among developers for a variety of reasons, including readability, flexibility,  
-and scalability. Ultimately, it depends on personal preference, needs, and goals.
-</code></pre>
+</hfoption>
+<hfoption id="DPO">
 
-Note that the chat interface relies on the tokenizer's [chat template](https://huggingface.co/docs/transformers/chat_templating) to format the inputs for the model. Make sure your tokenizer has a chat template defined.
+```yaml
+# dpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: BAAI/Infinity-Preference
+  - path: argilla/Capybara-Preferences
+```
 
-Besides talking to the model there are a few commands you can use:
+Launch with:
 
-- `clear`: clears the current conversation and start a new one
-- `example {NAME}`: load example named `{NAME}` from the config and use it as the user input
-- `set {SETTING_NAME}={SETTING_VALUE};`: change the system prompt or generation settings (multiple settings are separated by a `;`).
-- `reset`: same as clear but also resets the generation configs to defaults if they have been changed by `set`
-- `save` or `save {SAVE_NAME}`: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
-- `exit`: closes the interface
+```bash
+trl dpo --config dpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/tldr-preference
+  - path: trl-lib/lm-human-preferences-sentiment
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
+</hfoption>
+</hfoptions>
+
+To see all the available keywords for defining dataset mixtures, refer to the [`scripts.utils.DatasetConfig`] and [`DatasetMixtureConfig`] classes.
 
 ## Getting the System Information
 

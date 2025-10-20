@@ -18,12 +18,20 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of https://github.com/pytorch/torchtune.
 
-import warnings
 
 import psutil
 import torch
+from accelerate import logging
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
+from transformers import is_torch_npu_available
+
+
+if is_torch_npu_available():
+    import torch_npu  # noqa: F401
+
+
+logger = logging.get_logger(__name__)
 
 
 class OffloadActivations(saved_tensors_hooks):
@@ -59,10 +67,12 @@ class OffloadActivations(saved_tensors_hooks):
         ValueError: if `max_fwd_stash_size` is not at least `1`.
 
     Example:
-        >>> with OffloadActivations():
-        >>>     outputs = model(inputs, labels=labels)
-        >>> loss = outputs.loss
-        >>> loss.backward()
+    ```python
+    >>> with OffloadActivations():
+    ...     outputs = model(inputs, labels=labels)
+    >>> loss = outputs.loss
+    >>> loss.backward()
+    ```
     """
 
     def __init__(
@@ -85,11 +95,25 @@ class OffloadActivations(saved_tensors_hooks):
         self.use_pin_memory = use_pin_memory
         self.virtual_memory_safe_pct = 60  # we should not exceed this percentage of memory
 
-        self.s0 = torch.cuda.default_stream()  # comp stream
+        self.accelerator_type = (
+            torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
+        )
+        # NOTE: xpu doesn't have `default_stream` API, use `current_stream` instead
+        if self.accelerator_type == "xpu":  # comp stream
+            self.s0 = torch.xpu.current_stream()
+        elif is_torch_npu_available() and self.accelerator_type == "npu":
+            self.s0 = torch.npu.current_stream()
+        else:
+            self.s0 = torch.cuda.default_stream()
 
         # For streaming
         if self.use_streams:
-            self.s1 = torch.cuda.Stream()  # comms stream
+            if self.accelerator_type == "xpu":  # comms stream
+                self.s1 = torch.xpu.Stream()
+            elif self.accelerator_type == "npu":
+                self.s1 = torch.npu.Stream()
+            else:
+                self.s1 = torch.cuda.Stream()
             self.fwd_stash = {}  # tensor_id => (activation, ev1)
             if max_fwd_stash_size < 1:
                 raise ValueError(f"max_fwd_stash_size should be at least 1 but is {max_fwd_stash_size}")
@@ -103,7 +127,7 @@ class OffloadActivations(saved_tensors_hooks):
         def verify_sufficient_virtual_memory():
             curr_pct = get_cpu_ram_pct()
             if curr_pct > self.virtual_memory_safe_pct:
-                warnings.warn(f"{curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
+                logger.warning(f"{curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
 
         def get_cpu_ram_pct() -> float:
             # get the percentage of memory used by the system
@@ -136,7 +160,7 @@ class OffloadActivations(saved_tensors_hooks):
             # only offload hefty bois if they're activations on CUDA (our heuristic
             # for that is to check if they're not params or buffers)!
             if (
-                activation.is_cuda
+                activation.device.type in ["cuda", "xpu", "npu"]
                 and num_bytes >= self.min_tensor_size_bytes
                 and (
                     not isinstance(activation, torch.nn.Parameter)
@@ -158,7 +182,13 @@ class OffloadActivations(saved_tensors_hooks):
                     self.s1.wait_stream(self.s0)
 
                 stream = self.s1 if self.use_streams else self.s0
-                with torch.cuda.stream(stream):
+                if self.accelerator_type == "xpu":
+                    stream_ctx = torch.xpu.stream(stream)
+                elif self.accelerator_type == "npu":
+                    stream_ctx = torch.npu.stream(stream)
+                else:
+                    stream_ctx = torch.cuda.stream(stream)
+                with stream_ctx:
                     cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
                     cpu_tensor.copy_(activation, non_blocking=True)
                     self.tracker[tensor_id] = (
@@ -189,19 +219,21 @@ class OffloadActivations(saved_tensors_hooks):
                         verify_sufficient_virtual_memory()
 
                 self.is_first_backward_call = False
-                self.is_first_forward_call = True
 
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"Untracked tensor with id {unpack_tensor_id}")
 
-            maybe_gpu_tensor, modified = self.tracker[unpack_tensor_id]
+            maybe_accelerator_tensor, modified = self.tracker[unpack_tensor_id]
             if modified:
-                gpu_tensor = maybe_gpu_tensor.to("cuda", non_blocking=True)
-                maybe_gpu_tensor = gpu_tensor
+                accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
+                maybe_accelerator_tensor = accelerator_tensor
 
             # clear tensor from tracking
             del self.tracker[unpack_tensor_id]
-            return maybe_gpu_tensor
+            # Only set is_first_forward_call to True when all tensors have been unpacked
+            if len(self.tracker) == 0:
+                self.is_first_forward_call = True
+            return maybe_accelerator_tensor
 
         def unpack_tensor_with_streams(unpack_tensor_id: int) -> torch.Tensor:
             # backward pass - we are called with the tensor_id, which
@@ -224,12 +256,11 @@ class OffloadActivations(saved_tensors_hooks):
                         verify_sufficient_virtual_memory()
 
                 self.is_first_backward_call = False
-                self.is_first_forward_call = True
 
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"untracked tensor with id {unpack_tensor_id}")
 
-            maybe_gpu_tensor, modified = self.tracker[unpack_tensor_id]
+            maybe_accelerator_tensor, modified = self.tracker[unpack_tensor_id]
             if modified:
                 # Get data on the current autograd node
                 graph_id = torch._C._current_graph_task_id()
@@ -243,19 +274,25 @@ class OffloadActivations(saved_tensors_hooks):
 
                 brought_back_from_cpu = True
                 if unpack_tensor_id in self.fwd_stash:
-                    maybe_gpu_tensor = self.fwd_stash[unpack_tensor_id][0]
+                    maybe_accelerator_tensor = self.fwd_stash[unpack_tensor_id][0]
                     brought_back_from_cpu = False
                 else:
                     # Kick off the process to bring tensors back
-                    with torch.cuda.stream(self.s1):
-                        gpu_tensor = maybe_gpu_tensor.to("cuda", non_blocking=True)
-                        maybe_gpu_tensor = gpu_tensor
+                    if self.accelerator_type == "xpu":
+                        stream_ctx = torch.xpu.stream(self.s1)
+                    elif self.accelerator_type == "npu":
+                        stream_ctx = torch.npu.stream(self.s1)
+                    else:
+                        stream_ctx = torch.cuda.stream(self.s1)
+                    with stream_ctx:
+                        accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
+                        maybe_accelerator_tensor = accelerator_tensor
 
                     # Tell comp stream to wait for the info to be loaded before executing
                     self.s0.wait_stream(self.s1)
 
                     # Stash the tensor to keep memory alive until compute stream is complete
-                    self.bwd_tensor_stash[unpack_tensor_id] = maybe_gpu_tensor
+                    self.bwd_tensor_stash[unpack_tensor_id] = maybe_accelerator_tensor
 
                     # Note: [Track views of the unpacked]
                     # Why do we get the use count of the unpacked tensor here? We want an
@@ -270,7 +307,14 @@ class OffloadActivations(saved_tensors_hooks):
                     #    up as a view of the unpacked tensor.
                     # 3. The user abuses the system somehow and manually relies on the
                     #    unpacked tensor to exist after the backward node has executed.
-                    storage_refcount = torch._C._storage_Use_Count(maybe_gpu_tensor.untyped_storage()._cdata)
+                    if self.accelerator_type == "npu":
+                        storage_refcount = torch_npu._C._storage_Use_Count(
+                            maybe_accelerator_tensor.untyped_storage()._cdata
+                        )
+                    else:
+                        storage_refcount = torch._C._storage_Use_Count(
+                            maybe_accelerator_tensor.untyped_storage()._cdata
+                        )
 
                 def hook(outputs, inputs):
                     # create events for the current node inputs/outputs if they were streamed in
@@ -287,7 +331,11 @@ class OffloadActivations(saved_tensors_hooks):
                         # non-deterministic (thus higher) memory usage, but this case
                         # should not happen often.
                         unpacked_tensor = self.bwd_tensor_stash[unpack_tensor_id]
-                        if torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata) > storage_refcount:
+                        if self.accelerator_type == "npu":
+                            storage_count = torch_npu._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
+                        else:
+                            storage_count = torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
+                        if storage_count > storage_refcount:
                             unpacked_tensor.record_stream(self.s0)
                             del self.bwd_tensor_stash[unpack_tensor_id]
                         else:
@@ -312,7 +360,10 @@ class OffloadActivations(saved_tensors_hooks):
 
             # clear tensor from tracking
             del self.tracker[unpack_tensor_id]
-            return maybe_gpu_tensor
+            # Only set is_first_forward_call to True when all tensors have been unpacked
+            if len(self.tracker) == 0:
+                self.is_first_forward_call = True
+            return maybe_accelerator_tensor
 
         unpack_tensor = unpack_tensor_with_streams if self.use_streams else unpack_tensor_single_stream
         super().__init__(pack_tensor, unpack_tensor)
@@ -346,8 +397,8 @@ def get_act_offloading_ctx_manager(
     Returns the activation offloading context manager for the model. All but the last output Linear in every step will
     be offloaded.
 
-    If activation offloading is enabled, we return the OffloadActivations context manager.
-    If activation offloading is disabled, we return a NoOpManager context manager.
+    If activation offloading is enabled, we return the OffloadActivations context manager. If activation offloading is
+    disabled, we return a NoOpManager context manager.
 
     Args:
         model (`nn.Module`):
@@ -440,7 +491,7 @@ def get_act_offloading_ctx_manager(
         output_head_detected = True
 
     if not output_head_detected and warn_if_no_head:
-        warnings.warn(
+        logger.warning(
             "During activation offloading, no output head was detected. If your model has an output head, it will be "
             "offloaded. This usually greatly slows training, given the large vocabulary size. To change this "
             "behavior, set your output head as model.output and make it an nn.Module. You can disable this warning by "

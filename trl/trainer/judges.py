@@ -81,10 +81,11 @@ class BaseRankJudge(ABC):
         def judge(self, prompts, completions, shuffle_order=True):
             return ...  # Your ranking logic here
 
+
     judge = MyRankJudge()
     judge.judge(
         prompts=["The capital of France is", "The capital of Germany is"],
-        completions=[[" Paris", " Marseille", "Lyon"], [" Munich", " Berlin"]]
+        completions=[[" Paris", " Marseille", "Lyon"], [" Munich", " Berlin"]],
     )  # [[0, 1, 2], [1, 0]]
     ```
     """
@@ -131,8 +132,8 @@ class BasePairwiseJudge(BaseJudge):
 
         Returns:
             `list[int]`:
-                List of idxs, where each idx is the rank of the best completion for the corresponding prompt.
-                E.g., `1` means that the second completion (`idx=1`) is the best.
+                List of idxs, where each idx is the rank of the best completion for the corresponding prompt. E.g., `1`
+                means that the second completion (`idx=1`) is the best.
 
         Note:
             If the judge returns `-1` for any prompt, it indicates that the inner process used to compute the
@@ -159,9 +160,9 @@ class BaseBinaryJudge(BaseJudge):
         """
         Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
 
-        This base class should be used to implement binary evaluations as done in section 4.1.4 of the
-        [CGPO paper](https://huggingface.co/papers/2409.20370).
-        It is relevant for assessing whether a prompt completion pair satisfies a specific contraint.
+        This base class should be used to implement binary evaluations as done in section 4.1.4 of the [CGPO
+        paper](https://huggingface.co/papers/2409.20370). It is relevant for assessing whether a prompt-completion pair
+        satisfies a specific constraint.
 
         Args:
             prompts (`list[str]`): List of prompts.
@@ -175,14 +176,16 @@ class BaseBinaryJudge(BaseJudge):
                 - 0 indicates that the completion does not satisfy the evaluated constraint.
 
         Note:
-            If the judge returns -1 for any prompt, it indicates that the inner process used to compute the preference has failed.
-            For instance, this could occur if the underlying language model or rule based contraint returned an invalid answer.
-            In such cases, the caller should handle these invalid indices appropriately, possibly by implementing fallback logic or error handling.
+            If the judge returns -1 for any prompt, it indicates that the inner process used to compute the preference
+            has failed. For instance, this could occur if the underlying language model or rule based constraint
+            returned an invalid answer. In such cases, the caller should handle these invalid indices appropriately,
+            possibly by implementing fallback logic or error handling.
         """
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
 
 class PairRMJudge(BasePairwiseJudge):
+    # docstyle-ignore
     """
     LLM judge based on the PairRM model from AllenAI.
 
@@ -204,11 +207,8 @@ class PairRMJudge(BasePairwiseJudge):
     >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
     ```
 
-    <Tip>
-
-    This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
-
-    </Tip>
+    > [!TIP]
+    > This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
     """
 
     def __init__(self):
@@ -243,8 +243,8 @@ class PairRMJudge(BasePairwiseJudge):
         Returns:
             `Union[list[int, float]]`:
                 If `return_scores` is `False`, returns a list of ranks (`0` or `1`) for each prompt, indicating which
-                completion is preferred.
-                If `return_scores` is `True`, returns softmax probabilities for the first completion.
+                completion is preferred. If `return_scores` is `True`, returns softmax probabilities for the first
+                completion.
 
         Raises:
             `ValueError`:
@@ -295,7 +295,7 @@ class HfPairwiseJudge(BasePairwiseJudge):
             Model to use for the judge.
         token (`str`, *optional*):
             Hugging Face API token to use for the [`huggingface_hub.InferenceClient`].
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             The system prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token
@@ -349,7 +349,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     Args:
         model (`str`, *optional*, defaults to `"gpt-4-turbo-preview"`):
             Model to use for the judge.
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             System prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token
@@ -417,13 +417,13 @@ class AllTrueJudge(BaseBinaryJudge):
     """
     Unify the decision of multiple [`BaseBinaryJudge`] instances.
 
-    Returns `1` only if all inner binary judges return `1`. If any judge returns `0`, it returns `0`.
-    If any judge returns `-1`, indicating a failure in its process, this judge will also return `-1`.
+    Returns `1` only if all inner binary judges return `1`. If any judge returns `0`, it returns `0`. If any judge
+    returns `-1`, indicating a failure in its process, this judge will also return `-1`.
 
     Implements the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370).
 
     Args:
-    judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
+        judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
     """
 
     def __init__(self, judges: list[BaseBinaryJudge]):

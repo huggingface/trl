@@ -7,6 +7,54 @@
 TRL is a full stack library where we provide a set of tools to train transformer language models with methods like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO), Reward Modeling, and more.
 The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
 
+Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support).
+
+## Taxonomy
+
+<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
+<div style="flex: 1; min-width: 0;">
+
+### Online methods
+
+- [`GRPOTrainer`] ⚡️
+- [`RLOOTrainer`] ⚡️
+- [`OnlineDPOTrainer`] ⚡️
+- [`NashMDTrainer`] ⚡️
+- [`XPOTrainer`] ⚡️
+- [`PPOTrainer`]
+
+### Reward modeling
+
+- [`PRMTrainer`]
+- [`RewardTrainer`]
+
+</div>
+<div style="flex: 1; min-width: 0;">
+
+### Offline methods
+
+- [`SFTTrainer`]
+- [`DPOTrainer`]
+- [`ORPOTrainer`]
+- [`BCOTrainer`]
+- [`CPOTrainer`]
+- [`KTOTrainer`]
+
+### Knowledge distillation
+
+- [`GKDTrainer`]
+
+</div>
+</div>
+
+## 🎉 What's New
+
+**✨ OpenAI GPT OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4)! Check out the:
+
+- [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
+- [GPT OSS recipes](https://github.com/huggingface/gpt-oss-recipes)
+- [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
+
 You can also explore TRL-related models, datasets, and demos in the [TRL Hugging Face organization](https://huggingface.co/trl-lib).
 
 ## Learn
@@ -28,6 +76,21 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on August 7, 2025</p>
+      <p class="text-gray-700">Vision Language Model Alignment in TRL ⚡️</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/vllm-colocate">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/vllm-colocate/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on June 3, 2025</p>
+      <p class="text-gray-700">NO GPU left behind: Unlocking Efficiency with Co-located vLLM in TRL</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/liger-grpo">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/liger-grpo/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on May 25, 2025</p>
+      <p class="text-gray-700">🐯 Liger GRPO meets TRL</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/open-r1">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on January 28, 2025</p>

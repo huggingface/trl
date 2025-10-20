@@ -23,13 +23,133 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+import datasets
 import yaml
+from datasets import DatasetDict, concatenate_datasets
 from transformers import HfArgumentParser
 from transformers.hf_argparser import DataClass, DataClassType
 from transformers.utils import is_rich_available
 
 
+def _ensure_transformers_parallelism_config() -> None:
+    """
+    Ensure that ``transformers.training_args`` always defines the symbol `ParallelismConfig` so that Python's
+    `typing.get_type_hints` can resolve annotations on `transformers.TrainingArguments` without raising a `NameError`.
+
+    This is needed when running with ``accelerate<1.10.1``, where the module ``accelerate.parallelism_config`` did not
+    exist and therefore the type alias is not imported by Transformers.
+
+    See upstream fix PR in transformers#40818.
+    """
+    from typing import Any
+
+    import transformers.training_args
+
+    if not hasattr(transformers.training_args, "ParallelismConfig"):
+        transformers.training_args.ParallelismConfig = Any
+
+
+_ensure_transformers_parallelism_config()  # before creating HfArgumentParser
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DatasetConfig:
+    """
+    Configuration for a dataset.
+
+    This class matches the signature of [`~datasets.load_dataset`] and the arguments are used directly in the
+    [`~datasets.load_dataset`] function. You can refer to the [`~datasets.load_dataset`] documentation for more
+    details.
+
+    Parameters:
+        path (`str`):
+            Path or name of the dataset.
+        name (`str`, *optional*):
+            Defining the name of the dataset configuration.
+        data_dir (`str`, *optional*):
+            Defining the `data_dir` of the dataset configuration. If specified for the generic builders(csv, text etc.)
+            or the Hub datasets and `data_files` is `None`, the behavior is equal to passing `os.path.join(data_dir,
+            **)` as `data_files` to reference all the files in a directory.
+        data_files (`str` or `Sequence` or `Mapping`, *optional*):
+            Path(s) to source data file(s).
+        split (`str`, *optional*, defaults to `"train"`):
+            Which split of the data to load.
+        columns (`list[str]`, *optional*):
+            List of column names to select from the dataset. If `None`, all columns are selected.
+    """
+
+    path: str
+    name: Optional[str] = None
+    data_dir: Optional[str] = None
+    data_files: Optional[Union[str, list[str], dict[str, str]]] = None
+    split: str = "train"
+    columns: Optional[list[str]] = None
+
+
+@dataclass
+class DatasetMixtureConfig:
+    """
+    Configuration class for a mixture of datasets.
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
+    Parameters:
+        datasets (`list[DatasetConfig]`):
+            List of dataset configurations to include in the mixture.
+        streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the datasets. If `True`, the datasets will be loaded in streaming mode.
+        test_split_size (`float`, *optional*):
+            Size of the test split. Refer to the `test_size` parameter in the [`~datasets.train_test_split`] function
+            for more details. If `None`, the dataset will not be split into train and test sets.
+
+    Usage:
+        When using the CLI, you can add the following section to your YAML config file:
+
+        ```yaml
+        datasets:
+          - path: ...
+            name: ...
+            data_dir: ...
+            data_files: ...
+            split: ...
+            columns: ...
+          - path: ...
+            name: ...
+            data_dir: ...
+            data_files: ...
+            split: ...
+            columns: ...
+        streaming: ...
+        test_split_size: ...
+        ```
+    """
+
+    datasets: list[DatasetConfig] = field(
+        default_factory=list,
+        metadata={"help": "List of dataset configurations to include in the mixture."},
+    )
+    streaming: bool = field(
+        default=False,
+        metadata={"help": "Whether to stream the datasets. If True, the datasets will be loaded in streaming mode."},
+    )
+    test_split_size: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Size of the test split. Refer to the `test_size` parameter in the `datasets.train_test_split` "
+            "function for more details. If None, the dataset will not be split into train and test sets."
+        },
+    )
+
+    def __post_init__(self):
+        # Convert any dataset dicts (from CLI/config parsing) into DatasetConfig objects
+        for idx, dataset in enumerate(self.datasets):
+            if isinstance(dataset, dict):
+                # If it's a dict, convert it to DatasetConfig
+                self.datasets[idx] = DatasetConfig(**dataset)
 
 
 @dataclass
@@ -38,31 +158,52 @@ class ScriptArguments:
     Arguments common to all scripts.
 
     Args:
-        dataset_name (`str`):
-            Dataset name.
-        dataset_config (`str` or `None`, *optional*, defaults to `None`):
+        dataset_name (`str`,, *optional*):
+            Path or name of the dataset to load. If `datasets` is provided, this will be ignored.
+        dataset_config (`str`, *optional*):
             Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
+            If `datasets` is provided, this will be ignored.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
-            Dataset split to use for training.
+            Dataset split to use for training. If `datasets` is provided, this will be ignored.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
-            Dataset split to use for evaluation.
+            Dataset split to use for evaluation. If `datasets` is provided, this will be ignored.
+        dataset_streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If `datasets` is
+            provided, this will be ignored.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
             Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
-            type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
+            type, inplace operation. See
+            https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
+    dataset_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path or name of the dataset to load. If `datasets` is provided, this will be ignored."},
+    )
     dataset_config: Optional[str] = field(
         default=None,
         metadata={
             "help": "Dataset configuration name. Corresponds to the `name` argument of the `datasets.load_dataset` "
-            "function."
+            "function. If `datasets` is provided, this will be ignored."
         },
     )
-    dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
-    dataset_test_split: str = field(default="test", metadata={"help": "Dataset split to use for evaluation."})
+    dataset_train_split: str = field(
+        default="train",
+        metadata={"help": "Dataset split to use for training. If `datasets` is provided, this will be ignored."},
+    )
+    dataset_test_split: str = field(
+        default="test",
+        metadata={"help": "Dataset split to use for evaluation. If `datasets` is provided, this will be ignored."},
+    )
+    dataset_streaming: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If "
+            "`datasets` is provided, this will be ignored."
+        },
+    )
     gradient_checkpointing_use_reentrant: bool = field(
         default=False,
         metadata={"help": "Whether to apply `use_reentrant` for gradient checkpointing."},
@@ -79,8 +220,8 @@ class ScriptArguments:
 
 def init_zero_verbose():
     """
-    Perform zero verbose init - use this method on top of the CLI modules to make
-    logging and warning output cleaner. Uses Rich if available, falls back otherwise.
+    Perform zero verbose init - use this method on top of the CLI modules to make logging and warning output cleaner.
+    Uses Rich if available, falls back otherwise.
     """
     import logging
     import warnings
@@ -110,7 +251,7 @@ class TrlParser(HfArgumentParser):
     configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]` or `None`, *optional*, defaults to `None`):
+        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`, *optional*):
             Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.
@@ -130,10 +271,12 @@ class TrlParser(HfArgumentParser):
     from dataclasses import dataclass
     from trl import TrlParser
 
+
     @dataclass
     class MyArguments:
         arg1: int
         arg2: str = "alpha"
+
 
     parser = TrlParser(dataclass_types=[MyArguments])
     training_args = parser.parse_args_and_config()
@@ -172,7 +315,10 @@ class TrlParser(HfArgumentParser):
         super().__init__(dataclass_types=dataclass_types, **kwargs)
 
     def parse_args_and_config(
-        self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
+        self,
+        args: Optional[Iterable[str]] = None,
+        return_remaining_strings: bool = False,
+        fail_with_unknown_args: bool = True,
     ) -> tuple[DataClass, ...]:
         """
         Parse command-line args and config file into instances of the specified dataclass types.
@@ -211,6 +357,11 @@ class TrlParser(HfArgumentParser):
         if return_remaining_strings:
             args_remaining_strings = output[-1]
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
+        elif fail_with_unknown_args and config_remaining_strings:
+            raise ValueError(
+                f"Unknown arguments from config file: {config_remaining_strings}. Please remove them, add them to the "
+                "dataclass, or set `fail_with_unknown_args=False`."
+            )
         else:
             return output
 
@@ -218,8 +369,7 @@ class TrlParser(HfArgumentParser):
         """
         Overrides the parser's default values with those provided via keyword arguments, including for subparsers.
 
-        Any argument with an updated default will also be marked as not required
-        if it was previously required.
+        Any argument with an updated default will also be marked as not required if it was previously required.
 
         Returns a list of strings that were not consumed by the parser.
         """
@@ -266,3 +416,66 @@ def get_git_commit_hash(package_name):
             return None
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
+    """
+    Load a mixture of datasets based on the configuration.
+
+    Args:
+        mixture_config ([`DatasetMixtureConfig`]):
+            Script arguments containing dataset configuration.
+
+    Returns:
+        [`~datasets.DatasetDict`]:
+            Combined dataset(s) from the mixture configuration, with optional train/test split if `test_split_size` is
+            set.
+
+    Example:
+    ```python
+    from trl import DatasetMixtureConfig, get_dataset
+    from trl.scripts.utils import DatasetConfig
+
+    mixture_config = DatasetMixtureConfig(datasets=[DatasetConfig(path="trl-lib/tldr")])
+    dataset = get_dataset(mixture_config)
+    print(dataset)
+    ```
+
+    ```
+    DatasetDict({
+        train: Dataset({
+            features: ['prompt', 'completion'],
+            num_rows: 116722
+        })
+    })
+    ```
+    """
+    logger.info(f"Creating dataset mixture with {len(mixture_config.datasets)} datasets")
+    datasets_list = []
+    for dataset_config in mixture_config.datasets:
+        logger.info(f"Loading dataset for mixture: {dataset_config.path} (config name: {dataset_config.name})")
+        dataset = datasets.load_dataset(
+            path=dataset_config.path,
+            name=dataset_config.name,
+            data_dir=dataset_config.data_dir,
+            data_files=dataset_config.data_files,
+            split=dataset_config.split,
+            streaming=mixture_config.streaming,
+        )
+        if dataset_config.columns is not None:
+            dataset = dataset.select_columns(dataset_config.columns)
+        datasets_list.append(dataset)
+
+    if datasets_list:
+        combined_dataset = concatenate_datasets(datasets_list)
+        if isinstance(combined_dataset, datasets.Dataset):  # IterableDataset does not have a length
+            logger.info(f"Created dataset mixture with {len(combined_dataset)} examples")
+
+        if mixture_config.test_split_size is not None:
+            logger.info(f"Splitting dataset into train and test sets with test size: {mixture_config.test_split_size}")
+            combined_dataset = combined_dataset.train_test_split(test_size=mixture_config.test_split_size)
+            return combined_dataset
+        else:
+            return DatasetDict({"train": combined_dataset})
+    else:
+        raise ValueError("No datasets were loaded from the mixture configuration")

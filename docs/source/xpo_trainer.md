@@ -1,6 +1,6 @@
 # XPO Trainer
 
-[![](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
+[![model badge](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
 
 ## Overview
 
@@ -35,7 +35,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 judge = PairRMJudge()
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO", logging_steps=10)
+training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO")
 trainer = XPOTrainer(
     model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
@@ -52,12 +52,12 @@ Distributed across 8 GPUs, the training takes approximately 1 hour.
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-XPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-XPO
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-XPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
 <strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-XPO&gt;:</span></strong>
-The best programming language depends on individual preferences and familiarity with coding concepts. Some popular languages include Python, Java, C++, and JavaScript. 
+The best programming language depends on individual preferences and familiarity with coding concepts. Some popular languages include Python, Java, C++, and JavaScript.
 </code></pre>
 
 ## Expected dataset type
@@ -80,15 +80,12 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   trainer = XPOTrainer(
       ...
 -     judge=judge,
-+     reward_model=reward_model,
++     reward_funcs=reward_model,
   )
 ```
 
-<Tip warning={true}>
-
-Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
-
-</Tip>
+> [!WARNING]
+> Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
 
 ### Encourage EOS token generation
 
@@ -124,7 +121,6 @@ python examples/scripts/xpo.py \
     --judge pair_rm \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --logging_steps 25 \
     --output_dir Qwen2.5-0.5B-XPO-PairRM \
     --warmup_ratio 0.1 \
     --push_to_hub
@@ -132,7 +128,7 @@ python examples/scripts/xpo.py \
 
 ## Logged metrics
 
-The logged metrics are as follows:
+While training and evaluating we record the following reward metrics:
 
 * `loss/xpo`: The mean xpo part of the full loss.
 * `loss/dpo`: The mean dpo part of the full loss.
@@ -152,10 +148,12 @@ The logged metrics are as follows:
 * `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
 * `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
 
-
 ## XPOTrainer
 
 [[autodoc]] XPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## XPOConfig
 

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from typing import Any, Callable, Optional, Union
 
 import torch
@@ -21,6 +22,37 @@ from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
 
 
 class BestOfNSampler:
+    """
+    Sampler for best-of-n generation.
+
+    Args:
+        model ([`PreTrainedModelWrapper`]):
+            The pretrained model to use for generation.
+        tokenizer ([`~transformers.PreTrainedTokenizer`] or [`~transformers.PreTrainedTokenizerFast`]):
+            Tokenizer associated with the pretrained model.
+        queries_to_scores (`Callable[[list[str]], list[float]]`):
+            Callable that takes a list of generated texts and returns the associated reward scores.
+        length_sampler (`Any`):
+            Sampler used to sample the length of the generated text.
+        sample_size (`int`, *optional*, defaults to `4`):
+            Number of samples to generate for each query.
+        seed (`int`, *optional*):
+            Random seed used to control generation.
+        n_candidates (`int`, *optional*, defaults to `1`):
+            Number of candidates to return for each query.
+        generation_config ([`~transformers.GenerationConfig`], *optional*):
+            Generation config passed to the underlying model's `generate` method. See
+            [`~transformers.GenerationConfig`] for more details.
+
+    <Deprecated version="0.24.0">
+
+    `BestOfNSampler` is deprecated and will be removed in version 0.25.
+
+    </Deprecated>
+    """
+
+    warnings.warn("`BestOfNSampler` is deprecated and will be removed in TRL 0.25.", FutureWarning, stacklevel=2)
+
     def __init__(
         self,
         model: PreTrainedModelWrapper,
@@ -32,28 +64,6 @@ class BestOfNSampler:
         n_candidates: int = 1,
         generation_config: Optional[GenerationConfig] = None,
     ) -> None:
-        r"""
-        Initialize the sampler for best-of-n generation
-
-        Args:
-            model (`PreTrainedModelWrapper`):
-                The pretrained model to use for generation
-            tokenizer (`PreTrainedTokenizer` or `PreTrainedTokenizerFast`):
-                Tokenizer associated with the pretrained model
-            queries_to_scores (`Callable[[list[str]], list[float]]`):
-                Callable that takes a list of generated texts and returns the associated reward scores
-            length_sampler (`Any`):
-                Sampler used to sample the length of the generated text
-            sample_size (`int`):
-                Number of samples to generate for each query
-            seed (`int`, *optional*):
-                Random seed used to control generation
-            n_candidates (`int`):
-                Number of candidates to return for each query
-            generation_config (`GenerationConfig`, *optional*):
-                Generation config passed to the underlying model's `generate` method.
-                See `GenerationConfig` (https://huggingface.co/docs/transformers/v4.29.1/en/main_classes/text_generation#transformers.GenerationConfig) for more details
-        """
         if seed is not None:
             set_seed(seed)
 
@@ -82,22 +92,23 @@ class BestOfNSampler:
         device: Optional[Union[str, torch.device]] = None,
         **generation_kwargs,
     ) -> list[list[str]]:
-        r"""
-        Generate the best of n samples for input queries
+        """
+        Generate the best of n samples for input queries.
 
         Args:
-            tokenized_query (`list[int]` or `torch.Tensor` or `list[torch.Tensor]` or `list[int]`):
-                represents either a single tokenized query (a single tensor or a list of integers) or a batch of tokenized queries (a list of tensors or a list of lists of integers)
-            skip_special_tokens (`bool`):
-                Whether to remove the special tokens from the output
+            tokenized_query (`list[int]` or `torch.Tensor` or `list[torch.Tensor]` or `list[list[int]]`):
+                Either a single tokenized query (a single tensor or a list of integers) or a batch of tokenized queries
+                (a list of tensors or a list of lists of integers).
+            skip_special_tokens (`bool`, *optional*, defaults to `True`):
+                Whether to remove the special tokens from the output.
             device (`str` or `torch.device`, *optional*):
-                The device on which the model will be loaded
-            **generation_kwargs (`dict`, *optional*):
-                Additional keyword arguments passed along to the underlying model's `generate` method.
-                This is used to override generation config
+                The device on which the model will be loaded.
+            **generation_kwargs:
+                Additional keyword arguments passed along to the underlying model's `generate` method. This is used to
+                override generation config.
 
         Returns:
-            list[list[str]]: A list of lists of generated texts
+            `list[list[str]]`: A list of lists of generated texts.
         """
         queries = None
 

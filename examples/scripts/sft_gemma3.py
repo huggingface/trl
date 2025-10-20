@@ -12,16 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl",
+#     "Pillow",
+#     "trackio",
+#     "kernels",
+# ]
+# ///
+
 """
 Train Gemma-3 on the Codeforces COTS dataset.
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/sft_gemma3.py
 """
 
+import os
+
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
 
 from trl import SFTConfig, SFTTrainer
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main():
@@ -36,7 +51,6 @@ def main():
     # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
-        logging_steps=10,
         bf16=True,
         use_liger_kernel=True,
         gradient_checkpointing=True,
@@ -47,6 +61,7 @@ def main():
         dataset_num_proc=32,
         num_train_epochs=1,
     )
+
     trainer = SFTTrainer(
         args=training_args,
         model=model,

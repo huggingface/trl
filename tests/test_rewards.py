@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
-from trl.rewards import think_format_reward
+from trl.rewards import accuracy_reward, get_soft_overlong_punishment, think_format_reward
+
+from .testing_utils import TrlTestCase, require_math_latex
 
 
-class ThinkFormatRewardTester(unittest.TestCase):
+class TestThinkFormatReward(TrlTestCase):
     def test_valid_format(self):
         completions = [
             "<think>This is my reasoning.</think>This is my answer.",  # Simple, one-line reasoning
@@ -29,7 +30,7 @@ class ThinkFormatRewardTester(unittest.TestCase):
         completions = [[{"content": completion}] for completion in completions]
         expected_rewards = [1.0, 1.0, 1.0, 1.0, 1.0]  # All should be valid
         rewards = think_format_reward(completions)
-        self.assertEqual(rewards, expected_rewards)
+        assert rewards == expected_rewards
 
     def test_invalid_format(self):
         completions = [
@@ -46,7 +47,7 @@ class ThinkFormatRewardTester(unittest.TestCase):
         completions = [[{"content": completion}] for completion in completions]
         expected_rewards = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # All should be invalid
         rewards = think_format_reward(completions)
-        self.assertEqual(rewards, expected_rewards)
+        assert rewards == expected_rewards
 
     def test_mixed_format(self):
         completions = [
@@ -58,8 +59,86 @@ class ThinkFormatRewardTester(unittest.TestCase):
         completions = [[{"content": completion}] for completion in completions]
         expected_rewards = [1.0, 1.0, 0.0, 0.0]
         rewards = think_format_reward(completions)
-        self.assertEqual(rewards, expected_rewards)
+        assert rewards == expected_rewards
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestSoftOverlongPunishmentReward:
+    def test_soft_overlong_punishment_short_completion(self):
+        """Test soft overlong punishment reward function with a short completion."""
+        # length 50, with max=100 and soft cache=20, reward should be 0.
+        reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+        completion_ids = [[1] * 50]  # 50 <= 80
+        rewards = reward_fn(completion_ids=completion_ids)
+        assert rewards == [0]
+
+    def test_soft_overlong_punishment_long_completion(self):
+        """Test soft overlong punishment reward function with a longer than max completion."""
+        # 110 > 100, reward should be -1.
+        reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+        completion_ids = [[1] * 110]
+        rewards = reward_fn(completion_ids)
+        assert rewards == [-1]
+
+    def test_soft_overlong_punishment_intermediate_completion(self):
+        """Test soft overlong punishment reward function for intermediate length completion."""
+        reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+        completion_ids = [[1] * 90]  # 90 is between 80 and 100
+        rewards = reward_fn(completion_ids)
+        assert round(abs(rewards[0] - -0.5), 4) == 0
+
+
+class TestAccuracyReward:
+    @require_math_latex
+    def test_accuracy_reward_correct_answer(self):
+        """Test accuracy_reward with a correct answer."""
+        completion = [[{"content": r"\boxed{\frac{63}{400}}"}], [{"content": r"\boxed{\frac{63}{400}}"}]]
+        solution = [r"\frac{63}{400}", "63/400"]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 1.0
+        assert rewards[1] == 1.0
+
+    @require_math_latex
+    def test_accuracy_reward_wrong_answer(self):
+        """Test accuracy_reward with an incorrect answer."""
+        completion = [[{"content": r"\boxed{\frac{64}{400}}"}]]
+        solution = [r"\frac{63}{400}"]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 0.0
+
+    @require_math_latex
+    def test_accuracy_reward_wrong_answer_no_latex(self):
+        """Test accuracy_reward with an incorrect answer and gold solution with no latex."""
+        completion = [[{"content": r"\boxed{3}"}]]
+        solution = ["6"]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 0.0
+
+    @require_math_latex
+    def test_accuracy_reward_unparseable_gold(self):
+        """Test accuracy_reward with an unparseable gold solution."""
+        completion = [
+            [{"content": "Answer is forty two."}],
+            [{"content": "Some other content."}],
+            [{"content": r"Answer is \boxed{42}."}],
+            [{"content": r"Answer is \boxed{\mathbf{42}}."}],  # Make response bold
+            [{"content": r"Answer is \boxed{\textbf{42}}."}],  # Different latex command for bold
+            [{"content": r"Answer is \boxed{42}."}],
+            [{"content": r"Answer is \boxed{42.3456}."}],
+        ]
+        solution = [
+            "Answer is forty two.",
+            "Answer is forty three.",
+            "Answer is 42.0",  # Decimal point
+            "Answer is 42 43 okay?",  # Extra space
+            "Answer is 42",
+            r"Answer is \n\boxed{42}",  # Newline in gold solution
+            "Answer is 42.34560",  # Extra trailing zero
+        ]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 1.0  # Should revert to exact text match
+        assert rewards[1] == 0.0
+        assert rewards[2] == 1.0
+        assert rewards[3] == 1.0
+        assert rewards[4] == 1.0
+        assert rewards[5] == 1.0
+        assert rewards[6] == 1.0  # Should ignore trailing zeros

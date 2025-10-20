@@ -15,7 +15,7 @@
 import contextlib
 import functools
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 
 from transformers import Trainer
 from transformers.integrations import is_mlflow_available, is_wandb_available
@@ -45,6 +45,7 @@ def profiling_context(trainer: Trainer, name: str) -> Generator[None, None, None
     from transformers import Trainer
     from trl.extras.profiling import profiling_context
 
+
     class MyTrainer(Trainer):
         def some_method(self):
             A = np.random.rand(1000, 1000)
@@ -67,18 +68,19 @@ def profiling_context(trainer: Trainer, name: str) -> Generator[None, None, None
         mlflow.log_metrics(profiling_metrics, step=trainer.state.global_step)
 
 
-def profiling_decorator(func: callable) -> callable:
+def profiling_decorator(func: Callable) -> Callable:
     """
     Decorator to profile a function and log execution time using [`extras.profiling.profiling_context`].
 
     Args:
-        func (`callable`):
+        func (`Callable`):
             Function to be profiled.
 
     Example:
     ```python
     from transformers import Trainer
     from trl.extras.profiling import profiling_decorator
+
 
     class MyTrainer(Trainer):
         @profiling_decorator

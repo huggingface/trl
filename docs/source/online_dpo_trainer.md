@@ -1,10 +1,10 @@
 # Online DPO Trainer
 
-[![](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo,trl)
+[![model badge](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo,trl)
 
-## Overview 
+## Overview
 
-Online DPO was proposed in [Direct Language Model Alignment from Online AI Feedback](https://huggingface.co/papers/2402.04792) by Shangmin Guo, Biao Zhang, Tianlin Liu, Tianqi Liu, Misha Khalman, Felipe Llinares, Alexandre Rame, Thomas Mesnard, Yao Zhao, Bilal Piot, Johan Ferret, and Mathieu Blondel. 
+Online DPO was proposed in [Direct Language Model Alignment from Online AI Feedback](https://huggingface.co/papers/2402.04792) by Shangmin Guo, Biao Zhang, Tianlin Liu, Tianqi Liu, Misha Khalman, Felipe Llinares, Alexandre Rame, Thomas Mesnard, Yao Zhao, Bilal Piot, Johan Ferret, and Mathieu Blondel.
 
 The abstract from the paper is the following:
 
@@ -36,7 +36,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 judge = PairRMJudge()
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = OnlineDPOConfig(output_dir="Qwen2-0.5B-OnlineDPO", logging_steps=10)
+training_args = OnlineDPOConfig(output_dir="Qwen2-0.5B-OnlineDPO")
 trainer = OnlineDPOTrainer(
     model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
@@ -55,7 +55,7 @@ Distributed across 8 GPUs, the training takes approximately 1 hour. You can veri
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-OnlineDPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-OnlineDPO
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-OnlineDPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
@@ -65,7 +65,7 @@ The best programming language depends on your specific needs and priorities. Som
 
 ## Expected dataset type
 
-Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -84,7 +84,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   trainer = OnlineDPOTrainer(
       ...
 -     judge=judge,
-+     reward_model=reward_model,
++     reward_funcs=reward_model,
 +     reward_processing_class=reward_tokenizer,
       ...
   )
@@ -112,7 +112,6 @@ This callback logs the model's generated completions directly to Weights & Biase
 
 ![Logged Completions](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/wandb_completions.png)
 
-
 ## Example script
 
 We provide an example script to train a model using the online DPO method. The script is available in [`examples/scripts/dpo_online.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo_online.py)
@@ -125,7 +124,6 @@ python examples/scripts/dpo_online.py \
     --judge pair_rm \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --logging_steps 25 \
     --output_dir Qwen2.5-0.5B-Online-DPO-PairRM \
     --warmup_ratio 0.1 \
     --push_to_hub
@@ -133,7 +131,7 @@ python examples/scripts/dpo_online.py \
 
 ## Logged metrics
 
-The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/w4apmsi9)
+While training and evaluating, we record the following reward metrics. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/w4apmsi9)
 
 * `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current model and reference model.
 * `objective/entropy`: The mean entropy of the model, indicating the randomness of the actions chosen by the model.
@@ -154,8 +152,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 To validate the online DPO implementation works, we ran experiments with the Pythia 1B, 2.8B, and 6.9B models on a single node of 8 x H100s. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
-
-```
+```shell
 # 1B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
     examples/scripts/dpo_online.py \
@@ -171,7 +168,6 @@ accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
     --max_new_tokens 53 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --logging_steps 20 \
     --save_steps 0.1 \
     --push_to_hub
 
@@ -190,8 +186,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --max_new_tokens 53 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --bf16 \
-    --logging_steps 20 \
     --save_steps 0.1 \
     --push_to_hub
 
@@ -210,18 +204,15 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --max_new_tokens 53 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --bf16 \
     --gradient_checkpointing \
-    --logging_steps 20 \
     --save_steps 0.1 \
     --push_to_hub
 ```
 
 Checkpoints and experiment tracking are available at:
 
-- [🤗 Model checkpoints](https://huggingface.co/collections/trl-lib/online-dpo-66acd3fa38a331a9cd457b07)
-- [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/reports/Online-DPO-experiments-for-TL-DR-summarisation--Vmlldzo5MTczMDU0)
-
+* [🤗 Model checkpoints](https://huggingface.co/collections/trl-lib/online-dpo-66acd3fa38a331a9cd457b07)
+* [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/reports/Online-DPO-experiments-for-TL-DR-summarisation--Vmlldzo5MTczMDU0)
 
 To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
 For more information on how to use judges, see [Judges](judges).
@@ -265,13 +256,14 @@ plt.tight_layout()
 plt.show()
 ```
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/online_dpo_scaling.png)
-
 The online DPO checkpoint gets increasingly more win rate as we scale up the model sizes. This is a good sign that the online DPO implementation is working as intended.
 
 ## OnlineDPOTrainer
 
 [[autodoc]] OnlineDPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## OnlineDPOConfig
 

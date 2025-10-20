@@ -13,12 +13,18 @@
 # limitations under the License.
 
 import atexit
+import base64
 import logging
+import socket
 import time
-from typing import Optional
+from io import BytesIO
+from typing import Optional, Union
+from urllib.parse import urlparse
 
 import torch
+import torch.distributed.distributed_c10d as c10d
 from torch import nn
+from transformers import is_torch_xpu_available
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -47,10 +53,13 @@ class VLLMClient:
     weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
+        base_url (`str`, *optional*):
+            Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `host` and `server_port` are
+            ignored.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
-            IP address of the vLLM server.
+            IP address of the vLLM server. Ignored if `base_url` is provided.
         server_port (`int`, *optional*, defaults to `8000`):
-            Port number of the vLLM server.
+            Port number of the vLLM server. Ignored if `base_url` is provided.
         group_port (`int`, *optional*, defaults to `51216`):
             Port number for the weight update group.
         connection_timeout (`float`, *optional*, defaults to `0.0`):
@@ -71,29 +80,58 @@ class VLLMClient:
 
         ```python
         >>> from trl.extras.vllm_client import VLLMClient
+
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
-        [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
-         [911, 7988, 1251, 382, 3838, 653, 498, 1618, 4325, 879, 2581, 20027, 264, 21428, 30, 362]]
+        {'prompt_ids': [[9707, 11, 15235, 0],
+                        [40451, 752, 264, 21646]],
+         'completion_ids': [[11479, 752, 5046, 279, 1465, 304, 419, 23670, 2038, 358, 2776, 4378, 369, 847, 15549, 6733],
+                            [911, 19654, 382, 3838, 1558, 279, 16158, 1977, 979, 498, 2299, 4460, 311, 10542, 432, 518]],
+         'logprobs': [[-5.193126201629639, -0.05592319369316101, -4.861808776855469, -1.673396110534668, -2.6316866874694824, -0.2861405313014984, -0.35006725788116455, -5.23351526260376, -0.1447441577911377, -5.21489953994751, -1.6022650003433228, -1.9649192094802856, -2.1338791847229004, -1.2775304317474365, -10.004860877990723, -4.171003818511963],
+                      [-0.012896230444312096, -5.747106552124023, -1.5248860120773315, -1.9286258220672607, -2.8512537479400635, -2.8055880069732666, -3.019822835922241, -0.37132859230041504, -0.6311739087104797, -2.562908411026001, -3.1664533615112305, -2.685293436050415, -0.007259538397192955, -7.339841842651367, -1.188662052154541, -3.54781436920166]]}
 
         >>> from transformers import AutoModelForCausalLM
+
         >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
-        >>> client.init_communicator()
+        >>> client.init_communicator(device="cuda")
         >>> client.update_model_params(model)
+        ```
+
+        There are several ways to initialize the client:
+
+        ```python
+        VLLMClient(base_url="http://localhost:8000")
+        VLLMClient(base_url="http://192.168.1.100:8000")
+        VLLMClient(host="localhost", server_port=8000)
+        VLLMClient(host="192.168.1.100", server_port=8000)
         ```
     """
 
     def __init__(
-        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
+        self,
+        base_url: Optional[str] = None,
+        host: str = "0.0.0.0",
+        server_port: int = 8000,
+        group_port: int = 51216,
+        connection_timeout: float = 0.0,
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
         if not is_vllm_available():
-            raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
+            raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
-        self.host = host
-        self.server_port = server_port
+
+        if base_url is not None:
+            # Parse the base_url to extract host and port
+            parsed_url = urlparse(base_url)
+            self.host = socket.gethostbyname(parsed_url.hostname)
+            scheme = parsed_url.scheme or "http"
+            self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
+        else:
+            self.host = host
+            self.server_port = server_port
+            self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
 
@@ -108,7 +146,7 @@ class VLLMClient:
             total_timeout (`float`, *optional*, defaults to `0.0`):
                 Total timeout duration in seconds.
         """
-        url = f"http://{self.host}:{self.server_port}/health/"
+        url = f"{self.base_url}/health/"
         start_time = time.time()  # Record the start time
 
         while True:
@@ -119,11 +157,13 @@ class VLLMClient:
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= total_timeout:
                     raise ConnectionError(
-                        f"The vLLM server can't be reached at {self.host}:{self.server_port} after {total_timeout} "
-                        "seconds. Make sure the server is running by running `trl vllm-serve`."
+                        f"The vLLM server can't be reached at {self.base_url} after {total_timeout} seconds. Make "
+                        "sure the server is running by running `trl vllm-serve`."
                     ) from exc
             else:
                 if response.status_code == 200:
+                    if "X-Forwarded-For" in response.headers:
+                        self.host = response.headers["X-Forwarded-For"]
                     logger.info("Server is up!")
                     return None
 
@@ -134,6 +174,7 @@ class VLLMClient:
     def generate(
         self,
         prompts: list[str],
+        images: Optional[list] = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -141,7 +182,9 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        truncate_prompt_tokens: Optional[int] = None,
         guided_decoding_regex: Optional[str] = None,
+        generation_kwargs: Optional[dict] = None,
     ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
@@ -149,6 +192,8 @@ class VLLMClient:
         Args:
             prompts (`list[str]`):
                 List of text prompts for which the model will generate completions.
+            images (`list[PIL.Image]`, *optional*):
+                List of PIL Images to send along with the prompts.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -163,18 +208,42 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
-            guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            truncate_prompt_tokens (`int`, *optional*):
+                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
+                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
+                disabled.
+            guided_decoding_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
+            generation_kwargs (`dict`, *optional*):
+                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
+                will override them.
 
         Returns:
-            `list[list[int]]`:
-                List of lists of token IDs representing the model-generated completions for each prompt.
+            `dict` with keys:
+                - `prompt_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the tokenized input prompts.
+                - `completion_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the model-generated completions for each prompt.
+                - `logprobs` (`list[list[float]]`):
+                    List of lists of log probabilities for each generated token.
         """
-        url = f"http://{self.host}:{self.server_port}/generate/"
+        url = f"{self.base_url}/generate/"
+
+        def pil_to_base64(image):
+            buffer = BytesIO()
+            image.save(buffer, format="PNG")
+            img_bytes = buffer.getvalue()
+            return base64.b64encode(img_bytes).decode("utf-8")
+
+        # Convert PIL images to base64 strings
+        images = [pil_to_base64(img) for img in images] if images else None
+
         response = self.session.post(
             url,
             json={
                 "prompts": prompts,
+                "images": images,
                 "n": n,
                 "repetition_penalty": repetition_penalty,
                 "temperature": temperature,
@@ -182,20 +251,32 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "truncate_prompt_tokens": truncate_prompt_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
+                "generation_kwargs": generation_kwargs or {},
             },
         )
         if response.status_code == 200:
-            return response.json()["completion_ids"]
+            json_response = response.json()
+            return {
+                "prompt_ids": json_response["prompt_ids"],
+                "completion_ids": json_response["completion_ids"],
+                "logprobs": json_response["logprobs"],
+            }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_communicator(self):
+    def init_communicator(self, device: Union[torch.device, str, int] = 0):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
+
+        Args:
+            device (`torch.device`, `str`, or `int`, *optional*, defaults to `0`):
+                Device of trainer main process. It's the device that will be used for the weights synchronization. Can
+                be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
         # Get the world size from the server
-        url = f"http://{self.host}:{self.server_port}/get_world_size/"
+        url = f"{self.base_url}/get_world_size/"
         response = requests.get(url)
         if response.status_code == 200:
             vllm_world_size = response.json()["world_size"]
@@ -206,9 +287,26 @@ class VLLMClient:
         self.rank = vllm_world_size  # the client's rank is the last process
 
         # Initialize weight update group
-        url = f"http://{self.host}:{self.server_port}/init_communicator/"
+        url = f"{self.base_url}/init_communicator/"
+        # Will simplify it after torch xpu 2.9 support get uuid.
+        if is_torch_xpu_available():
+            if hasattr(torch.xpu.get_device_properties(device), "uuid"):
+                client_device_uuid = str(torch.xpu.get_device_properties(device).uuid)
+            else:
+                client_device_uuid = "42"
+        else:
+            client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
+
         # In the server side, the host is set to 0.0.0.0
-        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size})
+        response = self.session.post(
+            url,
+            json={
+                "host": "0.0.0.0",
+                "port": self.group_port,
+                "world_size": world_size,
+                "client_device_uuid": client_device_uuid,
+            },
+        )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -218,8 +316,22 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=0)
+        if is_torch_xpu_available():
+            store = torch.distributed.TCPStore(
+                host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
+            )
+            prefixed_store = c10d.PrefixStore("client2server", store)
+            pg = c10d.ProcessGroupXCCL(
+                store=prefixed_store,
+                rank=self.rank,
+                size=world_size,
+            )
+            self.communicator = pg
+        else:
+            pg = StatelessProcessGroup.create(
+                host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
+            )
+            self.communicator = PyNcclCommunicator(pg, device=device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -235,14 +347,19 @@ class VLLMClient:
                 Tensor containing the updated weights.
         """
         dtype, shape = str(weights.dtype), tuple(weights.shape)
-        url = f"http://{self.host}:{self.server_port}/update_named_param/"
+        url = f"{self.base_url}/update_named_param/"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        # Broadcast the weights to the other processes
-        self.pynccl_comm.broadcast(weights, src=self.rank)
-        self.pynccl_comm.group.barrier()
+        if is_torch_xpu_available():
+            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, root=self.rank)
+            self.communicator.barrier()
+        else:
+            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, src=self.rank)
+            self.communicator.group.barrier()
 
     def update_model_params(self, model: nn.Module):
         """
@@ -260,7 +377,7 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        url = f"http://{self.host}:{self.server_port}/reset_prefix_cache/"
+        url = f"{self.base_url}/reset_prefix_cache/"
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -269,7 +386,7 @@ class VLLMClient:
         """
         Closes the weight update group and cleans up the communication group.
         """
-        url = f"http://{self.host}:{self.server_port}/close_communicator/"
+        url = f"{self.base_url}/close_communicator/"
 
         try:
             response = self.session.post(url)
@@ -285,8 +402,9 @@ class VLLMClient:
 if __name__ == "__main__":
     from vllm import SamplingParams
 
+    device = "xpu" if is_torch_xpu_available() else "cuda"
     client = VLLMClient()
-    client.init_communicator()
+    client.init_communicator(device=device)
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
@@ -295,5 +413,5 @@ if __name__ == "__main__":
     # Update model weights
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to(device)
     client.update_model_params(model)

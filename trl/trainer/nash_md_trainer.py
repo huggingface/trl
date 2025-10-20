@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import textwrap
 from typing import Any, Callable, Optional, Union
 
@@ -28,11 +27,10 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    is_wandb_available,
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_apex_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
@@ -43,69 +41,91 @@ from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
     empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
     get_reward,
     selective_log_softmax,
     truncate_right,
 )
 
 
-if is_apex_available():
-    from apex import amp
-
-
-if is_wandb_available():
-    import wandb
+if is_peft_available():
+    from peft import PeftModel
 
 
 class NashMDTrainer(OnlineDPOTrainer):
-    r"""
-    Initialize NashMDTrainer as a subclass of [`OnlineDPOConfig`].
+    """
+    Trainer for the Nash-MD method.
+
+    It is implemented as a subclass of [`OnlineDPOTrainer`].
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
-        reward_model (`transformers.PreTrainedModel`):
-            The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
-        judge (`BasePairwiseJudge`):
+        ref_model ([`PreTrainedModelWrapper`]):
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
+        reward_funcs ([`~transformers.PreTrainedModel`]):
+            The reward model to score completions with, preferably an
+            [`~transformers.AutoModelForSequenceClassification`].
+        judge ([`BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
-        args (`NashMDConfig`):
+        args ([`NashMDConfig`]):
             The NashMD config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        data_collator ([`~transformers.DataCollator`]):
+            The data collator to use for training. If None is specified, the default data collator
+            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
-        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
+
+        reward_model:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
+
+            </Deprecated>
     """
 
     _tag_names = ["trl", "nash-md"]
+    _name = "Nash-MD"
+    _paper = {
+        "title": "Nash Learning from Human Feedback",
+        "id": "2312.00886",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{munos2024nash,
+                title        = {{Nash Learning from Human Feedback}},
+                author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
+                year         = 2024,
+                booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+                publisher    = {OpenReview.net},
+                url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
+            }"""),
+    }
 
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
         ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
+        reward_funcs: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
         args: Optional[NashMDConfig] = None,
         data_collator: Optional[Callable] = None,
@@ -119,23 +139,26 @@ class NashMDTrainer(OnlineDPOTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        # Deprecated parameters
+        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
     ) -> None:
         super().__init__(
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_funcs,
             judge=judge,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_class=processing_class,  # for now, NashMDTrainer can't use any reward model
+            reward_processing_classes=processing_class,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            reward_model=reward_model,
         )
 
         self._mixture_coef = self.args.mixture_coef
@@ -157,7 +180,10 @@ class NashMDTrainer(OnlineDPOTrainer):
             "beta": [],
             "mixture_coef": [],
         }
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
+            if len(self.reward_funcs) != 1:
+                raise ValueError("NashMDTrainer only supports one reward function/model.")
+            self.reward_funcs = self.reward_funcs[0]
             self.stats["rewards/chosen"] = []
             self.stats["rewards/rejected"] = []
 
@@ -170,28 +196,50 @@ class NashMDTrainer(OnlineDPOTrainer):
             return self._mixture_coef
 
     def _generate_completions(self, model, prompts):
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            model_output = unwrapped_model.generate(
+        # Generate completions from the policy model.
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_for_gen_ctx:
+            model_output = unwrapped_policy_for_gen_ctx.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
                 generation_config=self.generation_config,
             )
 
-            ref_model = model if self.ref_model is None else self.ref_model
-            with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
-                mixture_model = GeometricMixtureWrapper(
-                    model=unwrapped_model,
-                    ref_model=unwrapped_ref_model,
-                    generation_config=self.generation_config,
-                    mixture_coef=self.mixture_coef,
-                    device=self.accelerator.device,
-                )
+        # Get the DDP/FSDP unwrapped version of the main model.
+        # This will be the policy model for GeometricMixtureWrapper (PEFT adapters active if PEFT is used).
+        policy_model_for_gmw = self.accelerator.unwrap_model(model)
 
-                mixture_output = mixture_model.generate(
-                    input_ids=prompts["input_ids"],
-                    attention_mask=prompts["attention_mask"],
-                    generation_config=self.generation_config,
-                )
+        # Determine the correct reference model for GeometricMixtureWrapper.
+        # This also needs to be DDP/FSDP unwrapped.
+        ref_model_for_gmw: torch.nn.Module
+        if self.ref_model is None:
+            # No explicit ref_model is provided.
+            # Use the base of the main `model` if it's a PEFT model.
+            # policy_model_for_gmw is already DDP-unwrapped.
+            if is_peft_available() and isinstance(policy_model_for_gmw, PeftModel):
+                ref_model_for_gmw = policy_model_for_gmw.get_base_model()
+            else:
+                # Not a PEFT model (or PEFT not available), or already a base model.
+                # Use the DDP-unwrapped policy model itself as the reference.
+                ref_model_for_gmw = policy_model_for_gmw
+        else:
+            # An explicit ref_model is provided. Unwrap it for DDP/FSDP.
+            ref_model_for_gmw = self.accelerator.unwrap_model(self.ref_model)
+
+        # Both models given to GeometricMixtureWrapper (policy_model_for_gmw and ref_model_for_gmw) are DDP-unwrapped.
+        with torch.no_grad():  # Ensure no_grad context for mixture model generation
+            mixture_model = GeometricMixtureWrapper(
+                model=policy_model_for_gmw,
+                ref_model=ref_model_for_gmw,
+                generation_config=self.generation_config,
+                mixture_coef=self.mixture_coef,
+                device=self.accelerator.device,
+            )
+
+            mixture_output = mixture_model.generate(
+                input_ids=prompts["input_ids"],
+                attention_mask=prompts["attention_mask"],
+                generation_config=self.generation_config,
+            )
 
         return model_output, mixture_output
 
@@ -225,10 +273,10 @@ class NashMDTrainer(OnlineDPOTrainer):
     def _compute_rewards(self, model_data, mixture_data, context_length):
         with torch.no_grad():
             _, model_scores, _ = get_reward(
-                self.reward_model, model_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
             _, mixture_scores, _ = get_reward(
-                self.reward_model, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
 
         # Apply EOS penalty if needed
@@ -349,7 +397,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
 
         # Log rewards
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             self.stats["rewards/chosen"].append(gather_mean(model_scores))
             self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
 
@@ -408,7 +456,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         model_data, mixture_data = self._process_completions(model_output, mixture_output, prompts)
 
         # Compute rewards
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             model_scores, mixture_scores = self._compute_rewards(model_data, mixture_data, context_length)
             # probability of the model data vs the mixture data
             probability = F.sigmoid(model_scores - mixture_scores)
@@ -450,68 +498,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss, **kwargs)
+        self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
-
-        citation = textwrap.dedent("""\
-        @inproceedings{munos2024nash,
-            title        = {{Nash Learning from Human Feedback}},
-            author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
-            year         = 2024,
-            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="Nash-MD",
-            trainer_citation=citation,
-            paper_title="Nash Learning from Human Feedback",
-            paper_id="2312.00886",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
