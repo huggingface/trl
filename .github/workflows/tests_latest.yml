@@ -9,6 +9,7 @@ on:
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  TRL_EXPERIMENTAL_SILENCE: 1
 
 jobs:
   tests:
