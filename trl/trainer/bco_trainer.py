@@ -20,10 +20,10 @@ from ..experimental.bco import BCOTrainer as _BCOTrainer
 
 @dataclass
 class BCOTrainer(_BCOTrainer):
-    def __post_init__(self):
+    def __init__(self, *args, **kwargs):
         warnings.warn(
             "The `BCOTrainer` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.bco import BCOTrainer`. The current import path will be removed and no longer "
             "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
-        super().__post_init__()
+        super().__init__(*args, **kwargs)
