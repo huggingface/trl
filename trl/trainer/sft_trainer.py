@@ -818,18 +818,19 @@ class SFTTrainer(BaseTrainer):
                     )
 
         # Loss function
-        if args.loss_type == "nll" or args.use_liger_kernel:
-            pass  # use the default loss
-        elif args.loss_type == "dft":
-            if compute_loss_func is not None:
-                raise ValueError(
-                    "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
-                    "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so passing a "
-                    "`compute_loss_func` is not allowed."
-                )
-            compute_loss_func = dft_loss
-        else:
-            raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+        if not args.use_liger_kernel:  # liger supports dft loss by just passing use_token_scaling=True
+            if args.loss_type == "nll":
+                pass  # use the default loss
+            elif args.loss_type == "dft":
+                if compute_loss_func is not None:
+                    raise ValueError(
+                        "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
+                        "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so "
+                        "passing a `compute_loss_func` is not allowed."
+                    )
+                compute_loss_func = dft_loss
+            else:
+                raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
