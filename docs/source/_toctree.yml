@@ -95,8 +95,6 @@
     title: Model Classes
   - local: model_utils
     title: Model Utilities
-  - local: best_of_n
-    title: Best of N Sampling
   - local: judges
     title: Judges
   - local: callbacks
