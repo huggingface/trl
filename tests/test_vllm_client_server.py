@@ -134,6 +134,7 @@ class TestVLLMClientServer(TrlTestCase):
 # Same as above but using base_url to instantiate the client.
 @pytest.mark.slow
 @require_torch_multi_accelerator
+@require_vllm
 class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
