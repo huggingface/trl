@@ -13,12 +13,11 @@
 # limitations under the License.
 
 import copy
-import itertools
 import textwrap
 from time import strftime
 
+import pytest
 from datasets import Dataset, DatasetDict
-from parameterized import parameterized
 from transformers import AutoProcessor, AutoTokenizer
 
 from trl.data_utils import (
@@ -247,11 +246,11 @@ class TestIsConversational(TrlTestCase):
         {"prompt": "The sky is", "completion": " blue.", "label": True},
     ]
 
-    @parameterized.expand(itertools.product(conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples)
     def test_conversational(self, example):
         assert is_conversational(example)
 
-    @parameterized.expand(itertools.product(non_conversational_examples))
+    @pytest.mark.parametrize("example", non_conversational_examples)
     def test_non_conversational(self, example):
         assert not is_conversational(example)
 
@@ -345,7 +344,8 @@ class TestApplyChatTemplate(TrlTestCase):
         {"prompt": "The sky is", "completion": " blue.", "label": True},  # Unpaired preference
     ]
 
-    @parameterized.expand(itertools.product(tokenizers, conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples)
+    @pytest.mark.parametrize("tokenizer_id", tokenizers)
     def test_apply_chat_template(self, tokenizer_id, example):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
         result = apply_chat_template(example, tokenizer)
@@ -371,7 +371,8 @@ class TestApplyChatTemplate(TrlTestCase):
             assert result["label"] == example["label"]
 
     # both conversational and non-conversational examples
-    @parameterized.expand(itertools.product(tokenizers, conversational_examples + non_conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples + non_conversational_examples)
+    @pytest.mark.parametrize("tokenizer_id", tokenizers)
     def test_maybe_apply_chat_template(self, tokenizer_id, example):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
         result = maybe_apply_chat_template(example, tokenizer)

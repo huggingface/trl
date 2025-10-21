@@ -11,10 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
+import pytest
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
@@ -36,7 +34,7 @@ class TestNashMDTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_nash_md_trainer_training(self, config_name):
         training_args = NashMDConfig(
             output_dir=self.tmp_dir,
@@ -184,7 +182,7 @@ class TestNashMDTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
     def test_nash_md_trainer_judge_training(self, config_name):
         training_args = NashMDConfig(

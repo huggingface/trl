@@ -18,7 +18,6 @@ import pytest
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from transformers.utils import is_peft_available
 
@@ -33,15 +32,16 @@ if is_peft_available():
 
 
 class TestBCOTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "config_name",
         [
-            ("standard_preference",),
-            ("standard_implicit_prompt_preference",),
-            ("standard_unpaired_preference",),
-            ("conversational_preference",),
-            ("conversational_implicit_prompt_preference",),
-            ("conversational_unpaired_preference",),
-        ]
+            "standard_preference",
+            "standard_implicit_prompt_preference",
+            "standard_unpaired_preference",
+            "conversational_preference",
+            "conversational_implicit_prompt_preference",
+            "conversational_unpaired_preference",
+        ],
     )
     @require_sklearn
     def test_train(self, config_name):

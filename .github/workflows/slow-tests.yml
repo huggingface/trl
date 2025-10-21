@@ -47,7 +47,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog parameterized
+          uv pip install pytest-reportlog
 
       - name: Run slow SFT tests on single GPU
         if: always()
@@ -95,7 +95,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog parameterized
+          uv pip install pytest-reportlog
 
       - name: Run slow SFT tests on Multi GPU
         if: always()
