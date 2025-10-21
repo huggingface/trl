@@ -57,13 +57,11 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
 GEN_URL = "http://0.0.0.0:8000/generate/"
 ENV_URL = "http://0.0.0.0:8001"
 
-# Start the Echo server in background
 print("⚡ Starting FastAPI server for Echo Environment...")
 
-# Determine the correct path
-work_dir = str(Path.cwd().parent.absolute())
 
 # Workaround if you can't run the env with Docker
+work_dir = str(Path.cwd().parent.absolute())
 server_process = subprocess.Popen(
     [sys.executable, "-m", "uvicorn", "envs.echo_env.server.app:app", "--host", "0.0.0.0", "--port", "8001"],
     env={**os.environ, "PYTHONPATH": f"{work_dir}/src"},
@@ -73,11 +71,9 @@ server_process = subprocess.Popen(
     cwd=work_dir,
 )
 
-# Wait for server to start
 print("⏳ Waiting for server to start...")
 time.sleep(5)
 
-# Check if server is running
 try:
     response = requests.get(f"{ENV_URL}/health", timeout=2)
     print("\n✅ Echo Environment server is running!")

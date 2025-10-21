@@ -24,7 +24,7 @@ from datasets import Dataset
 from envs.openspiel_env import OpenSpielEnv
 from envs.openspiel_env.models import OpenSpielAction
 
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer, apply_chat_template
 
 
 """
@@ -99,7 +99,6 @@ server_process = subprocess.Popen(
     cwd=work_dir,
 )
 
-# Wait for server to start
 print("⏳ Waiting for server to start...")
 time.sleep(5)
 
@@ -145,7 +144,7 @@ def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, proc
     all_completion_ids = []
     all_logprobs = []
 
-    for prompt_idx, base_prompt in enumerate(prompts):
+    for base_prompt in prompts:
         for _ in range(args.num_generations):
             # Run episode: Reset environment and loop until done
             env_result = client.reset()
@@ -157,13 +156,13 @@ def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, proc
             episode_logprobs = []
 
             while not obs.done:
-                # FIXME: handle this better
-                episode_msg = [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]
-                episode_prompt = processing_class.apply_chat_template(episode_msg, tokenize=False)
+                # FIXME: handle the addition of observation to prompt more cleanly, ideally without a train_dataset
+                episode_msg = {"prompt": [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]}
+                episode_prompt = apply_chat_template(episode_msg, processing_class)
 
                 # Generate action from model
                 gen_payload = {
-                    "prompts": [episode_prompt],
+                    "prompts": [episode_prompt["prompt"]],
                     "n": 1,
                     "temperature": args.temperature,
                     "top_p": args.top_p,
@@ -235,7 +234,7 @@ training_args = GRPOConfig(
     report_to=["trackio", "wandb"],
     num_train_epochs=1,
     num_generations=8,
-    max_completion_length=64,  # Shorter for catch game (just need action selection)
+    max_completion_length=64,
     per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
 )
@@ -247,3 +246,9 @@ trainer = GRPOTrainer(
     rollout_func=rollout_func,
 )
 trainer.train()
+
+# Give time for background threads to finish
+time.sleep(5)
+
+print("🛑 Terminating environment server...")
+server_process.terminate()
