@@ -155,6 +155,7 @@ def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, proc
             episode_completion_ids = []
             episode_logprobs = []
 
+            # TODO: parallelise!
             while not obs.done:
                 # FIXME: handle the addition of observation to prompt more cleanly, ideally without a train_dataset
                 episode_msg = {"prompt": [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]}
@@ -234,7 +235,7 @@ training_args = GRPOConfig(
     report_to=["trackio", "wandb"],
     num_train_epochs=1,
     num_generations=8,
-    max_completion_length=64,
+    max_completion_length=4,
     per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
 )
