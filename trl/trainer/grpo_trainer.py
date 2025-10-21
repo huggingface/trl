@@ -94,10 +94,11 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-# What we call a rollout function is a callable that takes in the data and sampling parameters and returns a list of
-# generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs" fields and can include an optional "tools"
-# field. Any extra fields (per-completion) are forwarded to the reward functions.
-RolloutFunc = Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]
+# What we call a rollout function is a callable that takes prompts (list), images (optional), args (GRPOConfig),
+# and processing_class as parameters and returns a dict of generation results. Those results must include "prompt_ids",
+# "completion_ids", and "logprobs" fields and can include an optional "tools" field. Any extra fields (per-completion)
+# are forwarded to the reward functions.
+RolloutFunc = Callable[[list[str], Any, Any, Any], dict[str, Any]]
 
 
 class GRPOTrainer(BaseTrainer):
