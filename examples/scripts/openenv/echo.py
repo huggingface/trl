@@ -63,6 +63,7 @@ print("⚡ Starting FastAPI server for Echo Environment...")
 # Determine the correct path
 work_dir = str(Path.cwd().parent.absolute())
 
+# Workaround if you can't run the env with Docker
 server_process = subprocess.Popen(
     [sys.executable, "-m", "uvicorn", "envs.echo_env.server.app:app", "--host", "0.0.0.0", "--port", "8001"],
     env={**os.environ, "PYTHONPATH": f"{work_dir}/src"},
@@ -167,7 +168,6 @@ training_args = GRPOConfig(
     max_completion_length=2048,
     per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
-    max_steps=1,
 )
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
