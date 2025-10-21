@@ -49,12 +49,12 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 
 # Run training
 
 ```sh
-CUDA_VISIBLE_DEVICES=1 python trl/experimental/openenv/catch.py
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/catch.py
 ```
 """
 
 GEN_URL = "http://0.0.0.0:8000/generate/"
-ENV_URL = "http://0.0.0.0:8002"
+ENV_URL = "http://0.0.0.0:8001"
 
 BASE_PROMPT = """You are an AI agent playing the game **Catch**.
 
@@ -91,7 +91,7 @@ print("⚡ Starting FastAPI server for OpenSpiel Catch Environment...")
 work_dir = str(Path.cwd().parent.absolute())
 
 server_process = subprocess.Popen(
-    [sys.executable, "-m", "uvicorn", "envs.openspiel_env.server.app:app", "--host", "0.0.0.0", "--port", "8002"],
+    [sys.executable, "-m", "uvicorn", "envs.openspiel_env.server.app:app", "--host", "0.0.0.0", "--port", "8001"],
     env={**os.environ, "PYTHONPATH": f"{work_dir}/src"},
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
@@ -157,8 +157,9 @@ def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, proc
             episode_logprobs = []
 
             while not obs.done:
-                # Build prompt with current observation and legal actions
-                episode_prompt = f"{base_prompt}\n\n{obs.info_state}\n"
+                # FIXME: handle this better
+                episode_msg = [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]
+                episode_prompt = processing_class.apply_chat_template(episode_msg, tokenize=False)
 
                 # Generate action from model
                 gen_payload = {
