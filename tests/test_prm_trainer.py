@@ -14,9 +14,9 @@
 
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 from datasets import Dataset, load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.utils import is_peft_available
 
@@ -209,7 +209,7 @@ class TestPRMTrainer(TrlTestCase):
         self.model = AutoModelForTokenClassification.from_pretrained(model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    @parameterized.expand([True, False])
+    @pytest.mark.parametrize("train_on_last_step_only", [True, False])
     def test_train_full(self, train_on_last_step_only):
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
         training_args = PRMConfig(

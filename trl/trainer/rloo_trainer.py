@@ -197,47 +197,6 @@ class RLOOTrainer(BaseTrainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-
-        config:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `args` instead.
-
-            </Deprecated>
-
-        reward_model:
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
-
-            </Deprecated>
-
-        policy:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `model` instead.
-
-            </Deprecated>
-
-        ref_policy:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. To use the initial model as the
-            reference model, simply omit this parameter. The parameter is ignored.
-
-            </Deprecated>
-
-        data_collator:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. The RLOOTrainer does not use a data
-            collator, so this parameter is ignored.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "rloo"]
@@ -260,9 +219,8 @@ class RLOOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        # Note for dev: we can remove the default None when we remove the deprecated model parameter in version 0.25.0
-        model: Union[str, PreTrainedModel] = None,
-        reward_funcs: Union[RewardFunc, list[RewardFunc]] = None,
+        model: Union[str, PreTrainedModel],
+        reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[RLOOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -271,12 +229,6 @@ class RLOOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
-        # Deprecated parameters
-        config=None,
-        reward_model=None,
-        policy=None,
-        ref_policy=None,
-        data_collator=None,
     ):
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -285,70 +237,6 @@ class RLOOTrainer(BaseTrainer):
                 "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
                 "TRL_EXPERIMENTAL_SILENCE=1."
             )
-        # Handle deprecated parameters
-        if config is not None:
-            warnings.warn(
-                "Parameter 'config' is deprecated and will be removed in version 0.25.0. Please use 'args' instead. "
-                "We are setting args=config"
-            )
-            if args is None:
-                args = config
-            else:
-                raise ValueError("Cannot specify both 'config' (deprecated) and 'args'. Please use 'args' only.")
-
-        if reward_model is not None:
-            warnings.warn(
-                "Parameter 'reward_model' is deprecated and will be removed in version 0.25.0. Please use "
-                "'reward_funcs' instead. We are setting reward_funcs=reward_model"
-            )
-            if reward_funcs is None:
-                reward_funcs = reward_model
-            else:
-                raise ValueError(
-                    "Cannot specify both 'reward_model' (deprecated) and 'reward_funcs'. Please use 'reward_funcs' "
-                    "only."
-                )
-        if policy is not None:
-            warnings.warn(
-                "Parameter 'policy' is deprecated and will be removed in version 0.25.0. Please use 'model' instead. "
-                "We are setting model=policy"
-            )
-            if model is None:
-                model = policy
-            else:
-                raise ValueError("Cannot specify both 'policy' (deprecated) and 'model'. Please use 'model' only.")
-        if ref_policy is not None:
-            warnings.warn(
-                "Parameter 'ref_policy' is deprecated and will be removed in version 0.25.0. To use the initial model "
-                "as the reference model, simply omit this parameter. The parameter is ignored."
-            )
-        if data_collator is not None:
-            warnings.warn(
-                "Parameter 'data_collator' is deprecated and will be removed in version 0.25.0. The RLOOTrainer does "
-                "not use a data collator, so this parameter is ignored."
-            )
-        if "input_ids" in train_dataset.column_names:
-            warnings.warn(
-                "The training dataset contains a column named 'input_ids', indicating that it is pre-tokenized. "
-                "Support for pre-tokenized datasets is deprecated and will be removed in version 0.25. Please provide "
-                "the raw dataset (conversational or standard) with a 'prompt' column instead."
-            )
-
-            def decode(example, tokenizer):
-                return {"prompt": tokenizer.decode(example["input_ids"])}
-
-            train_dataset = train_dataset.map(decode, fn_kwargs={"tokenizer": processing_class})
-        if eval_dataset is not None and "input_ids" in eval_dataset.column_names:
-            warnings.warn(
-                "The evaluation dataset contains a column named 'input_ids', indicating that it is pre-tokenized. "
-                "Support for pre-tokenized datasets is deprecated and will be removed in version 0.25. Please provide "
-                "the raw dataset (conversational or standard) with a 'prompt' column instead."
-            )
-
-            def decode(example, tokenizer):
-                return {"prompt": tokenizer.decode(example["input_ids"])}
-
-            eval_dataset = eval_dataset.map(decode, fn_kwargs={"tokenizer": processing_class})
 
         # Args
         if args is None:
