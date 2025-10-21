@@ -95,17 +95,17 @@ except Exception as e:
 client = EchoEnv(base_url=f"{ENV_URL}")
 
 
-def rollout_func(prompts, **sampling_kwargs):
+def rollout_func(prompts, images, args, processing_class):
     # Make request to TRL's custom /generate/ endpoint
     payload = {
         "prompts": prompts,
-        "n": sampling_kwargs.get("n", 1),
-        "temperature": sampling_kwargs.get("temperature", 1.0),
-        "top_p": sampling_kwargs.get("top_p", 1.0),
-        "top_k": sampling_kwargs.get("top_k", -1),
-        "min_p": sampling_kwargs.get("min_p", 0.0),
-        "max_tokens": sampling_kwargs.get("max_tokens", 128),
-        "repetition_penalty": sampling_kwargs.get("repetition_penalty", 1.0),
+        "n": args.num_generations,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "top_k": -1 if args.top_k is None else args.top_k,
+        "min_p": 0.0 if args.min_p is None else args.min_p,
+        "max_tokens": args.max_completion_length,
+        "repetition_penalty": args.repetition_penalty,
     }
     response = requests.post(GEN_URL, json=payload)
 
@@ -115,15 +115,12 @@ def rollout_func(prompts, **sampling_kwargs):
     response.raise_for_status()
     result = response.json()
 
-    # FIXME: we should not need to propagate the processing_class like this
-    processing_class = sampling_kwargs.get("processing_class", None)
-
     completions_text = processing_class.batch_decode(result["completion_ids"], skip_special_tokens=True)
 
     # Flush env
     env_result = client.reset()
-    env_rewards = []
 
+    env_rewards = []
     for msg in completions_text:
         env_result = client.step(EchoAction(message=msg))
         env_rewards.append(env_result.reward)
@@ -155,7 +152,7 @@ training_args = GRPOConfig(
     report_to=["trackio", "wandb"],
     num_train_epochs=1,
     num_generations=8,
-    max_completion_length=4096,
+    max_completion_length=2048,
     per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
 )

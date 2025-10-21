@@ -201,9 +201,10 @@ class GRPOTrainer(BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         rollout_func (`RolloutFunc`, *optional*, defaults to `None`):
-            Function to use for generating completions. It must take in the data sampling parameters and return a list
-            of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs" fields and
-            can include optional "tools" field and any other fields that are forwarded to the reward functions.
+            Function to use for generating completions. It must take prompts, images (optional), args, and
+            processing_class as parameters and return a dict with "prompt_ids", "completion_ids", and "logprobs"
+            fields. It can include optional "tools" field and any other fields that are forwarded to the reward
+            functions.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -1132,16 +1133,8 @@ class GRPOTrainer(BaseTrainer):
                         if self.rollout_func is not None:
                             output = self.rollout_func(
                                 prompts=ordered_set_of_prompts,
-                                n=self.num_generations,
-                                repetition_penalty=self.repetition_penalty,
-                                temperature=self.temperature,
-                                top_p=self.top_p,
-                                top_k=-1 if self.top_k is None else self.top_k,
-                                min_p=0.0 if self.min_p is None else self.min_p,
-                                max_tokens=self.max_completion_length,
-                                truncate_prompt_tokens=self.max_prompt_length,
-                                guided_decoding_regex=self.guided_decoding_regex,
-                                generation_kwargs=self.args.generation_kwargs,
+                                images=ordered_set_of_images,
+                                args=self.args,
                                 processing_class=self.processing_class,
                             )
                         else:
