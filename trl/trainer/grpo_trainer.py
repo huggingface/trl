@@ -96,7 +96,7 @@ RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 # What we call a rollout function is a callable that takes in the data and sampling parameters and returns a list of
 # generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs" fields and can include an optional "tools"
-# field. Any extra fields are forwarded to the reward functions.
+# field. Any extra fields (per-completion) are forwarded to the reward functions.
 RolloutFunc = Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]
 
 
@@ -1159,14 +1159,17 @@ class GRPOTrainer(BaseTrainer):
                                 guided_decoding_regex=self.guided_decoding_regex,
                                 generation_kwargs=self.args.generation_kwargs,
                             )
-                        payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
+                        # Extract required fields and collect any extra fields for reward functions
+                        required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+                        extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+                        payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"], extra_fields)
                 else:
                     payload = None
 
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
-                all_prompt_ids, all_completion_ids, all_logprobs = obj_list[0]
+                all_prompt_ids, all_completion_ids, all_logprobs, all_extra_fields = obj_list[0]
 
                 # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
                 all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
@@ -1178,6 +1181,15 @@ class GRPOTrainer(BaseTrainer):
                 prompt_ids = all_prompt_ids[process_slice]
                 completion_ids = all_completion_ids[process_slice]
                 logprobs = all_logprobs[process_slice]
+
+                # Slice extra fields dict-of-lists per process (extra fields are per-completion, like completion_ids)
+                extra_fields = {}
+                for key, values in all_extra_fields.items():
+                    if isinstance(values, list):
+                        extra_fields[key] = values[process_slice]
+                    else:
+                        # Scalar value, keep as-is
+                        extra_fields[key] = values
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1252,6 +1264,8 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = all_completion_ids
                     logprobs = all_logprobs
 
+                extra_fields = {}  # No extra fields for colocate mode
+
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
 
@@ -1288,6 +1302,7 @@ class GRPOTrainer(BaseTrainer):
             # Restore the original attention implementation, training mode
             self.model_wrapped.config._attn_implementation = previous_attn
             logprobs = None  # not used in this case
+            extra_fields = {}  # No extra fields for paged mode
 
         else:
             # Regular generation path
@@ -1328,14 +1343,15 @@ class GRPOTrainer(BaseTrainer):
             prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
             logprobs = None  # not used in this case
+            extra_fields = {}  # No extra fields for non-rollout_func paths
 
-        return prompt_ids, completion_ids, logprobs
+        return prompt_ids, completion_ids, logprobs, extra_fields
 
     def _generate(self, prompts: list[str], images: Optional[list]):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompt_ids, completion_ids, logprobs = self._generate_single_turn(prompts, images)
+        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts, images)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -1367,7 +1383,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, total_completion_tokens, logprobs
+        return prompt_ids, completion_ids, total_completion_tokens, logprobs, extra_fields
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1387,8 +1403,8 @@ class GRPOTrainer(BaseTrainer):
         if images is not None and all(img_list == [] for img_list in images):
             images = None
 
-        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list = self._generate(
-            prompts, images
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
+            self._generate(prompts, images)
         )
 
         # Convert lists of token IDs to padded tensors
@@ -1506,6 +1522,16 @@ class GRPOTrainer(BaseTrainer):
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
+
+        # Merge extra_fields from rollout_func into inputs for reward functions
+        if extra_fields:
+            for i, inp in enumerate(inputs):
+                for key, values in extra_fields.items():
+                    if isinstance(values, list) and i < len(values):
+                        inp[key] = values[i]
+                    elif not isinstance(values, list):
+                        # Scalar value, add to all inputs
+                        inp[key] = values
 
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice

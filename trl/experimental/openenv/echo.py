@@ -1,25 +1,51 @@
-from datasets import load_dataset
-import requests
-from trl import GRPOConfig, GRPOTrainer
-import subprocess
-import time
-import sys
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ruff: noqa: T201
 import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import requests
+from datasets import load_dataset
+from envs.echo_env import EchoEnv
 from envs.echo_env.models import (
     EchoAction,
 )
-from envs.echo_env import EchoEnv
-from pathlib import Path
+
+from trl import GRPOConfig, GRPOTrainer
+
+
 """
 Simple script to run GRPO training with OpenEnv's Echo environment and a vLLM server. The reward function encourages
 longer completions.
 
+Setup:
+
+```bash
+uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+```
+
 Usage (2 GPUs required):
 
--- Spin up server -- CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port
-8000
+-- Spin up server -- 
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 
--- Run this script -- CUDA_VISIBLE_DEVICES=1 python trl/experimental/openenv/echo.py
+-- Run this script -- 
+CUDA_VISIBLE_DEVICES=1 python trl/experimental/openenv/echo.py
 """
 
 GEN_URL = "http://0.0.0.0:8000/generate/"
@@ -32,16 +58,12 @@ print("⚡ Starting FastAPI server for Echo Environment...")
 work_dir = str(Path.cwd().parent.absolute())
 
 server_process = subprocess.Popen(
-    [sys.executable, "-m", "uvicorn",
-     "envs.echo_env.server.app:app",
-     "--host", "0.0.0.0",
-     "--port", "8001"],
-    env={**os.environ,
-         "PYTHONPATH": f"{work_dir}/src"},
+    [sys.executable, "-m", "uvicorn", "envs.echo_env.server.app:app", "--host", "0.0.0.0", "--port", "8001"],
+    env={**os.environ, "PYTHONPATH": f"{work_dir}/src"},
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     text=True,
-    cwd=work_dir
+    cwd=work_dir,
 )
 
 # Wait for server to start
@@ -49,9 +71,8 @@ print("⏳ Waiting for server to start...")
 time.sleep(5)
 
 # Check if server is running
-import requests
 try:
-    response = requests.get(f'{ENV_URL}/health', timeout=2)
+    response = requests.get(f"{ENV_URL}/health", timeout=2)
     print("\n✅ Echo Environment server is running!")
 except Exception as e:
     print(f"\n❌ Server failed to start: {e}")
@@ -68,8 +89,8 @@ except Exception as e:
 client = EchoEnv(base_url=f"{ENV_URL}")
 print("✅ Client created!")
 
-def rollout_func(prompts, **sampling_kwargs):
 
+def rollout_func(prompts, **sampling_kwargs):
     # Make request to TRL's custom /generate/ endpoint
     payload = {
         "prompts": prompts,
@@ -91,7 +112,7 @@ def rollout_func(prompts, **sampling_kwargs):
     response.raise_for_status()
     result = response.json()
 
-    # Decode for env communication
+    # FIXME: we should not need to propagate the processing_class like this
     processing_class = sampling_kwargs.get("processing_class", None)
 
     completions_text = processing_class.batch_decode(result["completion_ids"], skip_special_tokens=True)
@@ -99,30 +120,32 @@ def rollout_func(prompts, **sampling_kwargs):
     # Flush env
     env_result = client.reset()
 
-    # Take an action (HTTP POST /step)
+    # Take an action (HTTP POST /step) and collect environment rewards
     print("\n📤 Calling client.step()...")
+    env_rewards = []
 
     for msg in completions_text:
         env_result = client.step(EchoAction(message=msg))
+        env_rewards.append(env_result.reward)
 
-    # Get state (HTTP GET /state)
-    state = client.state()
-    # print(f"\n📊 Episode state:")
-    # print(f"   • episode_id: {state.episode_id}")
-    # print(f"   • step_count: {state.step_count}")
-
-    # print(f"Response keys: {result.keys()}")
-    # print(f"Response shapes: {[(k, len(v) if isinstance(v, list) else 'not-list') for k, v in result.items()]}")
-    # print(f"=== rollout_func completed ===\n")
+    result["env_reward"] = env_rewards
 
     return result
 
+
 dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train[:1000]")
 
-def reward_len(completions, **kwargs):
-    """Reward function that rewards longer completions."""
-    completion_contents = [completion[0]["content"] for completion in completions]
-    return [float(len(content)) for content in completion_contents]
+
+def reward_from_env(completions, **kwargs):
+    """Reward function that uses the environment reward."""
+    # Extract environment rewards from kwargs (propagated via extra_fields)
+    env_rewards = kwargs.get("env_reward", [])
+    if env_rewards:
+        return [float(reward) for reward in env_rewards]
+    else:
+        # Fallback if env_reward is not available
+        return [0.0] * len(completions)
+
 
 training_args = GRPOConfig(
     output_dir="scratch/Qwen2.5-0.5B-GRPO-Rollout",
@@ -131,14 +154,14 @@ training_args = GRPOConfig(
     logging_steps=1,
     report_to=["trackio", "wandb"],
     num_train_epochs=1,
-    num_generations=16,
+    num_generations=8,
     max_completion_length=4096,
     per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
 )
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
-    reward_funcs=reward_len,
+    reward_funcs=reward_from_env,
     args=training_args,
     train_dataset=dataset,
     rollout_func=rollout_func,
