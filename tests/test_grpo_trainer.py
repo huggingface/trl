@@ -693,7 +693,6 @@ class TestGRPOTrainer(TrlTestCase):
     def test_training_with_cast_lm_head_to_fp32(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
-            fp16=True,
             output_dir=self.tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=3,
@@ -714,6 +713,7 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.model.lm_head.weight.dtype == torch.float32
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
