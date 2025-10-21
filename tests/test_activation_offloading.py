@@ -182,8 +182,8 @@ class TestActivationOffloading(TrlTestCase):
         assert total_tensor_ids > 0, "Should have created tensor IDs"
 
         # modified=True means offloaded to CPU, modified=False means kept on GPU (deduplicated)
-        deduplicated_count = sum(1 for _, modified in offload_ctx.tracker.values() if not modified)
-        offloaded_count = sum(1 for _, modified in offload_ctx.tracker.values() if modified)
+        deduplicated_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if not modified)
+        offloaded_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if modified)
 
         assert offloaded_count > 0, "Should have offloaded at least one tensor"
         assert deduplicated_count > 0, "Should have deduplicated at least one tensor (view)"
