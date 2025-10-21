@@ -47,6 +47,7 @@ import requests
 from envs.openspiel_env import OpenSpielEnv
 from envs.openspiel_env.models import OpenSpielAction
 
+
 ENV_URL = "http://0.0.0.0:8002"
 
 
@@ -120,9 +121,9 @@ def run_episode(env, policy, visualize=True, delay=0.3):
     obs = result.observation
 
     if visualize:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"   🎮 {policy.name}")
-        print(f"   🎲 Playing against OpenSpiel Catch")
+        print("   🎲 Playing against OpenSpiel Catch")
         print("=" * 60 + "\n")
         time.sleep(delay)
 
@@ -153,7 +154,7 @@ def run_episode(env, policy, visualize=True, delay=0.3):
 
     if visualize:
         result_text = "🎉 CAUGHT!" if total_reward > 0 else "😢 MISSED"
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"   {result_text} Total Reward: {total_reward}")
         print("=" * 60)
 
@@ -232,7 +233,7 @@ def run_demo():
 
         # Get final environment state
         state = client.state()
-        print(f"\n📊 Final Environment State:")
+        print("\n📊 Final Environment State:")
         print(f"   Episode ID: {state.episode_id}")
         print(f"   Step count: {state.step_count}")
         print(f"   Game: {state.game_name}")

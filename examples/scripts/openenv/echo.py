@@ -167,7 +167,7 @@ training_args = GRPOConfig(
     max_completion_length=2048,
     per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
-    max_steps=1
+    max_steps=1,
 )
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",

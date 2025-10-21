@@ -158,10 +158,7 @@ def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, proc
 
             while not obs.done:
                 # Build prompt with current observation and legal actions
-                episode_prompt = (
-                    f"{base_prompt}\n\n"
-                    f"{obs.info_state}\n"
-                )
+                episode_prompt = f"{base_prompt}\n\n{obs.info_state}\n"
 
                 # Generate action from model
                 gen_payload = {
@@ -183,11 +180,13 @@ def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, proc
                 episode_completion_ids.extend(gen_result["completion_ids"][0])
                 episode_logprobs.extend(gen_result["logprobs"][0])
 
-                completion_text = processing_class.batch_decode(gen_result["completion_ids"], skip_special_tokens=True)[0]
+                completion_text = processing_class.batch_decode(
+                    gen_result["completion_ids"], skip_special_tokens=True
+                )[0]
 
                 # Parse action from completion
                 action_id = 0  # default
-                numbers = re.findall(r'\b([0-2])\b', completion_text)
+                numbers = re.findall(r"\b([0-2])\b", completion_text)
                 if numbers:
                     action_id = int(numbers[0])
                 elif obs.legal_actions:
