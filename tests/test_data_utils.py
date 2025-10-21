@@ -18,9 +18,7 @@ from time import strftime
 
 import pytest
 from datasets import Dataset, DatasetDict
-from parameterized import parameterized
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
-from transformers import AutoProcessor, AutoTokenizer
 
 from trl.data_utils import (
     apply_chat_template,

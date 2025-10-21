@@ -1279,7 +1279,7 @@ class GRPOTrainer(BaseTrainer):
 
         return prompt_ids, completion_ids, logprobs
 
-    def _generate(self, prompts: list[str]):
+    def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
