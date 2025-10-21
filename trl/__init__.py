@@ -53,7 +53,6 @@ _import_structure = {
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "extras": ["BestOfNSampler"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -133,7 +132,6 @@ if TYPE_CHECKING:
         truncate_dataset,
         unpair_preference_dataset,
     )
-    from .extras import BestOfNSampler
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

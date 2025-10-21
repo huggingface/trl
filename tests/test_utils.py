@@ -30,7 +30,6 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     RepeatSampler,
     batch_generation,
-    decode_and_strip_padding,
     entropy_from_logits,
     flush_left,
     flush_right,
@@ -168,21 +167,6 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
-
-
-class TestDecodeAndStripPadding(TrlTestCase):
-    def setup_method(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-
-    def test_example_with_padding(self):
-        inputs = self.tokenizer(["Hello world", "Hello"], padding=True, return_tensors="pt")
-        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        assert decoded == ["Hello world", "Hello"]
-
-    def test_example_without_padding(self):
-        inputs = self.tokenizer(["Hello", "Hello"], padding=False, return_tensors="pt")
-        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        assert decoded == ["Hello", "Hello"]
 
 
 class TestGenerateModelCard(TrlTestCase):
