@@ -192,47 +192,6 @@ class RLOOTrainer(BaseTrainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-
-        config:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `args` instead.
-
-            </Deprecated>
-
-        reward_model:
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
-
-            </Deprecated>
-
-        policy:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `model` instead.
-
-            </Deprecated>
-
-        ref_policy:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. To use the initial model as the
-            reference model, simply omit this parameter. The parameter is ignored.
-
-            </Deprecated>
-
-        data_collator:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. The RLOOTrainer does not use a data
-            collator, so this parameter is ignored.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "rloo"]
@@ -255,9 +214,8 @@ class RLOOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        # Note for dev: we can remove the default None when we remove the deprecated model parameter in version 0.25.0
-        model: Union[str, PreTrainedModel] = None,
-        reward_funcs: Union[RewardFunc, list[RewardFunc]] = None,
+        model: Union[str, PreTrainedModel],
+        reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[RLOOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -266,12 +224,6 @@ class RLOOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
-        # Deprecated parameters
-        config=None,
-        reward_model=None,
-        policy=None,
-        ref_policy=None,
-        data_collator=None,
     ):
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -280,70 +232,6 @@ class RLOOTrainer(BaseTrainer):
                 "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
                 "TRL_EXPERIMENTAL_SILENCE=1."
             )
-        # Handle deprecated parameters
-        if config is not None:
-            warnings.warn(
-                "Parameter 'config' is deprecated and will be removed in version 0.25.0. Please use 'args' instead. "
-                "We are setting args=config"
-            )
-            if args is None:
-                args = config
-            else:
-                raise ValueError("Cannot specify both 'config' (deprecated) and 'args'. Please use 'args' only.")
-
-        if reward_model is not None:
-            warnings.warn(
-                "Parameter 'reward_model' is deprecated and will be removed in version 0.25.0. Please use "
-                "'reward_funcs' instead. We are setting reward_funcs=reward_model"
-            )
-            if reward_funcs is None:
-                reward_funcs = reward_model
-            else:
-                raise ValueError(
-                    "Cannot specify both 'reward_model' (deprecated) and 'reward_funcs'. Please use 'reward_funcs' "
-                    "only."
-                )
-        if policy is not None:
-            warnings.warn(
-                "Parameter 'policy' is deprecated and will be removed in version 0.25.0. Please use 'model' instead. "
-                "We are setting model=policy"
-            )
-            if model is None:
-                model = policy
-            else:
-                raise ValueError("Cannot specify both 'policy' (deprecated) and 'model'. Please use 'model' only.")
-        if ref_policy is not None:
-            warnings.warn(
-                "Parameter 'ref_policy' is deprecated and will be removed in version 0.25.0. To use the initial model "
-                "as the reference model, simply omit this parameter. The parameter is ignored."
-            )
-        if data_collator is not None:
-            warnings.warn(
-                "Parameter 'data_collator' is deprecated and will be removed in version 0.25.0. The RLOOTrainer does "
-                "not use a data collator, so this parameter is ignored."
-            )
-        if "input_ids" in train_dataset.column_names:
-            warnings.warn(
-                "The training dataset contains a column named 'input_ids', indicating that it is pre-tokenized. "
-                "Support for pre-tokenized datasets is deprecated and will be removed in version 0.25. Please provide "
-                "the raw dataset (conversational or standard) with a 'prompt' column instead."
-            )
-
-            def decode(example, tokenizer):
-                return {"prompt": tokenizer.decode(example["input_ids"])}
-
-            train_dataset = train_dataset.map(decode, fn_kwargs={"tokenizer": processing_class})
-        if eval_dataset is not None and "input_ids" in eval_dataset.column_names:
-            warnings.warn(
-                "The evaluation dataset contains a column named 'input_ids', indicating that it is pre-tokenized. "
-                "Support for pre-tokenized datasets is deprecated and will be removed in version 0.25. Please provide "
-                "the raw dataset (conversational or standard) with a 'prompt' column instead."
-            )
-
-            def decode(example, tokenizer):
-                return {"prompt": tokenizer.decode(example["input_ids"])}
-
-            eval_dataset = eval_dataset.map(decode, fn_kwargs={"tokenizer": processing_class})
 
         # Args
         if args is None:
@@ -1082,13 +970,6 @@ class RLOOTrainer(BaseTrainer):
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
         ]
 
-        if images is not None:
-            prompt_inputs = self.processing_class(text=prompts_text, padding=True, return_tensors="pt", **kwargs)
-            prompt_inputs = super()._prepare_inputs(prompt_inputs)
-            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
-        else:
-            forward_kwargs = {}
-
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
@@ -1292,13 +1173,13 @@ class RLOOTrainer(BaseTrainer):
             prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
 
-        return prompt_ids, completion_ids, forward_kwargs
+        return prompt_ids, completion_ids
 
     def _generate(self, prompts: list[str], images: Optional[list]):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompt_ids, completion_ids, forward_kwargs = self._generate_single_turn(prompts, images)
+        prompt_ids, completion_ids = self._generate_single_turn(prompts, images)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -1331,7 +1212,7 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, forward_kwargs
+        return prompt_ids, completion_ids
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1351,7 +1232,7 @@ class RLOOTrainer(BaseTrainer):
         if images is not None and all(img_list == [] for img_list in images):
             images = None
 
-        prompt_ids_list, completion_ids_list, forward_kwargs = self._generate(prompts, images)
+        prompt_ids_list, completion_ids_list = self._generate(prompts, images)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -1372,17 +1253,29 @@ class RLOOTrainer(BaseTrainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
+
+        num_images = [len(img_list) for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
             token_type_ids = forward_kwargs["token_type_ids"]
             forward_kwargs["token_type_ids"] = torch.cat(
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
-
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
-
-        num_images = [len(img_list) for img_list in images] if images is not None else None
 
         with torch.no_grad():
             # Compute the per-token log probabilities for the current model
