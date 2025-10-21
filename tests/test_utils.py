@@ -20,7 +20,6 @@ import numpy as np
 import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.utils import is_peft_available
 
@@ -629,14 +628,9 @@ class TestRepeatRandomSampler(TrlTestCase):
 
 
 class TestEntropyFromLogits(TrlTestCase):
-    @parameterized.expand(
-        [
-            (dtype, chunk_size, shape)
-            for dtype in (torch.float64, torch.float32, torch.float16, torch.bfloat16)
-            for chunk_size in (1, 16)
-            for shape in [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)]
-        ]
-    )
+    @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
+    @pytest.mark.parametrize("chunk_size", [1, 16])
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     def test_entropy_from_logits_2_dims(self, dtype, chunk_size, shape):
         logits = torch.randn(*shape, dtype=dtype)
         if dtype in (torch.float64, torch.float32):
@@ -803,7 +797,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
 
 class TestSelectiveLogSoftmax(TrlTestCase):
-    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
         vocab_size = 1024

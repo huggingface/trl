@@ -11,10 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
+import pytest
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import (
@@ -246,7 +244,7 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.dataset_num_proc == 4
 
-    @parameterized.expand([(False,), (True,)])
+    @pytest.mark.parametrize("mixtures_coef_list", [False, True])
     def test_nash_md(self, mixtures_coef_list):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -268,7 +266,7 @@ class TestTrainerArg(TrlTestCase):
         )
         assert trainer.args.mixture_coef == (0.5 if not mixtures_coef_list else [0.5, 0.6])
 
-    @parameterized.expand([(False,), (True,)])
+    @pytest.mark.parametrize("beta_list", [False, True])
     def test_online_dpo(self, beta_list):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -372,7 +370,7 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.dataset_kwargs["append_concat_token"]
         assert trainer.args.eval_packing
 
-    @parameterized.expand([(False,), (True,)])
+    @pytest.mark.parametrize("alpha_list", [False, True])
     def test_xpo(self, alpha_list):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)

@@ -11,11 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
+import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import ORPOConfig, ORPOTrainer
@@ -37,13 +35,14 @@ class TestORPOTrainer(TrlTestCase):
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "name, config_name",
         [
             ("qwen", "standard_preference"),
             ("t5", "standard_implicit_prompt_preference"),
             ("qwen", "conversational_preference"),
             ("t5", "conversational_implicit_prompt_preference"),
-        ]
+        ],
     )
     def test_orpo_trainer(self, name, config_name):
         training_args = ORPOConfig(
@@ -88,13 +87,14 @@ class TestORPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "config_name",
         [
-            ("standard_preference",),
-            ("standard_implicit_prompt_preference",),
-            ("conversational_preference",),
-            ("conversational_implicit_prompt_preference",),
-        ]
+            "standard_preference",
+            "standard_implicit_prompt_preference",
+            "conversational_preference",
+            "conversational_implicit_prompt_preference",
+        ],
     )
     @require_peft
     def test_orpo_trainer_with_lora(self, config_name):

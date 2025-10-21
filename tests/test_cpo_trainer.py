@@ -11,11 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
+import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import CPOConfig, CPOTrainer
@@ -37,7 +35,8 @@ class TestCPOTrainer(TrlTestCase):
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "name, loss_type, config_name",
         [
             ("qwen", "sigmoid", "standard_preference"),
             ("t5", "hinge", "standard_implicit_prompt_preference"),
@@ -46,7 +45,7 @@ class TestCPOTrainer(TrlTestCase):
             ("qwen", "simpo", "standard_preference"),
             ("t5", "simpo", "standard_implicit_prompt_preference"),
             ("qwen", "hinge", "conversational_preference"),
-        ]
+        ],
     )
     def test_cpo_trainer(self, name, loss_type, config_name):
         training_args = CPOConfig(
@@ -93,13 +92,14 @@ class TestCPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "config_name",
         [
-            ("standard_preference",),
-            ("standard_implicit_prompt_preference",),
-            ("conversational_preference",),
-            ("conversational_implicit_prompt_preference",),
-        ]
+            "standard_preference",
+            "standard_implicit_prompt_preference",
+            "conversational_preference",
+            "conversational_implicit_prompt_preference",
+        ],
     )
     @require_peft
     def test_cpo_trainer_with_lora(self, config_name):

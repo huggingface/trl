@@ -17,7 +17,6 @@ from unittest.mock import patch
 import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -124,7 +123,7 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
@@ -154,7 +153,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @parameterized.expand([("bnpo",), ("dr_grpo",), ("dapo",)])
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo"])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -907,7 +906,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @parameterized.expand([(False,), ("group",), ("batch",), (True,), ("none",)])
+    @pytest.mark.parametrize("scale_rewards", [False, "group", "batch", True, "none"])
     def test_training_scale_rewards(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1251,14 +1250,15 @@ class TestGRPOTrainer(TrlTestCase):
             for i in range(8, 16):
                 assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",), seems not to support bf16 properly
-        ]
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+        ],
     )
     @require_vision
     def test_training_vlm(self, model_id):
@@ -1471,11 +1471,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-        ]
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        ],
     )
     @require_vision
     @require_vllm
