@@ -23,7 +23,6 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, Features, Image, Value, load_dataset
 from packaging.version import Version
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -64,7 +63,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     def test_training_with_liger_grpo_loss(self, model_name):
         training_args = GRPOConfig(
@@ -104,7 +103,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     @require_peft
     def test_training_with_liger_grpo_loss_and_peft(self, model_name):
@@ -168,7 +167,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
         if Version(transformers.__version__) < Version("4.57.0"):
@@ -206,10 +205,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_name",
         [
-            ("HuggingFaceTB/SmolVLM-Instruct",),  # Only test the smaller model to avoid OOM
-        ]
+            "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
+        ],
     )
     @require_flash_attn
     @require_bitsandbytes
