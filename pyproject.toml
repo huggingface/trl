@@ -71,7 +71,6 @@ scikit = [
     "scikit-learn"
 ]
 test = [
-    "parameterized",
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
@@ -112,7 +111,6 @@ dev = [
     "bitsandbytes",
     # scikit: included in bco
     # test
-    "parameterized",
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",

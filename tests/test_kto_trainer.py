@@ -16,7 +16,6 @@
 import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 from transformers.testing_utils import require_liger_kernel
 
@@ -40,7 +39,8 @@ class TestKTOTrainer(TrlTestCase):
         self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "name, config_name, loss_type, pre_compute, eval_dataset",
         [
             ("qwen", "standard_preference", "kto", True, True),
             # ("t5", "standard_implicit_prompt_preference", "kto", True, False), # KTO broken for enc-dec
@@ -50,7 +50,7 @@ class TestKTOTrainer(TrlTestCase):
             # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", True, False),
             ("qwen", "standard_unpaired_preference", "apo_zero_unpaired", False, True),
             # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", False, False),
-        ]
+        ],
     )
     def test_kto_trainer(self, name, config_name, loss_type, pre_compute, eval_dataset):
         training_args = KTOConfig(

@@ -1251,34 +1251,6 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
-    # docstyle-ignore
-    """
-    Decodes the input tensor and strips the padding tokens.
-
-    > [!WARNING]
-    > This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy
-    > the code into your codebase and use it from there.
-
-    Args:
-        inputs (`torch.Tensor`):
-            The input tensor to be decoded.
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
-            The tokenizer used to decode the input tensor.
-
-    Returns:
-        `list[str]`:
-            The list of decoded strings with padding tokens stripped.
-    """
-    warnings.warn(
-        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
-        "to keep using it, please copy the code into your codebase and use it from there.",
-        FutureWarning,
-    )
-    decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
-    return [d.replace(tokenizer.pad_token, "") for d in decoded]
-
-
 def generate_model_card(
     base_model: Optional[str],
     model_name: str,

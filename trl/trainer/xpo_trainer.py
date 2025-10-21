@@ -93,14 +93,6 @@ class XPOTrainer(OnlineDPOTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-
-        reward_model:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "xpo"]
@@ -137,15 +129,12 @@ class XPOTrainer(OnlineDPOTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        # Deprecated parameters
-        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
     ) -> None:
         super().__init__(
             model=model,
             ref_model=ref_model,
             judge=judge,
             reward_funcs=reward_funcs,
-            reward_model=reward_model,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,

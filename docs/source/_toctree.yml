@@ -60,8 +60,6 @@
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: bco_trainer
-      title: BCO
     - local: cpo_trainer
       title: CPO
     - local: dpo_trainer
@@ -95,8 +93,6 @@
     title: Model Classes
   - local: model_utils
     title: Model Utilities
-  - local: best_of_n
-    title: Best of N Sampling
   - local: judges
     title: Judges
   - local: callbacks
@@ -110,3 +106,7 @@
   - local: others
     title: Others
   title: API
+- sections:
+  - local: bco_trainer
+    title: BCO
+  title: Experimental
