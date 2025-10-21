@@ -35,17 +35,23 @@ longer completions.
 
 Setup:
 
-```bash
+```sh
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 ```
 
 Usage (2 GPUs required):
 
--- Spin up server -- 
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+# Spin up server
 
--- Run this script -- 
+```sh
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+```
+
+# Run training
+
+```sh
 CUDA_VISIBLE_DEVICES=1 python trl/experimental/openenv/echo.py
+```
 """
 
 GEN_URL = "http://0.0.0.0:8000/generate/"
@@ -87,7 +93,6 @@ except Exception as e:
 
 # Create HTTP client for Echo Environment
 client = EchoEnv(base_url=f"{ENV_URL}")
-print("✅ Client created!")
 
 
 def rollout_func(prompts, **sampling_kwargs):
@@ -102,8 +107,6 @@ def rollout_func(prompts, **sampling_kwargs):
         "max_tokens": sampling_kwargs.get("max_tokens", 128),
         "repetition_penalty": sampling_kwargs.get("repetition_penalty", 1.0),
     }
-
-    print(f"Sending request to {GEN_URL}")
     response = requests.post(GEN_URL, json=payload)
 
     if response.status_code != 200:
@@ -119,9 +122,6 @@ def rollout_func(prompts, **sampling_kwargs):
 
     # Flush env
     env_result = client.reset()
-
-    # Take an action (HTTP POST /step) and collect environment rewards
-    print("\n📤 Calling client.step()...")
     env_rewards = []
 
     for msg in completions_text:
