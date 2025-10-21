@@ -1142,6 +1142,7 @@ class GRPOTrainer(BaseTrainer):
                                 truncate_prompt_tokens=self.max_prompt_length,
                                 guided_decoding_regex=self.guided_decoding_regex,
                                 generation_kwargs=self.args.generation_kwargs,
+                                processing_class=self.processing_class,
                             )
                         else:
                             output = self.vllm_client.generate(
