@@ -96,8 +96,7 @@ RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 # What we call a rollout function is a callable that takes prompts (list), images (optional), args (GRPOConfig),
 # and processing_class as parameters and returns a dict of generation results. Those results must include "prompt_ids",
-# "completion_ids", and "logprobs" fields and can include an optional "tools" field. Any extra fields (per-completion)
-# are forwarded to the reward functions.
+# "completion_ids", and "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
 RolloutFunc = Callable[[list[str], Any, Any, Any], dict[str, Any]]
 
 
@@ -204,8 +203,7 @@ class GRPOTrainer(BaseTrainer):
         rollout_func (`RolloutFunc`, *optional*, defaults to `None`):
             Function to use for generating completions. It must take prompts, images (optional), args, and
             processing_class as parameters and return a dict with "prompt_ids", "completion_ids", and "logprobs"
-            fields. It can include optional "tools" field and any other fields that are forwarded to the reward
-            functions.
+            fields. Any other fields that are forwarded to the reward functions.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -1182,7 +1180,6 @@ class GRPOTrainer(BaseTrainer):
                     if isinstance(values, list):
                         extra_fields[key] = values[process_slice]
                     else:
-                        # Scalar value, keep as-is
                         extra_fields[key] = values
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
@@ -1524,7 +1521,6 @@ class GRPOTrainer(BaseTrainer):
                     if isinstance(values, list) and i < len(values):
                         inp[key] = values[i]
                     elif not isinstance(values, list):
-                        # Scalar value, add to all inputs
                         inp[key] = values
 
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
