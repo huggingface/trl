@@ -1127,13 +1127,19 @@ class GRPOTrainer(BaseTrainer):
                     }
                     with profiling_context(self, "vLLM.generate"):
                         if self.rollout_func is not None:
+                            if is_conversational({"prompt": ordered_set_of_prompts[0]}):
+                                ordered_set_of_prompts = [
+                                    apply_chat_template({"prompt": p}, self.processing_class)["prompt"]
+                                    for p in ordered_set_of_prompts
+                                ]
                             output = self.rollout_func(
-                                prompts=ordered_set_of_prompts,
-                                args=self.args,
-                                processing_class=self.processing_class,
+                                ordered_set_of_prompts,
+                                self.args,
+                                self.processing_class,
                             )
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
+                                # FIXME: this endpoint doesn't exist in vllm_client
                                 output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
