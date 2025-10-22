@@ -1977,4 +1977,5 @@ def get_config_model_id(config: PreTrainedConfig) -> str:
         `str`:
             The model identifier associated with the model configuration.
     """
-    return getattr(config, "_name_or_path", "")
+    # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing. See GH-4323
+    return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")
