@@ -576,7 +576,7 @@ class GRPOTrainer(BaseTrainer):
                     logprobs_mode="processed_logprobs",
                 )
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
@@ -1106,7 +1106,7 @@ class GRPOTrainer(BaseTrainer):
             if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
-                self.llm.wake_up()
+                self.llm.wake_up(tags=["weights"])
 
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -1139,9 +1139,7 @@ class GRPOTrainer(BaseTrainer):
                     }
                     with profiling_context(self, "vLLM.generate"):
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                            output = self.vllm_client.chat(
-                                prompts=ordered_set_of_prompts, tools=self.tools, **sampling_params
-                            )
+                            output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
                         else:
                             output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
                         payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
@@ -1197,11 +1195,12 @@ class GRPOTrainer(BaseTrainer):
                 else:
                     all_prompts = prompts
 
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.wake_up(tags=["kv_cache"])
+
                 with profiling_context(self, "vLLM.generate"):
                     if is_conversational({"prompt": prompts[0]}):
-                        all_outputs = self.llm.chat(
-                            all_prompts, sampling_params=sampling_params, tools=self.tools, use_tqdm=False
-                        )
+                        all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
                     else:
                         all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
 
@@ -1227,7 +1226,7 @@ class GRPOTrainer(BaseTrainer):
                     logprobs = all_logprobs
 
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                    self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
             processor_kwargs = {"max_length": self.max_prompt_length, "truncation": True, "add_special_tokens": False}
@@ -1307,7 +1306,7 @@ class GRPOTrainer(BaseTrainer):
 
         return prompt_ids, completion_ids, logprobs
 
-    def _generate(self, prompts: list[str]):
+    def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 

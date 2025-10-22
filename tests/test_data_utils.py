@@ -13,14 +13,12 @@
 # limitations under the License.
 
 import copy
-import itertools
 import textwrap
 from time import strftime
 
+import pytest
 from datasets import Dataset, DatasetDict
-from parameterized import parameterized
-from PIL import Image
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
     apply_chat_template,
@@ -38,9 +36,14 @@ from trl.data_utils import (
     unpair_preference_dataset,
 )
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_vision
 
 
+if is_vision_available():
+    from PIL import Image
+
+
+@require_vision
 class TestPrepareMultimodalMessages:
     def test_basic_user_assistant_conversation(self):
         """Test basic conversation with user and assistant messages."""
@@ -183,10 +186,6 @@ class TestPrepareMultimodalMessages:
 
         expected = [
             {
-                "role": "system",
-                "content": [{"type": "text", "text": "You are a helpful assistant"}],
-            },
-            {
                 "role": "user",
                 "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
             },
@@ -194,11 +193,16 @@ class TestPrepareMultimodalMessages:
                 "role": "assistant",
                 "content": [{"type": "text", "text": "It is blue."}],
             },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What about the grass?"}],
+            },
         ]
 
         assert messages == expected
 
 
+@require_vision
 class TestPrepareMultimodalMessagesVLLM:
     def test_single_image_conversion(self):
         messages = [
@@ -391,11 +395,11 @@ class TestIsConversational(TrlTestCase):
         {"prompt": "The sky is", "completion": " blue.", "label": True},
     ]
 
-    @parameterized.expand(itertools.product(conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples)
     def test_conversational(self, example):
         assert is_conversational(example)
 
-    @parameterized.expand(itertools.product(non_conversational_examples))
+    @pytest.mark.parametrize("example", non_conversational_examples)
     def test_non_conversational(self, example):
         assert not is_conversational(example)
 
@@ -489,7 +493,8 @@ class TestApplyChatTemplate(TrlTestCase):
         {"prompt": "The sky is", "completion": " blue.", "label": True},  # Unpaired preference
     ]
 
-    @parameterized.expand(itertools.product(tokenizers, conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples)
+    @pytest.mark.parametrize("tokenizer_id", tokenizers)
     def test_apply_chat_template(self, tokenizer_id, example):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
         result = apply_chat_template(example, tokenizer)
@@ -515,7 +520,8 @@ class TestApplyChatTemplate(TrlTestCase):
             assert result["label"] == example["label"]
 
     # both conversational and non-conversational examples
-    @parameterized.expand(itertools.product(tokenizers, conversational_examples + non_conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples + non_conversational_examples)
+    @pytest.mark.parametrize("tokenizer_id", tokenizers)
     def test_maybe_apply_chat_template(self, tokenizer_id, example):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
         result = maybe_apply_chat_template(example, tokenizer)
