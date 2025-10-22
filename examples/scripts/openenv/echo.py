@@ -58,8 +58,6 @@ GEN_URL = "http://0.0.0.0:8000/generate/"
 ENV_URL = "http://0.0.0.0:8001"
 
 print("⚡ Starting FastAPI server for Echo Environment...")
-
-
 # Workaround if you can't run the env with Docker
 work_dir = str(Path.cwd().parent.absolute())
 server_process = subprocess.Popen(
@@ -104,7 +102,7 @@ def rollout_func(prompts: list[str], args: GRPOConfig, processing_class) -> dict
     Returns:
         Dict containing prompt_ids, completion_ids, logprobs, and env_reward
     """
-    # Make request to TRL's custom /generate/ endpoint
+    # 1. Generate completions via vLLM inference server (running on port 8000)
     payload = {
         "prompts": prompts,
         "n": args.num_generations,
@@ -125,20 +123,17 @@ def rollout_func(prompts: list[str], args: GRPOConfig, processing_class) -> dict
 
     completions_text = processing_class.batch_decode(result["completion_ids"], skip_special_tokens=True)
 
-    # Flush env
+    # 2. Step through the environment to get rewards
     env_result = client.reset()
-
     env_rewards = []
     for msg in completions_text:
         env_result = client.step(EchoAction(message=msg))
         env_rewards.append(env_result.reward)
 
+    # 3. Add environment rewards as extra field
     result["env_reward"] = env_rewards
 
     return result
-
-
-dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train[:1000]")
 
 
 def reward_from_env(completions, **kwargs):
@@ -151,6 +146,8 @@ def reward_from_env(completions, **kwargs):
         # Fallback if env_reward is not available
         return [0.0] * len(completions)
 
+
+dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train[:1000]")
 
 training_args = GRPOConfig(
     output_dir="scratch/Qwen2.5-0.5B-GRPO-Rollout",

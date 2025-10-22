@@ -136,6 +136,9 @@ That's it! Now that you’ve seen the full example, let’s unpack how the main 
 3. **Extra fields:** The rollout adds `env_reward` to the result dictionary, which is automatically passed to reward functions.  
 4. **Reward function:** Extracts `env_reward` from `kwargs` to apply environment-computed rewards during training.
 
+> [!WARNING]
+> The `rollout_func` is currently only supported when using vLLM in server mode (`use_vllm=True`, `vllm_mode="server"`).
+
 ### Running the Example
 
 The example requires two GPUs:
