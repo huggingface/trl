@@ -20,11 +20,9 @@ import time
 from pathlib import Path
 
 import requests
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from envs.echo_env import EchoEnv
-from envs.echo_env.models import (
-    EchoAction,
-)
+from envs.echo_env.models import EchoAction
 
 from trl import GRPOConfig, GRPOTrainer
 
@@ -90,92 +88,97 @@ except Exception as e:
 
 # Create HTTP client for Echo Environment
 client = EchoEnv(base_url=f"{ENV_URL}")
+client.action_class = EchoAction
+
+prompt="""You are connected to an *Echo Environment* that mirrors your input.
+To communicate, send a JSON-formatted message wrapped in `<action>` tags.
+
+Example:
+`<action>{"message": "Hi there!"}</action>`
+
+Try sending your first message to begin the interaction. The next user message will be the echoed back to you."""
 
 
-def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, processing_class) -> dict[str, list]:
-    """
-    Custom rollout function that generates completions via vLLM server and computes environment rewards.
+dataset = Dataset.from_list([{"prompt": [{"role": "user", "content": prompt}]}] * 1000)
 
-    Args:
-        prompts: List of prompt strings to generate from
-        images: Optional images for vision models (not used in this example)
-        args: GRPOConfig containing all sampling parameters
-        processing_class: Tokenizer/processor for decoding completions
+# def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, processing_class) -> dict[str, list]:
+#     """
+#     Custom rollout function that generates completions via vLLM server and computes environment rewards.
 
-    Returns:
-        Dict containing prompt_ids, completion_ids, logprobs, and env_reward
-    """
-    # Make request to TRL's custom /generate/ endpoint
-    payload = {
-        "prompts": prompts,
-        "n": args.num_generations,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "top_k": -1 if args.top_k is None else args.top_k,
-        "min_p": 0.0 if args.min_p is None else args.min_p,
-        "max_tokens": args.max_completion_length,
-        "repetition_penalty": args.repetition_penalty,
-    }
-    response = requests.post(GEN_URL, json=payload)
+#     Args:
+#         prompts: List of prompt strings to generate from
+#         images: Optional images for vision models (not used in this example)
+#         args: GRPOConfig containing all sampling parameters
+#         processing_class: Tokenizer/processor for decoding completions
 
-    if response.status_code != 200:
-        print(f"Error response: {response.text}")
+#     Returns:
+#         Dict containing prompt_ids, completion_ids, logprobs, and env_reward
+#     """
+#     # Make request to TRL's custom /generate/ endpoint
+#     payload = {
+#         "prompts": prompts,
+#         "n": args.num_generations,
+#         "temperature": args.temperature,
+#         "top_p": args.top_p,
+#         "top_k": -1 if args.top_k is None else args.top_k,
+#         "min_p": 0.0 if args.min_p is None else args.min_p,
+#         "max_tokens": args.max_completion_length,
+#         "repetition_penalty": args.repetition_penalty,
+#     }
+#     response = requests.post(GEN_URL, json=payload)
 
-    response.raise_for_status()
-    result = response.json()
+#     if response.status_code != 200:
+#         print(f"Error response: {response.text}")
 
-    completions_text = processing_class.batch_decode(result["completion_ids"], skip_special_tokens=True)
+#     response.raise_for_status()
+#     result = response.json()
 
-    # Flush env
-    env_result = client.reset()
+#     completions_text = processing_class.batch_decode(result["completion_ids"], skip_special_tokens=True)
 
-    env_rewards = []
-    for msg in completions_text:
-        env_result = client.step(EchoAction(message=msg))
-        env_rewards.append(env_result.reward)
+#     # Flush env
+#     env_result = client.reset()
 
-    result["env_reward"] = env_rewards
+#     env_rewards = []
+#     for msg in completions_text:
+#         env_result = client.step(EchoAction(message=msg))
+#         env_rewards.append(env_result.reward)
 
-    return result
+#     result["env_reward"] = env_rewards
+
+#     return result
 
 
-dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train[:1000]")
+# dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train[:1000]")
 
 
-def reward_from_env(completions, **kwargs):
-    """Reward function that uses the environment reward."""
-    # Extract environment rewards from kwargs (propagated via extra_fields)
-    env_rewards = kwargs.get("env_reward", [])
-    if env_rewards:
-        return [float(reward) for reward in env_rewards]
-    else:
-        # Fallback if env_reward is not available
-        return [0.0] * len(completions)
+def reward_zero(completions, **kwargs):
+    return [0.0] * len(completions)
 
 
 training_args = GRPOConfig(
     output_dir="scratch/Qwen2.5-0.5B-GRPO-Rollout",
-    vllm_mode="server",
-    use_vllm=True,
+    # vllm_mode="server",
+    # use_vllm=True,
     logging_steps=1,
-    report_to=["trackio", "wandb"],
-    num_train_epochs=1,
-    num_generations=8,
-    max_completion_length=2048,
-    per_device_train_batch_size=8,
-    gradient_accumulation_steps=4,
+    # report_to=["trackio", "wandb"],
+    # num_train_epochs=1,
+    # num_generations=8,
+    # max_completion_length=2048,
+    # per_device_train_batch_size=8,
+    # gradient_accumulation_steps=4,
 )
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
-    reward_funcs=reward_from_env,
+    model="Qwen/Qwen3-0.6B",
+    # reward_funcs=reward_zero,
     args=training_args,
     train_dataset=dataset,
-    rollout_func=rollout_func,
+    env=client,
+    # rollout_func=rollout_func,
 )
 trainer.train()
 
-# Give time for background threads to finish
-time.sleep(5)
+# # Give time for background threads to finish
+# time.sleep(5)
 
-print("🛑 Terminating Echo Environment server...")
-server_process.terminate()
+# print("🛑 Terminating Echo Environment server...")
+# server_process.terminate()

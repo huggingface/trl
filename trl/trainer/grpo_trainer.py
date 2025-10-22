@@ -104,6 +104,27 @@ RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 # "completion_ids", and "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
 RolloutFunc = Callable[[list[str], Any, Any, Any], dict[str, Any]]
 
+import re
+import json
+import re
+import json
+from typing import Any, Optional
+
+def extract_action(text: str) -> Optional[dict[str, Any]]:
+    """
+    Extract and return the first valid JSON object found inside <action>...</action> tags.
+    Returns None if no valid action block is found.
+    """
+    pattern = r"<action>\s*(\{.*?\})\s*</action>"
+    match = re.search(pattern, text, re.DOTALL)
+    if not match:
+        return None
+    
+    try:
+        action = json.loads(match.group(1))
+        return action
+    except json.JSONDecodeError:
+        return None
 
 class GRPOTrainer(BaseTrainer):
     """
@@ -230,7 +251,7 @@ class GRPOTrainer(BaseTrainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        reward_funcs: Union[RewardFunc, list[RewardFunc]]=None,
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -240,7 +261,9 @@ class GRPOTrainer(BaseTrainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
         rollout_func: Optional[RolloutFunc] = None,
+        env=None,
     ):
+        self.env = env
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -306,6 +329,8 @@ class GRPOTrainer(BaseTrainer):
         self.eos_token_id = tokenizer.eos_token_id
 
         # Reward functions
+        if reward_funcs is None:
+            reward_funcs = [None] # for the env
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
@@ -316,6 +341,8 @@ class GRPOTrainer(BaseTrainer):
                 )
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
                 self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+            elif reward_funcs[i] is None:
+                self.reward_func_names.append("env_reward")
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
@@ -1380,6 +1407,44 @@ class GRPOTrainer(BaseTrainer):
         prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = self._generate(
             prompts
         )
+
+        completion_contents = self.processing_class.batch_decode(completion_ids_list, skip_special_tokens=True)
+
+        actions = [extract_action(content) for content in completion_contents]
+        idxs_with_action = [i for i, a in enumerate(actions) if a]  # find indices that actually have a tool call
+        actions = [actions[i] for i in idxs_with_action]
+
+        while idxs_with_action:
+            prompts_for_generation = [prompts[i] for i in idxs_with_action]
+            for idx, action, prompt_for_generation in zip(idxs_with_action, actions, prompts_for_generation):
+                prompt_for_generation.append({"role": "assistant", "content": completion_contents[idx]})
+                a = self.env.action_class(**action)
+                output = self.env.step(a)
+                observation_message = {"role": "user", "content": str(output.observation)}
+                prompt_for_generation.append(observation_message)
+
+            prompt_completion_tool_ids, post_tool_ids, _, _ = self._generate_single_turn(prompts_for_generation)
+
+            # Truncate post-tool completion so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
+            for i in range(len(post_tool_ids)):
+                excess_length = (
+                    len(prompt_completion_tool_ids[i])
+                    + len(post_tool_ids[i])
+                    - (self.max_prompt_length + self.max_completion_length)
+                )
+                if excess_length > 0:
+                    post_tool_ids[i] = post_tool_ids[i][:-excess_length]
+
+            for idx, pct, post_tool in zip(idxs_with_action, prompt_completion_tool_ids, post_tool_ids):
+                completion_ids_list[idx] = pct[len(prompt_ids_list[idx]) :] + post_tool
+
+            cc = self.processing_class.batch_decode(post_tool_ids, skip_special_tokens=True)
+            actions = [extract_action(content) for content in cc]
+            completion_contents = [None] * len(completion_contents)
+            for i, content in zip(idxs_with_action, cc):
+                completion_contents[i] = content
+            idxs_with_action = [idx for idx, tc in zip(idxs_with_action, actions) if tc]
+            actions = [tc for tc in actions if tc]
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
