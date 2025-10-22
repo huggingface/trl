@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
@@ -1049,10 +1050,11 @@ class OnlineDPOTrainer(BaseTrainer):
         if self.use_transformers_paged:
             previous_attn = self.model_wrapped.config._attn_implementation
 
-            if is_flash_attn_2_available():
-                self.model_wrapped.config._attn_implementation = "paged_attention"
+            if version.parse(transformers.__version__).release >= version.parse("5.0.0").release:
+                new_attn = "paged|flash_attention_2" if is_flash_attn_2_available() else "paged|sdpa"
             else:
-                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+                new_attn = "paged_attention" if is_flash_attn_2_available() else "sdpa_paged"
+            self.model_wrapped.config._attn_implementation = new_attn
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
