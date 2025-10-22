@@ -20,15 +20,21 @@ import torch
 import transformers
 from datasets import load_dataset
 from packaging.version import parse as parse_version
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_flash_attn, require_liger_kernel
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 
-from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes, require_peft, require_vision
+from .testing_utils import (
+    TrlTestCase,
+    ignore_warnings,
+    require_bitsandbytes,
+    require_flash_attn,
+    require_liger_kernel,
+    require_peft,
+    require_vision,
+)
 
 
 if is_peft_available():
@@ -250,12 +256,13 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM",),
-            ("trl-internal-testing/tiny-GptOssForCausalLM",),
-        ]
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ],
     )
     def test_train(self, model_id):
         # Get the dataset
@@ -497,12 +504,13 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "peft_type",
         [
-            ("prompt_tuning",),
-            ("prefix_tuning",),
-            ("prompt_encoder",),
-        ]
+            "prompt_tuning",
+            "prefix_tuning",
+            "prompt_encoder",
+        ],
     )
     @require_peft
     def test_train_with_peft_config_prompt_tuning(self, peft_type):
@@ -881,7 +889,7 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    @parameterized.expand([("bfd",), ("wrapped",)])
+    @pytest.mark.parametrize("packing_strategy", ["bfd", "wrapped"])
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_train_packing(self, packing_strategy):
@@ -1321,17 +1329,18 @@ class TestSFTTrainer(TrlTestCase):
         for tag in ["sft", "trl"]:
             assert tag in trainer.model.model_tags
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # ("trl-internal-testing/tiny-Idefics3ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-        ]
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+        ],
     )
     @require_vision
     def test_train_vlm(self, model_id):
