@@ -1101,7 +1101,8 @@ class GRPOTrainer(BaseTrainer):
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
+            if is_conversational({"prompt": prompts[0]}):
+                prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
