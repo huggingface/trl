@@ -41,7 +41,7 @@ from transformers import (
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
-    PreTrainedConfig,
+    PretrainedConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
@@ -1965,7 +1965,7 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
     return model
 
 
-def get_config_model_id(config: PreTrainedConfig) -> str:
+def get_config_model_id(config: PretrainedConfig) -> str:
     """
     Retrieve the model identifier from a given model configuration.
 
