@@ -41,6 +41,7 @@ from transformers import (
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
+    PreTrainedConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
@@ -1962,3 +1963,18 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
     architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
+
+
+def get_config_model_id(config: PreTrainedConfig) -> str:
+    """
+    Retrieve the model identifier from a given model configuration.
+
+    Args:
+        config ([`~transformers.PreTrainedConfig`]):
+            Configuration from which to extract the model identifier.
+
+    Returns:
+        `str`:
+            The model identifier associated with the model configuration.
+    """
+    return getattr(config, "_name_or_path", "")
