@@ -1423,19 +1423,19 @@ class GRPOTrainer(BaseTrainer):
                 observation_message = {"role": "user", "content": str(output.observation)}
                 prompt_for_generation.append(observation_message)
 
-            prompt_completion_tool_ids, post_tool_ids, _, _ = self._generate_single_turn(prompts_for_generation)
+            prompt_completion_action_ids, post_tool_ids, _, _ = self._generate_single_turn(prompts_for_generation)
 
             # Truncate post-tool completion so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for i in range(len(post_tool_ids)):
                 excess_length = (
-                    len(prompt_completion_tool_ids[i])
+                    len(prompt_completion_action_ids[i])
                     + len(post_tool_ids[i])
                     - (self.max_prompt_length + self.max_completion_length)
                 )
                 if excess_length > 0:
                     post_tool_ids[i] = post_tool_ids[i][:-excess_length]
 
-            for idx, pct, post_tool in zip(idxs_with_action, prompt_completion_tool_ids, post_tool_ids):
+            for idx, pct, post_tool in zip(idxs_with_action, prompt_completion_action_ids, post_tool_ids):
                 completion_ids_list[idx] = pct[len(prompt_ids_list[idx]) :] + post_tool
 
             cc = self.processing_class.batch_decode(post_tool_ids, skip_special_tokens=True)
