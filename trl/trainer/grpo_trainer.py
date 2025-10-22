@@ -99,10 +99,9 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-# What we call a rollout function is a callable that takes prompts (list), images (optional), args (GRPOConfig),
-# and processing_class as parameters and returns a dict of generation results. Those results must include "prompt_ids",
+# What we call a rollout function is a callable that takes prompts (list), args (GRPOConfig), and processing_class as parameters and returns a dict of generation results. Those results must include "prompt_ids",
 # "completion_ids", and "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
-RolloutFunc = Callable[[list[str], Any, Any, Any], dict[str, Any]]
+RolloutFunc = Callable[[list[str], Any, Any], dict[str, Any]]
 
 
 class GRPOTrainer(BaseTrainer):
@@ -206,9 +205,9 @@ class GRPOTrainer(BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         rollout_func (`RolloutFunc`, *optional*, defaults to `None`):
-            Function to use for generating completions. It must take prompts, images (optional), args, and
-            processing_class as parameters and return a dict with "prompt_ids", "completion_ids", and "logprobs"
-            fields. Any other fields that are forwarded to the reward functions.
+            Function to use for generating completions. It must take prompts, args, and processing_class as parameters
+            and return a dict with "prompt_ids", "completion_ids", and "logprobs" fields. Any other fields that are
+            forwarded to the reward functions.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -1130,7 +1129,6 @@ class GRPOTrainer(BaseTrainer):
                         if self.rollout_func is not None:
                             output = self.rollout_func(
                                 prompts=ordered_set_of_prompts,
-                                images=ordered_set_of_images,
                                 args=self.args,
                                 processing_class=self.processing_class,
                             )
@@ -1377,8 +1375,8 @@ class GRPOTrainer(BaseTrainer):
         if images is not None:
             prompts = [prepare_multimodal_messages(prompt, image_list) for prompt, image_list in zip(prompts, images)]
 
-        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = self._generate(
-            prompts
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
+            self._generate(prompts)
         )
 
         # Convert lists of token IDs to padded tensors

@@ -92,13 +92,12 @@ except Exception as e:
 client = EchoEnv(base_url=f"{ENV_URL}")
 
 
-def rollout_func(prompts: list[str], images: list | None, args: GRPOConfig, processing_class) -> dict[str, list]:
+def rollout_func(prompts: list[str], args: GRPOConfig, processing_class) -> dict[str, list]:
     """
     Custom rollout function that generates completions via vLLM server and computes environment rewards.
 
     Args:
-        prompts: List of prompt strings to generate from
-        images: Optional images for vision models (not used in this example)
+        prompts: List of prompts to generate from
         args: GRPOConfig containing all sampling parameters
         processing_class: Tokenizer/processor for decoding completions
 
