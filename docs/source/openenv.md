@@ -18,7 +18,7 @@ pip install git+https://github.com/meta-pytorch/OpenEnv.git
 
 ## Using `rollout_func` with OpenEnv environments
 
-TRL's `GRPOTrainer` supports _custom rollout logic_ through the `rollout_func` argument. This lets you override the trainer's default text-generation loop and directly interact with OpenEnv environments — for example, to compute environment-based rewards instead of purely model-based ones.
+TRL's [`GRPOTrainer`] supports _custom rollout logic_ through the `rollout_func` argument. This lets you override the trainer's default text-generation loop and directly interact with OpenEnv environments — for example, to compute environment-based rewards instead of purely model-based ones.
 
 ### Rollout Function Signature
 
@@ -48,7 +48,7 @@ def rollout_func(
     pass
 ```
 
-> [!NOTE] 
+> [!NOTE]
 > Any extra fields in the returned dictionary (beyond the required three) are automatically forwarded to your reward functions. This makes it easy to propagate signals such as environment rewards or auxiliary metrics from the rollout step.
 
 ### Integration pattern
@@ -110,6 +110,8 @@ def reward_from_env(completions, **kwargs):
     env_rewards = kwargs.get("env_reward", [])
     return [float(reward) for reward in env_rewards] if env_rewards else [0.0] * len(completions)
 
+dataset = Dataset.from_dict({"prompt": ["You are an AI that interacts with an *Echo* environment. Word to echo:"] * 64})
+
 # Setup trainer with custom rollout
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
@@ -152,3 +154,25 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
 ```
 
 To learn more about how to create custom environments, see the [OpenEnv documentation](https://github.com/meta-pytorch/OpenEnv/blob/main/src/envs/README.md).
+
+## Another example: Catch
+
+The [catch.py](../../examples/scripts/openenv/catch.py) script demonstrates training an LLM to play the Catch environment from OpenEnv.
+In this example, the catch environment is a simple 10×5 grid game where a ball falls from the top and you control a paddle at the bottom. Move left, right, or stay to catch the ball for +1 reward or miss it for –1.
+
+```txt
+· · ● · ·
+· · · · ·
+· · · · ·
+· · · · ·
+· · · · ·
+· · · · ·
+· · · · ·
+· · · · ·
+· · · · ·
+· · █ · ·
+```
+
+The model is prompted with a description of the environment and the current state, and trained to output actions to maximize the environment reward. Below is the reward curve from training:
+
+<iframe src="https://trl-lib-trackio.hf.space?project=openenv&metrics=train/rewards/reward_from_env/mean&runs=qgallouedec-1761202871&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>

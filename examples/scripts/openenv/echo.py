@@ -22,11 +22,9 @@ from pathlib import Path
 import requests
 from datasets import load_dataset
 from envs.echo_env import EchoEnv
-from envs.echo_env.models import (
-    EchoAction,
-)
+from envs.echo_env.models import EchoAction
 
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
 
 
 """
@@ -150,15 +148,13 @@ def reward_from_env(completions, **kwargs):
 dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train[:1000]")
 
 training_args = GRPOConfig(
-    output_dir="scratch/Qwen2.5-0.5B-GRPO-Rollout",
+    output_dir="Qwen2.5-0.5B-GRPO-Rollout",
     vllm_mode="server",
     use_vllm=True,
     logging_steps=1,
-    report_to=["trackio", "wandb"],
+    report_to="trackio",
     num_train_epochs=1,
-    num_generations=8,
     max_completion_length=2048,
-    per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
 )
 trainer = GRPOTrainer(
@@ -167,6 +163,7 @@ trainer = GRPOTrainer(
     args=training_args,
     train_dataset=dataset,
     rollout_func=rollout_func,
+    callbacks=[RichProgressCallback()],
 )
 trainer.train()
 

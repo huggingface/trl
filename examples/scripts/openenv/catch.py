@@ -14,6 +14,7 @@
 
 # ruff: noqa: T201
 import os
+import re
 import subprocess
 import sys
 import time
@@ -24,7 +25,7 @@ from datasets import Dataset
 from envs.openspiel_env import OpenSpielEnv
 from envs.openspiel_env.models import OpenSpielAction
 
-from trl import GRPOConfig, GRPOTrainer, apply_chat_template
+from trl import GRPOConfig, GRPOTrainer, RichProgressCallback, apply_chat_template
 
 
 """
@@ -35,7 +36,7 @@ Setup:
 
 ```sh
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
-uv pip install open_spiel
+uv pip install open_spiel rich trackio
 ```
 
 Usage (2 GPUs required):
@@ -59,19 +60,18 @@ ENV_URL = "http://0.0.0.0:8001"
 BASE_PROMPT = """You are an AI agent playing the game **Catch**.
 
 ### Game Description
-- The game is played on a **5×5 grid**.
+- The game is played on a **10×5 grid**.
 - There is one **falling ball** and one **paddle** that you control at the bottom.
 - The objective is to **move the paddle left or right to catch the ball** as it falls.
 - The episode ends when the ball reaches the bottom row:
   - You get **+1 reward** if you catch it.
   - You get **–1 reward** if you miss it.
 
-### Observation Format You will receive:
-- `observation`: a list of **50 numbers (floats)**.
-  - The first **25 numbers** (indices `0–24`) represent the **ball layer**, flattened from a 5×5 grid. Each cell is
-    `1.0` if the ball is there, `0.0` otherwise.
-  - The next **25 numbers** (indices `25–49`) represent the **paddle layer**, also flattened from a 5×5 grid. Each cell
-    is `1.0` if the paddle occupies that column in the bottom row, `0.0` otherwise.
+### Observation Format
+
+- `observation`: a list of **50 numbers (floats)** representing the entire grid, flattened row by row.
+  - Each cell contains `1.0` if it is occupied (either by the ball or the paddle), or `0.0` if it is empty.
+  - The positions of the two `1.0` values indicate where the **ball** and **paddle** currently are.
 - `legal_actions`: a list of integers representing which actions are currently allowed.
 
 ### Actions Each action is a discrete integer:
@@ -135,8 +135,6 @@ def rollout_func(prompts: list[str], args: GRPOConfig, processing_class) -> dict
     Returns:
         Dict containing prompt_ids, completion_ids, logprobs, and env_reward
     """
-    import re
-
     # Run full episodes for each generation to get episode rewards
     env_rewards = []
     all_prompt_ids = []
@@ -227,16 +225,16 @@ def reward_from_env(completions, **kwargs):
 
 
 training_args = GRPOConfig(
-    output_dir="scratch/Qwen2.5-0.5B-GRPO-Catch",
+    output_dir="Qwen2.5-0.5B-GRPO-Catch",
     vllm_mode="server",
     use_vllm=True,
     logging_steps=1,
-    report_to=["trackio", "wandb"],
+    report_to="trackio",
     num_train_epochs=1,
-    num_generations=8,
     max_completion_length=4,
-    per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
+    log_completions=True,
+    num_completions_to_print=1,
 )
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
@@ -244,6 +242,7 @@ trainer = GRPOTrainer(
     args=training_args,
     train_dataset=dataset,
     rollout_func=rollout_func,
+    callbacks=[RichProgressCallback()],
 )
 trainer.train()
 

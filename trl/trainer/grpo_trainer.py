@@ -15,6 +15,7 @@
 import inspect
 import os
 import textwrap
+import warnings
 from collections import defaultdict, deque
 from contextlib import nullcontext
 from functools import partial
@@ -99,8 +100,9 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-# What we call a rollout function is a callable that takes prompts (list), args (GRPOConfig), and processing_class as parameters and returns a dict of generation results. Those results must include "prompt_ids",
-# "completion_ids", and "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
+# What we call a rollout function is a callable that takes prompts (list), args (GRPOConfig), and processing_class as
+# parameters and returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and
+# "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
 RolloutFunc = Callable[[list[str], Any, Any], dict[str, Any]]
 
 
@@ -204,10 +206,11 @@ class GRPOTrainer(BaseTrainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-        rollout_func (`RolloutFunc`, *optional*, defaults to `None`):
+        rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It must take prompts, args, and processing_class as parameters
-            and return a dict with "prompt_ids", "completion_ids", and "logprobs" fields. Any other fields that are
-            forwarded to the reward functions.
+            and return a dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields that
+            are forwarded to the reward functions. This feature is experimental and may change or be removed at any
+            time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -355,6 +358,14 @@ class GRPOTrainer(BaseTrainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Rollout function
+        if rollout_func is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
+            warnings.warn(
+                "You are importing from 'rollout_func', which is an experimental feature. This API may change or be "
+                "removed at any time without prior notice. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1.",
+                UserWarning,
+                stacklevel=2,
+            )
         self.rollout_func = rollout_func
 
         # Training arguments
