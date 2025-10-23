@@ -1305,8 +1305,14 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_training_vlm_beta_non_zero(self):
+    def test_training_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1323,7 +1329,7 @@ class TestGRPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -1345,12 +1351,16 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
     @require_peft
-    def test_training_vlm_peft(self):
-        model = AutoModelForImageTextToText.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
-        )
+    def test_training_vlm_peft(self, model_id):
+        model = AutoModelForImageTextToText.from_pretrained(model_id)
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1388,8 +1398,14 @@ class TestGRPOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_training_vlm_and_importance_sampling(self):
+    def test_training_vlm_and_importance_sampling(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1406,7 +1422,7 @@ class TestGRPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -1428,9 +1444,15 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
     @require_liger_kernel
-    def test_training_vlm_and_liger(self):
+    def test_training_vlm_and_liger(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1448,7 +1470,7 @@ class TestGRPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -1515,8 +1537,14 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_training_vlm_multi_image(self):
+    def test_training_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1533,7 +1561,7 @@ class TestGRPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
