@@ -2,11 +2,9 @@
 
 ## Overview
 
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is a framework from Meta to integrate external environments with RL training loops. It provides [Gymnasium-style APIs](https://gymnasium.farama.org) (`reset()`, `step()`, `state()`) and a simple HTTP protocol for interacting with environments running as Docker containers. You can find OpenEnv environments on the Hugging Face Hub under dedicated [orgs](https://huggingface.co/openenv).
+[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework from Meta's PyTorch team for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It offers [Gymnasium-style APIs](https://gymnasium.farama.org) (e.g., `reset()` and `step()`) to interface with environments in a standard manner, and supports running these environments as backend servers (for example via HTTP or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/environment-hub).
 
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework from Meta's PyTorch team for defining, deploying and interacting with environments in RL/agentic workflows. It offers [Gymnasium-style APIs](https://gymnasium.farama.org) (e.g., `reset()` and `step()`) to interface with environments in a standard manner, and supports running these environments as backend servers (for example via HTTP or containerised execution). A collection of ready-to-use OpenEnv environments is available on the [Hugging Face Hub](https://huggingface.co/collections/openenv/environment-hub).
-
-Here, we’ll focus on the **integration of OpenEnv with TRL**, but check out the above resources to learn more about them.
+In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel free to explore the links above to dive deeper into OpenEnv itself.
 
 ## Installation
 
@@ -18,7 +16,7 @@ pip install git+https://github.com/meta-pytorch/OpenEnv.git
 
 ## Using `rollout_func` with OpenEnv environments
 
-TRL's [`GRPOTrainer`] supports _custom rollout logic_ through the `rollout_func` argument. This lets you override the trainer's default text-generation loop and directly interact with OpenEnv environments — for example, to compute environment-based rewards instead of purely model-based ones.
+TRL's [`GRPOTrainer`] supports _custom rollout logic_ through the `rollout_func` argument. This lets you override the trainer's default text-generation loop and directly interact with OpenEnv environments — for instance, to compute environment-driven rewards instead of relying solely on model-based signals.
 
 ### Rollout Function Signature
 
@@ -69,7 +67,7 @@ By using OpenEnv in this loop, you can:
 
 ## A simple example
 
-The [echo.py](../../examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the Echo environment rewards completions based on their text length, encouraging the model to generate longer outputs. This pattern can be extended to any custom environment that provides structured feedback or task-based rewards:
+The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the Echo environment rewards completions based on their text length, encouraging the model to generate longer outputs. This pattern can be extended to any custom environment that provides structured feedback or task-based rewards:
 
 ```python
 from envs.echo_env import EchoEnv, EchoAction
