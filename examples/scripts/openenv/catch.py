@@ -233,8 +233,6 @@ training_args = GRPOConfig(
     num_train_epochs=1,
     max_completion_length=4,
     gradient_accumulation_steps=4,
-    log_completions=True,
-    num_completions_to_print=1,
 )
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
