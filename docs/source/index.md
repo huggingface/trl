@@ -49,11 +49,9 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 ## 🎉 What's New
 
-**✨ OpenAI GPT OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4)! Check out the:
+**OpenEnv Integration:** TRL now supports **[OpenEnv](openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
 
-- [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
-- [GPT OSS recipes](https://github.com/huggingface/gpt-oss-recipes)
-- [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
+Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](openenv).
 
 You can also explore TRL-related models, datasets, and demos in the [TRL Hugging Face organization](https://huggingface.co/trl-lib).
 
