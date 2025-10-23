@@ -1,0 +1,70 @@
+# Multi-Token Prediction (MTP) Training Configuration
+# This configuration demonstrates how to enable and configure MTP for various models
+
+# Model configuration
+model_name_or_path: "Qwen/Qwen2.5-0.5B"  # Can be changed to other models
+torch_dtype: "bfloat16"  # Use bfloat16 for better performance
+trust_remote_code: false
+
+# Dataset configuration
+dataset_name: "trl-lib/Capybara"  # Popular SFT dataset
+train_split: "train"
+max_train_samples: 10000  # Limit for faster training, remove for full dataset
+
+# Basic training configuration
+output_dir: "./results/mtp-demo"
+num_train_epochs: 3
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 4
+learning_rate: 5e-5
+warmup_steps: 100
+logging_steps: 10
+save_steps: 500
+eval_steps: 500
+evaluation_strategy: "steps"
+save_strategy: "steps"
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+# Memory optimization
+gradient_checkpointing: true
+dataloader_pin_memory: false
+remove_unused_columns: false
+
+# MTP Configuration
+mtp_enabled: true                    # Enable Multi-Token Prediction
+mtp_num_predictions: 2               # Predict 2 future tokens (t+1, t+2)
+mtp_loss_weight: 0.5                 # Weight for MTP auxiliary loss
+mtp_head_type: "mha_ffn"              # Type of MTP head: linear, ffn, mha_ffn, cnn, identical
+
+mtp_weight_decay_strategy: "uniform" # Weight decay: uniform, harmonic
+mtp_dropout_prob: 0.1                # Dropout probability for MTP heads
+mtp_num_layers: 2                    # Number of layers in each MTP head (multi-layer support)
+mtp_init_strategy: "kaiming_uniform" # Parameter initialization: default, kaiming_uniform, kaiming_normal, xavier_uniform, xavier_normal, copy_lm_head
+
+# Advanced MTP configurations for different use cases:
+
+# For identical structure to LM head with parameter copying (uncomment to use):
+# mtp_head_type: "identical"
+# mtp_init_strategy: "copy_lm_head"
+# mtp_num_layers: 1
+
+# For better performance with larger models (uncomment to use):
+# mtp_head_type: "ffn"
+# mtp_num_predictions: 3
+# mtp_num_layers: 3
+# mtp_weight_decay_strategy: "harmonic"
+# mtp_init_strategy: "xavier_uniform"
+
+# For parameter efficiency (uncomment to use):
+# mtp_dropout_prob: 0.0
+# mtp_num_layers: 1
+
+# For experimental deep MTP heads (uncomment to use):
+# mtp_head_type: "mha_ffn"
+# mtp_num_predictions: 4
+# mtp_num_layers: 4
+# mtp_loss_weight: 0.3
+# mtp_init_strategy: "kaiming_normal"
