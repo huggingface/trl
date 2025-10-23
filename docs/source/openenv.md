@@ -153,26 +153,8 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
 ```
 
-To learn more about how to create custom environments, see the [OpenEnv documentation](https://github.com/meta-pytorch/OpenEnv/blob/main/src/envs/README.md).
-
-## Another example: Catch
-
-The [catch.py](../../examples/scripts/openenv/catch.py) script demonstrates training an LLM to play the Catch environment from OpenEnv.
-In this example, the catch environment is a simple 10×5 grid game where a ball falls from the top and you control a paddle at the bottom. Move left, right, or stay to catch the ball for +1 reward or miss it for –1.
-
-```txt
-· · ● · ·
-· · · · ·
-· · · · ·
-· · · · ·
-· · · · ·
-· · · · ·
-· · · · ·
-· · · · ·
-· · · · ·
-· · █ · ·
-```
-
-The model is prompted with a description of the environment and the current state, and trained to output actions to maximize the environment reward. Below is the reward curve from training:
+Below is the reward curve from training:
 
 <iframe src="https://trl-lib-trackio.hf.space?project=openenv&metrics=train/rewards/reward_from_env/mean&runs=qgallouedec-1761202871&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>
+
+To learn more about how to create custom environments, see the [OpenEnv documentation](https://github.com/meta-pytorch/OpenEnv/blob/main/src/envs/README.md).
