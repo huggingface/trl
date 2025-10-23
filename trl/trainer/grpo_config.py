@@ -42,7 +42,8 @@ class GRPOConfig(TrainingArguments):
             the model from generating different logprobs for the same input.
         cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
             Whether to cast the language modeling head of the policy and reference models to float32. As recommended by
-            the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe.
+            the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only supported when the model
+            has untied word embedding and language modeling head layers i.e. `tie_word_embeddings` in the model config is False.
 
         > Parameters that control the data preprocessing
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
@@ -292,7 +293,8 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
-            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe."
+            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only supported when the model"
+            " has untied word embedding and language modeling head layers i.e. `tie_word_embeddings` in the model config is False."
         },
     )
 
