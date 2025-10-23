@@ -30,17 +30,26 @@ from .testing_utils import TrlTestCase
     "to fail on Python <3.10.",  # let's say it's a known issue, but not expected to be fixed, because too niche
 )
 class TestCLI(TrlTestCase):
-    def test_dpo(self):
+    @pytest.fixture(
+        scope="class",
+        params=[
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def model_id(self, request):
+        return request.param
+
+    def test_dpo(self, model_id):
         from trl.cli import main
 
-        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none"
+        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path {model_id} --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
-    def test_dpo_multiple_loss_types(self):
+    def test_dpo_multiple_loss_types(self, model_id):
         from trl.cli import main
 
-        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
+        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path {model_id} --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
         with patch("sys.argv", command.split(" ")):
             main()
 
@@ -53,17 +62,17 @@ class TestCLI(TrlTestCase):
             main()
         assert "TRL version: " in mock_stdout.getvalue().strip()
 
-    def test_grpo(self):
+    def test_grpo(self, model_id):
         from trl.cli import main
 
-        command = f"trl grpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 4 --max_completion_length 32 --report_to none"
+        command = f"trl grpo --output_dir {self.tmp_dir} --model_name_or_path {model_id} --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 4 --max_completion_length 32 --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
-    def test_kto(self):
+    def test_kto(self, model_id):
         from trl.cli import main
 
-        command = f"trl kto --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none"
+        command = f"trl kto --output_dir {self.tmp_dir} --model_name_or_path {model_id} --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
@@ -74,21 +83,21 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
-    def test_rloo(self):
+    def test_rloo(self, model_id):
         from trl.cli import main
 
-        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none"
+        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path {model_id} --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
-    def test_sft(self):
+    def test_sft(self, model_id):
         from trl.cli import main
 
-        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path {model_id} --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
-    def test_sft_config_file(self):
+    def test_sft_config_file(self, model_id):
         from trl.cli import main
 
         output_dir = os.path.join(self.tmp_dir, "output")
@@ -96,7 +105,7 @@ class TestCLI(TrlTestCase):
         # Create a temporary config file
         config_path = os.path.join(self.tmp_dir, "config.yaml")
         config_content = {
-            "model_name_or_path": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "model_name_or_path": model_id,
             "dataset_name": "trl-internal-testing/zen",
             "dataset_config": "standard_language_modeling",
             "report_to": "none",
