@@ -75,6 +75,8 @@ _import_structure = {
     ],
     "xpo_config": ["XPOConfig"],
     "xpo_trainer": ["XPOTrainer"],
+    "papo_config": ["PAPOConfig"],
+    "papo_trainer": ["PAPOTrainer"],
 }
 
 if TYPE_CHECKING:
@@ -135,6 +137,8 @@ if TYPE_CHECKING:
     )
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
+    from .papo_config import PAPOConfig
+    from .papo_trainer import PAPOTrainer
 else:
     import sys
 
