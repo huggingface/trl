@@ -286,6 +286,10 @@ class GRPOConfig(TrainingArguments):
             "it prevents the model from generating different logprobs for the same input."
         },
     )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={"help": "Whether to trust remote code when loading custom models e.g. from the Hugging Face Hub."},
+    )
 
     # Parameters that control the data preprocessing
     # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
