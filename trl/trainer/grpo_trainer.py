@@ -444,21 +444,22 @@ class GRPOTrainer(BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Cast LM Head To FP32
-        if args.cast_lm_head_to_fp32 and not model.config.tie_word_embeddings:
+        if args.cast_lm_head_to_fp32:
+            if not model.config.tie_word_embeddings:
 
-            def cast_inputs_to_fp32(module, input):
-                return (input[0].float(),)
+                def cast_inputs_to_fp32(module, input):
+                    return (input[0].float(),)
 
-            model.lm_head = model.lm_head.float()
-            model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
-            if self.ref_model is not None:
-                self.ref_model.lm_head = self.ref_model.lm_head.float()
-                self.ref_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
-        else:
-            raise NotImplementedError(
-                "`cast_lm_head_to_fp32=True` is only supported when the model has untied word embedding and language modeling head layers"
-                "i.e. `tie_word_embeddings` in the model config is False."
-            )
+                model.lm_head = model.lm_head.float()
+                model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+                if self.ref_model is not None:
+                    self.ref_model.lm_head = self.ref_model.lm_head.float()
+                    self.ref_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+            else:
+                raise NotImplementedError(
+                    "`cast_lm_head_to_fp32=True` is only supported when the model has untied word embedding and language modeling head layers"
+                    "i.e. `tie_word_embeddings` in the model config is False."
+                )
 
         # Liger loss
         if self.use_liger_loss:
