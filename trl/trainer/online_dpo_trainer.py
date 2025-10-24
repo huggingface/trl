@@ -104,6 +104,11 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+# What we call a rollout function is a callable that takes prompts (list), args (OnlineDPOConfig), and processing_class
+# as parameters and returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and
+# optionally "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
+RolloutFunc = Callable[[list[str], Any, Any], dict[str, Any]]
+
 
 class OnlineDPOTrainer(BaseTrainer):
     r"""
@@ -166,6 +171,11 @@ class OnlineDPOTrainer(BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
+        rollout_func (`RolloutFunc`, *optional*):
+            Function to use for generating completions. It must take prompts, args, and processing_class as parameters
+            and return a dict with `"prompt_ids"`, `"completion_ids"`, and optionally `"logprobs"` fields. Any other
+            fields are forwarded to the reward functions. This feature is experimental and may change or be removed at
+            any time without prior notice.
     """
 
     _tag_names = ["trl", "online-dpo"]
@@ -200,6 +210,7 @@ class OnlineDPOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        rollout_func: Optional[RolloutFunc] = None,
     ) -> None:
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -288,6 +299,17 @@ class OnlineDPOTrainer(BaseTrainer):
                 self.reward_weights = torch.ones(len(self.reward_funcs), dtype=torch.float32)
         else:
             self.reward_weights = None
+
+        # Rollout function
+        if rollout_func is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
+            warnings.warn(
+                "You are using 'rollout_func', which is an experimental feature. This API may change or be "
+                "removed at any time without prior notice. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1.",
+                UserWarning,
+                stacklevel=2,
+            )
+        self.rollout_func = rollout_func
 
         if args.missing_eos_penalty is not None and reward_funcs is None and judge is None:
             raise ValueError("`missing_eos_penalty` is only supported when `reward_funcs` is provided.")
@@ -462,7 +484,12 @@ class OnlineDPOTrainer(BaseTrainer):
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                     self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                    # Use CUDA device if available, otherwise use CPU
+                    if torch.cuda.is_available():
+                        device = torch.cuda.current_device()
+                    else:
+                        device = torch.device("cpu")
+                    self.vllm_client.init_communicator(device=device)
                 else:
                     self.vllm_client = None
             elif self.vllm_mode == "colocate":
@@ -687,9 +714,10 @@ class OnlineDPOTrainer(BaseTrainer):
 
         # Generate completion_ids and prompt_ids based on mode
         if self.vllm_mode == "server":
-            completion_ids, prompt_ids = self._generate_vllm_server(prompts, images)
+            completion_ids, prompt_ids, extra_fields = self._generate_vllm_server(prompts, images)
         elif self.vllm_mode == "colocate":
             completion_ids, prompt_ids = self._generate_vllm_colocate(prompts, images)
+            extra_fields = {}  # No extra fields for colocate mode (unless we add support later)
 
         # Shared padding, masking, and tensor conversion logic
         max_prompt_length = max(len(ids) for ids in prompt_ids)
@@ -709,7 +737,7 @@ class OnlineDPOTrainer(BaseTrainer):
         completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
         completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
 
-        return prompt_ids, prompt_mask, completion_ids, completion_mask
+        return prompt_ids, prompt_mask, completion_ids, completion_mask, extra_fields
 
     def _generate_vllm_server(self, prompts, images=None):
         """Generate completions using vLLM server mode"""
@@ -742,46 +770,72 @@ class OnlineDPOTrainer(BaseTrainer):
                 ordered_set_of_images = all_images[:: self.num_generations]
             else:
                 ordered_set_of_images = None
-            completion_ids = self.vllm_client.generate(
-                prompts=ordered_set_of_prompts,
-                images=ordered_set_of_images,
-                n=self.num_generations,
-                repetition_penalty=self.repetition_penalty,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=-1 if self.top_k is None else self.top_k,
-                min_p=0.0 if self.min_p is None else self.min_p,
-                max_tokens=self.generation_config.max_tokens,
-                guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
-                generation_kwargs=self.args.generation_kwargs,
-            )
-            # Flatten: each prompt generates 2 completions
-            completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
-        else:
-            completion_ids = [None] * (len(all_prompts) * 2)
 
-        # Broadcast completions to all processes
-        completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            if self.rollout_func is not None:
+                # Use custom rollout function
+                output = self.rollout_func(
+                    ordered_set_of_prompts,
+                    self.args,
+                    self.processing_class,
+                )
+                # Extract required fields and collect any extra fields for reward functions
+                required_keys = {"prompt_ids", "completion_ids"}
+                extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+                payload = (output["prompt_ids"], output["completion_ids"], extra_fields)
+            else:
+                # Use standard vLLM generation
+                completion_ids = self.vllm_client.generate(
+                    prompts=ordered_set_of_prompts,
+                    images=ordered_set_of_images,
+                    n=self.num_generations,
+                    repetition_penalty=self.repetition_penalty,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    top_k=-1 if self.top_k is None else self.top_k,
+                    min_p=0.0 if self.min_p is None else self.min_p,
+                    max_tokens=self.generation_config.max_tokens,
+                    guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
+                    generation_kwargs=self.args.generation_kwargs,
+                )
+                # Flatten: each prompt generates 2 completions
+                completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
+                # Create prompt_ids by tokenizing locally
+                prompt_inputs = self.processing_class(
+                    text=prompts_text,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left",
+                    add_special_tokens=False,
+                )
+                prompt_ids = []
+                for prompt_tokens in prompt_inputs["input_ids"]:
+                    prompt_ids.extend([prompt_tokens.tolist(), prompt_tokens.tolist()])  # 2 copies for 2 completions
+                payload = (prompt_ids, completion_ids, {})
+        else:
+            payload = None
+
+        # Broadcast the payload from main process to all processes
+        obj_list = [payload]
+        broadcast_object_list(obj_list, from_process=0)
+        all_prompt_ids, all_completion_ids, all_extra_fields = obj_list[0]
 
         # Each process takes its slice
         process_slice = slice(
             self.accelerator.process_index * len(prompts) * 2,
             (self.accelerator.process_index + 1) * len(prompts) * 2,
         )
-        completion_ids = completion_ids[process_slice]
+        prompt_ids = all_prompt_ids[process_slice]
+        completion_ids = all_completion_ids[process_slice]
 
-        # Create prompt_ids by tokenizing locally
-        prompt_inputs = self.processing_class(
-            text=prompts_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=False,
-        )
-        prompt_ids = []
-        for prompt_tokens in prompt_inputs["input_ids"]:
-            prompt_ids.extend([prompt_tokens.tolist(), prompt_tokens.tolist()])  # 2 copies for 2 completions
-        return completion_ids, prompt_ids
+        # Slice extra fields dict-of-lists per process (extra fields are per-completion, like completion_ids)
+        extra_fields = {}
+        for key, values in all_extra_fields.items():
+            if isinstance(values, list):
+                extra_fields[key] = values[process_slice]
+            else:
+                extra_fields[key] = values
+
+        return completion_ids, prompt_ids, extra_fields
 
     def _generate_vllm_colocate(self, prompts, images=None):
         """Generate completions using vLLM colocate mode"""
@@ -1228,9 +1282,10 @@ class OnlineDPOTrainer(BaseTrainer):
                                 message["content"] = [{"type": "text", "text": content}]
 
         if self.args.use_vllm:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(prompts, images)
+            prompt_ids, prompt_mask, completion_ids, completion_mask, extra_fields = self._generate_vllm(prompts, images)
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
+            extra_fields = {}  # No extra fields for non-vllm generation (unless we add support later)
 
         contain_eos_token = torch.any(completion_ids == self.eos_token_id, dim=-1)
 
@@ -1297,6 +1352,11 @@ class OnlineDPOTrainer(BaseTrainer):
                     reward_kwargs[key] = inputs[key] * 2
                 else:
                     reward_kwargs[key] = inputs[key]
+
+            # Merge extra_fields from rollout_func into reward_kwargs
+            if extra_fields:
+                for key, values in extra_fields.items():
+                    reward_kwargs[key] = values
 
             # Calculate rewards using reward functions
             rewards = self._calculate_rewards_from_functions(
