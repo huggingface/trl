@@ -33,7 +33,7 @@ from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelFor
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 if TYPE_CHECKING:
