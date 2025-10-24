@@ -451,6 +451,8 @@ class GRPOTrainer(BaseTrainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
+        self.current_gradient_accumulation_steps = args.gradient_accumulation_steps
+
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:
