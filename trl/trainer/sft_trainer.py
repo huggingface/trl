@@ -54,6 +54,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    get_config_model_id,
     pad,
     remove_none_values,
     selective_log_softmax,
@@ -590,7 +591,7 @@ class SFTTrainer(BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
@@ -608,11 +609,10 @@ class SFTTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
