@@ -297,11 +297,11 @@ class VLLMClient:
         else:
             client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
 
-        # In the server side, the host is set to 0.0.0.0
+        # On the server side, the host is set to self.host
         response = self.session.post(
             url,
             json={
-                "host": "0.0.0.0",
+                "host": self.host,
                 "port": self.group_port,
                 "world_size": world_size,
                 "client_device_uuid": client_device_uuid,
