@@ -2,9 +2,9 @@
 
 Training workflows can often be optimized to **reduce memory consumption**, and TRL provides several built-in features to help achieve this.
 
-Below, we outline these techniques and recommend experimenting with different combinations to determine which configuration works best for your specific setup.
+Below, we outline these techniques and recommend experimenting with different combinations to figure out which configuration works best for your specific setup.
 
-Each method includes examples for the supported trainers. If you're unsure whether a technique is compatible with your trainer, please refer to the corresponding trainer documentation.
+Each method includes examples for the supported trainers. If you're unsure whether a technique is compatible with your trainer, please take a look at the corresponding trainer documentation.
 
 For additional strategies, such as **gradient checkpointing**, which is supported across all trainers, see the [`transformers` performance guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
 
@@ -95,7 +95,7 @@ training_args = SFTConfig(..., packing=True, max_length=512)
 
 ## Liger for reducing peak memory usage
 
-> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%.
+> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
@@ -173,7 +173,7 @@ from trl import SFTConfig
 training_args = SFTConfig(..., activation_offloading=True)
 ```
 
-Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors which would be inefficient. For performance optimization, it can optionally use CUDA streams to overlap computation with CPU-GPU transfers.
+Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors that would be inefficient. For performance optimization, it can optionally use CUDA streams to overlap computation with CPU-GPU transfers.
 
 ## Padding Sequences to a Multiple
 
