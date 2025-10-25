@@ -137,8 +137,6 @@ if TYPE_CHECKING:
     )
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
-    from .papo_config import PAPOConfig
-    from .papo_trainer import PAPOTrainer
 else:
     import sys
 
