@@ -207,6 +207,14 @@ training_args = GRPOConfig(
 
 See [Experimental - GFPO](experimental#gfpo).
 
+
+### PAPO (Preference Alignment via Policy Optimization)
+
+* **Paper:** [Link to Paper.](https://arxiv.org/abs/2507.06448)
+* **Implementation:**  `trl.experimental.papo_trainer.PAPOTrainer`
+* **Description:  A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason.**
+* **Note:  This is a TRL adoption, NOT PAPO's official code!** [Link to PAPO offical repo.](https://github.com/MikeWangWZHL/PAPO)
+
 ## Direct Policy Optimization
 
 Papers relating to the [`DPOTrainer`]
