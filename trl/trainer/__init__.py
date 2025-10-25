@@ -75,8 +75,6 @@ _import_structure = {
     ],
     "xpo_config": ["XPOConfig"],
     "xpo_trainer": ["XPOTrainer"],
-    "papo_config": ["PAPOConfig"],
-    "papo_trainer": ["PAPOTrainer"],
 }
 
 if TYPE_CHECKING:
