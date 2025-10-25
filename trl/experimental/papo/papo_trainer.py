@@ -21,7 +21,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixi
 from trl import GRPOTrainer
 from trl.trainer.grpo_trainer import RewardFunc
 from .papo_config import PAPOConfig
-from .utils import get_comet_experiment_url, nanmax, nanmin
+from trl.trainer.utils import get_comet_experiment_url, nanmax, nanmin
 
 
 class PAPOTrainer(GRPOTrainer):
