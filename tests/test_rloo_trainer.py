@@ -35,17 +35,26 @@ if is_peft_available():
 
 
 class TestRLOOTrainer(TrlTestCase):
-    def test_init_minimal(self):
+    @pytest.fixture(
+        scope="class",
+        params=[
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def model_id(self, request):
+        return request.param
+
+    def test_init_minimal(self, model_id):
         # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             train_dataset=dataset,
         )
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    def test_training(self, config_name):
+    def test_training(self, config_name, model_id):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         training_args = RLOOConfig(
@@ -57,7 +66,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -74,7 +83,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_eval(self):
+    def test_training_with_eval(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
         training_args = RLOOConfig(
@@ -88,7 +97,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset["train"],
@@ -97,7 +106,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         trainer.train()
 
-    def test_training_multiple_iterations(self):
+    def test_training_multiple_iterations(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -110,7 +119,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -128,8 +137,8 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_training_peft(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+    def test_training_peft(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id)
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -164,12 +173,12 @@ class TestRLOOTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_training_peft_with_gradient_checkpointing(self):
+    def test_training_peft_with_gradient_checkpointing(self, model_id):
         """Test that training works with PEFT and gradient checkpointing enabled."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model_id,
             dtype=torch.float32,  # Use float32 for testing to avoid precision issues
         )
 
@@ -212,7 +221,7 @@ class TestRLOOTrainer(TrlTestCase):
             else:  # Base model parameters should not change
                 assert torch.equal(param, new_param), f"Base parameter {n} has changed."
 
-    def test_training_different_reward_model(self):
+    def test_training_different_reward_model(self, model_id):
         # Use a reward model different from the model: different chat template, tokenization, etc.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         reward_model_id = "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
@@ -233,7 +242,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=reward_model,
             args=training_args,
             train_dataset=dataset,
@@ -251,7 +260,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_reward_func_standard(self):
+    def test_training_reward_func_standard(self, model_id):
         # Test if trainer can handle reward function with standard format
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -268,7 +277,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -285,7 +294,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_reward_func_conversational(self):
+    def test_training_reward_func_conversational(self, model_id):
         # Test if trainer can handle reward function with conversational format
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -303,7 +312,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -320,7 +329,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_multiple_reward_funcs(self):
+    def test_training_multiple_reward_funcs(self, model_id):
         # Test that RLOOTrainer can be instantiated with multiple reward functions
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -341,7 +350,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=[reward_func1, reward_func2],
             args=training_args,
             train_dataset=dataset,
@@ -358,7 +367,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_multiple_reward_funcs_with_None_output(self):
+    def test_training_multiple_reward_funcs_with_None_output(self, model_id):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -380,7 +389,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
 
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=[
                 applicable_reward_func,
                 non_applicable_reward_func,
@@ -402,7 +411,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_multiple_reward_funcs_with_weights(self):
+    def test_training_multiple_reward_funcs_with_weights(self, model_id):
         """Test that RLOOTrainer can handle multiple reward functions with weights."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -424,7 +433,7 @@ class TestRLOOTrainer(TrlTestCase):
             reward_weights=[0.7, 0.3],  # weight of reward_func1 and reward_func2 respectively
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=[reward_func1, reward_func2],
             args=training_args,
             train_dataset=dataset,
@@ -446,7 +455,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_multiple_mixed_reward_funcs(self):
+    def test_training_multiple_mixed_reward_funcs(self, model_id):
         # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -463,7 +472,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=[reward_func, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
             args=training_args,
             train_dataset=dataset,
@@ -480,7 +489,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_reward_func_additional_column(self):
+    def test_training_reward_func_additional_column(self, model_id):
         # Test if trainer can handle reward function that rely on additional columns in the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -501,7 +510,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -518,7 +527,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_sync_ref_model(self):
+    def test_training_with_sync_ref_model(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -532,7 +541,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -549,7 +558,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_beta_zero(self):
+    def test_training_beta_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
@@ -561,7 +570,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -658,7 +667,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_additional_generation_kwargs(self):
+    def test_training_with_additional_generation_kwargs(self, model_id):
         """Test that training works with additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -676,7 +685,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
 
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -731,7 +740,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_normalized_advantages(self):
+    def test_training_with_normalized_advantages(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -744,7 +753,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -761,7 +770,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_clipped_rewards(self):
+    def test_training_with_clipped_rewards(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -774,7 +783,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -792,7 +801,7 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @patch("transformers.generation.utils.GenerationMixin.generate")
-    def test_training_with_mask_truncated_completions(self, mock_generate):
+    def test_training_with_mask_truncated_completions(self, mock_generate, model_id):
         """Test that training works with mask_truncated_completions=True parameter."""
 
         # We mock the generate method because the model's random weights make it extremely unlikely to produce a
@@ -824,7 +833,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -841,7 +850,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_mask_truncated_completions_all_masked(self):
+    def test_training_with_mask_truncated_completions_all_masked(self, model_id):
         """
         Test that when all generated completions are truncated (i.e., none contain an EOS token), and
         mask_truncated_completions=True, the model receives no effective learning signal and therefore does not update
@@ -862,7 +871,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -879,7 +888,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
-    def test_warning_raised_all_rewards_none(self, caplog):
+    def test_warning_raised_all_rewards_none(self, model_id, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -896,7 +905,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=always_none_reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -908,7 +917,7 @@ class TestRLOOTrainer(TrlTestCase):
         expected_warning = "All reward functions returned None for the following kwargs:"
         assert expected_warning in caplog.text
 
-    def test_training_num_generations_larger_than_batch_size(self):
+    def test_training_num_generations_larger_than_batch_size(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -921,7 +930,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -938,7 +947,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_multiple_dataloader_workers(self):
+    def test_training_multiple_dataloader_workers(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -951,7 +960,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -968,7 +977,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_generation_kwargs(self):
+    def test_training_with_generation_kwargs(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -981,7 +990,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -998,7 +1007,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_reward_func_accessing_trainer_state(self):
+    def test_training_with_reward_func_accessing_trainer_state(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1016,14 +1025,14 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
         trainer.train()
 
-    def test_prepare_input_called_with_correct_data(self):
+    def test_prepare_input_called_with_correct_data(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
@@ -1039,7 +1048,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -1291,7 +1300,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_mismatched_reward_processing_classes_length(self):
+    def test_mismatched_reward_processing_classes_length(self, model_id):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1310,14 +1319,14 @@ class TestRLOOTrainer(TrlTestCase):
 
         with pytest.raises(ValueError, match="must match"):
             RLOOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model=model_id,
                 reward_funcs=reward_models,
                 reward_processing_classes=single_processing_class,  # only one, but need two
                 args=training_args,
                 train_dataset=dataset,
             )
 
-    def test_correct_reward_processing_classes_list(self):
+    def test_correct_reward_processing_classes_list(self, model_id):
         """Test that correct list of reward_processing_classes works properly."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1339,7 +1348,7 @@ class TestRLOOTrainer(TrlTestCase):
         correct_processing_classes = [processing_class1, processing_class2]
 
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=reward_models,
             reward_processing_classes=correct_processing_classes,
             args=training_args,
@@ -1348,7 +1357,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert len(trainer.reward_processing_classes) == len(reward_models)
 
-    def test_single_reward_model_with_single_processing_class(self):
+    def test_single_reward_model_with_single_processing_class(self, model_id):
         """Test that single reward model with single processing class works."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1363,7 +1372,7 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
 
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=reward_model,
             reward_processing_classes=single_processing_class,  # single object for single reward model
             args=training_args,

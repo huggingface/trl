@@ -23,6 +23,15 @@ from .testing_utils import TrlTestCase, require_peft
 
 
 class TestORPOTrainer(TrlTestCase):
+    @pytest.fixture(
+        scope="class",
+        params=[
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def model_id(self, request):
+        return request.param
+
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -144,9 +153,9 @@ class TestORPOTrainer(TrlTestCase):
                 if param.sum() != 0:  # ignore 0 biases
                     assert not torch.equal(param, new_param)
 
-    def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+    def test_compute_metrics(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")

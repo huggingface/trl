@@ -66,9 +66,10 @@ class TrainerWithRefModel(Trainer):
 
 class TestWinRateCallback(TrlTestCase):
     def setup_method(self):
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForCausalLM.from_pretrained(model_id)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         dataset["train"] = dataset["train"].select(range(8))
@@ -224,8 +225,9 @@ class TestWinRateCallback(TrlTestCase):
 
 class TestLogCompletionsCallback(TrlTestCase):
     def setup_method(self):
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForCausalLM.from_pretrained(model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         dataset["train"] = dataset["train"].select(range(8))
@@ -318,8 +320,9 @@ class TestLogCompletionsCallback(TrlTestCase):
 @require_mergekit
 class TestMergeModelCallback(TrlTestCase):
     def setup_method(self):
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForCausalLM.from_pretrained(model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
     def test_callback(self):
@@ -374,8 +377,9 @@ class TestMergeModelCallback(TrlTestCase):
 
 class TestBEMACallback(TrlTestCase):
     def setup_method(self):
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForCausalLM.from_pretrained(model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 

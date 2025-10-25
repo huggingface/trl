@@ -33,6 +33,15 @@ if is_peft_available():
 
 @pytest.mark.low_priority
 class TestBCOTrainer(TrlTestCase):
+    @pytest.fixture(
+        scope="class",
+        params=[
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def model_id(self, request):
+        return request.param
+
     @pytest.mark.parametrize(
         "config_name",
         [
@@ -45,8 +54,7 @@ class TestBCOTrainer(TrlTestCase):
         ],
     )
     @require_sklearn
-    def test_train(self, config_name):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train(self, config_name, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -81,8 +89,7 @@ class TestBCOTrainer(TrlTestCase):
                 assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
-    def test_train_with_precompute(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train_with_precompute(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -118,8 +125,7 @@ class TestBCOTrainer(TrlTestCase):
                 assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
-    def test_train_eval(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train_eval(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -146,8 +152,7 @@ class TestBCOTrainer(TrlTestCase):
         trainer.train()
 
     @require_sklearn
-    def test_init_with_ref_model_is_model(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_init_with_ref_model_is_model(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -169,8 +174,7 @@ class TestBCOTrainer(TrlTestCase):
             )
 
     @require_sklearn
-    def test_tokenize_and_process_tokens(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_tokenize_and_process_tokens(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -225,8 +229,7 @@ class TestBCOTrainer(TrlTestCase):
         assert processed_dataset["completion_labels"][0] == [-100, -100, -100, -100, 27261, 13, 151645]
 
     @require_sklearn
-    def test_train_without_providing_ref_model(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train_without_providing_ref_model(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -259,8 +262,7 @@ class TestBCOTrainer(TrlTestCase):
                 assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
-    def test_train_udm(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train_udm(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -309,8 +311,7 @@ class TestBCOTrainer(TrlTestCase):
 
     @require_sklearn
     @require_peft
-    def test_train_without_providing_ref_model_with_lora(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train_without_providing_ref_model_with_lora(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -347,8 +348,7 @@ class TestBCOTrainer(TrlTestCase):
 
     @require_sklearn
     @require_no_wandb
-    def test_generate_during_eval_no_wandb(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_generate_during_eval_no_wandb(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -378,8 +378,7 @@ class TestBCOTrainer(TrlTestCase):
 
     @require_sklearn
     @require_peft
-    def test_lora_train_and_save(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_lora_train_and_save(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -410,8 +409,7 @@ class TestBCOTrainer(TrlTestCase):
         AutoModelForCausalLM.from_pretrained(self.tmp_dir)
 
     @require_sklearn
-    def test_compute_metrics(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_compute_metrics(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
