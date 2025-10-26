@@ -17,6 +17,7 @@ env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  TRL_EXPERIMENTAL_SILENCE: 1
 
 jobs:
   check_code_quality:

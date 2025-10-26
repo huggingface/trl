@@ -389,7 +389,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 
 | Trainer | Expected dataset type |
 | --- | --- |
-| [`BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
+| [`experimental.bco.BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`DPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`GKDTrainer`] | [Prompt-completion](#prompt-completion) |

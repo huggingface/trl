@@ -43,9 +43,12 @@ def conversations_formatting_function(
     return a callable function that takes in a "messages" dataset and returns a formatted dataset, based on the
     tokenizer apply chat template to the dataset along with the schema of the list of functions in the tools list.
 
-    .. deprecated:: 0.24.0
-        `conversations_formatting_function` is deprecated and will be removed in version 0.27. Please use
-        `tokenizer.apply_chat_template()` directly instead.
+    <Deprecated version="0.24.0">
+
+    `conversations_formatting_function` is deprecated and will be removed in version 0.27. Please use
+    `tokenizer.apply_chat_template()` directly instead.
+
+    </Deprecated>
     """
     warnings.warn(
         "`conversations_formatting_function` is deprecated and will be removed in TRL 0.27. "
@@ -73,9 +76,12 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
     return a callable function that takes in an "instructions" dataset and returns a formatted dataset, based on the
     tokenizer apply chat template to the dataset
 
-    .. deprecated:: 0.24.0
-        `instructions_formatting_function` is deprecated and will be removed in version 0.27. Please use
-        `tokenizer.apply_chat_template()` directly instead.
+    <Deprecated version="0.24.0">
+
+    `instructions_formatting_function` is deprecated and will be removed in version 0.27. Please use
+    `tokenizer.apply_chat_template()` directly instead.
+
+    </Deprecated>
     """
     warnings.warn(
         "`instructions_formatting_function` is deprecated and will be removed in TRL 0.27. "
@@ -121,9 +127,12 @@ def get_formatting_func_from_dataset(
     Returns:
         Callable: Formatting function if the dataset format is supported else None
 
-    .. deprecated:: 0.24.0
-        `get_formatting_func_from_dataset` is deprecated and will be removed in version 0.27. Please use
-        `tokenizer.apply_chat_template()` directly instead.
+    <Deprecated version="0.24.0">
+
+    `get_formatting_func_from_dataset` is deprecated and will be removed in version 0.27. Please use
+    `tokenizer.apply_chat_template()` directly instead.
+
+    </Deprecated>
     """
     warnings.warn(
         "`get_formatting_func_from_dataset` is deprecated and will be removed in TRL 0.27. "

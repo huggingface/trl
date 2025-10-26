@@ -44,7 +44,7 @@ from ..data_utils import is_conversational
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
-from .utils import disable_dropout_in_model, pad, remove_none_values
+from .utils import disable_dropout_in_model, get_config_model_id, pad, remove_none_values
 
 
 if is_peft_available():
@@ -273,7 +273,7 @@ class RewardTrainer(BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = RewardConfig(f"{model_name}-Reward")
 
@@ -294,7 +294,7 @@ class RewardTrainer(BaseTrainer):
             with suppress_from_pretrained_warning(transformers.modeling_utils.logger):
                 model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1, **model_init_kwargs)
         else:
-            model_id = model.config._name_or_path
+            model_id = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "

@@ -17,7 +17,7 @@ from typing import Optional, Union
 
 from transformers import Trainer, is_wandb_available
 
-from .utils import generate_model_card, get_comet_experiment_url
+from .utils import generate_model_card, get_comet_experiment_url, get_config_model_id
 
 
 if is_wandb_available():
@@ -50,8 +50,9 @@ class BaseTrainer(Trainer):
         if not self.is_world_process_zero():
             return
 
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
+        model_name_or_path = get_config_model_id(self.model.config)
+        if model_name_or_path and not os.path.isdir(model_name_or_path):
+            base_model = model_name_or_path
         else:
             base_model = None
 

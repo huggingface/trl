@@ -338,7 +338,7 @@ training_args = DPOConfig(
 )
 ```
 
-For the unpaired version, the user should utilize [`BCOConfig`] and [`BCOTrainer`].
+For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
 ### Self-Play Preference Optimization for Language Model Alignment
 

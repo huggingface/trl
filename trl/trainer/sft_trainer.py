@@ -54,6 +54,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    get_config_model_id,
     pad,
     remove_none_values,
     selective_log_softmax,
@@ -353,9 +354,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images = None
 
         if "messages" in examples[0]:  # conversational case
-            for example in examples:
-                prepare_multimodal_messages(example["messages"], len(example["images"]))
-            messages = [example["messages"] for example in examples]
+            messages = [prepare_multimodal_messages(example["messages"], example["images"]) for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
@@ -396,7 +395,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images = None
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["completion"] = prepare_multimodal_messages(example["completion"], images=[])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
@@ -591,7 +591,7 @@ class SFTTrainer(BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
@@ -609,11 +609,10 @@ class SFTTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -951,10 +950,13 @@ class SFTTrainer(BaseTrainer):
                         output = {}
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["prompt"], num_images=0)
-                                prepare_multimodal_messages(example["completion"], num_images=0)
+                                prompt = prepare_multimodal_messages(example["prompt"], images=[])
+                                completion = prepare_multimodal_messages(example["completion"], images=[])
+                            else:
+                                prompt = example["prompt"]
+                                completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"],
+                                prompt,
                                 tokenize=True,
                                 add_generation_prompt=True,
                                 tools=example.get("tools"),
@@ -964,7 +966,7 @@ class SFTTrainer(BaseTrainer):
                             # even for single examples, while for LLMs it returns lists of ints.
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"],
+                                prompt + completion,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1002,9 +1004,11 @@ class SFTTrainer(BaseTrainer):
                     else:  # language modeling case
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["messages"], num_images=0)
+                                messages = prepare_multimodal_messages(example["messages"], images=[])
+                            else:
+                                messages = example["messages"]
                             processed = processing_class.apply_chat_template(
-                                example["messages"],
+                                messages,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,

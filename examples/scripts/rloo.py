@@ -33,12 +33,10 @@ import os
 
 import torch
 from datasets import load_dataset
-from latex2sympy2_extended import NormalizationConfig
-from math_verify import LatexExtractionConfig, parse, verify
 from peft import LoraConfig
 
 from trl import RLOOConfig, RLOOTrainer
-from trl.rewards import think_format_reward
+from trl.rewards import accuracy_reward, think_format_reward
 
 
 # Enable logging in a Hugging Face Space
@@ -66,52 +64,6 @@ def main():
 
     train_dataset = train_dataset.map(make_conversation, remove_columns=["messages", "problem"])
     eval_dataset = eval_dataset.map(make_conversation, remove_columns=["messages", "problem"])
-
-    # Reward function for training
-    def accuracy_reward(completions, solution: list[str], **kwargs):
-        """Reward function that checks if the completion matches the ground truth.
-        - If both gold and prediction are parseable → use math verification.
-        - If not parseable → compare as normalized text.
-        """
-        rewards = []
-        contents = [completion[0]["content"] for completion in completions]
-        for content, sol in zip(contents, solution):
-            try:
-                gold_parsed = parse(sol, extraction_mode="first_match")
-            except Exception:
-                gold_parsed = []
-
-            if len(gold_parsed) != 0:
-                # Try parsing predicted answer too
-                try:
-                    answer_parsed = parse(
-                        content,
-                        extraction_config=[
-                            LatexExtractionConfig(
-                                normalization_config=NormalizationConfig(
-                                    nits=False,
-                                    malformed_operators=False,
-                                    basic_latex=True,
-                                    boxed="all",
-                                    units=True,
-                                ),
-                                boxed_match_priority=0,
-                                try_extract_without_anchor=False,
-                            )
-                        ],
-                        extraction_mode="first_match",
-                    )
-                    reward = float(verify(gold_parsed, answer_parsed))
-                except Exception as e:
-                    print(f"verify failed: {e}, answer: {content}, gold: {sol}")
-                    reward = None
-            else:
-                # fallback to text match
-                reward = float(content.strip().lower() == sol.strip().lower())
-
-            rewards.append(reward)
-
-        return rewards
 
     # Training
     training_args = RLOOConfig(

@@ -90,7 +90,7 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
     model_name,
     peft_config=lora_config,
     reward_adapter=rm_adapter_id,
-    load_in_8bit=True,
+    quantization_config=BitsAndBytesConfig(load_in_8bit=True),
 )
 
 ...

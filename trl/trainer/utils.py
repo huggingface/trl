@@ -41,6 +41,7 @@ from transformers import (
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
+    PretrainedConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
@@ -1251,34 +1252,6 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
-    # docstyle-ignore
-    """
-    Decodes the input tensor and strips the padding tokens.
-
-    > [!WARNING]
-    > This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy
-    > the code into your codebase and use it from there.
-
-    Args:
-        inputs (`torch.Tensor`):
-            The input tensor to be decoded.
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
-            The tokenizer used to decode the input tensor.
-
-    Returns:
-        `list[str]`:
-            The list of decoded strings with padding tokens stripped.
-    """
-    warnings.warn(
-        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
-        "to keep using it, please copy the code into your codebase and use it from there.",
-        FutureWarning,
-    )
-    decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
-    return [d.replace(tokenizer.pad_token, "") for d in decoded]
-
-
 def generate_model_card(
     base_model: Optional[str],
     model_name: str,
@@ -1990,3 +1963,19 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
     architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
+
+
+def get_config_model_id(config: PretrainedConfig) -> str:
+    """
+    Retrieve the model identifier from a given model configuration.
+
+    Args:
+        config ([`~transformers.PreTrainedConfig`]):
+            Configuration from which to extract the model identifier.
+
+    Returns:
+        `str`:
+            The model identifier associated with the model configuration.
+    """
+    # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing: Qwen2-VL and Qwen2.5-VL. See GH-4323
+    return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")

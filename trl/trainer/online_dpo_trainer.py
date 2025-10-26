@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
@@ -73,6 +74,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
+    get_config_model_id,
     pad,
     truncate_right,
 )
@@ -164,14 +166,6 @@ class OnlineDPOTrainer(BaseTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-
-        reward_model:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "online-dpo"]
@@ -206,9 +200,6 @@ class OnlineDPOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        # Deprecated parameters
-        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
     ) -> None:
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -224,36 +215,6 @@ class OnlineDPOTrainer(BaseTrainer):
             )
 
         self.ref_model = ref_model
-
-        # Handle deprecated parameters for backward compatibility
-        if reward_model is not None:
-            warnings.warn(
-                "The `reward_model` parameter is deprecated and will be removed in version 0.25.0. "
-                "Please use `reward_funcs` instead. For example, change `reward_model=model` to `reward_funcs=model`.",
-            )
-            # Convert old reward_model to new reward_funcs format
-            if reward_funcs is None:
-                reward_funcs = reward_model
-            else:
-                warnings.warn(
-                    "Both `reward_model` and `reward_funcs` are provided. Using `reward_funcs` and ignoring "
-                    "`reward_model`.",
-                )
-
-        if reward_processing_class is not None:
-            warnings.warn(
-                "The `reward_processing_class` parameter is deprecated and will be removed in version 0.25.0. "
-                "Please use `reward_processing_classes` instead. For example, change "
-                "`reward_processing_class=tokenizer` to `reward_processing_classes=tokenizer`.",
-            )
-            # Convert old reward_processing_class to new reward_processing_classes format
-            if reward_processing_classes is None:
-                reward_processing_classes = reward_processing_class
-            else:
-                warnings.warn(
-                    "Both `reward_processing_class` and `reward_processing_classes` are provided. Using "
-                    "`reward_processing_classes` and ignoring `reward_processing_class`.",
-                )
 
         # Validate reward configuration - must have exactly one of: judge, or reward_funcs
         reward_configs = sum(x is not None for x in [judge, reward_funcs])
@@ -283,7 +244,7 @@ class OnlineDPOTrainer(BaseTrainer):
                         reward_func, num_labels=1, **model_init_kwargs
                     )
                 if isinstance(reward_funcs[i], nn.Module):
-                    self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+                    self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
                 else:
                     self.reward_func_names.append(reward_funcs[i].__name__)
             self.reward_funcs = reward_funcs
@@ -329,16 +290,7 @@ class OnlineDPOTrainer(BaseTrainer):
             self.reward_weights = None
 
         if args.missing_eos_penalty is not None and reward_funcs is None and judge is None:
-            # Check if this is the old reward_model case
-            if reward_model is not None:
-                logger.warning(
-                    "The `missing_eos_penalty` parameter is deprecated when used with the deprecated `reward_model` parameter. "
-                    "Please use `reward_funcs` instead of `reward_model` to continue using this feature.",
-                    FutureWarning,
-                    stacklevel=2,
-                )
-            else:
-                raise ValueError("`missing_eos_penalty` is only supported when `reward_funcs` is provided.")
+            raise ValueError("`missing_eos_penalty` is only supported when `reward_funcs` is provided.")
 
         if args is None:
             raise ValueError("`args` must be provided.")
@@ -1099,10 +1051,11 @@ class OnlineDPOTrainer(BaseTrainer):
         if self.use_transformers_paged:
             previous_attn = self.model_wrapped.config._attn_implementation
 
-            if is_flash_attn_2_available():
-                self.model_wrapped.config._attn_implementation = "paged_attention"
+            if version.parse(transformers.__version__).release >= version.parse("5.0.0").release:
+                new_attn = "paged|flash_attention_2" if is_flash_attn_2_available() else "paged|sdpa"
             else:
-                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+                new_attn = "paged_attention" if is_flash_attn_2_available() else "sdpa_paged"
+            self.model_wrapped.config._attn_implementation = new_attn
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1330,7 +1283,7 @@ class OnlineDPOTrainer(BaseTrainer):
         if is_conversational({"prompt": prompts[0]}):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
-        # Get the reward from reward functions, judge, or deprecated reward_model
+        # Get the reward from reward functions or judge
         if self.reward_funcs is not None:
             # First create completion_ids_list for custom reward functions
             completion_ids_list = [completion_ids[i].tolist() for i in range(completion_ids.shape[0])]

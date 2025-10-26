@@ -16,9 +16,7 @@ import pytest
 import transformers
 from datasets import Dataset, features, load_dataset
 from packaging.version import Version
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_torch_accelerator
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer
@@ -28,6 +26,7 @@ from .testing_utils import (
     TrlTestCase,
     require_llm_blender,
     require_peft,
+    require_torch_accelerator,
     require_vision,
     require_vllm,
 )
@@ -55,7 +54,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training(self, config_name):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
@@ -244,7 +243,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
     def test_training_with_judge(self, config_name):
         training_args = OnlineDPOConfig(
@@ -270,7 +269,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     @require_vllm
     @pytest.mark.slow
@@ -425,7 +424,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):
         if Version(transformers.__version__) < Version("4.57.0"):
@@ -455,7 +454,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training_with_reward_funcs(self, config_name):
         def simple_reward_func(prompts, completions, completion_ids, **kwargs):
             return [0.5 for _ in prompts]
@@ -490,11 +489,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
 @require_vision
 class TestOnlineDPOVisionTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
-        ]
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+        ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):
         dataset_dict = {

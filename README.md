@@ -19,11 +19,9 @@
 
 ## 🎉 What's New
 
-> **✨ OpenAI GPT OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4)! Check out the:
->
-> - [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
-> - [GPT OSS recipes](https://github.com/huggingface/gpt-oss-recipes)
-> - [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
+**OpenEnv Integration:** TRL now supports **[OpenEnv](https://huggingface.co/blog/openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
+
+Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](openenv).
 
 ## Overview
 
@@ -168,7 +166,7 @@ trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --output_dir Qwen2.5-0.5B-DPO 
 ```
 
-Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/clis) or use `--help` for more details.
 
 ## Development
 
@@ -190,7 +188,7 @@ Example:
 from trl.experimental.new_trainer import NewTrainer
 ```
 
-Read more in the [Experimental docs](https://huggingface.co/docs/trl/main/en/experimental).
+Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimental).
 
 ## Citation
 

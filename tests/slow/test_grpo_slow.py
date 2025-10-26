@@ -23,7 +23,6 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, Features, Image, Value, load_dataset
 from packaging.version import Version
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -31,19 +30,21 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
-from transformers.testing_utils import (
-    backend_empty_cache,
-    require_flash_attn,
-    require_liger_kernel,
-    require_torch_accelerator,
-    torch_device,
-)
+from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.utils import get_kbit_device_map
 
-from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_vllm
+from ..testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_flash_attn,
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+    require_vllm,
+)
 from .testing_constants import MODELS_TO_TEST
 
 
@@ -64,7 +65,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     def test_training_with_liger_grpo_loss(self, model_name):
         training_args = GRPOConfig(
@@ -104,7 +105,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     @require_peft
     def test_training_with_liger_grpo_loss_and_peft(self, model_name):
@@ -168,7 +169,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
         if Version(transformers.__version__) < Version("4.57.0"):
@@ -206,10 +207,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_name",
         [
-            ("HuggingFaceTB/SmolVLM-Instruct",),  # Only test the smaller model to avoid OOM
-        ]
+            "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
+        ],
     )
     @require_flash_attn
     @require_bitsandbytes
@@ -329,11 +331,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
             assert lora_params_changed, "No LoRA parameters were updated during training."
 
         except torch.OutOfMemoryError as e:
-            self.skipTest(f"Skipping VLM training test due to insufficient GPU memory: {e}")
+            pytest.skip(f"Skipping VLM training test due to insufficient GPU memory: {e}")
         except Exception as e:
             # Check for other memory-related errors
             if any(keyword in str(e).lower() for keyword in ["memory", "cuda", "out of memory", "insufficient"]):
-                self.skipTest(f"Skipping VLM training test due to hardware constraints: {e}")
+                pytest.skip(f"Skipping VLM training test due to hardware constraints: {e}")
             else:
                 raise
 
@@ -474,11 +476,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
                             "decrease gpu memory",
                         ]
                     ):
-                        self.skipTest(f"Skipping vLLM colocate test due to hardware constraints: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to hardware constraints: {e}")
                     elif "KeyError" in str(e) and "RANK" in str(e):
-                        self.skipTest(f"Skipping vLLM colocate test due to environment setup issues: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to environment setup issues: {e}")
                     elif "ValueError" in str(e) and "memory" in str(e).lower():
-                        self.skipTest(f"Skipping vLLM colocate test due to memory constraints: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to memory constraints: {e}")
                     else:
                         raise
         finally:
@@ -541,11 +543,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
                     "decrease gpu memory",
                 ]
             ):
-                self.skipTest(f"Skipping vLLM training test due to hardware constraints: {e}")
+                pytest.skip(f"Skipping vLLM training test due to hardware constraints: {e}")
             elif "KeyError" in str(e) and "RANK" in str(e):
-                self.skipTest(f"Skipping vLLM training test due to environment setup issues: {e}")
+                pytest.skip(f"Skipping vLLM training test due to environment setup issues: {e}")
             elif "ValueError" in str(e) and "memory" in str(e).lower():
-                self.skipTest(f"Skipping vLLM training test due to memory constraints: {e}")
+                pytest.skip(f"Skipping vLLM training test due to memory constraints: {e}")
             else:
                 raise
 
