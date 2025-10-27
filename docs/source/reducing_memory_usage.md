@@ -178,7 +178,7 @@ Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks
 ## Padding Sequences to a Multiple
 
 > [!TIP]
-> This technique is supported for **SFT** and **Reward** trainers, and for setups using **FlashAttention** (and its variants).
+> This technique is supported for **SFT** and **Reward** trainers currently.
 
 When enabled, this option ensures that all sequences are **padded to a multiple** of the specified value.  
 This can improve computational efficiency on some hardware by aligning sequence lengths to memory-friendly boundaries.
