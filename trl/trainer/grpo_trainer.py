@@ -1145,11 +1145,7 @@ class GRPOTrainer(BaseTrainer):
                                     apply_chat_template({"prompt": p}, self.processing_class)["prompt"]
                                     for p in ordered_set_of_prompts
                                 ]
-                            output = self.rollout_func(
-                                ordered_set_of_prompts,
-                                self.args,
-                                self.processing_class,
-                            )
+                            output = self.rollout_func(ordered_set_of_prompts, trainer=self)
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 # FIXME: this endpoint doesn't exist in vllm_client

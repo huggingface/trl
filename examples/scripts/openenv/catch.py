@@ -121,7 +121,7 @@ except Exception as e:
 client = OpenSpielEnv(base_url=f"{ENV_URL}")
 
 
-def rollout_func(prompts: list[str], args: GRPOConfig, processing_class) -> dict[str, list]:
+def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
     """
     Custom rollout function that generates completions via vLLM server and computes environment rewards.
 
@@ -129,12 +129,14 @@ def rollout_func(prompts: list[str], args: GRPOConfig, processing_class) -> dict
 
     Args:
         prompts: List of prompts to generate from
-        args: GRPOConfig containing all sampling parameters
-        processing_class: Tokenizer/processor for decoding completions
+        trainer: The GRPOTrainer instance (required parameter)
 
     Returns:
         Dict containing prompt_ids, completion_ids, logprobs, and env_reward
     """
+    args = trainer.args
+    processing_class = trainer.processing_class
+
     # Run full episodes for each generation to get episode rewards
     env_rewards = []
     all_prompt_ids = []
