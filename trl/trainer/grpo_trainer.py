@@ -1202,15 +1202,10 @@ class GRPOTrainer(BaseTrainer):
                     required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                     extra_fields = {k: v for k, v in output.items() if k not in required_keys}
 
-                    # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-                    all_prompt_ids = [ids for ids in output["prompt_ids"] for _ in range(self.num_generations)]
-                    all_completion_ids = output["completion_ids"]
-                    all_logprobs = output["logprobs"]
-
-                    # For colocate mode, each process works on its own slice of prompts
-                    prompt_ids = all_prompt_ids
-                    completion_ids = all_completion_ids
-                    logprobs = all_logprobs
+                    # Rollout function already handles num_generations, so use data directly
+                    prompt_ids = output["prompt_ids"]
+                    completion_ids = output["completion_ids"]
+                    logprobs = output["logprobs"]
                 else:
                     # Default vLLM generation path
                     if self.guided_decoding_regex:

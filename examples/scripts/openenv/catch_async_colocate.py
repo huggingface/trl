@@ -102,7 +102,11 @@ async def play_episode_async(
         output = outputs[0]
         prompt_ids = output.prompt_token_ids
         completion_ids = output.outputs[0].token_ids
-        logprobs = [token.logprob for token in output.outputs[0].logprobs] if output.outputs[0].logprobs else []
+        # vLLM returns logprobs as a list of dicts with token_id as key
+        if output.outputs[0].logprobs:
+            logprobs = [list(token_logprobs.values())[0].logprob for token_logprobs in output.outputs[0].logprobs]
+        else:
+            logprobs = []
 
         # Collect trajectory data
         episode_prompt_ids.extend(prompt_ids)
@@ -168,6 +172,7 @@ def rollout_func_async_colocate(prompts: list[str], trainer: GRPOTrainer) -> dic
         min_p=0.0 if args.min_p is None else args.min_p,
         max_tokens=args.max_completion_length,
         repetition_penalty=args.repetition_penalty,
+        logprobs=1,  # Request logprobs from vLLM
     )
 
     # Run full episodes for each generation to get episode rewards (like catch.py)
