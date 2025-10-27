@@ -104,10 +104,10 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-# What we call a rollout function is a callable that takes prompts (list), args (OnlineDPOConfig), and processing_class
+# What we call a rollout function is a callable that takes prompts (list) and the trainer as
 # as parameters and returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and
 # optionally "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
-RolloutFunc = Callable[[list[str], Any, Any], dict[str, Any]]
+RolloutFunc = Callable[[list[str], "OnlineDPOTrainer"], dict[str, list]]
 
 
 class OnlineDPOTrainer(BaseTrainer):
@@ -172,10 +172,10 @@ class OnlineDPOTrainer(BaseTrainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         rollout_func (`RolloutFunc`, *optional*):
-            Function to use for generating completions. It must take prompts, args, and processing_class as parameters
-            and return a dict with `"prompt_ids"`, `"completion_ids"`, and optionally `"logprobs"` fields. Any other
-            fields are forwarded to the reward functions. This feature is experimental and may change or be removed at
-            any time without prior notice.
+            Function to use for generating completions. It must take prompts, and the trainer as parameters and return
+            a dict with `"prompt_ids"`, `"completion_ids"`, and optionally `"logprobs"` fields. Any other fields are
+            forwarded to the reward functions. This feature is experimental and may change or be removed at any time
+            without prior notice.
     """
 
     _tag_names = ["trl", "online-dpo"]
@@ -773,11 +773,7 @@ class OnlineDPOTrainer(BaseTrainer):
 
             if self.rollout_func is not None:
                 # Use custom rollout function
-                output = self.rollout_func(
-                    ordered_set_of_prompts,
-                    self.args,
-                    self.processing_class,
-                )
+                output = self.rollout_func(ordered_set_of_prompts, trainer=self)
                 # Extract required fields and collect any extra fields for reward functions
                 required_keys = {"prompt_ids", "completion_ids"}
                 extra_fields = {k: v for k, v in output.items() if k not in required_keys}
@@ -794,7 +790,9 @@ class OnlineDPOTrainer(BaseTrainer):
                     top_k=-1 if self.top_k is None else self.top_k,
                     min_p=0.0 if self.min_p is None else self.min_p,
                     max_tokens=self.generation_config.max_tokens,
-                    guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
+                    guided_decoding_regex=self.guided_decoding_regex
+                    if hasattr(self, "guided_decoding_regex")
+                    else None,
                     generation_kwargs=self.args.generation_kwargs,
                 )
                 # Flatten: each prompt generates 2 completions
@@ -1282,7 +1280,9 @@ class OnlineDPOTrainer(BaseTrainer):
                                 message["content"] = [{"type": "text", "text": content}]
 
         if self.args.use_vllm:
-            prompt_ids, prompt_mask, completion_ids, completion_mask, extra_fields = self._generate_vllm(prompts, images)
+            prompt_ids, prompt_mask, completion_ids, completion_mask, extra_fields = self._generate_vllm(
+                prompts, images
+            )
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
             extra_fields = {}  # No extra fields for non-vllm generation (unless we add support later)

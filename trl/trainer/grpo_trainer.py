@@ -101,10 +101,10 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-# What we call a rollout function is a callable that takes prompts (list), args (GRPOConfig), and processing_class as
+# What we call a rollout function is a callable that takes prompts (list) and the trainer as
 # parameters and returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and
 # "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
-RolloutFunc = Callable[[list[str], Any, Any], dict[str, Any]]
+RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, list]]
 
 
 class GRPOTrainer(BaseTrainer):
@@ -208,10 +208,10 @@ class GRPOTrainer(BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         rollout_func (`RolloutFunc`, *optional*):
-            Function to use for generating completions. It must take prompts, args, and processing_class as parameters
-            and return a dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields that
-            are forwarded to the reward functions. This feature is experimental and may change or be removed at any
-            time without prior notice.
+            Function to use for generating completions. It must take prompts and the trainer as parameters and return a
+            dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields that are forwarded
+            to the reward functions. This feature is experimental and may change or be removed at any time without
+            prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
