@@ -245,3 +245,65 @@ def test_uldloss_handles_smollm_student_qwen_teacher_sequence(smollm_tokenizer, 
     assert loss.dim() == 0
     assert loss_fn.last_matched_loss is not None
     assert loss_fn.last_unmatched_loss is not None
+
+
+def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
+    config = build_config(
+        uld_use_hybrid_loss=True,
+        uld_hybrid_matched_weight=0.0,
+        uld_hybrid_unmatched_weight=1.0,
+        use_extended_uld=True,
+        uld_crossentropy_weight=0.0,
+        uld_distillation_weight=1.0,
+        uld_student_temperature=1.0,
+        uld_teacher_temperature=1.0,
+        temperature=1.0,
+        top_p=0.95,
+        top_k=0,
+        lmbda=1.0,
+        beta=0.0,
+    )
+    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+
+    prompt = "User: Explain how GOLD handles tokenizer mismatches."
+    completion = "Assistant: GOLD merges aligned subwords and applies hybrid ULD loss."
+
+    student_ids, student_labels = encode_prompt_completion(llama_tokenizer, prompt, completion)
+    teacher_ids, teacher_labels = encode_prompt_completion(qwen_tokenizer, prompt, completion)
+
+    pad_id_student = llama_tokenizer.pad_token_id
+    pad_id_teacher = qwen_tokenizer.pad_token_id
+    max_length = max(len(student_ids), len(teacher_ids))
+
+    student_ids = pad_tokens(student_ids, pad_id_student, max_length)
+    teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
+    student_labels = pad_labels(student_labels, max_length)
+    teacher_labels = pad_labels(teacher_labels, max_length)
+
+    student_input_ids = torch.tensor([student_ids])
+    teacher_input_ids = torch.tensor([teacher_ids])
+    student_labels = torch.tensor([student_labels])
+    teacher_labels = torch.tensor([teacher_labels])
+
+    student_vocab = len(llama_tokenizer)
+    teacher_vocab = len(qwen_tokenizer)
+    torch.manual_seed(0)
+    student_logits = torch.randn(1, max_length, student_vocab)
+    teacher_logits = torch.randn(1, max_length, teacher_vocab)
+
+    loss = loss_fn(
+        student_logits=student_logits,
+        teacher_logits=teacher_logits,
+        student_labels=student_labels,
+        teacher_labels=teacher_labels,
+        student_input_ids=student_input_ids,
+        teacher_input_ids=teacher_input_ids,
+    )
+
+    assert torch.isfinite(loss)
+    assert loss.dim() == 0
+    assert loss_fn.last_matched_loss is not None
+    assert loss_fn.last_unmatched_loss is not None
+
+    expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
+    assert torch.allclose(loss, expected, atol=1e-6, rtol=1e-5)
