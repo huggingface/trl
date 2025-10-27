@@ -1062,7 +1062,12 @@ class GRPOTrainer(BaseTrainer):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+                        texts = [
+                            apply_chat_template(
+                                x, reward_processing_class, template_kwargs=self.args.chat_template_kwargs
+                            )["text"]
+                            for x in messages
+                        ]
                     else:
                         texts = [p + c for p, c in zip(prompts, completions)]
                     reward_inputs = reward_processing_class(
@@ -1142,7 +1147,11 @@ class GRPOTrainer(BaseTrainer):
                         if self.rollout_func is not None:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 ordered_set_of_prompts = [
-                                    apply_chat_template({"prompt": p}, self.processing_class)["prompt"]
+                                    apply_chat_template(
+                                        {"prompt": p},
+                                        self.processing_class,
+                                        template_kwargs=self.args.chat_template_kwargs,
+                                    )["prompt"]
                                     for p in ordered_set_of_prompts
                                 ]
                             output = self.rollout_func(
@@ -1153,7 +1162,11 @@ class GRPOTrainer(BaseTrainer):
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 # FIXME: this endpoint doesn't exist in vllm_client
-                                output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
+                                output = self.vllm_client.chat(
+                                    prompts=ordered_set_of_prompts,
+                                    **sampling_params,
+                                    chat_template_kwargs=self.args.chat_template_kwargs,
+                                )
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
                         # Extract required fields and collect any extra fields for reward functions
@@ -1259,7 +1272,11 @@ class GRPOTrainer(BaseTrainer):
             processor_kwargs = {"max_length": self.max_prompt_length, "truncation": True, "add_special_tokens": False}
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                    conversation=prompts,
+                    **processor_kwargs,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.args.chat_template_kwargs,
                 )
             else:
                 processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1300,7 +1317,11 @@ class GRPOTrainer(BaseTrainer):
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                    conversation=prompts,
+                    **processor_kwargs,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.args.chat_template_kwargs,
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1434,7 +1455,10 @@ class GRPOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+                apply_chat_template(
+                    {"prompt": prompt}, self.processing_class, template_kwargs=self.args.chat_template_kwargs
+                )["prompt"]
+                for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)

@@ -96,8 +96,8 @@ class GRPOConfig(TrainingArguments):
             `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
             generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
             with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
-
-        > Parameters that control generation acceleration powered by vLLM
+        chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
 
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
@@ -372,6 +372,12 @@ class GRPOConfig(TrainingArguments):
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
             "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+        },
+    )
+    chat_template_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating completions."
         },
     )
     repetition_penalty: float = field(
