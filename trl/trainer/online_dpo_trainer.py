@@ -484,12 +484,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                     self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                    # Use CUDA device if available, otherwise use CPU
-                    if torch.cuda.is_available():
-                        device = torch.cuda.current_device()
-                    else:
-                        device = torch.device("cpu")
-                    self.vllm_client.init_communicator(device=device)
+                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
                 else:
                     self.vllm_client = None
             elif self.vllm_mode == "colocate":
