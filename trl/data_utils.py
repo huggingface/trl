@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from itertools import takewhile
@@ -28,19 +29,30 @@ from transformers import PreTrainedTokenizerBase, ProcessorMixin
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
-def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int) -> None:
+def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) -> list[dict[str, Any]]:
+    # docstyle-ignore  # because <Image> is not parsable in the code block
     """
-    Convert messages into a structured multimodal format if needed.
-
-    Each message's content is transformed from a raw string into a list of typed parts. The first user message is
-    prefixed with an image placeholder, while all other user and assistant messages are wrapped as text entries.
+    Convert messages into a structured multimodal format and inject the provided images into the message contents.
 
     Args:
         messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content may be a raw string before transformation.
-        num_images (`int`):
-            Number of images to include in the first user message. This is used to determine how many image
-            placeholders to add.
+            Messages with `"role"` and `"content"`. Content may be a raw string before transformation. List of messages
+            a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing either a string or
+            a list of structured blocks if already prepared.
+        images (`list`):
+            List of image objects to insert.
+
+    Returns:
+        `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
+        content blocks, and all `"image"` placeholders are populated with the corresponding image objects.
+
+    Notes:
+        - When the input `messages` isn't already in the structured format, (i.e., all `"content"` values are strings),
+          the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
+          and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
+        - When the input `messages` is already in the structured format (i.e., all `"content"` values are lists of
+          structured blocks), the function only fills in the actual images in the existing `{"type": "image"}`
+          placeholders. If the number of placeholders does not match the number of provided images, an error is raised.
 
     Example:
     ```python
@@ -50,30 +62,84 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int)
         {"role": "assistant", "content": "It looks like a cat."},
     ]
 
-    # Output (num_images=1)
+    # Output, one image provided
     [
-        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
+        {"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
     ]
     ```
     """
-    image_included = False
+
+    messages = copy.deepcopy(messages)  # avoid modifying the original messages
+
+    # First, convert all messages to the structured format if needed, and insert image placeholders if needed
+    images_included = False
     for message in messages:
         if message["role"] == "system":
             if isinstance(message["content"], str):  # if already prepared, the content will be a list
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "user":
-            if isinstance(message["content"], str) and not image_included:
-                placeholders = [{"type": "image"}] * num_images
-                message["content"] = [*placeholders, {"type": "text", "text": message["content"]}]
-                image_included = True
-            elif isinstance(message["content"], str) and image_included:
+            if isinstance(message["content"], str) and not images_included:
+                image_entries = [{"type": "image"} for _ in range(len(images))]
+                message["content"] = [*image_entries, {"type": "text", "text": message["content"]}]
+                images_included = True
+            elif isinstance(message["content"], str) and images_included:
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "assistant":
             if isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
         else:
             raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
+
+    # Then, check that the number of image placeholders matches the number of images provided
+    num_placeholders = sum(sum(1 for part in message["content"] if part["type"] == "image") for message in messages)
+    if num_placeholders != len(images):
+        raise ValueError(
+            f"Number of images provided ({len(images)}) does not match number of image placeholders ({num_placeholders})."
+        )
+
+    # Then, fill in the actual images in the placeholders
+    img_idx = 0
+    for message in messages:
+        for part in message["content"]:
+            if part["type"] == "image":
+                part["image"] = images[img_idx]
+                img_idx += 1
+
+    return messages
+
+
+def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # docstyle-ignore  # because <Image> is not parsable in the code block
+    """
+    Convert structured multimodal messages into a format compatible with vLLM. Replaces `"type": "image"` blocks with
+    `"type": "image_pil"` blocks, and `"image": Image` with `"image_pil": Image`.
+
+    Args:
+        messages (`list[dict[str, Any]]`):
+            Messages with `"role"` and `"content"`. Content is expected to be a list of structured blocks.
+
+    Returns:
+        `list[dict[str, Any]]`:
+            A deep-copied list of messages compatible with vLLM's expected input format.
+
+    Example:
+    ```python
+    # Input
+    [{"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
+
+    # Output
+    [{"role": "user", "content": [{"type": "image_pil", "image_pil": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
+    ```
+    """
+    messages = copy.deepcopy(messages)  # avoid modifying the original messages
+    for message in messages:
+        if isinstance(message["content"], list):
+            for part in message["content"]:
+                if part["type"] == "image":
+                    part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
+                    part["image_pil"] = part.pop("image")
+    return messages
 
 
 def is_conversational(example: dict[str, Any]) -> bool:

@@ -19,12 +19,11 @@ import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
-from transformers.testing_utils import require_liger_kernel
 
 from trl import GKDConfig, GKDTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_liger_kernel
 
 
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):

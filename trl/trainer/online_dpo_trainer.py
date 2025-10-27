@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
@@ -73,6 +74,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
+    get_config_model_id,
     pad,
     truncate_right,
 )
@@ -242,7 +244,7 @@ class OnlineDPOTrainer(BaseTrainer):
                         reward_func, num_labels=1, **model_init_kwargs
                     )
                 if isinstance(reward_funcs[i], nn.Module):
-                    self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+                    self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
                 else:
                     self.reward_func_names.append(reward_funcs[i].__name__)
             self.reward_funcs = reward_funcs
@@ -1049,10 +1051,11 @@ class OnlineDPOTrainer(BaseTrainer):
         if self.use_transformers_paged:
             previous_attn = self.model_wrapped.config._attn_implementation
 
-            if is_flash_attn_2_available():
-                self.model_wrapped.config._attn_implementation = "paged_attention"
+            if version.parse(transformers.__version__).release >= version.parse("5.0.0").release:
+                new_attn = "paged|flash_attention_2" if is_flash_attn_2_available() else "paged|sdpa"
             else:
-                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+                new_attn = "paged_attention" if is_flash_attn_2_available() else "sdpa_paged"
+            self.model_wrapped.config._attn_implementation = new_attn
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
