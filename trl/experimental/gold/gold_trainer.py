@@ -50,7 +50,6 @@ from trl.extras.vllm_client import VLLMClient
 from trl.import_utils import is_vllm_available
 from trl.models import prepare_deepspeed
 from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.gkd_trainer import GKDTrainer
 from trl.trainer.sft_trainer import SFTTrainer
 from trl.trainer.utils import (
     DataCollatorForChatML,
@@ -58,10 +57,25 @@ from trl.trainer.utils import (
     empty_cache,
     generate_model_card,
     get_comet_experiment_url,
-    print_prompt_completions_sample_uld,
 )
 
 from .gold_config import GOLDConfig
+
+
+"""
+General Online Logit Distillation (GOLD) ----------------------------------------
+
+GOLD extends Universal Logit Distillation (ULD) so that student and teacher models with different tokenizers can still
+be distilled effectively. ULD already enables cross-tokenizer training, but it truncates sequences to the shortest
+tokenization, which can discard trailing tokens whenever one tokenizer splits more aggressively than the other. GOLD
+avoids that truncation.
+
+Sequence alignment:
+    GOLD decodes both token streams incrementally and identifies spans that yield the same visible text. Tokens within
+    each span are merged by summing their log probabilities and applying a softmax, so both models present logits over
+    the same textual chunk regardless of how many subword pieces were required. This guarantees aligned sequences
+    without losing information at the ends of completions.
+"""
 
 
 if is_peft_available():
@@ -76,6 +90,91 @@ if is_vllm_available():
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+
+def print_prompt_completions_sample_uld(
+    prompts: list[str],
+    completions: list[str],
+    step: int,
+    num_samples: int = None,
+) -> None:
+    """
+    Print out a sample of model completions to the console with multiple reward metrics.
+
+    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
+    during training. It requires the `rich` library to be installed.
+
+    Args:
+        prompts (`list[str]`):
+            List of prompts.
+        completions (`list[str]`):
+            List of completions corresponding to the prompts.
+        rewards (`dict[str, list[float]]`):
+            Dictionary where keys are reward names and values are lists of rewards.
+        advantages (`list[float]`):
+            List of advantages corresponding to the prompts and completions.
+        step (`int`):
+            Current training step number, used in the output title.
+        num_samples (`int` or `None`, *optional*, defaults to `None`):
+            Number of random samples to display. If `None` (default), all items will be displayed.
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import print_prompt_completions_sample
+
+    >>> prompts = ["The sky is", "The sun is"]
+    >>> completions = [" blue.", " in the sky."]
+    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+    >>> advantages = [0.987, 0.654]
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
+    ╭──────────────────────────── Step 42 ─────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────╯
+    ```
+    """
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
+            "`pip install rich`."
+        )
+    console = Console()
+    table = Table(show_header=True, header_style="bold white", expand=True)
+
+    # Add columns
+    table.add_column("Prompt", style="bright_yellow")
+    table.add_column("Completion", style="bright_green")
+
+    # Some basic input validation
+    if num_samples is not None:
+        if num_samples >= len(prompts):
+            num_samples = None
+        elif num_samples <= 0:
+            return
+
+    # Subsample data if num_samples is specified
+    if num_samples is not None:
+        indices = random.sample(range(len(prompts)), num_samples)
+        prompts = [prompts[i] for i in indices]
+        completions = [completions[i] for i in indices]
+
+    for i in range(len(prompts)):
+        table.add_row(Text(prompts[i]), Text(completions[i]))
+        table.add_section()  # Adds a separator between rows
+
+    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+    console.print(panel)
 
 
 class ULDLoss(nn.Module):
@@ -517,8 +616,8 @@ class ULDLoss(nn.Module):
         student_logits_reshaped = student_logits.view(-1, num_matched)
         teacher_logits_reshaped = teacher_logits.view(-1, num_matched)
 
-        # Use the existing generalized JSD loss implementation
-        jsd_loss = GKDTrainer.generalized_jsd_loss(
+        # Use the GOLD generalized JSD loss implementation that accepts probability inputs
+        jsd_loss = GOLDTrainer.generalized_jsd_loss(
             student_logits_reshaped,
             teacher_logits_reshaped,
             labels=None,  # No masking needed for matched tokens
