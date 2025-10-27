@@ -7,9 +7,15 @@
 TRL is a full stack library where we provide a set of tools to train transformer language models with methods like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO), Reward Modeling, and more.
 The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
 
-Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support; 🧪 = experimental).
+## 🎉 What's New
+
+**OpenEnv Integration:** TRL now supports **[OpenEnv](https://huggingface.co/blog/openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
+
+Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](openenv).
 
 ## Taxonomy
+
+Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support; 🧪 = experimental).
 
 <div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
 <div style="flex: 1; min-width: 0;">
@@ -47,12 +53,6 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 </div>
 </div>
 
-## 🎉 What's New
-
-**OpenEnv Integration:** TRL now supports **[OpenEnv](openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
-
-Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](openenv).
-
 You can also explore TRL-related models, datasets, and demos in the [TRL Hugging Face organization](https://huggingface.co/trl-lib).
 
 ## Learn
@@ -74,6 +74,11 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published October 23, 2025</p>
+      <p class="text-gray-700">Building the Open Agent Ecosystem Together: Introducing OpenEnv</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on August 7, 2025</p>
