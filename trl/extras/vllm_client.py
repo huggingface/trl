@@ -36,6 +36,7 @@ if is_requests_available():
 # Try to import httpx for async support
 try:
     import httpx
+
     _httpx_available = True
 except ImportError:
     _httpx_available = False
@@ -297,8 +298,8 @@ class VLLMClient:
         """
         Asynchronously generates model completions for the provided prompts.
 
-        This method is non-blocking and can be used for off-policy training where generation
-        and weight updates happen concurrently without synchronization.
+        This method is non-blocking and can be used for off-policy training where generation and weight updates happen
+        concurrently without synchronization.
 
         Args:
             Same as `generate()` method.
@@ -320,19 +321,19 @@ class VLLMClient:
             >>> import asyncio
             >>> from trl.extras.vllm_client import VLLMClient
 
+
             >>> async def main():
             ...     client = VLLMClient()
             ...     # Non-blocking generation - can run multiple in parallel
             ...     result = await client.generate_async(["Hello, AI!"], max_tokens=32)
             ...     print(result)
 
+
             >>> asyncio.run(main())
             ```
         """
         if not _httpx_available:
-            raise ImportError(
-                "httpx is not installed. Install it with `pip install httpx` to use async generation."
-            )
+            raise ImportError("httpx is not installed. Install it with `pip install httpx` to use async generation.")
         if self.async_client is None:
             raise RuntimeError("Async client not initialized. This should not happen.")
 
@@ -491,8 +492,8 @@ class VLLMClient:
 
     def close_communicator(self):
         """
-        Closes the weight update group and cleans up the communication group.
-        Also closes the async HTTP client if it was initialized.
+        Closes the weight update group and cleans up the communication group. Also closes the async HTTP client if it
+        was initialized.
         """
         url = f"{self.base_url}/close_communicator/"
 
@@ -508,6 +509,7 @@ class VLLMClient:
         # Close async HTTP client if available
         if self.async_client is not None:
             import asyncio
+
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():

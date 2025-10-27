@@ -18,14 +18,13 @@ Async version of Catch game training with GRPO using vLLM colocate mode.
 
 This version demonstrates:
 - vLLM colocate mode (no separate server needed!)
-- Async wrapper for non-blocking generation
-- Concurrent episode execution with asyncio
-- Fire-and-forget weight updates
+- Async vLLM generation for non-blocking inference
+- Synchronous environment interaction (identical to catch.py)
 
-Performance:
-- Sequential: ~4 eps/sec
-- Concurrent (this version): ~15-20 eps/sec
-- **4-5x faster than sequential!** 🚀
+Key design:
+- Only vLLM generation is async (using AsyncVLLMColocateWrapper)
+- Environment calls (client.reset(), client.step()) are synchronous
+- Episodes run sequentially (environment server limitation)
 
 Run:
 ```bash
@@ -56,13 +55,15 @@ from trl.extras.vllm_colocate_async import AsyncVLLMColocateWrapper
 
 ENV_URL = "http://0.0.0.0:8001"
 
+# Create HTTP client for OpenSpiel Catch Environment (shared globally like catch.py)
+client = OpenSpielEnv(base_url=ENV_URL)
+
 
 async def play_episode_async(
     base_prompt: str,
     async_vllm: AsyncVLLMColocateWrapper,
     sampling_params,
     processing_class,
-    episode_id: int = 0,
 ) -> dict:
     """
     Play one full episode of Catch game asynchronously.
@@ -72,15 +73,12 @@ async def play_episode_async(
         async_vllm: Async wrapper around vLLM LLM instance
         sampling_params: vLLM sampling parameters
         processing_class: Tokenizer/processor
-        episode_id: Episode identifier for logging
 
     Returns:
         Dict with episode data: prompt_ids, completion_ids, logprobs, total_reward
     """
-    # Create separate env client for this episode
-    env_client = OpenSpielEnv(base_url=ENV_URL)
-
-    env_result = env_client.reset()
+    # Use global client (like catch.py)
+    env_result = client.reset()
     obs = env_result.observation
     total_reward = 0.0
 
@@ -88,11 +86,9 @@ async def play_episode_async(
     episode_completion_ids = []
     episode_logprobs = []
 
-    step_count = 0
-    max_steps = 100
-
-    while not obs.done and step_count < max_steps:
-        # Format prompt with current observation
+    # TODO: parallelise!
+    while not obs.done:
+        # FIXME: handle the addition of observation to prompt more cleanly, ideally without a train_dataset
         episode_msg = {"prompt": [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]}
         episode_prompt = apply_chat_template(episode_msg, processing_class)
 
@@ -125,19 +121,16 @@ async def play_episode_async(
             action_id = obs.legal_actions[0]
 
         # Take action in environment
-        env_result = env_client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
+        env_result = client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
         reward = env_result.reward if env_result.reward is not None else 0.0
         total_reward += reward
         obs = env_result.observation
-
-        step_count += 1
 
     return {
         "prompt_ids": episode_prompt_ids,
         "completion_ids": episode_completion_ids,
         "logprobs": episode_logprobs,
         "total_reward": total_reward,
-        "episode_id": episode_id,
     }
 
 
@@ -147,9 +140,8 @@ def rollout_func_async_colocate(prompts: list[str], trainer: GRPOTrainer) -> dic
 
     Key advantages:
     - No HTTP overhead (vLLM colocated in process)
-    - True async I/O (asyncio + thread pool)
-    - Concurrent episode execution
-    - 4-5x faster than sequential
+    - Async vLLM generation (non-blocking)
+    - Synchronous environment interaction (identical to catch.py)
 
     Note: This requires vLLM colocate mode (use_vllm=True, vllm_mode="colocate")
     """
@@ -178,30 +170,28 @@ def rollout_func_async_colocate(prompts: list[str], trainer: GRPOTrainer) -> dic
         repetition_penalty=args.repetition_penalty,
     )
 
-    # Create all episode tasks
-    tasks = []
-    episode_id = 0
+    # Run full episodes for each generation to get episode rewards (like catch.py)
+    env_rewards = []
+    all_prompt_ids = []
+    all_completion_ids = []
+    all_logprobs = []
+
+    loop = asyncio.get_event_loop()
     for base_prompt in prompts:
         for _ in range(args.num_generations):
-            task = play_episode_async(
-                base_prompt,
-                async_vllm,
-                sampling_params,
-                processing_class,
-                episode_id,
+            # Run episode (only vLLM generation is async, environment interaction is synchronous)
+            result = loop.run_until_complete(
+                play_episode_async(
+                    base_prompt,
+                    async_vllm,
+                    sampling_params,
+                    processing_class,
+                )
             )
-            tasks.append(task)
-            episode_id += 1
-
-    # Run all episodes concurrently with asyncio
-    loop = asyncio.get_event_loop()
-    results = loop.run_until_complete(asyncio.gather(*tasks))
-
-    # Aggregate results
-    env_rewards = [r["total_reward"] for r in results]
-    all_prompt_ids = [r["prompt_ids"] for r in results]
-    all_completion_ids = [r["completion_ids"] for r in results]
-    all_logprobs = [r["logprobs"] for r in results]
+            env_rewards.append(result["total_reward"])
+            all_prompt_ids.append(result["prompt_ids"])
+            all_completion_ids.append(result["completion_ids"])
+            all_logprobs.append(result["logprobs"])
 
     return {
         "prompt_ids": all_prompt_ids,
