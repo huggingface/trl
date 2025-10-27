@@ -33,6 +33,13 @@ if is_requests_available():
     import requests
     from requests import ConnectionError
 
+# Try to import httpx for async support
+try:
+    import httpx
+    _httpx_available = True
+except ImportError:
+    _httpx_available = False
+
 
 if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
@@ -121,6 +128,12 @@ class VLLMClient:
             raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
+
+        # Initialize async HTTP client for async operations (optional dependency)
+        if _httpx_available:
+            self.async_client = httpx.AsyncClient(timeout=300.0)
+        else:
+            self.async_client = None
 
         if base_url is not None:
             # Parse the base_url to extract host and port
@@ -266,6 +279,100 @@ class VLLMClient:
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
+    async def generate_async(
+        self,
+        prompts: list[str],
+        images: Optional[list] = None,
+        n: int = 1,
+        repetition_penalty: float = 1.0,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        max_tokens: int = 16,
+        truncate_prompt_tokens: Optional[int] = None,
+        guided_decoding_regex: Optional[str] = None,
+        generation_kwargs: Optional[dict] = None,
+    ) -> dict:
+        """
+        Asynchronously generates model completions for the provided prompts.
+
+        This method is non-blocking and can be used for off-policy training where generation
+        and weight updates happen concurrently without synchronization.
+
+        Args:
+            Same as `generate()` method.
+
+        Returns:
+            `dict` with keys:
+                - `prompt_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the tokenized input prompts.
+                - `completion_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the model-generated completions for each prompt.
+                - `logprobs` (`list[list[float]]`):
+                    List of lists of log probabilities for each generated token.
+
+        Raises:
+            ImportError: If httpx is not installed.
+
+        Examples:
+            ```python
+            >>> import asyncio
+            >>> from trl.extras.vllm_client import VLLMClient
+
+            >>> async def main():
+            ...     client = VLLMClient()
+            ...     # Non-blocking generation - can run multiple in parallel
+            ...     result = await client.generate_async(["Hello, AI!"], max_tokens=32)
+            ...     print(result)
+
+            >>> asyncio.run(main())
+            ```
+        """
+        if not _httpx_available:
+            raise ImportError(
+                "httpx is not installed. Install it with `pip install httpx` to use async generation."
+            )
+        if self.async_client is None:
+            raise RuntimeError("Async client not initialized. This should not happen.")
+
+        url = f"{self.base_url}/generate/"
+
+        def pil_to_base64(image):
+            buffer = BytesIO()
+            image.save(buffer, format="PNG")
+            img_bytes = buffer.getvalue()
+            return base64.b64encode(img_bytes).decode("utf-8")
+
+        # Convert PIL images to base64 strings
+        images = [pil_to_base64(img) for img in images] if images else None
+
+        # Async HTTP request - doesn't block!
+        response = await self.async_client.post(
+            url,
+            json={
+                "prompts": prompts,
+                "images": images,
+                "n": n,
+                "repetition_penalty": repetition_penalty,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "min_p": min_p,
+                "max_tokens": max_tokens,
+                "truncate_prompt_tokens": truncate_prompt_tokens,
+                "guided_decoding_regex": guided_decoding_regex,
+                "generation_kwargs": generation_kwargs or {},
+            },
+        )
+        response.raise_for_status()
+        json_response = response.json()
+        return {
+            "prompt_ids": json_response["prompt_ids"],
+            "completion_ids": json_response["completion_ids"],
+            "logprobs": json_response["logprobs"],
+        }
+
     def init_communicator(self, device: Union[torch.device, str, int] = 0):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
@@ -385,6 +492,7 @@ class VLLMClient:
     def close_communicator(self):
         """
         Closes the weight update group and cleans up the communication group.
+        Also closes the async HTTP client if it was initialized.
         """
         url = f"{self.base_url}/close_communicator/"
 
@@ -396,6 +504,21 @@ class VLLMClient:
         else:
             if response.status_code != 200:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+        # Close async HTTP client if available
+        if self.async_client is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If event loop is running, create a task to close later
+                    asyncio.create_task(self.async_client.aclose())
+                else:
+                    # If no event loop or not running, close synchronously
+                    loop.run_until_complete(self.async_client.aclose())
+            except RuntimeError:
+                # No event loop available, create one to close
+                asyncio.run(self.async_client.aclose())
 
 
 # Example usage

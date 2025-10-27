@@ -46,7 +46,7 @@ pip install git+https://github.com/meta-pytorch/OpenEnv.git
 Usage (single GPU - everything on one device!):
 
 ```sh
-python examples/scripts/openenv/echo_online_dpo_with_model.py
+python examples/scripts/openenv/echo_online_dpo.py
 ```
 """
 
