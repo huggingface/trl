@@ -750,7 +750,6 @@ class GOLDTrainer(SFTTrainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Callable] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
         revision = args.student_model_revision
@@ -819,7 +818,6 @@ class GOLDTrainer(SFTTrainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             peft_config=peft_config,
-            formatting_func=formatting_func,
         )
 
         if args.disable_dropout:
