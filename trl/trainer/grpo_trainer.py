@@ -43,6 +43,7 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
     is_wandb_available,
+    is_trackio_available,
 )
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
@@ -93,6 +94,9 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+if is_trackio_available():
+    import trackio
 
 
 logger = logging.get_logger(__name__)
@@ -1860,7 +1864,14 @@ class GRPOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
+            logging_backends = []
+
             if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
+
+            if logging_backends:
                 import pandas as pd
 
                 table = {
@@ -1871,16 +1882,33 @@ class GRPOTrainer(BaseTrainer):
                     "advantage": self._logs["advantages"],
                 }
 
-                if self._logs["images"]:
-                    table["images"] = []
-                    for image_list in self._logs["images"]:
-                        # Convert images to wandb Image objects for proper visualization
-                        table["images"].append([wandb.Image(image) for image in image_list])
+                df_base = pd.DataFrame(table)
+                images_raw = self._logs["images"] or []
 
-                df = pd.DataFrame(table)
-                if self.wandb_log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+                for logging_backend in logging_backends:
+                    if images_raw:
+                        # Convert images per backend and derive a dataframe that shares base columns
+                        if logging_backend == wandb:
+                            images = []
+                            for image_list in self._logs["images"]:
+                                images.append([logging_backend.Image(image) for image in image_list])
+                            df_final = pd.concat(
+                                [df_base, pd.Series(images, name="image")],
+                                axis=1,
+                                copy=False,
+                            )
+                        elif logging_backend == trackio:
+                            # TODO: Implement once supported upstream
+                            # https://github.com/gradio-app/trackio/issues/327
+                            logger.info(f"Skipping image logging for Trackio")
+                            df_final = df_base
+                    else:
+                        df_final = df_base
+
+                    if self.wandb_log_unique_prompts:
+                        df_final = df_final.drop_duplicates(subset=["prompt"])
+
+                    logging_backend.log({"completions": logging_backend.Table(dataframe=df_final)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
