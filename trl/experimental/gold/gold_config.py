@@ -174,13 +174,6 @@ class GOLDConfig(SFTConfig):
             "help": "Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps."
         },
     )
-    data_subset: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "Subset of the training data to use. If a float, it is interpreted as a fraction of the dataset. "
-            "If an integer, it is interpreted as the number of samples to use."
-        },
-    )
 
     # ULD Loss parameters
     use_uld_loss: bool = field(
