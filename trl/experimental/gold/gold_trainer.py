@@ -591,10 +591,12 @@ class ULDLoss(nn.Module):
 
         # 1. JSD loss for matched vocabulary tokens (direct semantic correspondence)
         matched_loss = torch.tensor(0.0, device=device)
+        matched_token_count = 0
         if len(teacher_matched_indices) > 0:
             # Extract probabilities for matched tokens
             teacher_matched_probs = teacher_aligned[:, teacher_matched_indices]  # [seq_len, num_matched]
             student_matched_probs = student_aligned[:, student_matched_indices]  # [seq_len, num_matched]
+            matched_token_count = teacher_matched_probs.size(-1)
 
             # Use JSD loss for semantically aligned tokens
             # Convert probabilities back to logits for JSD computation
@@ -636,7 +638,7 @@ class ULDLoss(nn.Module):
         # 3. Combine losses with weights
         if self.hybrid_matched_weight is None:
             # Use adaptive weighting based on vocabulary overlap
-            hybrid_matched_weight = teacher_matched_probs.size(-1) / max(1, teacher_vocab_size)
+            hybrid_matched_weight = matched_token_count / max(1, teacher_vocab_size)
             hybrid_unmatched_weight = 1.0 - hybrid_matched_weight
         else:
             # Use fixed weights provided in config
