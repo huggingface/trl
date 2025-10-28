@@ -13,15 +13,15 @@
 # limitations under the License.
 
 import random
-import wandb
+import textwrap
 from typing import Optional, Union
 import torch
 from datasets import Dataset, IterableDataset
-from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_wandb_available
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 from trl import GRPOTrainer
 from trl.trainer.grpo_trainer import RewardFunc
 from .papo_config import PAPOConfig
-from trl.trainer.utils import get_comet_experiment_url, nanmax, nanmin
+from trl.trainer.utils import nanmax, nanmin
 
 
 class PAPOTrainer(GRPOTrainer):
@@ -90,6 +90,24 @@ class PAPOTrainer(GRPOTrainer):
     """
 
     _tag_names = ["trl", "papo"]
+    _name = "PAPO"
+    _paper = {
+        "title": "Perception-Aware Policy Optimization for Multimodal Reasoning",
+        "id": "2507.06448",
+        # docstyle-ignore
+        "citation": textwrap.dedent(
+            """\
+            @misc{wang2025perceptionawarepolicyoptimizationmultimodal,
+                title        = {{Perception-Aware Policy Optimization for Multimodal Reasoning}},
+                author       = {Zhenhailong Wang and Xuehang Guo and Sofia Stoica and Haiyang Xu and Hongru Wang and Hyeonjeong Ha and Xiusi Chen and Yangyi Chen and Ming Yan and Fei Huang and Heng Ji},
+                year         = 2025,
+                url          = {https://arxiv.org/abs/2507.06448},
+                archivePrefix= {arXiv},
+                eprint       = {2507.06448},
+                primaryClass = {cs.CL}
+            }"""
+        ),
+    }
 
     def __init__(
         self,
@@ -324,57 +342,3 @@ class PAPOTrainer(GRPOTrainer):
         gathered_clip_ratio = self.accelerator.gather(clip_ratio)
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a model card for PAPO trainer.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        # Normalize tags
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        tags.update(self._tag_names)
-
-        # PAPO doesn't have a published paper yet, so we reference the GRPO paper
-        # and note that PAPO extends it for multimodal reasoning
-        citation = """\
-@article{wang2025perception,
-  title={Perception-Aware Policy Optimization for Multimodal Reasoning},
-  author={Wang, Zhenhailong and Guo, Xuehang and Stoica, Sofia and Xu, Haiyang and Wang, Hongru and Ha, Hyeonjeong and Chen, Xiusi and Chen, Yangyi and Yan, Ming and Huang, Fei and others},
-  journal={arXiv preprint arXiv:2507.06448},
-  year={2025}
-}
-
-Note: [This is NOT PAPO's official code implementation.]
-"""
-
-        from trl.trainer.utils import generate_model_card
-        import os
-
-        model_card = generate_model_card(
-            base_model=self.model.config._name_or_path if hasattr(self.model.config, "_name_or_path") else None,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            tags=tags,
-            trainer_name="PAPO",
-            trainer_citation=citation,
-            paper_title="Perception-Aware Policy Optimization for Multimodal Reasoning",
-            paper_id=None,
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

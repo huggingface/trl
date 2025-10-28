@@ -207,13 +207,35 @@ training_args = GRPOConfig(
 
 See [Experimental - GFPO](experimental#gfpo).
 
+### PAPO (Perception-Aware Policy Optimization for Multimodal Reasoning)
 
-### PAPO (Preference Alignment via Policy Optimization)
+**📜 Paper**: https://arxiv.org/abs/2507.06448
 
-* **Paper:** [Link to Paper.](https://arxiv.org/abs/2507.06448)
-* **Implementation:**  `trl.experimental.papo_trainer.PAPOTrainer`
-* **Description:  A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason.**
-* **Note:  This is a TRL adoption, NOT PAPO's official code!** [Link to PAPO offical repo.](https://github.com/MikeWangWZHL/PAPO)
+A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adoption, NOT PAPO's official code![Link to PAPO offical repo.](https://github.com/MikeWangWZHL/PAPO)
+
+```python
+from trl.experimental.papo.papo_config import PAPOConfig
+from trl.experimental.papo.papo_trainer import PAPOTrainer
+
+papo_config = PAPOConfig(
+    # PAPO-specific params
+    perception_loss_weight=0.01,  # Weight for perception loss
+    mask_ratio=0.6,  # 40% of image will be masked
+    mask_type="random",  # Use patch masking (recommended)
+    der_loss_weight1=0.02,
+    der_loss_weight2=0.02,
+    # ...other GRPO params...
+)
+trainer = PAPOTrainer(
+    model=model,
+    processing_class=processor,
+    args=papo_config, # PAPOConfig
+    train_dataset=train_ds,
+    eval_dataset=eval_ds,
+    reward_funcs=[reward_fn],
+)
+
+```
 
 ## Direct Policy Optimization
 
