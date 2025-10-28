@@ -387,6 +387,6 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
 
 ### Results
 
-<!-- TODO: @burtenshaw Add results here -->
-```
-```
+The resulting model improves it's performance on the game, both by reducing the number of repetitions and by increasing the number of correct guesses. However, the the Qwen3.1-17B model we trained is not able to consistently win the game. The following reward curve shows the coverage of the model's guesses and the coverage of correct Y and G letters.
+
+<iframe src="https://burtenshaw-wordle-grpo.hf.space/?project=group-Qwen-Qwen3-17B&metrics=train/rewards/reward_coverage/mean&runs=run-2025-10-26_09-39-49&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>
