@@ -1515,7 +1515,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if "model.vision_tower" in n or "model.audio_tower" in n:
-                # The vision tower and audio tower will not update.
+                # The vision/audio towers are frozen during training and will not update
                 continue
             if "model.embed_audio" in n:
                 # The audio embedding parameters are not updated because this dataset contains no audio data
