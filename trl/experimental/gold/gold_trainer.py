@@ -857,7 +857,6 @@ class GOLDTrainer(SFTTrainer):
             top_p=args.top_p,
             do_sample=True,
             top_k=args.top_k,
-            use_cache=False if args.gradient_checkpointing else True,
             pad_token_id=self.processing_class.pad_token_id,
         )
         if (
