@@ -370,8 +370,6 @@ class RLOOTrainer(BaseTrainer):
         self.normalize_advantages = args.normalize_advantages
         self.mask_truncated_completions = args.mask_truncated_completions
         self.reward_clip_range = args.reward_clip_range
-        if self.args.chat_template_kwargs is None:
-            self.args.chat_template_kwargs = {}
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -415,6 +413,8 @@ class RLOOTrainer(BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+        if self.args.chat_template_kwargs is None:
+            self.args.chat_template_kwargs = {}
 
         # Reference model
         self.beta = args.beta
