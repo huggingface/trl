@@ -51,13 +51,7 @@ from trl.import_utils import is_vllm_available
 from trl.models import prepare_deepspeed
 from trl.models.utils import unwrap_model_for_generation
 from trl.trainer.sft_trainer import SFTTrainer
-from trl.trainer.utils import (
-    DataCollatorForChatML,
-    disable_dropout_in_model,
-    empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
-)
+from trl.trainer.utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
 
 from .gold_config import GOLDConfig
 
@@ -743,7 +737,6 @@ class GOLDTrainer(SFTTrainer):
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        model_revision: Optional[str] = None,
         teacher_model: Union[PreTrainedModel, nn.Module, str] = None,
         args: Optional[GOLDConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
@@ -760,7 +753,11 @@ class GOLDTrainer(SFTTrainer):
         formatting_func: Optional[Callable] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
-        self.model_revision = model_revision
+        revision = args.student_model_revision
+        if isinstance(model, str) and revision is not None:
+            args.model_init_kwargs = args.model_init_kwargs or {}
+            args.model_init_kwargs["revision"] = revision
+
         # Ensure Trainer does not drop non-signature columns used by the collator (e.g., "prompts")
         args.remove_unused_columns = False
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
