@@ -757,8 +757,6 @@ class GOLDTrainer(SFTTrainer):
             args.model_init_kwargs = args.model_init_kwargs or {}
             args.model_init_kwargs["revision"] = revision
 
-        # Ensure Trainer does not drop non-signature columns used by the collator (e.g., "prompts")
-        args.remove_unused_columns = False
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
         if data_collator is None:
             data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
@@ -964,6 +962,16 @@ class GOLDTrainer(SFTTrainer):
             self._last_student_sync_step = -1
 
             self.add_callback(GOLDStudentVLLMSyncCallback(self))
+
+    def _set_signature_columns_if_needed(self):
+        super()._set_signature_columns_if_needed()
+        required_columns = ["prompts", "prompt_attention_mask"]
+        if self._signature_columns is None:
+            self._signature_columns = required_columns
+        else:
+            for column in required_columns:
+                if column not in self._signature_columns:
+                    self._signature_columns.append(column)
 
     def _prepare_dataset(
         self,
