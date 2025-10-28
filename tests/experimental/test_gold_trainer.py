@@ -16,9 +16,213 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss
+from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
+from trl.trainer.utils import DataCollatorForChatML
+
+
+@pytest.fixture(scope="module")
+def openr1_examples():
+    try:
+        dataset = load_dataset(
+            "HuggingFaceTB/OpenR1-Math-220k-default-verified",
+            "all",
+            split="train[:3]",
+        )
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"OpenR1 dataset unavailable: {exc}")
+    return [{"messages": row["messages"]} for row in dataset]
+
+
+@pytest.fixture(scope="module")
+def countdown_examples():
+    try:
+        dataset = load_dataset(
+            "HuggingFaceTB/Countdown-Tasks-3to4",
+            "gkd_verified_Qwen2.5-7B-Instruct",
+            split="train[:3]",
+        )
+    except Exception as exc:  # pragma: no cover - network/environment dependent
+        pytest.skip(f"Countdown dataset unavailable: {exc}")
+    return [{"messages": row["messages"]} for row in dataset]
+
+
+def _teacher_inputs_from_collator(student_tok, teacher_tok, batch):
+    prompt_texts = []
+    completion_texts = []
+
+    pad_token_id = student_tok.pad_token_id
+    for prompt_ids_tensor, input_ids_tensor, labels_tensor in zip(
+        batch["prompts"], batch["input_ids"], batch["labels"]
+    ):
+        prompt_ids = prompt_ids_tensor.tolist()
+        if pad_token_id is not None:
+            prompt_ids = [tok for tok in prompt_ids if tok != pad_token_id]
+        prompt_texts.append(student_tok.decode(prompt_ids, skip_special_tokens=False))
+
+        input_ids = input_ids_tensor.tolist()
+        labels = labels_tensor.tolist()
+        completion_token_ids = [tok for tok, label in zip(input_ids, labels) if label != -100]
+        completion_texts.append(student_tok.decode(completion_token_ids, skip_special_tokens=False))
+
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
+        teacher_tok, prompt_texts, completion_texts
+    )
+    return teacher_input_ids, teacher_labels, completion_texts
+
+
+def _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teacher_labels):
+    for idx in range(batch["input_ids"].shape[0]):
+        student_mask = batch["attention_mask"][idx].bool()
+        student_ids = batch["input_ids"][idx][student_mask]
+        student_labels = batch["labels"][idx][student_mask]
+        student_answer_ids = student_ids[student_labels != -100].tolist()
+
+        teacher_answer_mask = teacher_labels[idx] != -100
+        teacher_answer_ids = teacher_input_ids[idx][teacher_answer_mask].tolist()
+
+        student_groups, teacher_groups = loss_fn._build_alignment_groups_from_ids(
+            student_answer_ids, teacher_answer_ids
+        )
+
+        assert student_groups, "Student alignment groups must not be empty"
+        assert teacher_groups, "Teacher alignment groups must not be empty"
+        assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_answer_ids)))
+        assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_answer_ids)))
+
+
+def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokenizer, openr1_examples):
+    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
+    batch = collator(openr1_examples)
+
+    assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
+    decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
+    for decoded, assistant in zip(decoded_batch, assistant_texts):
+        assert assistant.strip() in decoded
+
+    teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
+        llama_tokenizer, qwen_tokenizer, batch
+    )
+    for completion, assistant in zip(completion_texts, assistant_texts):
+        assert assistant.strip() in completion
+        assert completion.strip()
+
+    config = build_config(
+        uld_use_hybrid_loss=True,
+        uld_hybrid_matched_weight=0.6,
+        uld_hybrid_unmatched_weight=0.4,
+    )
+    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+
+    _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teacher_labels)
+
+    torch.manual_seed(0)
+    student_vocab = len(llama_tokenizer)
+    teacher_vocab = len(qwen_tokenizer)
+    batch_size, seq_len = batch["input_ids"].shape
+    student_logits = torch.randn(batch_size, seq_len, student_vocab)
+    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
+
+    loss = loss_fn(
+        student_logits=student_logits,
+        teacher_logits=teacher_logits,
+        student_labels=batch["labels"],
+        teacher_labels=teacher_labels,
+        student_input_ids=batch["input_ids"],
+        teacher_input_ids=teacher_input_ids,
+    )
+
+    assert torch.isfinite(loss)
+
+
+def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, qwen_tokenizer, countdown_examples):
+    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
+    batch = collator(countdown_examples)
+
+    assistant_texts = [example["messages"][-1]["content"] for example in countdown_examples]
+    decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
+    for decoded, assistant in zip(decoded_batch, assistant_texts):
+        assert assistant.strip() in decoded
+
+    teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
+        llama_tokenizer, qwen_tokenizer, batch
+    )
+    for completion, assistant in zip(completion_texts, assistant_texts):
+        assert assistant.strip() in completion
+        assert completion.strip()
+
+    config = build_config(
+        uld_use_hybrid_loss=True,
+        uld_hybrid_matched_weight=0.6,
+        uld_hybrid_unmatched_weight=0.4,
+    )
+    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+
+    _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teacher_labels)
+
+    torch.manual_seed(2)
+    student_vocab = len(llama_tokenizer)
+    teacher_vocab = len(qwen_tokenizer)
+    batch_size, seq_len = batch["input_ids"].shape
+    student_logits = torch.randn(batch_size, seq_len, student_vocab)
+    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
+
+    loss = loss_fn(
+        student_logits=student_logits,
+        teacher_logits=teacher_logits,
+        student_labels=batch["labels"],
+        teacher_labels=teacher_labels,
+        student_input_ids=batch["input_ids"],
+        teacher_input_ids=teacher_input_ids,
+    )
+
+    assert torch.isfinite(loss)
+
+
+def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_tokenizer, openr1_examples):
+    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=512)
+    batch = collator(openr1_examples)
+
+    assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
+    decoded_batch = smollm_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
+    for decoded, assistant in zip(decoded_batch, assistant_texts):
+        assert assistant.strip() in decoded
+
+    teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
+        smollm_tokenizer, qwen_tokenizer, batch
+    )
+    for completion, assistant in zip(completion_texts, assistant_texts):
+        assert assistant.strip() in completion
+        assert completion.strip()
+
+    config = build_config(
+        uld_use_hybrid_loss=True,
+        uld_hybrid_matched_weight=0.5,
+        uld_hybrid_unmatched_weight=0.5,
+    )
+    loss_fn = ULDLoss(config, student_tokenizer=smollm_tokenizer, teacher_tokenizer=qwen_tokenizer)
+
+    _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teacher_labels)
+
+    torch.manual_seed(1)
+    student_vocab = len(smollm_tokenizer)
+    teacher_vocab = len(qwen_tokenizer)
+    batch_size, seq_len = batch["input_ids"].shape
+    student_logits = torch.randn(batch_size, seq_len, student_vocab)
+    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
+
+    loss = loss_fn(
+        student_logits=student_logits,
+        teacher_logits=teacher_logits,
+        student_labels=batch["labels"],
+        teacher_labels=teacher_labels,
+        student_input_ids=batch["input_ids"],
+        teacher_input_ids=teacher_input_ids,
+    )
+
+    assert torch.isfinite(loss)
 
 
 def build_config(**overrides):

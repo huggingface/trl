@@ -177,6 +177,73 @@ def print_prompt_completions_sample_uld(
     console.print(panel)
 
 
+def build_teacher_inputs_from_texts(
+    tokenizer: PreTrainedTokenizerBase,
+    prompt_texts: list[str],
+    completion_texts: list[str],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss."""
+
+    teacher_prompts = tokenizer(
+        prompt_texts,
+        return_tensors="pt",
+        padding="longest",
+        truncation=True,
+        add_special_tokens=True,
+    )
+    teacher_completions = tokenizer(
+        completion_texts,
+        return_tensors="pt",
+        padding="longest",
+        truncation=True,
+        add_special_tokens=False,
+    )
+
+    teacher_input_ids = torch.cat([teacher_prompts["input_ids"], teacher_completions["input_ids"]], dim=1).long()
+
+    pad_token_id = tokenizer.pad_token_id
+    eos_token_id = tokenizer.eos_token_id
+
+    if eos_token_id is not None:
+        batch_size = teacher_input_ids.size(0)
+        for row in range(batch_size):
+            non_pad_mask = (
+                teacher_input_ids[row] != pad_token_id
+                if pad_token_id is not None
+                else torch.ones_like(teacher_input_ids[row], dtype=torch.bool)
+            )
+            if non_pad_mask.any():
+                last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
+                if teacher_input_ids[row, last_token_idx] != eos_token_id:
+                    if last_token_idx + 1 < teacher_input_ids.size(1):
+                        teacher_input_ids[row, last_token_idx + 1] = eos_token_id
+                    else:
+                        teacher_input_ids[row, last_token_idx] = eos_token_id
+
+    teacher_attention_mask = torch.cat(
+        [teacher_prompts["attention_mask"], teacher_completions["attention_mask"]], dim=1
+    ).bool()
+
+    if eos_token_id is not None:
+        for row in range(teacher_attention_mask.size(0)):
+            non_pad_mask = (
+                teacher_input_ids[row] != pad_token_id if pad_token_id is not None else teacher_attention_mask[row]
+            )
+            if non_pad_mask.any():
+                last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
+                teacher_attention_mask[row, : last_token_idx + 1] = True
+                if last_token_idx + 1 < teacher_attention_mask.size(1):
+                    teacher_attention_mask[row, last_token_idx + 1 :] = False
+
+    teacher_prompt_length = teacher_prompts["input_ids"].shape[1]
+    teacher_labels = teacher_input_ids.clone()
+    teacher_labels[:, :teacher_prompt_length] = -100
+    if pad_token_id is not None:
+        teacher_labels[teacher_input_ids == pad_token_id] = -100
+
+    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
+
+
 class ULDLoss(nn.Module):
     """
     Universal Logit Distillation Loss.
@@ -1279,66 +1346,20 @@ class GOLDTrainer(SFTTrainer):
                 prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
                 completion_texts = [full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts)]
 
-            # Tokenize prompt and completion separately with teacher tokenizer
-            teacher_prompts = self.teacher_tokenizer(
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_prompt_length,
+            ) = build_teacher_inputs_from_texts(
+                self.teacher_tokenizer,
                 prompt_texts,
-                return_tensors="pt",
-                padding="longest",
-                truncation=True,
-                add_special_tokens=True,
-            ).to(self.accelerator.device)
-
-            teacher_completions = self.teacher_tokenizer(
                 completion_texts,
-                return_tensors="pt",
-                padding="longest",
-                truncation=True,
-                add_special_tokens=False,  # Don't add special tokens to completion
-            ).to(self.accelerator.device)
+            )
 
-            # Combine teacher prompt and completion, ensuring correct dtype
-            teacher_input_ids = torch.cat(
-                [teacher_prompts["input_ids"], teacher_completions["input_ids"]], dim=1
-            ).long()
-
-            # Add EOS token at the end if it's not already there
-            batch_size = teacher_input_ids.size(0)
-            if self.teacher_tokenizer.eos_token_id is not None:
-                # Check if EOS token is already at the end for each sequence
-                for i in range(batch_size):
-                    # Find the last non-padding token
-                    non_pad_mask = teacher_input_ids[i] != self.teacher_tokenizer.pad_token_id
-                    if non_pad_mask.any():
-                        last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
-                        if teacher_input_ids[i, last_token_idx] != self.teacher_tokenizer.eos_token_id:
-                            # Shift tokens right and insert EOS
-                            if last_token_idx + 1 < teacher_input_ids.size(1):
-                                teacher_input_ids[i, last_token_idx + 1] = self.teacher_tokenizer.eos_token_id
-                            else:
-                                # Sequence is full, replace last token with EOS
-                                teacher_input_ids[i, last_token_idx] = self.teacher_tokenizer.eos_token_id
-
-            teacher_attention_mask = torch.cat(
-                [teacher_prompts["attention_mask"], teacher_completions["attention_mask"]], dim=1
-            ).bool()
-
-            # Update attention mask to account for added EOS tokens
-            if self.teacher_tokenizer.eos_token_id is not None:
-                for i in range(batch_size):
-                    non_pad_mask = teacher_input_ids[i] != self.teacher_tokenizer.pad_token_id
-                    if non_pad_mask.any():
-                        last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
-                        teacher_attention_mask[i, : last_token_idx + 1] = True
-                        if last_token_idx + 1 < teacher_attention_mask.size(1):
-                            teacher_attention_mask[i, last_token_idx + 1 :] = False
-
-            teacher_prompt_length = teacher_prompts["input_ids"].shape[1]
-
-            # Create teacher_labels and mask the prompt, and padding tokens
-            teacher_labels = teacher_input_ids.clone()
-            teacher_labels[:, :teacher_prompt_length] = -100
-            if self.teacher_tokenizer.pad_token_id is not None:
-                teacher_labels[teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
+            teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
+            teacher_labels = teacher_labels.to(self.accelerator.device)
+            teacher_attention_mask = teacher_attention_mask.to(self.accelerator.device)
 
             outputs_student = model(
                 input_ids=inputs["input_ids"],
@@ -1761,10 +1782,7 @@ class GOLDTrainer(SFTTrainer):
         else:
             gather_if_zero3 = nullcontext
 
-        if (
-            self.args.student_vllm_mode == "colocate"
-            and self.args.student_vllm_enable_sleep_mode
-        ):
+        if self.args.student_vllm_mode == "colocate" and self.args.student_vllm_enable_sleep_mode:
             empty_cache()
             self.student_llm.wake_up(tags=["weights"])
 
