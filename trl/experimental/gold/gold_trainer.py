@@ -1359,6 +1359,7 @@ class GOLDTrainer(SFTTrainer):
             outputs_student = model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
+                use_cache=False,
             )
 
             self.teacher_model.eval()
