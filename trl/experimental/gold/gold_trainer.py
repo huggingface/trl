@@ -725,6 +725,20 @@ class GOLDStudentVLLMSyncCallback(TrainerCallback):
 
 class GOLDTrainer(SFTTrainer):
     _tag_names = ["trl", "gold"]
+    _name = "GOLD"
+    _paper = {
+        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
+        "id": "2306.13649",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{rafailov2023direct,
+                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
+                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+                year         = 2024,
+                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1883,71 +1897,6 @@ class GOLDTrainer(SFTTrainer):
             self._off_sum += loss_scalar
             self._off_step_eq += step_equiv
         return loss
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-            tags.add("hf_jobs")
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @inproceedings{agarwal2024on-policy,
-            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-            year         = 2024,
-            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="GOLD",
-            trainer_citation=citation,
-            paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-            paper_id="2306.13649",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "train" if self.model.training else "eval"
