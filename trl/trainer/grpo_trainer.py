@@ -1064,9 +1064,7 @@ class GRPOTrainer(BaseTrainer):
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [
-                            apply_chat_template(
-                                x, reward_processing_class, template_kwargs=self.args.chat_template_kwargs
-                            )["text"]
+                            apply_chat_template(x, reward_processing_class, **self.args.chat_template_kwargs)["text"]
                             for x in messages
                         ]
                     else:
@@ -1151,7 +1149,7 @@ class GRPOTrainer(BaseTrainer):
                                     apply_chat_template(
                                         {"prompt": p},
                                         self.processing_class,
-                                        template_kwargs=self.args.chat_template_kwargs,
+                                        **self.args.chat_template_kwargs,
                                     )["prompt"]
                                     for p in ordered_set_of_prompts
                                 ]
@@ -1456,9 +1454,9 @@ class GRPOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, template_kwargs=self.args.chat_template_kwargs
-                )["prompt"]
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.args.chat_template_kwargs)[
+                    "prompt"
+                ]
                 for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
