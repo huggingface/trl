@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoTokenizer
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -51,7 +51,7 @@ from trl.import_utils import is_vllm_available
 from trl.models import prepare_deepspeed
 from trl.models.utils import unwrap_model_for_generation
 from trl.trainer.sft_trainer import SFTTrainer
-from trl.trainer.utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
+from trl.trainer.utils import DataCollatorForChatML, create_model_from_path, disable_dropout_in_model, empty_cache
 
 from .gold_config import GOLDConfig
 
@@ -787,7 +787,10 @@ class GOLDTrainer(SFTTrainer):
             )
 
         if isinstance(teacher_model, str):
-            teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+            init_kwargs = dict(teacher_model_init_kwargs)
+            if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
+                init_kwargs["dtype"] = init_kwargs.pop("torch_dtype")
+            teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
         if args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
