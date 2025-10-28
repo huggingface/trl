@@ -40,7 +40,7 @@ from ..import_utils import is_mergekit_available, is_weave_available
 from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
-from .utils import log_table_to_comet_experiment
+from .utils import get_config_model_id, log_table_to_comet_experiment
 
 
 if is_rich_available():
@@ -821,7 +821,7 @@ class MergeModelCallback(TrainerCallback):
         checkpoint_path = os.path.join(output_dir, f"checkpoint-{global_step}")
         self.merge_config.policy_model_path = checkpoint_path
         if self.merge_config.target_model_path is None:
-            self.merge_config.target_model_path = model.config._name_or_path
+            self.merge_config.target_model_path = get_config_model_id(model.config)
         merge_path = os.path.join(checkpoint_path, "merged")
 
         merge_models(self.merge_config.create(), merge_path)
