@@ -331,7 +331,8 @@ class RLOOConfig(TrainingArguments):
     chat_template_kwargs: Optional[dict] = field(
         default=None,
         metadata={
-            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating completions."
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
+            "completions."
         },
     )
     repetition_penalty: float = field(

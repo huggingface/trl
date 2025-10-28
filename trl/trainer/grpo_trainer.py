@@ -373,6 +373,7 @@ class GRPOTrainer(BaseTrainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.chat_template_kwargs = self.args.chat_template_kwargs or {}
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -400,6 +401,7 @@ class GRPOTrainer(BaseTrainer):
                 "Liger Kernels currently only support token-level importance sampling. Please set"
                 "`importance_sampling_level` to 'token'."
             )
+
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -449,8 +451,6 @@ class GRPOTrainer(BaseTrainer):
             # that behavior without rewriting `training_step`.
             compute_loss_func="non-None value to disable scaling",
         )
-        if self.args.chat_template_kwargs is None:
-            self.args.chat_template_kwargs = {}
 
         # Reference model
         self.beta = args.beta
@@ -1064,7 +1064,7 @@ class GRPOTrainer(BaseTrainer):
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [
-                            apply_chat_template(x, reward_processing_class, **self.args.chat_template_kwargs)["text"]
+                            apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
                             for x in messages
                         ]
                     else:
@@ -1147,9 +1147,7 @@ class GRPOTrainer(BaseTrainer):
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 ordered_set_of_prompts = [
                                     apply_chat_template(
-                                        {"prompt": p},
-                                        self.processing_class,
-                                        **self.args.chat_template_kwargs,
+                                        {"prompt": p}, self.processing_class, **self.chat_template_kwargs
                                     )["prompt"]
                                     for p in ordered_set_of_prompts
                                 ]
@@ -1164,7 +1162,7 @@ class GRPOTrainer(BaseTrainer):
                                 output = self.vllm_client.chat(
                                     prompts=ordered_set_of_prompts,
                                     **sampling_params,
-                                    chat_template_kwargs=self.args.chat_template_kwargs,
+                                    chat_template_kwargs=self.chat_template_kwargs,
                                 )
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
@@ -1275,7 +1273,7 @@ class GRPOTrainer(BaseTrainer):
                     **processor_kwargs,
                     tokenize=True,
                     return_dict=True,
-                    **self.args.chat_template_kwargs,
+                    **self.chat_template_kwargs,
                 )
             else:
                 processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1320,7 +1318,7 @@ class GRPOTrainer(BaseTrainer):
                     **processor_kwargs,
                     tokenize=True,
                     return_dict=True,
-                    **self.args.chat_template_kwargs,
+                    **self.chat_template_kwargs,
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1454,9 +1452,7 @@ class GRPOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class, **self.args.chat_template_kwargs)[
-                    "prompt"
-                ]
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
                 for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
