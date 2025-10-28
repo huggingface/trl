@@ -34,6 +34,29 @@ A minimal end-to-end example:
 
 ```python
 from datasets import load_dataset
+from trl.experimental.gold import GOLDConfig, GOLDTrainer
+
+train_dataset = load_dataset(
+    "HuggingFaceTB/OpenR1-Math-220k-default-verified",
+    "all",
+    split="train[:1024]",
+)
+
+trainer = GOLDTrainer(
+    model="meta-llama/Llama-3.2-1B-Instruct",
+    teacher_model="Qwen/Qwen2.5-0.5B-Instruct",
+    args=GOLDConfig(output_dir="gold-model", use_uld_loss=True, teacher_tokenizer_name_or_path="Qwen/Qwen2.5-0.5B-Instruct"),
+    train_dataset=train_dataset,
+)
+trainer.train()
+```
+
+For quick-start workflows you can rely on string identifiers as shown above—the trainer will load the model and tokenizer for you. Explicitly instantiating `AutoModelForCausalLM`, `AutoTokenizer`, or populating `GOLDConfig` is recommended only for advanced use cases where you need fine-grained control over initialization.
+
+A more explicit setup might look like this when you need to customise model loading, tokenizer settings, or training arguments:
+
+```python
+from datasets import load_dataset
 from trl import GOLDConfig, GOLDTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
