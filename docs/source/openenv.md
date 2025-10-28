@@ -156,3 +156,165 @@ Below is the reward curve from training:
 <iframe src="https://trl-lib-trackio.hf.space?project=openenv&metrics=train/rewards/reward_from_env/mean&runs=qgallouedec-1761202871&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>
 
 To learn more about how to create custom environments, see the [OpenEnv documentation](https://github.com/meta-pytorch/OpenEnv/blob/main/src/envs/README.md).
+
+## Advanced Example
+
+Let's level this up a bit by training a model to interact with a more complex environment. We'll use the game [wordle](https://www.nytimes.com/games/wordle/index.html) from the `textarena` environment. 
+
+> [!NOTE]
+> Wordle is a word guessing game where the player has to guess a 5-letter word. They will receive feedback on each guess, and the goal is to guess the word in 6 guesses or less.
+
+### The TextArena Environment
+
+[TextAren](https://huggingface.co/papers/2504.11442) is an open-source collection of competitive text-based games designed to evaluate reasoning skills in LLMs using textual games like Wordle, Snake, Tic-Tac-Toe, and more. Research has shown that such games improve model performance on reasoning tasks.
+
+![image of textarena](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/text_arena_evals.png)
+
+We will use the `textarena` environment to train a model to play Wordle. The environment is a simple text based response environment that allows the model to interact with the game by making guesses and receive feedback on them.
+
+### Wordle
+
+Wordle is a useful game to train a model on because it requires the model to reason about the word and the feedback provided by the environment. Also, it is a purely language based game that requires no external tools or knowledge. Furthermore, we found that models from 1 billion parameters and up are able to improve on wordle and only require 8 tokens to generate a guess, which makes the game a good benchmark to experiment with Reinforcement Learning environments without significant compute requirements.
+
+> [!NOTE] How does Wordle work?
+> Wordle is a word guessing game where the player has to guess a 5-letter word. The player can make 6 guesses, and for each guess, the environment will provide feedback on the correctness of the guess. The player wins if they guess the word in 6 guesses or less. It challenges the model to generate words that are likely to be correct, and to learn from the feedback provided by the environment. 
+> 
+> For example, if the wordle environment returns the following feedback:
+>
+> ```
+> G U E S S
+> X G Y X X
+> ```
+> The model has guessed the word "GUESS" and the environment has provided feedback as the letters X, G, and Y. Referring to colors in the original game blank, green, and yellow. From this feedback, the model should learn that the word is "GUESS" is incorrect. The letter "E" is in the word, but in the wrong position. The letter "U" is correct and in the correct position.
+ 
+In the TextArena environment, reward is only given when the model wins the game. The reward is 1.0 if the model wins, and 0.0 otherwise. This is not a ver efficient reward signal for the model, so we have added a number of custom reward functions to the script to help the model learn to play the game. The extensible nature of `reward_funcs` and `rollout_func` allows you to add any custom reward function you want to the script.
+
+### Rollout Function
+
+The rollout function is an implementation of the actions that the agent will take within the environment. In this case, the agent will make guesses and receive feedback on them. The rollout function will generate the guesses and step through the environment to get the feedback. Multi-step environments will typically collect feedback from the environment after each action and aggregate those rewards into a single signal. 
+
+This rollout function will iterate over the guesses of a word in the environment and at each step:
+
+- construct a prompt for the model to generate a guess. 
+- generate a guess with vLLM.
+- extract the guess from the completion.
+- act in the environment with the `env.step` method.
+- collect the feedback from the environment to be returned to the model.
+- aggregate and collect rewards from the environment and feedback.
+
+After completing the game, either by winning or exhausting all 6 turns, the rollout function will return the rewards of the game to the trainer. Below is the rollout function for the Wordle environment:
+
+<!-- TODO: @burtenshaw Add rollout function code here -->
+```python
+def rollout_once(
+    env: TextArenaEnv,
+    tokenizer: AutoTokenizer,
+    args: GRPOConfig,
+    dataset_prompt: str,
+) -> Dict[str, List]:
+    result = env.reset()
+    observation = result.observation
+
+    prompt_ids: List[int] = []
+    completion_ids: List[int] = []
+    logprobs: List[float] = []
+    raw_rewards: List[float] = []
+    coverage_rewards: List[float] = []
+    repetition_rewards: List[float] = []
+
+    for _turn in range(MAX_TURNS):
+        if result.done:
+            break
+        base_prompt = observation.prompt or dataset_prompt
+        user_prompt = make_user_prompt(base_prompt, observation.messages)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+            enable_thinking=False,
+        )
+
+        vllm_result = request_vllm_completion(prompt_text, args)
+
+        prompt_ids.extend(vllm_result["prompt_ids"])
+        completion_ids.extend(vllm_result["completion_ids"])
+        logprobs.extend(vllm_result["logprobs"])
+
+        completion_text = vllm_result.get("text") or tokenizer.decode(
+            vllm_result["completion_ids"], skip_special_tokens=True
+        )
+        guess = extract_guess(completion_text)
+
+        result = env.step(TextArenaAction(message=guess))
+        raw_rewards.append(float(result.reward or 0.0))
+
+        observation = result.observation
+        feedback = extract_wordle_feedback(observation)
+        if not feedback:
+            repetition_reward = 0.0
+            coverage_reward = 0.0
+        else:
+            repetition_reward = repeated_guess_penalty(guess, feedback)
+            coverage_reward = compute_feedback_score(feedback)
+        repetition_rewards.append(repetition_reward)
+        coverage_rewards.append(coverage_reward)
+
+    solved = bool(result.done and raw_rewards and raw_rewards[-1] > 0.0)
+    correctness_reward = 1.0 if solved else 0.0
+    coverage_reward = coverage_rewards[-1] if coverage_rewards else 0.0
+    repetition_reward = sum(repetition_rewards) / max(1, len(repetition_rewards))
+
+    return {
+        "prompt_ids": prompt_ids,
+        "completion_ids": completion_ids,
+        "logprobs": logprobs,
+        "raw_rewards": raw_rewards,
+        "correct_reward": correctness_reward,
+        "coverage_reward": coverage_reward,
+        "repetition_reward": repetition_reward,
+    }
+```
+
+### Reward Functions
+
+For the Wordle environment, we use three different reward functions to help the model learn to play the game:
+
+- `correctness_reward`: This reward score directly from the environment. The function gives a reward of 1.0 if the model wins the game, and 0.0 otherwise.
+- `repeated_guess_penalty`: This reward function penalizes the model for making the same guess twice.
+- `compute_feedback_score`: This reward function computes the score of the feedback from the environment. For example, if the model gets a `G` in the correct position, it should be rewarded. If the model gets a `Y` in the wrong position, it should be penalized.
+
+Below is the reward function for the Wordle environment:
+
+<!-- TODO: @burtenshaw Add reward function code here -->
+```python
+```
+
+### Training the Model
+
+To train the model, we use the `GRPOTrainer` with the `rollout_func` and `reward_funcs` arguments as the previous examples. Below is the training script for the Wordle environment:
+
+<!-- TODO: @burtenshaw Add training script code here -->
+```python
+```
+
+### Running the Example
+
+The example requires two GPUs:
+
+```bash
+# Terminal 1: Start vLLM inference server
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+
+# Terminal 2: Run GRPO training with OpenEnv
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
+```
+
+### Results
+
+<!-- TODO: @burtenshaw Add results here -->
+```
+```
