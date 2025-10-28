@@ -13,15 +13,19 @@
 # limitations under the License.
 
 import random
-import wandb
 from typing import Optional, Union
+
 import torch
 from datasets import Dataset, IterableDataset
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_wandb_available
-from trl import GRPOTrainer
-from trl.trainer.grpo_trainer import RewardFunc
+
+from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
+from ...trainer.utils import get_comet_experiment_url, nanmax, nanmin
 from .papo_config import PAPOConfig
-from trl.trainer.utils import get_comet_experiment_url, nanmax, nanmin
+
+
+if is_wandb_available():
+    import wandb
 
 
 class PAPOTrainer(GRPOTrainer):
@@ -221,7 +225,9 @@ class PAPOTrainer(GRPOTrainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
 
         # Compute the loss
         advantages = inputs["advantages"]
@@ -239,7 +245,8 @@ class PAPOTrainer(GRPOTrainer):
             log_importance_weights = log_importance_weights.unsqueeze(-1)
         else:
             raise ValueError(
-                f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' " "and 'sequence'."
+                f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' "
+                "and 'sequence'."
             )
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
@@ -280,7 +287,9 @@ class PAPOTrainer(GRPOTrainer):
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
         )
-        perception_kl = torch.exp(mask_img_per_token_logps - per_token_logps) - (mask_img_per_token_logps - per_token_logps) - 1
+        perception_kl = (
+            torch.exp(mask_img_per_token_logps - per_token_logps) - (mask_img_per_token_logps - per_token_logps) - 1
+        )
         perception_loss = self.perception_loss_weight * perception_kl
 
         # >>> 3. Double Entropy Loss
@@ -360,8 +369,9 @@ class PAPOTrainer(GRPOTrainer):
 Note: [This is NOT PAPO's official code implementation.]
 """
 
-        from trl.trainer.utils import generate_model_card
         import os
+
+        from trl.trainer.utils import generate_model_card
 
         model_card = generate_model_card(
             base_model=self.model.config._name_or_path if hasattr(self.model.config, "_name_or_path") else None,
