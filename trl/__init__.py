@@ -50,10 +50,10 @@ _import_structure = {
         "maybe_unpair_preference_dataset",
         "pack_dataset",
         "prepare_multimodal_messages",
+        "prepare_multimodal_messages_vllm",
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "extras": ["BestOfNSampler"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -130,10 +130,10 @@ if TYPE_CHECKING:
         maybe_unpair_preference_dataset,
         pack_dataset,
         prepare_multimodal_messages,
+        prepare_multimodal_messages_vllm,
         truncate_dataset,
         unpair_preference_dataset,
     )
-    from .extras import BestOfNSampler
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

@@ -18,30 +18,31 @@ import pytest
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from transformers.utils import is_peft_available
 
-from trl import BCOConfig, BCOTrainer
-from trl.trainer.bco_trainer import _process_tokens, _tokenize
+from trl.experimental.bco import BCOConfig, BCOTrainer
+from trl.experimental.bco.bco_trainer import _process_tokens, _tokenize
 
-from .testing_utils import TrlTestCase, require_no_wandb, require_peft, require_sklearn
+from ..testing_utils import TrlTestCase, require_no_wandb, require_peft, require_sklearn
 
 
 if is_peft_available():
     from peft import LoraConfig
 
 
+@pytest.mark.low_priority
 class TestBCOTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "config_name",
         [
-            ("standard_preference",),
-            ("standard_implicit_prompt_preference",),
-            ("standard_unpaired_preference",),
-            ("conversational_preference",),
-            ("conversational_implicit_prompt_preference",),
-            ("conversational_unpaired_preference",),
-        ]
+            "standard_preference",
+            "standard_implicit_prompt_preference",
+            "standard_unpaired_preference",
+            "conversational_preference",
+            "conversational_implicit_prompt_preference",
+            "conversational_unpaired_preference",
+        ],
     )
     @require_sklearn
     def test_train(self, config_name):

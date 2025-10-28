@@ -13,10 +13,6 @@
     title: Paper Index
   - local: experimental
     title: Experimental
-  - local: how_to_train
-    title: Training FAQ
-  - local: logging
-    title: Understanding Logs
   title: Conceptual Guides
 - sections:
   - local: clis
@@ -59,15 +55,11 @@
     title: LoRA Without Regret
   - local: sentiment_tuning
     title: Sentiment Tuning
-  - local: using_llama_models
-    title: Training StackLlama
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: bco_trainer
-      title: BCO
     - local: cpo_trainer
       title: CPO
     - local: dpo_trainer
@@ -101,8 +93,6 @@
     title: Model Classes
   - local: model_utils
     title: Model Utilities
-  - local: best_of_n
-    title: Best of N Sampling
   - local: judges
     title: Judges
   - local: callbacks
@@ -116,3 +106,9 @@
   - local: others
     title: Others
   title: API
+- sections:
+  - local: bco_trainer
+    title: BCO
+  - local: openenv
+    title: OpenEnv Integration
+  title: Experimental
