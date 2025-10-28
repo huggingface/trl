@@ -830,11 +830,11 @@ class GOLDTrainer(SFTTrainer):
         self.top_p = args.top_p
         self.seq_kd = args.seq_kd
 
-        # Separate loss logs
-        self._on_sum = 0.0
-        self._off_sum = 0.0
-        self._on_step_eq = 0.0
-        self._off_step_eq = 0.0
+        # Track per-step loss statistics for on/off-policy batches (used in logging)
+        self._on_policy_loss_total = 0.0
+        self._off_policy_loss_total = 0.0
+        self._on_policy_step_equiv = 0.0
+        self._off_policy_step_equiv = 0.0
 
         # Hybrid ULD matched/unmatched accumulators (logged every step when ULD hybrid is used)
         self._matched_sum = 0.0
@@ -1890,11 +1890,11 @@ class GOLDTrainer(SFTTrainer):
         step_equiv = 1.0 / ga
 
         if on_policy:
-            self._on_sum += loss_scalar
-            self._on_step_eq += step_equiv
+            self._on_policy_loss_total += loss_scalar
+            self._on_policy_step_equiv += step_equiv
         else:
-            self._off_sum += loss_scalar
-            self._off_step_eq += step_equiv
+            self._off_policy_loss_total += loss_scalar
+            self._off_policy_step_equiv += step_equiv
         return loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
@@ -1906,10 +1906,10 @@ class GOLDTrainer(SFTTrainer):
             # include matched/unmatched accumulators for distributed reduction
             vec = torch.tensor(
                 [
-                    self._on_sum,
-                    self._off_sum,
-                    self._on_step_eq,
-                    self._off_step_eq,
+                    self._on_policy_loss_total,
+                    self._off_policy_loss_total,
+                    self._on_policy_step_equiv,
+                    self._off_policy_step_equiv,
                     self._matched_sum,
                     self._unmatched_sum,
                     self._matched_step_eq,
@@ -1927,7 +1927,16 @@ class GOLDTrainer(SFTTrainer):
             ):
                 dist.all_reduce(vec, op=dist.ReduceOp.SUM)
 
-            on_sum, off_sum, on_eq, off_eq, matched_sum, unmatched_sum, matched_eq, unmatched_eq = vec.tolist()
+            (
+                on_sum,
+                off_sum,
+                on_eq,
+                off_eq,
+                matched_sum,
+                unmatched_sum,
+                matched_eq,
+                unmatched_eq,
+            ) = vec.tolist()
 
             # Compute category averages over the *same window* as Trainer's logs
             # (avoid div-by-zero if, e.g., no on-policy steps in the window)
@@ -1943,8 +1952,8 @@ class GOLDTrainer(SFTTrainer):
                 logs["unmatched_loss"] = round(unmatched_sum / unmatched_eq, 4)
 
             # Reset window accumulators after logging (just like Trainer resets its window)
-            self._on_sum = self._off_sum = 0.0
-            self._on_step_eq = self._off_step_eq = 0.0
+            self._on_policy_loss_total = self._off_policy_loss_total = 0.0
+            self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
             self._matched_sum = self._unmatched_sum = 0.0
             self._matched_step_eq = self._unmatched_step_eq = 0.0
 
