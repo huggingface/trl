@@ -53,7 +53,13 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import DataCollatorForChatML, create_model_from_path, disable_dropout_in_model, empty_cache
+from ...trainer.utils import (
+    DataCollatorForChatML,
+    create_model_from_path,
+    disable_dropout_in_model,
+    empty_cache,
+    ensure_master_addr_port,
+)
 from .gold_config import GOLDConfig
 
 
@@ -928,8 +934,7 @@ class GOLDTrainer(SFTTrainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
-                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+                ensure_master_addr_port()
 
                 self.vllm_engine = LLM(
                     model=student_model_name_or_path,
