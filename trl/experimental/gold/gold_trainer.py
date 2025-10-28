@@ -24,6 +24,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -45,6 +46,7 @@ from transformers.utils import (
     is_rich_available,
 )
 
+from trl.data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
 from trl.extras.profiling import profiling_decorator
 from trl.extras.vllm_client import VLLMClient
 from trl.import_utils import is_vllm_available
@@ -1016,10 +1018,6 @@ class GOLDTrainer(SFTTrainer):
         """
         Prepare dataset while preserving original text for cross-tokenizer distillation.
         """
-        from accelerate import PartialState
-
-        from ..data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
