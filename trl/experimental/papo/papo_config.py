@@ -15,7 +15,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from trl.trainer.grpo_config import GRPOConfig
+from ...trainer.grpo_config import GRPOConfig
 
 
 @dataclass
