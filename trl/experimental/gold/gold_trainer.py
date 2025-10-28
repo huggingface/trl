@@ -761,13 +761,6 @@ class GOLDTrainer(SFTTrainer):
         if data_collator is None:
             data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
-        # Ensure SFTTrainer does not pre-process the dataset when using a ChatML collator,
-        # so that raw conversational fields (e.g., "messages") remain available to the collator.
-        if args.dataset_kwargs is None:
-            args.dataset_kwargs = {"skip_prepare_dataset": True}
-        else:
-            args.dataset_kwargs["skip_prepare_dataset"] = True
-
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
         if args.use_liger_kernel:
