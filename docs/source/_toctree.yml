@@ -107,10 +107,10 @@
     title: Others
   title: API
 - sections:
-  - local: gold_trainer
-    title: GOLD
   - local: bco_trainer
     title: BCO
+  - local: gold_trainer
+    title: GOLD
   - local: openenv
     title: OpenEnv Integration
   title: Experimental

@@ -1,5 +1,6 @@
 # General Online Logit Distillation (GOLD) Trainer
 
+[![All_models-GOLD-blue](https://img.shields.io/badge/All_models-GOLD-blue)](https://huggingface.co/models?other=sft,gold)
 
 ## Overview
 
@@ -10,18 +11,12 @@ mixed model families (for example, LLaMA students with Qwen teachers).
 
 Key capabilities:
 
-1. **Cross-tokenizer alignment** – GOLD incrementally decodes the student and teacher tokens, groups passages with the
-   same visible text, and merges probabilities inside each group. This guarantees loss terms are computed over the full
-   completion even when token boundaries differ.
-2. **Hybrid ULD loss** – when `uld_use_hybrid_loss` is enabled, GOLD compares exact vocabulary matches directly and
-   falls back to the original sorted-probability ULD loss for unmatched tokens. This improves stability for students
-   whose vocabularies only partially overlap with the teacher.
-3. **Seamless integration with GKD** – GOLD inherits the on-policy vs. off-policy scheduling from the
-   [`GKDTrainer`](./gkd_trainer.md), so you can combine sequence-level KD, generalized JSD, and cross-tokenizer
-   distillation in a single training run.
+1. **Cross-tokenizer alignment** – GOLD incrementally decodes the student and teacher tokens, groups passages with the same visible text, and merges probabilities inside each group. This guarantees loss terms are computed over the full completion even when token boundaries differ.
+2. **Hybrid ULD loss** – when `uld_use_hybrid_loss` is enabled, GOLD compares exact vocabulary matches directly and falls back to the original sorted-probability ULD loss for unmatched tokens. This improves stability for students whose vocabularies only partially overlap with the teacher.
+3. **Seamless integration with GKD** – GOLD inherits the on-policy vs. off-policy scheduling from the [`GKDTrainer`](./gkd_trainer.md), so you can combine sequence-level KD, generalized JSD, and cross-tokenizer distillation in a single training run.
 
-> [!NOTE] GOLD is currently part of the `trl.experimental` namespace. APIs may change without notice while the feature
-> is iterated on.
+> [!NOTE]
+> GOLD is currently part of the `trl.experimental` namespace. APIs may change without notice while the feature is iterated on.
 
 ## Usage tips
 
@@ -81,14 +76,11 @@ trainer.train()
 
 ### Expected dataset type
 
-Datasets should provide a `messages` column containing ChatML-style turns:
+GOLD requires a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset, e.g.:
 
 ```python
-[
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "Explain reinforcement learning in one paragraph."},
-    {"role": "assistant", "content": "…"}
-]
+{"messages": [{"role": "user", "content": "What color is the sky?"},
+              {"role": "assistant", "content": "It is blue."}]}
 ```
 
 `GOLDTrainer` keeps the raw messages so the ChatML collator can construct prompts and completions with the correct
