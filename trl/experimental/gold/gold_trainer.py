@@ -751,10 +751,10 @@ class GOLDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
-        revision = args.student_model_revision
-        if isinstance(model, str) and revision is not None:
+        self.model_revision = getattr(args, "student_model_revision", None)
+        if isinstance(model, str) and self.model_revision is not None:
             args.model_init_kwargs = args.model_init_kwargs or {}
-            args.model_init_kwargs["revision"] = revision
+            args.model_init_kwargs.setdefault("revision", self.model_revision)
 
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
         if data_collator is None:
@@ -852,7 +852,7 @@ class GOLDTrainer(SFTTrainer):
             )
 
         self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_new_tokens,
+            max_new_tokens=args.max_completion_length,
             temperature=args.temperature,
             top_p=args.top_p,
             do_sample=True,
@@ -1594,7 +1594,7 @@ class GOLDTrainer(SFTTrainer):
         # prompts_text = [p.replace(target_system_prompt, system_prompt) for p in prompts_text]
         # Add system prompt to prompts
 
-        max_new_tokens = generation_config.max_new_tokens
+        max_completion_length = generation_config.max_completion_length
         temperature = generation_config.temperature
         # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
         top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
@@ -1614,7 +1614,7 @@ class GOLDTrainer(SFTTrainer):
                     top_p=top_p,
                     top_k=top_k,
                     min_p=min_p,
-                    max_tokens=max_new_tokens,
+                    max_tokens=max_completion_length,
                     guided_decoding_regex=self.vllm_guided_decoding_regex,
                 )
             else:
@@ -1637,7 +1637,7 @@ class GOLDTrainer(SFTTrainer):
                 top_p=top_p,
                 top_k=top_k,
                 min_p=min_p,
-                max_tokens=max_new_tokens,
+                max_tokens=max_completion_length,
                 guided_decoding=guided_decoding,
             )
 
@@ -1671,7 +1671,7 @@ class GOLDTrainer(SFTTrainer):
         # Use prompts_text_for_vllm (without special tokens) for tokenization since vLLM expects clean text
         # Ensure add_special_tokens=False as vLLM typically handles prompts as raw text
         # Calculate max_length for prompts, ensuring it's positive
-        prompt_max_length = max(1, self.args.max_length - max_new_tokens) if self.args.max_length else None
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
         prompt_tokenized = self.processing_class(
             prompts_text_for_vllm,
             return_tensors="pt",
@@ -1683,15 +1683,15 @@ class GOLDTrainer(SFTTrainer):
         prompt_ids = prompt_tokenized.input_ids
 
         completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids]
-        # Manually pad/truncate completions to max_new_tokens length before using pad function
+        # Manually pad/truncate completions to max_completion_length length before using pad function
         padded_completion_ids_list = []
         for completion_tensor in completion_ids_tensors:
-            if len(completion_tensor) > max_new_tokens:
-                # Truncate if longer than max_new_tokens
-                padded_completion_ids_list.append(completion_tensor[:max_new_tokens])
-            elif len(completion_tensor) < max_new_tokens:
-                # Pad if shorter than max_new_tokens
-                padding_needed = max_new_tokens - len(completion_tensor)
+            if len(completion_tensor) > max_completion_length:
+                # Truncate if longer than max_completion_length
+                padded_completion_ids_list.append(completion_tensor[:max_completion_length])
+            elif len(completion_tensor) < max_completion_length:
+                # Pad if shorter than max_completion_length
+                padding_needed = max_completion_length - len(completion_tensor)
                 padded_tensor = torch.cat(
                     [
                         completion_tensor,

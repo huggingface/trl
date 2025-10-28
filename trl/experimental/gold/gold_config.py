@@ -37,7 +37,7 @@ class GOLDConfig(SFTConfig):
         beta (`float`, *optional*, defaults to `0.5`):
             Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
             beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
-        max_new_tokens (`int`, *optional*, defaults to `128`):
+        max_completion_length (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
         teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
@@ -126,7 +126,7 @@ class GOLDConfig(SFTConfig):
             "Divergence."
         },
     )
-    max_new_tokens: int = field(
+    max_completion_length: int = field(
         default=128,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
@@ -371,11 +371,11 @@ class GOLDConfig(SFTConfig):
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError("beta must be in the range [0.0, 1.0].")
 
-        # Validate that max_length is sufficient for max_new_tokens
-        if self.max_length is not None and self.max_new_tokens >= self.max_length:
+        # Validate that max_length is sufficient for max_completion_length
+        if self.max_length is not None and self.max_completion_length >= self.max_length:
             raise ValueError(
-                f"max_new_tokens ({self.max_new_tokens}) must be smaller than max_length ({self.max_length}) "
-                f"to leave room for the prompt. Consider increasing max_length or reducing max_new_tokens."
+                f"max_completion_length ({self.max_completion_length}) must be smaller than max_length ({self.max_length}) "
+                f"to leave room for the prompt. Consider increasing max_length or reducing max_completion_length."
             )
 
         if self.steps_per_generation is None:
