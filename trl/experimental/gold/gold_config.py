@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from transformers import TrainingArguments
 
-from trl.trainer.sft_config import SFTConfig
+from ...trainer.sft_config import SFTConfig
 
 
 @dataclass

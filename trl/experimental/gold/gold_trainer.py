@@ -46,15 +46,14 @@ from transformers.utils import (
     is_rich_available,
 )
 
-from trl.data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
-from trl.extras.profiling import profiling_decorator
-from trl.extras.vllm_client import VLLMClient
-from trl.import_utils import is_vllm_available
-from trl.models import prepare_deepspeed
-from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.sft_trainer import SFTTrainer
-from trl.trainer.utils import DataCollatorForChatML, create_model_from_path, disable_dropout_in_model, empty_cache
-
+from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
+from ...extras.profiling import profiling_decorator
+from ...extras.vllm_client import VLLMClient
+from ...import_utils import is_vllm_available
+from ...models import prepare_deepspeed
+from ...models.utils import unwrap_model_for_generation
+from ...trainer.sft_trainer import SFTTrainer
+from ...trainer.utils import DataCollatorForChatML, create_model_from_path, disable_dropout_in_model, empty_cache
 from .gold_config import GOLDConfig
 
 
