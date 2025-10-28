@@ -989,12 +989,7 @@ class GOLDTrainer(SFTTrainer):
         # Use our enhanced dataset preparation for:
         # 1. ULD loss with cross-tokenizer (need original text preservation)
         # 2. Any unprocessed dataset (need attention_mask for DataCollatorForChatML)
-        if not is_processed or (
-            hasattr(self, "use_uld_loss")
-            and self.use_uld_loss
-            and hasattr(self, "teacher_tokenizer")
-            and self.teacher_tokenizer is not None
-        ):
+        if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None):
             if not is_processed:
                 # For unprocessed datasets, use our enhanced tokenization
                 return self._prepare_dataset_with_original_text(
