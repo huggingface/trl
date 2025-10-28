@@ -191,26 +191,16 @@ In the TextArena environment, reward is only given when the model wins the game.
 
 ### Rollout Function
 
-The rollout function is an implementation of the actions that the agent will take within the environment. In this case, the agent will make guesses and receive feedback on them. The rollout function will generate the guesses and step through the environment to get the feedback. Multi-step environments will typically collect feedback from the environment after each action and aggregate those rewards into a single signal. 
+The rollout function runs one full Wordle episode, prompting the model for a guess each turn and capturing both environment rewards and auxiliary signals such as letter coverage and repetition penalties.
 
-This rollout function will iterate over the guesses of a word in the environment and at each step:
-
-- construct a prompt for the model to generate a guess. 
-- generate a guess with vLLM.
-- extract the guess from the completion.
-- act in the environment with the `env.step` method.
-- collect the feedback from the environment to be returned to the model.
-- aggregate and collect rewards from the environment and feedback.
-
-After completing the game, either by winning or exhausting all 6 turns, the rollout function will return the rewards of the game to the trainer. Below is the rollout function for the Wordle environment:
-
-<!-- TODO: @burtenshaw Add rollout function code here -->
 ```python
 def rollout_once(
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
     args: GRPOConfig,
     dataset_prompt: str,
+    cli_args: argparse.Namespace,
+    system_prompt: str,
 ) -> Dict[str, List]:
     result = env.reset()
     observation = result.observation
@@ -219,16 +209,20 @@ def rollout_once(
     completion_ids: List[int] = []
     logprobs: List[float] = []
     raw_rewards: List[float] = []
-    coverage_rewards: List[float] = []
-    repetition_rewards: List[float] = []
+    green_scores: List[float] = []
+    yellow_scores: List[float] = []
+    repetition_scores: List[float] = []
+    correct_scores: List[float] = []
+    guess_counts: Dict[str, int] = {}
 
-    for _turn in range(MAX_TURNS):
+    for _turn in range(cli_args.max_turns):
         if result.done:
             break
+
         base_prompt = observation.prompt or dataset_prompt
         user_prompt = make_user_prompt(base_prompt, observation.messages)
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
         prompt_text = tokenizer.apply_chat_template(
@@ -238,7 +232,13 @@ def rollout_once(
             enable_thinking=False,
         )
 
-        vllm_result = request_vllm_completion(prompt_text, args)
+        vllm_result = request_vllm_completion(
+            prompt_text,
+            args,
+            endpoint=cli_args.vllm_endpoint,
+            timeout=cli_args.request_timeout,
+            fallback=cli_args,
+        )
 
         prompt_ids.extend(vllm_result["prompt_ids"])
         completion_ids.extend(vllm_result["completion_ids"])
@@ -253,52 +253,124 @@ def rollout_once(
         raw_rewards.append(float(result.reward or 0.0))
 
         observation = result.observation
-        feedback = extract_wordle_feedback(observation)
-        if not feedback:
-            repetition_reward = 0.0
-            coverage_reward = 0.0
-        else:
-            repetition_reward = repeated_guess_penalty(guess, feedback)
-            coverage_reward = compute_feedback_score(feedback)
-        repetition_rewards.append(repetition_reward)
-        coverage_rewards.append(coverage_reward)
+        reward_signals = (
+            observation.info.get("reward_signals") if observation.info else None
+        )
+        feedback = None
+        normalized_guess = guess if guess and guess != "[dunno]" else ""
+        previous_occurrences = (
+            guess_counts.get(normalized_guess, 0) if normalized_guess else 0
+        )
 
-    solved = bool(result.done and raw_rewards and raw_rewards[-1] > 0.0)
-    correctness_reward = 1.0 if solved else 0.0
-    coverage_reward = coverage_rewards[-1] if coverage_rewards else 0.0
-    repetition_reward = sum(repetition_rewards) / max(1, len(repetition_rewards))
+        if reward_signals:
+            green_score = float(reward_signals.get("wordle.greens", 0.0))
+            yellow_score = float(reward_signals.get("wordle.yellows", 0.0))
+            repetition_score = float(reward_signals.get("wordle.repetitions", 0.0))
+            correct_score = float(reward_signals.get("wordle.correct", 0.0))
+        else:
+            feedback = extract_wordle_feedback(observation)
+            if feedback:
+                green_count, yellow_count = extract_feedback_counts(feedback)
+                green_score = green_count / 5.0
+                yellow_score = yellow_count / 5.0
+                repetition_score = 1.0 - previous_occurrences
+                correct_score = float(result.reward or 0.0)
+            else:
+                green_score = 0.0
+                yellow_score = 0.0
+                repetition_score = 1.0 - previous_occurrences
+                correct_score = float(result.reward or 0.0)
+
+        repetition_score = max(0.0, repetition_score)
+        repetition_scores.append(repetition_score)
+        green_scores.append(green_score)
+        yellow_scores.append(yellow_score)
+        correct_scores.append(correct_score)
+
+        if normalized_guess:
+            guess_counts[normalized_guess] = previous_occurrences + 1
+
+    correct_reward_value = (
+        correct_scores[-1]
+        if correct_scores
+        else (raw_rewards[-1] if raw_rewards else 0.0)
+    )
 
     return {
         "prompt_ids": prompt_ids,
         "completion_ids": completion_ids,
         "logprobs": logprobs,
         "raw_rewards": raw_rewards,
-        "correct_reward": correctness_reward,
-        "coverage_reward": coverage_reward,
-        "repetition_reward": repetition_reward,
+        "correct_reward": correct_reward_value,
+        "green_reward": green_scores[-1] if green_scores else 0.0,
+        "yellow_reward": yellow_scores[-1] if yellow_scores else 0.0,
+        "repetition_reward": repetition_scores[-1] if repetition_scores else 0.0,
     }
 ```
 
+> [!TIP]
+> When the environment does not expose structured `reward_signals`, the rollout falls back to parsing the textual feedback so the auxiliary rewards remain available.
+
 ### Reward Functions
 
-For the Wordle environment, we use three different reward functions to help the model learn to play the game:
+We log four reward streams that encourage the model to solve the puzzle, cover new letters, and avoid repeating guesses:
 
-- `correctness_reward`: This reward score directly from the environment. The function gives a reward of 1.0 if the model wins the game, and 0.0 otherwise.
-- `repeated_guess_penalty`: This reward function penalizes the model for making the same guess twice.
-- `compute_feedback_score`: This reward function computes the score of the feedback from the environment. For example, if the model gets a `G` in the correct position, it should be rewarded. If the model gets a `Y` in the wrong position, it should be penalized.
+- `reward_correct`: final win/loss signal from the environment.
+- `reward_greens`: density of green letters in the last feedback.
+- `reward_yellows`: density of yellow letters in the last feedback.
+- `reward_repetition`: penalty for guessing the same token multiple times.
 
-Below is the reward function for the Wordle environment:
-
-<!-- TODO: @burtenshaw Add reward function code here -->
 ```python
+def reward_correct(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+    rewards = kwargs.get("correct_reward") if kwargs else None
+    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
+
+
+def reward_greens(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+    rewards = kwargs.get("green_reward") if kwargs else None
+    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
+
+
+def reward_yellows(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+    rewards = kwargs.get("yellow_reward") if kwargs else None
+    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
+
+
+def reward_repetition(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+    rewards = kwargs.get("repetition_reward") if kwargs else None
+    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
 ```
 
 ### Training the Model
 
-To train the model, we use the `GRPOTrainer` with the `rollout_func` and `reward_funcs` arguments as the previous examples. Below is the training script for the Wordle environment:
+The training script wires the custom rollout and rewards into `GRPOTrainer`. The CLI exposes the configuration used during development as defaults, so you can override endpoints or hyperparameters at launch time.
 
-<!-- TODO: @burtenshaw Add training script code here -->
 ```python
+parser = argparse.ArgumentParser()
+# ... add CLI arguments with sensible defaults ...
+cli_args = parser.parse_args()
+
+trainer = GRPOTrainer(
+    model=cli_args.model_id,
+    processing_class=tokenizer,
+    reward_funcs=[
+        reward_correct,
+        reward_greens,
+        reward_yellows,
+        reward_repetition,
+    ],
+    train_dataset=dataset,
+    args=grpo_config,
+    rollout_func=lambda prompts, args, processing_class: rollout_func(
+        env=env,
+        tokenizer=tokenizer,
+        prompts=prompts,
+        args=args,
+        cli_args=cli_args,
+        system_prompt=system_prompt,
+    ),
+)
+trainer.train()
 ```
 
 ### Running the Example
