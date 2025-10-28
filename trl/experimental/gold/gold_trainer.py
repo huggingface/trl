@@ -62,22 +62,6 @@ from trl.trainer.utils import (
 from .gold_config import GOLDConfig
 
 
-"""
-General Online Logit Distillation (GOLD) ----------------------------------------
-
-GOLD extends Universal Logit Distillation (ULD) so that student and teacher models with different tokenizers can still
-be distilled effectively. ULD already enables cross-tokenizer training, but it truncates sequences to the shortest
-tokenization, which can discard trailing tokens whenever one tokenizer splits more aggressively than the other. GOLD
-avoids that truncation.
-
-Sequence alignment:
-    GOLD decodes both token streams incrementally and identifies spans that yield the same visible text. Tokens within
-    each span are merged by summing their log probabilities and applying a softmax, so both models present logits over
-    the same textual chunk regardless of how many subword pieces were required. This guarantees aligned sequences
-    without losing information at the ends of completions.
-"""
-
-
 if is_peft_available():
     from peft import PeftConfig
 

@@ -93,6 +93,7 @@ def _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teach
         assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_answer_ids)))
 
 
+@pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokenizer, openr1_examples):
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
     batch = collator(openr1_examples)
@@ -137,6 +138,7 @@ def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokeni
     assert torch.isfinite(loss)
 
 
+@pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, qwen_tokenizer, countdown_examples):
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
     batch = collator(countdown_examples)
@@ -181,6 +183,7 @@ def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, q
     assert torch.isfinite(loss)
 
 
+@pytest.mark.slow
 def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_tokenizer, openr1_examples):
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=512)
     batch = collator(openr1_examples)
