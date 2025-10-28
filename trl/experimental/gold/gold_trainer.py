@@ -700,7 +700,7 @@ class ULDLoss(nn.Module):
         return answers_index, answers_size
 
 
-class GKDStudentVLLMSyncCallback(TrainerCallback):
+class GOLDStudentVLLMSyncCallback(TrainerCallback):
     """
     Callback to sync student model weights to vLLM after training steps. This ensures weight syncing happens when
     DeepSpeed is in a stable state.
@@ -775,7 +775,7 @@ class GOLDTrainer(SFTTrainer):
             teacher_model_init_kwargs = {}
         elif not isinstance(teacher_model, str):
             raise ValueError(
-                "You passed teacher_model_init_kwargs to the GKDConfig, but your teacher_model is already instantiated."
+                "You passed teacher_model_init_kwargs to the GOLDConfig, but your teacher_model is already instantiated."
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
@@ -954,7 +954,7 @@ class GOLDTrainer(SFTTrainer):
             self.student_vllm_sync_frequency = args.student_vllm_sync_frequency
             self._last_student_sync_step = -1
 
-            self.add_callback(GKDStudentVLLMSyncCallback(self))
+            self.add_callback(GOLDStudentVLLMSyncCallback(self))
 
     def _prepare_dataset(
         self,
@@ -1834,11 +1834,11 @@ class GOLDTrainer(SFTTrainer):
         self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
     ) -> torch.Tensor:
         """
-        Perform a training step for the Generalized Knowledge Distillation (GKD) model.
+        Perform a training step for the General Online Logit Distillation (GOLD) model.
 
-        This method implements the on-policy learning approach described in the GKD paper. With probability
+        This method implements the on-policy learning approach described in the GOLD blog post. With probability
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
-        the original inputs.
+        the offline original inputs.
         """
         on_policy = False
         if random.random() <= self.lmbda:
@@ -1941,7 +1941,7 @@ class GOLDTrainer(SFTTrainer):
             tags=tags,
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
-            trainer_name="GKD",
+            trainer_name="GOLD",
             trainer_citation=citation,
             paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
             paper_id="2306.13649",
