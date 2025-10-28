@@ -65,6 +65,7 @@ from .utils import (
     empty_cache,
     flush_left,
     flush_right,
+    get_config_model_id,
     log_table_to_comet_experiment,
     pad,
     pad_to_length,
@@ -286,7 +287,7 @@ class DPOTrainer(BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
@@ -299,7 +300,7 @@ class DPOTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
+        model_id = get_config_model_id(model.config)
         if isinstance(ref_model, str):
             ref_model = create_model_from_path(ref_model, **args.ref_model_init_kwargs or {})
         else:

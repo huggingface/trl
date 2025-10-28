@@ -18,6 +18,7 @@ import os
 import re
 import textwrap
 import traceback
+import warnings
 from collections import defaultdict, deque
 from contextlib import nullcontext
 from functools import partial
@@ -68,6 +69,7 @@ from .utils import (
     disable_dropout_in_model,
     ensure_master_addr_port,
     entropy_from_logits,
+    get_config_model_id,
     identity,
     nanmax,
     nanmin,
@@ -101,6 +103,11 @@ logger = logging.get_logger(__name__)
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+# What we call a rollout function is a callable that takes prompts (list), args (GRPOConfig), and processing_class as
+# parameters and returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and
+# "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
+RolloutFunc = Callable[[list[str], Any, Any], dict[str, Any]]
 
 
 def extract_tool_calls(text: str) -> list[dict[str, Any]]:
@@ -221,6 +228,11 @@ class GRPOTrainer(BaseTrainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        rollout_func (`RolloutFunc`, *optional*):
+            Function to use for generating completions. It must take prompts, args, and processing_class as parameters
+            and return a dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields that
+            are forwarded to the reward functions. This feature is experimental and may change or be removed at any
+            time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -252,12 +264,13 @@ class GRPOTrainer(BaseTrainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
         tools=None,
+        rollout_func: Optional[RolloutFunc] = None,
     ):
         self.tools = tools or []
         self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = GRPOConfig(f"{model_name}-GRPO")
 
@@ -282,7 +295,7 @@ class GRPOTrainer(BaseTrainer):
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
         else:
-            model_id = model.config._name_or_path
+            model_id = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
@@ -302,7 +315,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side="left")
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config), truncation_side="left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -329,7 +342,7 @@ class GRPOTrainer(BaseTrainer):
                     reward_func, num_labels=1, **model_init_kwargs
                 )
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
-                self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+                self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
@@ -359,7 +372,7 @@ class GRPOTrainer(BaseTrainer):
         for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
+                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
@@ -368,6 +381,17 @@ class GRPOTrainer(BaseTrainer):
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
+
+        # Rollout function
+        if rollout_func is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
+            warnings.warn(
+                "You are importing from 'rollout_func', which is an experimental feature. This API may change or be "
+                "removed at any time without prior notice. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1.",
+                UserWarning,
+                stacklevel=2,
+            )
+        self.rollout_func = rollout_func
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
@@ -1113,7 +1137,8 @@ class GRPOTrainer(BaseTrainer):
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
+            if is_conversational({"prompt": prompts[0]}):
+                prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
@@ -1138,18 +1163,34 @@ class GRPOTrainer(BaseTrainer):
                         "generation_kwargs": self.args.generation_kwargs,
                     }
                     with profiling_context(self, "vLLM.generate"):
-                        if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                            output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
+                        if self.rollout_func is not None:
+                            if is_conversational({"prompt": ordered_set_of_prompts[0]}):
+                                ordered_set_of_prompts = [
+                                    apply_chat_template({"prompt": p}, self.processing_class)["prompt"]
+                                    for p in ordered_set_of_prompts
+                                ]
+                            output = self.rollout_func(
+                                ordered_set_of_prompts,
+                                self.args,
+                                self.processing_class,
+                            )
                         else:
-                            output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
-                        payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
+                            if is_conversational({"prompt": ordered_set_of_prompts[0]}):
+                                # FIXME: this endpoint doesn't exist in vllm_client
+                                output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
+                            else:
+                                output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
+                        # Extract required fields and collect any extra fields for reward functions
+                        required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+                        extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+                        payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"], extra_fields)
                 else:
                     payload = None
 
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
-                all_prompt_ids, all_completion_ids, all_logprobs = obj_list[0]
+                all_prompt_ids, all_completion_ids, all_logprobs, all_extra_fields = obj_list[0]
 
                 # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
                 all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
@@ -1161,6 +1202,14 @@ class GRPOTrainer(BaseTrainer):
                 prompt_ids = all_prompt_ids[process_slice]
                 completion_ids = all_completion_ids[process_slice]
                 logprobs = all_logprobs[process_slice]
+
+                # Slice extra fields dict-of-lists per process (extra fields are per-completion, like completion_ids)
+                extra_fields = {}
+                for key, values in all_extra_fields.items():
+                    if isinstance(values, list):
+                        extra_fields[key] = values[process_slice]
+                    else:
+                        extra_fields[key] = values
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1225,18 +1274,19 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = all_completion_ids
                     logprobs = all_logprobs
 
+                extra_fields = {}  # No extra fields for colocate mode
+
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
             processor_kwargs = {"max_length": self.max_prompt_length, "truncation": True, "add_special_tokens": False}
             if is_conversational({"prompt": prompts[0]}):
-                generate_inputs = self.processing_class.apply_chat_template(
+                processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
-            generate_inputs["inputs"] = generate_inputs.pop("input_ids")
+                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -1252,13 +1302,15 @@ class GRPOTrainer(BaseTrainer):
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
+                    # Continuous batching API expects 'inputs' arg only
                     all_outputs = unwrapped_model.generate_batch(
-                        **generate_inputs, generation_config=self.generation_config, progress_bar=False
+                        processor_outputs["input_ids"], generation_config=self.generation_config, progress_bar=False
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = generate_inputs["inputs"]
+            prompt_ids = processor_outputs["input_ids"]
             logprobs = None  # not used in this case
+            extra_fields = {}  # No extra fields for paged mode
 
         else:
             # Regular generation path
@@ -1303,14 +1355,15 @@ class GRPOTrainer(BaseTrainer):
             prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
             logprobs = None  # not used in this case
+            extra_fields = {}  # No extra fields for non-rollout_func paths
 
-        return prompt_ids, completion_ids, logprobs
+        return prompt_ids, completion_ids, logprobs, extra_fields
 
     def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompt_ids, completion_ids, logprobs = self._generate_single_turn(prompts)
+        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
         completion_contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         # parsed_completions = []
         # for content in completion_contents:
@@ -1342,7 +1395,7 @@ class GRPOTrainer(BaseTrainer):
                     tool_message = {"role": "tool", "name": function["name"], "content": str(result)}
                     prompt_for_generation.append(tool_message)
 
-            prompt_completion_tool_ids, post_tool_ids, _ = self._generate_single_turn(prompts_for_generation)
+            prompt_completion_tool_ids, post_tool_ids, _, _ = self._generate_single_turn(prompts_for_generation)
 
             # Truncate post-tool completion so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for i in range(len(post_tool_ids)):
@@ -1403,7 +1456,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, total_completion_tokens, logprobs
+        return prompt_ids, completion_ids, total_completion_tokens, logprobs, extra_fields
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1429,8 +1482,8 @@ class GRPOTrainer(BaseTrainer):
         if images is not None:
             prompts = [prepare_multimodal_messages(prompt, image_list) for prompt, image_list in zip(prompts, images)]
 
-        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list = self._generate(
-            prompts
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
+            self._generate(prompts)
         )
 
         # Convert lists of token IDs to padded tensors
@@ -1549,6 +1602,15 @@ class GRPOTrainer(BaseTrainer):
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
+
+        # Merge extra_fields from rollout_func into inputs for reward functions
+        if extra_fields:
+            for i, inp in enumerate(inputs):
+                for key, values in extra_fields.items():
+                    if isinstance(values, list) and i < len(values):
+                        inp[key] = values[i]
+                    elif not isinstance(values, list):
+                        inp[key] = values
 
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
