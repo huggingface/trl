@@ -400,7 +400,8 @@ class GRPOTrainer(BaseTrainer):
                 "Liger Kernels currently only support token-level importance sampling. Please set"
                 "`importance_sampling_level` to 'token'."
             )
-
+        if self.args.chat_template_kwargs is None:
+            self.args.chat_template_kwargs = {}
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 

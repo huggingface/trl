@@ -370,7 +370,8 @@ class RLOOTrainer(BaseTrainer):
         self.normalize_advantages = args.normalize_advantages
         self.mask_truncated_completions = args.mask_truncated_completions
         self.reward_clip_range = args.reward_clip_range
-
+        if self.args.chat_template_kwargs is None:
+            self.args.chat_template_kwargs = {}
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -923,7 +924,12 @@ class RLOOTrainer(BaseTrainer):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+                        texts = [
+                            apply_chat_template(
+                                x, reward_processing_class, template_kwargs=self.args.chat_template_kwargs
+                            )["text"]
+                            for x in messages
+                        ]
                     else:
                         texts = [p + c for p, c in zip(prompts, completions)]
                     reward_inputs = reward_processing_class(
@@ -1000,7 +1006,11 @@ class RLOOTrainer(BaseTrainer):
                     }
                     with profiling_context(self, "vLLM.generate"):
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                            output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
+                            output = self.vllm_client.chat(
+                                prompts=ordered_set_of_prompts,
+                                **sampling_params,
+                                chat_template_kwargs=self.args.chat_template_kwargs,
+                            )
                         else:
                             output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
                         payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
@@ -1088,6 +1098,7 @@ class RLOOTrainer(BaseTrainer):
                     **processor_kwargs,
                     tokenize=True,
                     return_dict=True,
+                    **self.args.chat_template_kwargs,
                 )
             else:
                 processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1126,7 +1137,11 @@ class RLOOTrainer(BaseTrainer):
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                    conversation=prompts,
+                    **processor_kwargs,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.args.chat_template_kwargs,
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1252,7 +1267,10 @@ class RLOOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+                apply_chat_template(
+                    {"prompt": prompt}, self.processing_class, template_kwargs=self.args.chat_template_kwargs
+                )["prompt"]
+                for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
