@@ -379,7 +379,7 @@ Based on internal benchmarks comparing sequential vs. RapidFire AI concurrent tr
 For troubleshooting guidance, see the [RapidFire AI Troubleshooting Guide](https://oss-docs.rapidfire.ai/en/latest/troubleshooting.html).
 
 ## Additional Resources
-
+- **Colab Notebook**: [RapidFire AI in Google Colab](http://tinyurl.com/rapidfireai-colab)
 - **Documentation**: [oss-docs.rapidfire.ai](https://oss-docs.rapidfire.ai)
 - **GitHub**: [RapidFireAI/rapidfireai](https://github.com/RapidFireAI/rapidfireai)
 - **PyPI**: [pypi.org/project/rapidfireai](https://pypi.org/project/rapidfireai/)
