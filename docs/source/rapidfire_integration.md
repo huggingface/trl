@@ -1,17 +1,47 @@
 # RapidFire AI Integration
 
-RapidFire AI is a hyperparallelized experiment execution framework that enables concurrent training of multiple TRL configurations on the same GPU(s) through intelligent chunk-based scheduling. It provides 16-24× higher throughput compared to sequential training while offering first-of-its-kind real-time control over running experiments.
-
-The library provides drop-in configuration wrappers around TRL's trainers, allowing you to run multiple hyperparameter configurations simultaneously without any code changes. It's fully compatible with [`SFTTrainer`], [`DPOTrainer`], and [`GRPOTrainer`].
+RapidFire AI is an open-source experiment execution framework that enables concurrent training of multiple TRL configurations on the same GPU(s) through intelligent chunk-based scheduling.
 
 ## Key Features
 
-- **16-24× Higher Throughput**: Run multiple TRL configurations concurrently on the same GPU(s) via chunk-based scheduling
-- **Interactive Control Operations (IC Ops)**: Real-time control to stop, resume, clone, and modify training runs mid-training
-- **Zero Code Changes**: Drop-in wrappers (`RFSFTConfig`, `RFDPOConfig`, `RFGRPOConfig`) around TRL's existing configs
-- **Automatic Multi-GPU Orchestration**: Intelligent scheduling across available GPUs with minimal overhead
-- **Production-Ready**: Used in production with complete examples for SFT, DPO, and GRPO trainers
+- **16-24× higher experimentation throughput** compared to sequential training.
+- **Almost no code changes** - drop-in configuration wrappers around TRL's and PEFT's existing configs.
+- **Interactive Control Operations** - real-time control to stop, resume, clone, and modify training runs in flight
+- **Automatic multi-GPU orchestration** with intelligent scheduling
+- **Full compatibility** with transformers, PEFT, SFTTrainer, DPOTrainer, and GRPOTrainer
 - **Full MLflow Integration**: Automatic experiment tracking and visualization
+- **Production-Ready**: Already used in production environments with complete working examples.
+
+### Problem It Solves
+
+When fine-tuning or post-training with TRL, AI developers often need to:
+- Try different hyperparameter configurations
+- Compare different LoRA settings
+- Test different prompt schemes
+- Run ablation studies
+
+
+**Current approach**: Train each config one after another → slow and inefficient process
+
+**With RapidFire AI**: Train all configs in one go even on a single GPU → 16-24× faster process
+
+### How It Works
+
+RapidFire AI employs **adaptive chunk-based scheduling**:
+
+```
+GPU Timeline (Single GPU):
+Chunk 1: [Config A] → [Config B] → [Config C] → [Config D]
+Chunk 2: [Config A] → [Config B] → [Config C] → [Config D]
+Chunk 3: [Config A] → [Config B] → [Config C] → [Config D]
+```
+
+This enables:
+- Early comparison of configurations on same data subsets incrementally
+- Efficient GPU utilization and minimizing idle times
+- Real-time and automated experiment metrics tracking
+- Dynamic control over runs in flight to incentivize more experimentation
+
 
 ## Installation
 
