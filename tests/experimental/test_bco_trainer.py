@@ -24,7 +24,7 @@ from transformers.utils import is_peft_available
 from trl.experimental.bco import BCOConfig, BCOTrainer
 from trl.experimental.bco.bco_trainer import _process_tokens, _tokenize
 
-from .testing_utils import TrlTestCase, require_no_wandb, require_peft, require_sklearn
+from ..testing_utils import TrlTestCase, require_no_wandb, require_peft, require_sklearn
 
 
 if is_peft_available():

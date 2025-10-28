@@ -74,6 +74,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
+    get_config_model_id,
     pad,
     truncate_right,
 )
@@ -243,7 +244,7 @@ class OnlineDPOTrainer(BaseTrainer):
                         reward_func, num_labels=1, **model_init_kwargs
                     )
                 if isinstance(reward_funcs[i], nn.Module):
-                    self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+                    self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
                 else:
                     self.reward_func_names.append(reward_funcs[i].__name__)
             self.reward_funcs = reward_funcs
