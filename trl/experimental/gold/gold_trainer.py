@@ -889,7 +889,7 @@ class GOLDTrainer(SFTTrainer):
                 )
 
                 if args.student_vllm_enable_sleep_mode:
-                    self.student_llm.sleep(level=1)
+                    self.student_llm.sleep(level=2)
 
                 # When using vLLM, the main process is responsible for loading the model weights. This can cause process
                 # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -1649,7 +1649,7 @@ class GOLDTrainer(SFTTrainer):
                 completion_ids = completion_ids[tp_slice]
 
             if self.args.student_vllm_enable_sleep_mode:
-                self.student_llm.sleep(level=1)
+                self.student_llm.sleep(level=2)
         else:
             raise ValueError(f"Unknown student_vllm_mode: {self.student_vllm_mode}")
 
@@ -1761,6 +1761,13 @@ class GOLDTrainer(SFTTrainer):
         else:
             gather_if_zero3 = nullcontext
 
+        if (
+            self.args.student_vllm_mode == "colocate"
+            and self.args.student_vllm_enable_sleep_mode
+        ):
+            empty_cache()
+            self.student_llm.wake_up(tags=["weights"])
+
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
@@ -1816,7 +1823,7 @@ class GOLDTrainer(SFTTrainer):
     def _wake_student_vllm_if_needed(self):
         if self.args.student_vllm_mode == "colocate" and self.args.student_vllm_enable_sleep_mode:
             empty_cache()
-            self.student_llm.wake_up()
+            self.student_llm.wake_up(tags=["kv_cache"])
 
     @profiling_decorator
     def training_step(
