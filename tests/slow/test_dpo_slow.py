@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,21 +13,18 @@
 # limitations under the License.
 
 import gc
-import itertools
-import tempfile
-import unittest
 
+import pytest
 import torch
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.testing_utils import require_peft, require_torch_accelerator, torch_device
+from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
 
-from ..testing_utils import require_bitsandbytes
+from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_torch_accelerator
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
@@ -35,9 +32,11 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
+@pytest.mark.slow
 @require_torch_accelerator
-class DPOTrainerSlowTester(unittest.TestCase):
-    def setUp(self):
+@require_peft
+class TestDPOTrainerSlow(TrlTestCase):
+    def setup_method(self):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.peft_config = LoraConfig(
             lora_alpha=16,
@@ -48,15 +47,14 @@ class DPOTrainerSlowTester(unittest.TestCase):
         )
         self.max_length = 128
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
-        if torch_device == "cpu":
-            torch.cuda.empty_cache()
-        elif torch_device == "xpu":
-            torch.xpu.empty_cache()
+        backend_empty_cache(torch_device)
         gc.collect()
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS)))
+    @pytest.mark.parametrize("pre_compute_logits", DPO_PRECOMPUTE_LOGITS)
+    @pytest.mark.parametrize("loss_type", DPO_LOSS_TYPES)
+    @pytest.mark.parametrize("model_id", MODELS_TO_TEST)
     def test_dpo_bare_model(self, model_id, loss_type, pre_compute_logits):
         """
         A test that tests the simple usage of `DPOTrainer` using a bare model in full precision.
@@ -65,114 +63,101 @@ class DPOTrainerSlowTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=2,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=2,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                fp16=True,
-                logging_strategy="no",
-                report_to="none",
-                beta=0.1,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute_logits,
-                max_length=self.max_length,
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=2,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            fp16=True,
+            logging_strategy="no",
+            report_to="none",
+            beta=0.1,
+            loss_type=loss_type,
+            precompute_ref_log_probs=pre_compute_logits,
+            max_length=self.max_length,
+        )
 
-            # dpo train lora model
-            trainer = DPOTrainer(
-                model=model,
-                ref_model=None,
-                args=training_args,
-                train_dataset=self.dataset["train"],
-                eval_dataset=self.dataset["test"],
-                processing_class=tokenizer,
-            )
+        # dpo train lora model
+        trainer = DPOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            eval_dataset=self.dataset["test"],
+            processing_class=tokenizer,
+        )
 
-            # train the model
-            trainer.train()
+        # train the model
+        trainer.train()
 
-            # save trained model or adapter
-            trainer.save_model()
+        # save trained model or adapter
+        trainer.save_model()
 
         release_memory(model, trainer)
 
-    @parameterized.expand(
-        list(
-            itertools.product(
-                MODELS_TO_TEST,
-                DPO_LOSS_TYPES,
-                DPO_PRECOMPUTE_LOGITS,
-                GRADIENT_CHECKPOINTING_KWARGS,
-            )
-        )
-    )
+    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
+    @pytest.mark.parametrize("pre_compute_logits", DPO_PRECOMPUTE_LOGITS)
+    @pytest.mark.parametrize("loss_type", DPO_LOSS_TYPES)
+    @pytest.mark.parametrize("model_id", MODELS_TO_TEST)
     @require_peft
     def test_dpo_peft_model(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
         """
-        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios of gradient checkpointing.
+        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios
+        of gradient checkpointing.
         """
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=2,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=2,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                fp16=True,
-                logging_strategy="no",
-                report_to="none",
-                gradient_checkpointing=True,
-                gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-                generate_during_eval=False,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute_logits,
-                beta=0.1,
-                max_length=self.max_length,
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=2,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            fp16=True,
+            logging_strategy="no",
+            report_to="none",
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+            generate_during_eval=False,
+            loss_type=loss_type,
+            precompute_ref_log_probs=pre_compute_logits,
+            beta=0.1,
+            max_length=self.max_length,
+        )
 
-            # dpo train lora model
-            trainer = DPOTrainer(
-                model=model,
-                ref_model=None,
-                args=training_args,
-                train_dataset=self.dataset["train"],
-                eval_dataset=self.dataset["test"],
-                processing_class=tokenizer,
-                peft_config=self.peft_config,
-            )
+        # dpo train lora model
+        trainer = DPOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            eval_dataset=self.dataset["test"],
+            processing_class=tokenizer,
+            peft_config=self.peft_config,
+        )
 
-            self.assertIsInstance(trainer.model, PeftModel)
-            self.assertIsNone(trainer.ref_model)
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
 
-            # train the model
-            trainer.train()
+        # train the model
+        trainer.train()
 
-            # save trained model or adapter
-            trainer.save_model()
+        # save trained model or adapter
+        trainer.save_model()
 
         release_memory(model, trainer)
 
-    @parameterized.expand(
-        list(
-            itertools.product(
-                MODELS_TO_TEST,
-                DPO_LOSS_TYPES,
-                DPO_PRECOMPUTE_LOGITS,
-                GRADIENT_CHECKPOINTING_KWARGS,
-            )
-        )
-    )
+    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
+    @pytest.mark.parametrize("pre_compute_logits", DPO_PRECOMPUTE_LOGITS)
+    @pytest.mark.parametrize("loss_type", DPO_LOSS_TYPES)
+    @pytest.mark.parametrize("model_id", MODELS_TO_TEST)
     @require_bitsandbytes
     @require_peft
     def test_dpo_peft_model_qlora(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
@@ -185,45 +170,44 @@ class DPOTrainerSlowTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=2,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=2,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                fp16=True,
-                logging_strategy="no",
-                report_to="none",
-                gradient_checkpointing=True,
-                gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-                beta=0.1,
-                generate_during_eval=False,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute_logits,
-                max_length=self.max_length,
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=2,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            fp16=True,
+            logging_strategy="no",
+            report_to="none",
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+            beta=0.1,
+            generate_during_eval=False,
+            loss_type=loss_type,
+            precompute_ref_log_probs=pre_compute_logits,
+            max_length=self.max_length,
+        )
 
-            # dpo train lora model
-            trainer = DPOTrainer(
-                model=model,
-                ref_model=None,
-                args=training_args,
-                train_dataset=self.dataset["train"],
-                eval_dataset=self.dataset["test"],
-                processing_class=tokenizer,
-                peft_config=self.peft_config,
-            )
+        # dpo train lora model
+        trainer = DPOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            eval_dataset=self.dataset["test"],
+            processing_class=tokenizer,
+            peft_config=self.peft_config,
+        )
 
-            self.assertIsInstance(trainer.model, PeftModel)
-            self.assertIsNone(trainer.ref_model)
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
 
-            # train the model
-            trainer.train()
+        # train the model
+        trainer.train()
 
-            # save trained model or adapter
-            trainer.save_model()
+        # save trained model or adapter
+        trainer.save_model()
 
         release_memory(model, trainer)

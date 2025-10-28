@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import textwrap
 from typing import Any, Callable, Optional, Union
 
@@ -28,11 +27,10 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    is_apex_available,
-    is_wandb_available,
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
@@ -41,8 +39,6 @@ from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
     empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
     get_reward,
     selective_log_softmax,
     truncate_right,
@@ -50,46 +46,47 @@ from .utils import (
 from .xpo_config import XPOConfig
 
 
-if is_apex_available():
-    from apex import amp
-
-
-if is_wandb_available():
-    import wandb
+if is_peft_available():
+    from peft import PeftModel
 
 
 class XPOTrainer(OnlineDPOTrainer):
-    r"""
-    Initialize XPOTrainer as a subclass of [`OnlineDPOConfig`].
+    """
+    Trainer for Exploratory Preference Optimization (XPO).
+
+    It is implemented as a subclass of [`OnlineDPOTrainer`].
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
-        reward_model (`transformers.PreTrainedModel`):
-            The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
-        judge (`BasePairwiseJudge`):
+        ref_model ([`PreTrainedModelWrapper`]):
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
+        reward_funcs ([`~transformers.PreTrainedModel`]):
+            The reward model to score completions with, preferably an
+            [`~transformers.AutoModelForSequenceClassification`].
+        judge ([`BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
-        args (`XPOConfig`):
+        args ([`XPOConfig`]):
             The XPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        data_collator ([`~transformers.DataCollator`]):
+            The data collator to use for training. If None is specified, the default data collator
+            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
-        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -99,12 +96,25 @@ class XPOTrainer(OnlineDPOTrainer):
     """
 
     _tag_names = ["trl", "xpo"]
+    _name = "XPO"
+    _paper = {
+        "title": "Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
+        "id": "2405.21046",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{jung2024binary,
+                title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
+                author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
+                year         = 2024,
+                eprint       = {arXiv:2405.21046}
+            }"""),
+    }
 
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
         ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_model: Optional[nn.Module] = None,
+        reward_funcs: Optional[nn.Module] = None,
         judge: Optional[BasePairwiseJudge] = None,
         args: Optional[XPOConfig] = None,
         data_collator: Optional[Callable] = None,
@@ -113,6 +123,7 @@ class XPOTrainer(OnlineDPOTrainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
+        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         peft_config: Optional[dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
@@ -123,13 +134,13 @@ class XPOTrainer(OnlineDPOTrainer):
             model=model,
             ref_model=ref_model,
             judge=judge,
-            reward_model=reward_model,
+            reward_funcs=reward_funcs,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_class=processing_class,  # for now, XPOTrainer can't use any reward model
+            reward_processing_classes=reward_processing_classes,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -159,8 +170,10 @@ class XPOTrainer(OnlineDPOTrainer):
             "alpha": [],
             "beta": [],
         }
-        if self.reward_model is not None:
-            # Replace "scores" by "model_scores" and "ref_scores"
+        if self.reward_funcs is not None:
+            if len(self.reward_funcs) != 1:
+                raise ValueError("XPOTrainer only supports one reward function/model.")
+            self.reward_funcs = self.reward_funcs[0]
             self.stats["objective/model_scores"] = []
             self.stats["objective/ref_scores"] = []
             self.stats["objective/scores_margin"] = []
@@ -174,16 +187,26 @@ class XPOTrainer(OnlineDPOTrainer):
             return self._alpha
 
     def _generate_completions(self, prompts, model):
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            model_output = unwrapped_model.generate(
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_model_for_gen:
+            model_output = unwrapped_policy_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
                 generation_config=self.generation_config,
             )
 
-        ref_model = model if self.ref_model is None else self.ref_model
-        with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
-            ref_output = unwrapped_ref_model.generate(
+        actual_model_for_ref_generation: torch.nn.Module
+        if self.ref_model is None:
+            unwrapped_main_model_for_ref_logic = self.accelerator.unwrap_model(model)
+
+            if is_peft_available() and isinstance(unwrapped_main_model_for_ref_logic, PeftModel):
+                actual_model_for_ref_generation = unwrapped_main_model_for_ref_logic.get_base_model()
+            else:
+                actual_model_for_ref_generation = unwrapped_main_model_for_ref_logic
+        else:
+            actual_model_for_ref_generation = self.accelerator.unwrap_model(self.ref_model)
+
+        with unwrap_model_for_generation(actual_model_for_ref_generation, self.accelerator) as final_ref_model_for_gen:
+            ref_output = final_ref_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
                 generation_config=self.generation_config,
@@ -221,10 +244,10 @@ class XPOTrainer(OnlineDPOTrainer):
     def _compute_rewards(self, model_data, ref_data, context_length):
         with torch.no_grad():
             _, model_scores, _ = get_reward(
-                self.reward_model, model_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
             _, ref_scores, _ = get_reward(
-                self.reward_model, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
 
         # Apply EOS penalty if needed
@@ -367,7 +390,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["loss/xpo"].append(gather_mean(xpo_losses))
 
         # Log scores
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             self.stats["objective/model_scores"].append(gather_mean(model_scores))
             self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
             self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
@@ -456,7 +479,7 @@ class XPOTrainer(OnlineDPOTrainer):
         model_data, ref_data = self._process_completions(model_output, ref_output, prompts)
 
         # Compute rewards
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             model_scores, ref_scores = self._compute_rewards(model_data, ref_data, context_length)
             chosen_mask = model_scores >= ref_scores
         else:
@@ -507,66 +530,6 @@ class XPOTrainer(OnlineDPOTrainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss, **kwargs)
+        self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
-
-        citation = textwrap.dedent("""\
-        @article{jung2024binary,
-            title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
-            author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
-            year         = 2024,
-            eprint       = {arXiv:2405.21046}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="XPO",
-            trainer_citation=citation,
-            paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
-            paper_id="2405.21046",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

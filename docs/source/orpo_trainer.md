@@ -1,6 +1,6 @@
 # ORPO Trainer
 
-[![](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl) [![](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
+[![model badge](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl) [![model badge](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
 
 ## Overview
 
@@ -41,7 +41,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-training_args = ORPOConfig(output_dir="Qwen2-0.5B-ORPO", logging_steps=10)
+training_args = ORPOConfig(output_dir="Qwen2-0.5B-ORPO")
 trainer = ORPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
@@ -54,21 +54,21 @@ accelerate launch train_orpo.py
 
 Distributed across 8 GPUs, the training takes approximately 30 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/orpo-qwen2-reward-margin.png)
+![orpo qwen2 reward margin](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/orpo-qwen2-reward-margin.png)
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-ORPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-ORPO
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-ORPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
 <strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-ORPO&gt;:</span></strong>
 It's challenging to determine the best programming language as no one language is perfect, as the complexity of a task and the type of project are significant factors. Some popular languages include Java, Python, JavaScript, and
-C++. If you have specific needs or requirements for a specific project, it's important to choose the language that best suits those needs.                                                                                          
+C++. If you have specific needs or requirements for a specific project, it's important to choose the language that best suits those needs.
 
 Here are some other factors to consider when choosing a programming language for a project:
 
- <strong><span style="color: green;">• Language proficiency:</span></strong> A good programming language is more likely to be easy to understand and use, and will allow developers to collaborate on projects more efficiently.                                     
+ <strong><span style="color: green;">• Language proficiency:</span></strong> A good programming language is more likely to be easy to understand and use, and will allow developers to collaborate on projects more efficiently.
  <strong><span style="color: green;">• Ease of use:</span></strong> There are tools and libraries available to make programming more accessible, so developers should choose a language that can help them get started easier.
  <strong><span style="color: green;">• Code readability:</span></strong> A clear and concise codebase should be easy to read and understand, especially when working with large projects.
  <strong><span style="color: green;">• Tool and framework support:</span></strong> There are numerous libraries available for Python, Java, and JavaScript, along with tools like IDEs and static code analysis tools.
@@ -94,7 +94,6 @@ accelerate launch examples/scripts/orpo.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --num_train_epochs 1 \
-    --logging_steps 25 \
     --output_dir Qwen2-0.5B-ORPO
 ```
 
@@ -110,7 +109,7 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following reward metrics:
 
 - `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
 - `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta
@@ -119,10 +118,13 @@ While training and evaluating we record the following reward metrics:
 - `log_odds_chosen`: the mean log odds ratio of the chosen responses over the rejected responses
 - `log_odds_ratio`: the mean of the `log(sigmoid(log_odds_chosen))`
 - `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
- 
+
 ## ORPOTrainer
 
 [[autodoc]] ORPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## ORPOConfig
 

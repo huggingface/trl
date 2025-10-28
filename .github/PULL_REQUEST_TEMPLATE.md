@@ -21,8 +21,7 @@ Fixes # (issue)
       Pull Request section?
 - [ ] Was this discussed/approved via a GitHub issue? Please add a link
       to it if that's the case.
-- [ ] Did you make sure to update the documentation with your changes? Here are the
-      [documentation guidelines](https://github.com/huggingface/trl/tree/main/docs).
+- [ ] Did you make sure to update the documentation with your changes?
 - [ ] Did you write any new necessary tests?
 
 

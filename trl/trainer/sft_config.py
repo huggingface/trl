@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -24,8 +23,9 @@ class SFTConfig(TrainingArguments):
     r"""
     Configuration class for the [`SFTTrainer`].
 
-    Only the parameters specific to SFT training are listed here. For details on other parameters, refer to the
-    [`~transformers.TrainingArguments`] documentation.
+    This class includes only the parameters that are specific to SFT training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -34,40 +34,117 @@ class SFTConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model
 
-        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string.
+            argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
+            include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            `output_router_logits=True` in this dictionary.
+        chat_template_path (`str`, *optional*):
+            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
+            or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
+            ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
+            embedding layer is resized accordingly.
 
         > Parameters that control the data preprocessing
 
         dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the column that contains text data in the dataset.
-        dataset_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        dataset_kwargs (`dict[str, Any]`, *optional*):
             Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
-            `skip_prepare_dataset`.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+            `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
+            regardless of the provided value, since preprocessing is done on the fly.
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
+        eos_token (`str`, *optional*):
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
+            `processing_class.eos_token`.
+        pad_token (`str`, *optional*):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
         packing (`bool`, *optional*, defaults to `False`):
-            Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define sequence length.
-        eval_packing (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
+            padding. Uses `max_length` to define sequence length.
+        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
+            Strategy for packing sequences. Can be either `"bfd"` (best-fit decreasing, default), or `"wrapped"`.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
+            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
+            packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
+            parameter.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
+        eval_packing (`bool`, *optional*):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
         > Parameters that control the training
 
-        learning_rate (`float`, *optional*, defaults to `2e-5`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
+        completion_only_loss (`bool`, *optional*):
+            Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
+            only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
+            `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
+            sequence for [language modeling](#language-modeling) datasets.
+        assistant_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
+            on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
+            `False`, loss is computed on the entire sequence.
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
+            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
     """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=2e-5,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
 
     # Parameters that control the model
     model_init_kwargs: Optional[dict[str, Any]] = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string."
+            "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
+            "load balancing/auxilliary loss as a part of the final loss, remember to set `output_router_logits=True` "
+            "in this dictionary."
+        },
+    )
+    chat_template_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
+            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
+            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
+            "that the model's embedding layer is resized accordingly."
         },
     )
 
@@ -80,12 +157,27 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
-            "`skip_prepare_dataset`."
+            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
+            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
+            "since preprocessing is done on the fly."
         },
     )
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    eos_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
+        },
+    )
+    pad_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
+        },
     )
     max_length: Optional[int] = field(
         default=1024,
@@ -98,9 +190,30 @@ class SFTConfig(TrainingArguments):
     packing: bool = field(
         default=False,
         metadata={
-            "help": "Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define "
-            "sequence length."
+            "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
+            "and reduce padding. Uses `max_length` to define sequence length."
         },
+    )
+    packing_strategy: str = field(
+        default="bfd",
+        metadata={
+            "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
+            "`'wrapped'`."
+        },
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
+            "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
+            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
+            "value of this parameter."
+        },
+    )
+    pad_to_multiple_of: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
     eval_packing: Optional[bool] = field(
         default=None,
@@ -108,74 +221,42 @@ class SFTConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    learning_rate: float = field(
-        default=2.0e-5,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "`TrainingArguments`."
-        },
-    )
-
-    # Deprecated parameters
-    dataset_batch_size: Optional[int] = field(
-        default=None,
-        metadata={"help": "Deprecated. You can safely remove this parameter from your configuration."},
-    )
-    num_of_sequences: Optional[int] = field(
+    completion_only_loss: Optional[bool] = field(
         default=None,
         metadata={
-            "help": "Deprecated. Use `max_length` instead, which specifies the maximum length of the tokenized "
-            "sequence, unlike `num_of_sequences`, which referred to string sequences."
+            "help": (
+                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
+                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
+                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
+                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
+                "language modeling datasets."
+            )
         },
     )
-    chars_per_token: Optional[float] = field(
-        default=None,
-        metadata={"help": "Deprecated. If you want to customize the packing length, use `max_length`."},
+    assistant_only_loss: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
+                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
+                "loss is computed on the entire sequence."
+            )
+        },
     )
-    max_seq_length: Optional[int] = field(
-        default=None,
-        metadata={"help": "Deprecated. Use `max_length` instead."},
+    loss_type: str = field(
+        default="nll",
+        metadata={
+            "help": (
+                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
+                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
+            )
+        },
     )
-    use_liger: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Deprecated. Use `use_liger_kernel` instead."},
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
         super().__post_init__()
-
-        if self.dataset_batch_size is not None:
-            warnings.warn(
-                "`dataset_batch_size` is deprecated and will be remove in version 0.18.0. You can safely remove this "
-                "parameter from your configuration.",
-                DeprecationWarning,
-            )
-
-        if self.num_of_sequences is not None:
-            warnings.warn(
-                "`num_of_sequences` is deprecated and will be remove in version 0.18.0. Use `max_length` instead, "
-                "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which r"
-                "eferred to string sequences.",
-                DeprecationWarning,
-            )
-
-        if self.chars_per_token is not None:
-            warnings.warn(
-                "`chars_per_token` is deprecated and will be remove in version 0.18.0. If you want to customize the "
-                "packing length, use `max_length`.",
-                DeprecationWarning,
-            )
-
-        if self.max_seq_length is not None:
-            warnings.warn(
-                "`max_seq_length` is deprecated and will be remove in version 0.20.0. Use `max_length` instead.",
-                DeprecationWarning,
-            )
-            self.max_length = self.max_seq_length
-
-        if self.use_liger is not None:
-            warnings.warn(
-                "`use_liger` is deprecated and will be remove in version 0.18.0. Use `use_liger_kernel` instead.",
-                DeprecationWarning,
-            )
-            self.use_liger_kernel = self.use_liger

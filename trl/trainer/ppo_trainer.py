@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,10 @@ import math
 import os
 import textwrap
 import time
+import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
@@ -36,29 +38,27 @@ from transformers import (
     GenerationConfig,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     TrainerCallback,
     TrainerControl,
-    is_wandb_available,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
+from .base_trainer import BaseTrainer
 from .ppo_config import PPOConfig
 from .utils import (
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
+    empty_cache,
     exact_div,
     first_true_indices,
     forward,
-    generate_model_card,
-    get_comet_experiment_url,
     get_reward,
     log_table_to_comet_experiment,
     peft_module_casting_to_bf16,
@@ -72,9 +72,6 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
 
-if is_wandb_available():
-    import wandb
-
 
 INVALID_LOGPROB = 1.0
 
@@ -87,6 +84,7 @@ class PolicyAndValueWrapper(nn.Module):
         self.policy = policy
         self.value_model = value_model
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
+        self.is_gradient_checkpointing = policy.is_gradient_checkpointing
 
     def forward(self, **kwargs):
         output = self.critic_backbone(**kwargs)
@@ -94,20 +92,67 @@ class PolicyAndValueWrapper(nn.Module):
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(Trainer):
+class PPOTrainer(BaseTrainer):
+    """Trainer for Proximal Policy Optimization (PPO).
+
+    For details on PPO, see the paper: [Proximal Policy Optimization
+    Algorithms](https://huggingface.co/papers/1707.06347).
+
+    Args:
+        args ([`PPOConfig`]):
+            Training arguments.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
+            Class to process the data.
+        model (`torch.nn.Module`):
+            Model to be trained. This is the policy model.
+        ref_model (`torch.nn.Module`, *optional*):
+            Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
+        reward_model (`torch.nn.Module`):
+            Reward model used to compute the rewards.
+        train_dataset ([`~datasets.Dataset`]):
+            Dataset for training.
+        value_model (`torch.nn.Module`):
+            Value model used to predict the value of a state.
+        data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
+            Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
+            using the `processing_class`.
+        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
+            Dataset for evaluation.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
+            optimizer and the learning rate scheduler are created using the
+            [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
+            will be wrapped with the specified PEFT adapter.
+    """
+
     _tag_names = ["trl", "ppo"]
+    _name = "PPO"
+    _paper = {
+        "title": "Fine-Tuning Language Models from Human Preferences",
+        "id": "1909.08593",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{mziegler2019fine-tuning,
+                title        = {{Fine-Tuning Language Models from Human Preferences}},
+                author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
+                year         = 2019,
+                eprint       = {arXiv:1909.08593}
+            }"""),
+    }
 
     def __init__(
         self,
         args: PPOConfig,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ],
+        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
         model: nn.Module,
         ref_model: Optional[nn.Module],
         reward_model: nn.Module,
         train_dataset: Dataset,
-        value_model: Optional[nn.Module] = None,
+        value_model: nn.Module,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         # less commonly used
@@ -115,6 +160,13 @@ class PPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         peft_config: Optional["PeftConfig"] = None,
     ) -> None:
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -141,6 +193,14 @@ class PPOTrainer(Trainer):
                 )
         else:
             self.policy_model.generation_config.eos_token_id = self.stop_token_id = args.stop_token_id  # None or int
+
+        # Check that the kl estimator is valid
+        if self.args.kl_estimator not in {"k1", "k3"}:
+            raise ValueError(
+                "kl_estimator must be either 'k1' (straightforward, unbiased) or 'k3' (lower variance, unbiased, "
+                "appears to be a strictly better estimator). See "
+                "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
+            )
 
         # peft support
         if not is_peft_available() and peft_config is not None:
@@ -185,9 +245,7 @@ class PPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = (
-            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
-        )
+        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(
@@ -226,7 +284,7 @@ class PPOTrainer(Trainer):
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
 
         #########
-        ### trainer specifics
+        # trainer specifics
         #########
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
@@ -258,7 +316,7 @@ class PPOTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         #########
-        ### setup dataloader
+        # setup dataloader
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
@@ -375,7 +433,7 @@ class PPOTrainer(Trainer):
         # trainer state initialization
         self.state.global_step = 0
         self.state.episode = 0
-        self.state.max_steps = args.num_total_batches * args.num_mini_batches
+        self.state.max_steps = args.num_total_batches
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
@@ -431,7 +489,7 @@ class PPOTrainer(Trainer):
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
                     logprob = selective_log_softmax(logits, response)
                     del logits
-                    torch.cuda.empty_cache()
+                    empty_cache()
 
                     if ref_policy is None:
                         with self.null_ref_context():
@@ -442,7 +500,7 @@ class PPOTrainer(Trainer):
                     ref_logits /= args.temperature + 1e-7
                     ref_logprob = selective_log_softmax(ref_logits, response)
                     del ref_output, ref_logits
-                    torch.cuda.empty_cache()
+                    empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -478,7 +536,7 @@ class PPOTrainer(Trainer):
                 scores = torch.cat(scores, 0)
                 values = torch.cat(values, 0)
                 del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
-                torch.cuda.empty_cache()
+                empty_cache()
                 gc.collect()
 
                 # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
@@ -498,7 +556,9 @@ class PPOTrainer(Trainer):
                 values = torch.masked_fill(values, padding_mask_p1, 0)
 
                 # 4. compute rewards
-                kl = logprobs - ref_logprobs
+                # Formula used by http://joschu.net/blog/kl-approx.html for the k1 and k3 estimators
+                logr = ref_logprobs - logprobs
+                kl = -logr if args.kl_estimator == "k1" else (logr.exp() - 1) - logr  # Else statement is k3
                 non_score_reward = -args.kl_coef * kl
                 rewards = non_score_reward.clone()
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
@@ -523,7 +583,7 @@ class PPOTrainer(Trainer):
                 returns = advantages + values
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
-                torch.cuda.empty_cache()
+                empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
@@ -604,7 +664,7 @@ class PPOTrainer(Trainer):
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
                     )
                     # fmt: on
-                    torch.cuda.empty_cache()
+                    empty_cache()
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
@@ -641,12 +701,12 @@ class PPOTrainer(Trainer):
                 self._save_checkpoint(model, trial=None)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
-            torch.cuda.empty_cache()
+            empty_cache()
             gc.collect()
 
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
-                torch.cuda.empty_cache()
+                empty_cache()
             del (
                 query_responses,
                 responses,
@@ -666,12 +726,12 @@ class PPOTrainer(Trainer):
                 advantages,
                 returns,
             )
-            torch.cuda.empty_cache()
+            empty_cache()
 
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
         if self.control.should_save:
-            self._save_checkpoint(model, trial=None, metrics=None)
+            self._save_checkpoint(model, trial=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
@@ -724,7 +784,8 @@ class PPOTrainer(Trainer):
         df = pd.DataFrame(table)
 
         if self.accelerator.is_main_process:
-            print_rich_table(df.iloc[0 : 0 + 5])
+            if is_rich_available():
+                print_rich_table(df.iloc[0 : 0 + 5])
             if "wandb" in args.report_to:
                 import wandb
 
@@ -737,58 +798,11 @@ class PPOTrainer(Trainer):
                     table=df,
                 )
 
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
         else:
-            base_model = None
-
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
-
-        citation = textwrap.dedent("""\
-        @article{mziegler2019fine-tuning,
-            title        = {{Fine-Tuning Language Models from Human Preferences}},
-            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
-            year         = 2019,
-            eprint       = {arXiv:1909.08593}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="PPO",
-            trainer_citation=citation,
-            paper_title="Fine-Tuning Language Models from Human Preferences",
-            paper_id="1909.08593",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)

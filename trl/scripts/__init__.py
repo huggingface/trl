@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,11 +18,11 @@ from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "utils": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
+    "utils": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
 }
 
 if TYPE_CHECKING:
-    from .utils import ScriptArguments, TrlParser, init_zero_verbose
+    from .utils import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
 else:
     import sys
 

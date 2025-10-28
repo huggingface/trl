@@ -1,10 +1,7 @@
 # Speeding Up Training
 
-<Tip warning={true}>
-
-Section under construction. Feel free to contribute!
-
-</Tip>
+> [!WARNING]
+> Section under construction. Feel free to contribute!
 
 ## vLLM for fast generation in online methods
 
@@ -14,13 +11,7 @@ To speed up generation, you can use [vLLM](https://github.com/vllm-project/vllm)
 To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
 
 ```bash
-pip install vllm
-```
-
-or 
-
-```bash
-pip install "trl[vllm]"
+pip install trl[vllm]
 ```
 
 <hfoptions id="vllm examples">
@@ -37,7 +28,13 @@ training_args = OnlineDPOConfig(..., use_vllm=True)
 </hfoption>
 <hfoption id="GRPO">
 
-Then, enable it by passing `use_vllm=True` in the training arguments.
+First, start a vLLM server by running:
+
+```bash
+trl vllm-serve --model <model_name>
+```
+
+Then, run the training script and pass `use_vllm=True` in the training arguments.
 
 ```python
 from trl import GRPOConfig
@@ -45,31 +42,56 @@ from trl import GRPOConfig
 training_args = GRPOConfig(..., use_vllm=True)
 ```
 
-The strategy here is to use a dedicated GPU for generation powered by vLLM, while using the remainder for training.
+You can customize the server configuration by passing additional arguments. For more information, see [vLLM integration](vllm_integration).
 
-<Tip warning={true}>
+> [!WARNING]
+> When using vLLM, ensure that the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation using `CUDA_VISIBLE_DEVICES`.  
+>
+> Set GPUs **0-3** for vLLM generation:  
+>
+> ```sh
+> CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model <model_name>
+> ```  
+>
+> And GPUs **4-7** for training:
+>
+> ```sh
+> CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+> ```
 
-When using vLLM, an additional GPU is required exclusively for generation. This means you need at least two available GPUs and must ensure that one remains unused by the trainer. To achieve this, run the training with `--num_processes <NUMBER_OF_GPUs - 1>`.
+</hfoption>
+<hfoption id="RLOO">
 
-For example, if you have 4 GPUs, set `--num_processes 3` to allocate three GPUs for training while reserving one for generation.
+First, start a vLLM server by running:
+
 ```bash
-accelerate launch --multi_gpu --num_processes 3 train_grpo.py
+trl vllm-serve --model <model_name>
 ```
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/1_gpu_for_generation.png)
-
-</Tip>
-
-You can further tune the vLLM configuration by setting a specific `vllm_device` and `vllm_gpu_memory_utilization` in the [`GRPOConfig`].
+Then, run the training script and pass `use_vllm=True` in the training arguments.
 
 ```python
-training_args = GRPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_device="cuda:4",
-    vllm_gpu_memory_utilization=0.7,
-)
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., use_vllm=True)
 ```
+
+You can customize the server configuration by passing additional arguments. For more information, see [vLLM integration](vllm_integration).
+
+> [!WARNING]
+> When using vLLM, ensure that the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation using `CUDA_VISIBLE_DEVICES`.  
+>
+> Set GPUs **0-3** for vLLM generation:
+>
+> ```sh
+> CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model <model_name>
+> ```  
+>
+> And GPUs **4-7** for training:
+>
+> ```sh
+> CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+> ```
 
 </hfoption>
 </hfoptions>
