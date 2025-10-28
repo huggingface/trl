@@ -68,28 +68,28 @@ class GOLDConfig(SFTConfig):
             Whether to skip EOS token for student in ULD loss computation.
         uld_skip_teacher_eos (`bool`, *optional*, defaults to `True`):
             Whether to skip EOS token for teacher in ULD loss computation.
-        student_use_vllm (`bool`, *optional*, defaults to `False`):
+        use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
-        student_vllm_mode (`str`, *optional*, defaults to `"server"`):
+        vllm_mode (`str`, *optional*, defaults to `"server"`):
             Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
             (run vLLM in the same process).
-        student_vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
-            Host of the vLLM server for the student model (if `student_vllm_mode="server"`).
-        student_vllm_server_port (`int`, *optional*, defaults to `8001`):
-            Port of the vLLM server for the student model (if `student_vllm_mode="server"`).
-        student_vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Timeout for connecting to the student vLLM server (if `student_vllm_mode="server"`).
-        student_vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
-            GPU memory utilization for the colocated student vLLM engine (if `student_vllm_mode="colocate"`). It is
-            recommended to set this to a low value if the student and teacher models share the same GPU.
-        student_vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
-            Tensor parallel size for the colocated student vLLM engine (if `student_vllm_mode="colocate"`).
-        student_vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server for the student model (if `vllm_mode="server"`).
+        vllm_server_port (`int`, *optional*, defaults to `8001`):
+            Port of the vLLM server for the student model (if `vllm_mode="server"`).
+        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Timeout for connecting to the student vLLM server (if `vllm_mode="server"`).
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
+            GPU memory utilization for the colocated student vLLM engine (if `vllm_mode="colocate"`). It is recommended
+            to set this to a low value if the student and teacher models share the same GPU.
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Tensor parallel size for the colocated student vLLM engine (if `vllm_mode="colocate"`).
+        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding for the student model.
-        student_vllm_sync_frequency (`int`, *optional*, defaults to `1`):
+        vllm_sync_frequency (`int`, *optional*, defaults to `1`):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
             every step.
-        student_vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Whether to enable sleep mode for the student vLLM engine. If set to `True`, the engine will enter sleep
             mode after each training step to save resources.
     """
@@ -267,57 +267,53 @@ class GOLDConfig(SFTConfig):
         },
     )
 
-    # VLLM parameters for student model
-    student_use_vllm: bool = field(
+    # vLLM parameters
+    use_vllm: bool = field(
         default=False,
-        metadata={
-            "help": "Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed."
-        },
+        metadata={"help": "Whether to use vLLM for generating completions. Requires `vllm` to be installed."},
     )
-    student_vllm_mode: str = field(
+    vllm_mode: str = field(
         default="server",
         metadata={
-            "help": 'Mode for student vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+            "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
         },
     )
-    student_vllm_server_host: str = field(
+    vllm_server_host: str = field(
         default="0.0.0.0",
-        metadata={"help": 'Host of the vLLM server for the student model (if `student_vllm_mode="server"`).'},
+        metadata={"help": 'Host of the vLLM server when `vllm_mode="server"`.'},
     )
-    student_vllm_server_port: int = field(
+    vllm_server_port: int = field(
         default=8001,
-        metadata={"help": 'Port of the vLLM server for the student model (if `student_vllm_mode="server"`).'},
+        metadata={"help": 'Port of the vLLM server when `vllm_mode="server"`.'},
     )
-    student_vllm_server_timeout: float = field(
+    vllm_server_timeout: float = field(
         default=240.0,
-        metadata={"help": 'Timeout for connecting to the student vLLM server (if `student_vllm_mode="server"`).'},
+        metadata={"help": 'Timeout (in seconds) for connecting to the vLLM server when `vllm_mode="server"`.'},
     )
-    student_vllm_gpu_memory_utilization: float = field(
+    vllm_gpu_memory_utilization: float = field(
         default=0.9,
         metadata={
-            "help": 'GPU memory utilization for the colocated student vLLM engine (if `student_vllm_mode="colocate"`). It is recommended to set this to a low value if the student and teacher models share the same GPU.'
+            "help": 'GPU memory utilization for the colocated vLLM engine when `vllm_mode="colocate"`. Lower values reduce contention when sharing a device with the student/teacher models.'
         },
     )
-    student_vllm_tensor_parallel_size: int = field(
+    vllm_tensor_parallel_size: int = field(
         default=1,
-        metadata={
-            "help": 'Tensor parallel size for the colocated student vLLM engine (if `student_vllm_mode="colocate"`).'
-        },
+        metadata={"help": 'Tensor parallel size for the colocated vLLM engine when `vllm_mode="colocate"`.'},
     )
-    student_vllm_guided_decoding_regex: Optional[str] = field(
+    vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding for the student model."},
+        metadata={"help": "Regex pattern used for vLLM guided decoding (optional)."},
     )
-    student_vllm_sync_frequency: int = field(
+    vllm_sync_frequency: int = field(
         default=1,
         metadata={
-            "help": "Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after every step."
+            "help": "Frequency (in training steps) to synchronize model weights to the vLLM engine. Set to 1 to sync after every step."
         },
     )
-    student_vllm_enable_sleep_mode: bool = field(
+    vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={
-            "help": "Whether to enable sleep mode for the student vLLM engine. If `True`, the student vLLM engine will sleep during the optimization step and be woken up for weight sync and generation."
+            "help": "Whether to enable sleep mode for the colocated vLLM engine. When `True`, the engine sleeps during the optimizer step and wakes for weight sync and generation."
         },
     )
     # Parameters that control the logging

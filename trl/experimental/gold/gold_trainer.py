@@ -696,11 +696,8 @@ class ULDLoss(nn.Module):
         return answers_index, answers_size
 
 
-class GOLDStudentVLLMSyncCallback(TrainerCallback):
-    """
-    Callback to sync student model weights to vLLM after training steps. This ensures weight syncing happens when
-    DeepSpeed is in a stable state.
-    """
+class GOLDVLLMSyncCallback(TrainerCallback):
+    """Sync the model weights to vLLM after training steps when it's safe to do so."""
 
     def __init__(self, trainer):
         self.trainer = trainer
@@ -708,15 +705,15 @@ class GOLDStudentVLLMSyncCallback(TrainerCallback):
     def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
         """Sync weights after training step when DeepSpeed is stable."""
         if (
-            self.trainer.student_use_vllm
-            and state.global_step != self.trainer._last_student_sync_step
-            and state.global_step % self.trainer.student_vllm_sync_frequency == 0
+            self.trainer.use_vllm
+            and state.global_step != self.trainer._last_vllm_sync_step
+            and state.global_step % self.trainer.vllm_sync_frequency == 0
         ):
             # Check if this is a step where gradients are synchronized
             # This happens at the end of gradient accumulation cycles
             if hasattr(self.trainer.accelerator, "sync_gradients") and self.trainer.accelerator.sync_gradients:
-                self.trainer._move_student_model_to_vllm()
-                self.trainer._last_student_sync_step = state.global_step
+                self.trainer._move_model_to_vllm()
+                self.trainer._last_vllm_sync_step = state.global_step
 
 
 class GOLDTrainer(SFTTrainer):
@@ -886,43 +883,46 @@ class GOLDTrainer(SFTTrainer):
             "advantages": deque(maxlen=maxlen),
         }
 
-        self.student_use_vllm = args.student_use_vllm
-        if self.student_use_vllm:
+        self.use_vllm = args.use_vllm
+        if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
-                    "vLLM is not available and student_use_vllm is set to True. Please install vLLM with "
+                    "vLLM is not available and use_vllm is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
-            self.student_vllm_mode = args.student_vllm_mode
-            if self.student_vllm_mode == "server":
+            self.vllm_mode = args.vllm_mode
+            self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
+            self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization
+            self.vllm_enable_sleep_mode = args.vllm_enable_sleep_mode
+            if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:
-                    self.student_vllm_client = VLLMClient(
-                        host=args.student_vllm_server_host,
-                        server_port=args.student_vllm_server_port,
-                        connection_timeout=args.student_vllm_server_timeout,
+                    self.vllm_client = VLLMClient(
+                        host=args.vllm_server_host,
+                        server_port=args.vllm_server_port,
+                        connection_timeout=args.vllm_server_timeout,
                     )
-                    self.student_vllm_client.init_communicator()
-            elif self.student_vllm_mode == "colocate":
+                    self.vllm_client.init_communicator()
+            elif self.vllm_mode == "colocate":
                 student_model_name_or_path = self.model_name_or_path
 
                 # Make sure tensor_parallel_size divides world size evenly
-                if not self.accelerator.num_processes % args.student_vllm_tensor_parallel_size == 0:
+                if not self.accelerator.num_processes % self.vllm_tensor_parallel_size == 0:
                     raise ValueError(
-                        f"student_vllm_tensor_parallel_size ({args.student_vllm_tensor_parallel_size}) must divide world size "
+                        f"vllm_tensor_parallel_size ({self.vllm_tensor_parallel_size}) must divide world size "
                         f"({self.accelerator.num_processes}) evenly."
                     )
 
-                if args.student_vllm_tensor_parallel_size > 1:
+                if self.vllm_tensor_parallel_size > 1:
                     # Create subgroups of ranks for TP
-                    self.student_tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
+                    self.vllm_tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
                         [
                             list(
                                 range(
-                                    i * args.student_vllm_tensor_parallel_size,
-                                    (i + 1) * args.student_vllm_tensor_parallel_size,
+                                    i * self.vllm_tensor_parallel_size,
+                                    (i + 1) * self.vllm_tensor_parallel_size,
                                 )
                             )
-                            for i in range(self.accelerator.num_processes // args.student_vllm_tensor_parallel_size)
+                            for i in range(self.accelerator.num_processes // self.vllm_tensor_parallel_size)
                         ]
                     )
 
@@ -933,33 +933,33 @@ class GOLDTrainer(SFTTrainer):
                 os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
                 os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
 
-                self.student_llm = LLM(
+                self.vllm_engine = LLM(
                     model=student_model_name_or_path,
                     revision=self.model_revision,
-                    tensor_parallel_size=args.student_vllm_tensor_parallel_size,
-                    gpu_memory_utilization=args.student_vllm_gpu_memory_utilization,
+                    tensor_parallel_size=self.vllm_tensor_parallel_size,
+                    gpu_memory_utilization=self.vllm_gpu_memory_utilization,
                     max_num_seqs=self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps,
                     max_model_len=args.max_length,
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                    seed=self.accelerator.process_index // args.student_vllm_tensor_parallel_size,
-                    enable_sleep_mode=args.student_vllm_enable_sleep_mode,
+                    seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
+                    enable_sleep_mode=self.vllm_enable_sleep_mode,
                 )
 
-                if args.student_vllm_enable_sleep_mode:
-                    self.student_llm.sleep(level=2)
+                if self.vllm_enable_sleep_mode:
+                    self.vllm_engine.sleep(level=2)
 
                 # When using vLLM, the main process is responsible for loading the model weights. This can cause process
                 # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
                 # synchronize all processes after vLLM has been fully initialized.
                 self.accelerator.wait_for_everyone()
             else:
-                raise ValueError(f"Unknown student_vllm_mode: {self.student_vllm_mode}")
-            self.student_vllm_guided_decoding_regex = args.student_vllm_guided_decoding_regex
-            self.student_vllm_sync_frequency = args.student_vllm_sync_frequency
-            self._last_student_sync_step = -1
+                raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
+            self.vllm_guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.vllm_sync_frequency = args.vllm_sync_frequency
+            self._last_vllm_sync_step = -1
 
-            self.add_callback(GOLDStudentVLLMSyncCallback(self))
+            self.add_callback(GOLDVLLMSyncCallback(self))
 
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
@@ -1571,7 +1571,7 @@ class GOLDTrainer(SFTTrainer):
         return generated_tokens, new_attention_mask, new_labels, prompt_texts, completion_texts
 
     @profiling_decorator
-    def _generate_on_policy_outputs_student_vllm(self, inputs, generation_config, pad_token_id=None):
+    def _generate_on_policy_outputs_vllm(self, inputs, generation_config, pad_token_id=None):
         device = self.accelerator.device
 
         # Decode prompts for vLLM (without special tokens - vLLM expects clean text)
@@ -1604,10 +1604,10 @@ class GOLDTrainer(SFTTrainer):
         repetition_penalty = self.args.repetition_penalty if hasattr(self.args, "repetition_penalty") else 1.0
         min_p = self.args.min_p if hasattr(self.args, "min_p") else 0.0
 
-        if self.student_vllm_mode == "server":
+        if self.vllm_mode == "server":
             all_prompts_text = gather_object(prompts_text_for_vllm)
             if self.accelerator.is_main_process:
-                completion_ids = self.student_vllm_client.generate(
+                completion_ids = self.vllm_client.generate(
                     prompts=all_prompts_text,
                     n=1,  # In GKD, we generate 1 completion per prompt from student
                     repetition_penalty=repetition_penalty,
@@ -1616,7 +1616,7 @@ class GOLDTrainer(SFTTrainer):
                     top_k=top_k,
                     min_p=min_p,
                     max_tokens=max_new_tokens,
-                    guided_decoding_regex=self.student_vllm_guided_decoding_regex,
+                    guided_decoding_regex=self.vllm_guided_decoding_regex,
                 )
             else:
                 completion_ids = [None] * len(all_prompts_text)
@@ -1626,11 +1626,9 @@ class GOLDTrainer(SFTTrainer):
                 (self.accelerator.process_index + 1) * len(prompts_text_for_vllm),
             )
             completion_ids = completion_ids[process_slice]
-        elif self.student_vllm_mode == "colocate":
-            if self.student_vllm_guided_decoding_regex:
-                guided_decoding = GuidedDecodingParams(
-                    backend="outlines", regex=self.student_vllm_guided_decoding_regex
-                )
+        elif self.vllm_mode == "colocate":
+            if self.vllm_guided_decoding_regex:
+                guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.vllm_guided_decoding_regex)
             else:
                 guided_decoding = None
             sampling_params = SamplingParams(
@@ -1644,32 +1642,30 @@ class GOLDTrainer(SFTTrainer):
                 guided_decoding=guided_decoding,
             )
 
-            if hasattr(self, "student_tp_group") and self.args.student_vllm_tensor_parallel_size > 1:
+            if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
                 # Gather prompts from all ranks in the TP group and flatten.
                 # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
                 orig_size = len(prompts_text_for_vllm)
-                gathered_prompts = [None for _ in range(self.args.student_vllm_tensor_parallel_size)]
-                torch.distributed.all_gather_object(
-                    gathered_prompts, prompts_text_for_vllm, group=self.student_tp_group
-                )
+                gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                torch.distributed.all_gather_object(gathered_prompts, prompts_text_for_vllm, group=self.vllm_tp_group)
                 all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
             else:
                 all_prompts_text = prompts_text_for_vllm
 
-            all_outputs = self.student_llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+            all_outputs = self.vllm_engine.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
             completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
-            if hasattr(self, "student_tp_group") and self.args.student_vllm_tensor_parallel_size > 1:
+            if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
                 # Slice completions for this rank within its TP group.
                 # Each rank generates all outputs — we keep only our share.
-                local_rank_in_group = torch.distributed.get_rank(group=self.student_tp_group)
+                local_rank_in_group = torch.distributed.get_rank(group=self.vllm_tp_group)
                 tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                 completion_ids = completion_ids[tp_slice]
 
-            if self.args.student_vllm_enable_sleep_mode:
-                self.student_llm.sleep(level=2)
+            if self.vllm_enable_sleep_mode:
+                self.vllm_engine.sleep(level=2)
         else:
-            raise ValueError(f"Unknown student_vllm_mode: {self.student_vllm_mode}")
+            raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
 
         # We need to combine prompt and completion for new_input_ids
         # Tokenize prompts again to get prompt_ids on the correct device and format
@@ -1740,7 +1736,7 @@ class GOLDTrainer(SFTTrainer):
 
         return new_input_ids, new_attention_mask, new_labels, prompts_text_with_special, completion_texts
 
-    def _sync_fsdp_params_to_student_vllm(self, module: nn.Module, prefix: str = "", visited=None):
+    def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with student vLLM."""
         if visited is None:
             visited = set()
@@ -1748,7 +1744,7 @@ class GOLDTrainer(SFTTrainer):
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
             # recurse into the child
-            self._sync_fsdp_params_to_student_vllm(child_module, prefix=child_prefix, visited=visited)
+            self._sync_fsdp_params_to_vllm(child_module, prefix=child_prefix, visited=visited)
 
         if isinstance(module, FSDP):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
@@ -1761,13 +1757,13 @@ class GOLDTrainer(SFTTrainer):
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-                        self.student_vllm_client.update_named_param(full_name, param.data)
-                    elif self.student_vllm_mode == "colocate":
-                        llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
+                    if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        self.vllm_client.update_named_param(full_name, param.data)
+                    elif self.vllm_mode == "colocate":
+                        llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
 
-    def _move_student_model_to_vllm(self):
+    def _move_model_to_vllm(self):
         """Synchronize student model weights to vLLM engine."""
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
@@ -1779,9 +1775,9 @@ class GOLDTrainer(SFTTrainer):
         else:
             gather_if_zero3 = nullcontext
 
-        if self.args.student_vllm_mode == "colocate" and self.args.student_vllm_enable_sleep_mode:
+        if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
             empty_cache()
-            self.student_llm.wake_up(tags=["weights"])
+            self.vllm_engine.wake_up(tags=["weights"])
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
@@ -1793,7 +1789,7 @@ class GOLDTrainer(SFTTrainer):
                 if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self._sync_fsdp_params_to_student_vllm(self.model)
+                    self._sync_fsdp_params_to_vllm(self.model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
@@ -1806,10 +1802,10 @@ class GOLDTrainer(SFTTrainer):
                             continue
                         name = name.replace("modules_to_save.default.", "")
 
-                        if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.student_vllm_client.update_named_param(name, param.data)
-                        elif self.student_vllm_mode == "colocate":
-                            llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
@@ -1818,27 +1814,27 @@ class GOLDTrainer(SFTTrainer):
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
                 # use memory-efficient post-order traversal for FSDP
-                self._sync_fsdp_params_to_student_vllm(self.model)
+                self._sync_fsdp_params_to_vllm(self.model)
             else:
                 # For DeepSpeed ZeRO-3, gather each parameter individually like GRPO trainer
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
-                        if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.student_vllm_client.update_named_param(name, param.data)
-                        elif self.student_vllm_mode == "colocate":
-                            llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.vllm_engine.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
 
         # Reset cache on vLLM
-        if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-            self.student_vllm_client.reset_prefix_cache()
-        elif self.student_vllm_mode == "colocate":
-            self.student_llm.reset_prefix_cache()
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+            self.vllm_client.reset_prefix_cache()
+        elif self.vllm_mode == "colocate":
+            self.vllm_engine.reset_prefix_cache()
 
-    def _wake_student_vllm_if_needed(self):
-        if self.args.student_vllm_mode == "colocate" and self.args.student_vllm_enable_sleep_mode:
+    def _wake_vllm_if_needed(self):
+        if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
             empty_cache()
-            self.student_llm.wake_up(tags=["kv_cache"])
+            self.vllm_engine.wake_up(tags=["kv_cache"])
 
     @profiling_decorator
     def training_step(
@@ -1854,9 +1850,9 @@ class GOLDTrainer(SFTTrainer):
         on_policy = False
         if random.random() <= self.lmbda:
             on_policy = True
-            if self.student_use_vllm:
-                self._wake_student_vllm_if_needed()
-                result = self._generate_on_policy_outputs_student_vllm(
+            if self.use_vllm:
+                self._wake_vllm_if_needed()
+                result = self._generate_on_policy_outputs_vllm(
                     inputs, self.generation_config, self.processing_class.pad_token_id
                 )
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
