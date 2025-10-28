@@ -1420,9 +1420,6 @@ class GOLDTrainer(SFTTrainer):
                 )
                 true_labels = masked_input_ids[:, 1:].contiguous()
 
-                # Release intermediate tensors
-                del labels_mask, masked_input_ids
-
                 # heads
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()
