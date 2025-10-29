@@ -729,7 +729,7 @@ class GOLDTrainer(SFTTrainer):
         "citation": textwrap.dedent("""\
             @misc{patino2025unlocking,
                 title        = {{Unlocking On-Policy Distillation for Any Model Family}},
-                author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
+                author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Thibaud Frere and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
                 year         = 2025,
                 url          = {https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation},
             }"""),

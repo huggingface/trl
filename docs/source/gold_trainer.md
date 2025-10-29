@@ -4,10 +4,9 @@
 
 ## Overview
 
-General Online Logit Distillation (GOLD) is an extension of Universal Logit Distillation (ULD) that supports
-student/teacher pairs with different tokenizers. It aligns the textual spans produced by both tokenizers and merges the
-associated logits so no completion tokens are dropped. This enables cross-tokenizer knowledge distillation, including
-mixed model families (for example, LLaMA students with Qwen teachers).
+General Online Logit Distillation (GOLD) is an extension of Universal Logit Distillation (ULD) that supports student/teacher pairs with different tokenizers. It aligns the textual spans produced by both tokenizers and merges the associated logits so no completion tokens are dropped. This enables cross-tokenizer knowledge distillation, including mixed model families (for example, LLaMA students with Qwen teachers).
+
+For more details on the method, please refer to [Unlocking On-Policy Distillation for Any Model Family](https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation).
 
 Key capabilities:
 
@@ -15,13 +14,14 @@ Key capabilities:
 2. **Hybrid ULD loss** – when `uld_use_hybrid_loss` is enabled, GOLD compares exact vocabulary matches directly and falls back to the original sorted-probability ULD loss for unmatched tokens. This improves stability for students whose vocabularies only partially overlap with the teacher.
 3. **Seamless integration with GKD** – GOLD inherits the on-policy vs. off-policy scheduling from the [`GKDTrainer`](./gkd_trainer.md), so you can combine sequence-level KD, generalized JSD, and cross-tokenizer distillation in a single training run.
 
+This post-training method was contributed by [Carlos Miguel Patiño](https://huggingface.co/cmpatino) and [Kashif Rasul](https://huggingface.co/kashif).
+
 > [!NOTE]
 > GOLD is currently part of the `trl.experimental` namespace. APIs may change without notice while the feature is iterated on.
 
 ## Usage tips
 
-The [`GOLDTrainer`] subclasses [`SFTTrainer`] and accepts the same datasets as other TRL trainers (lists of ChatML style
-messages). Important configuration flags on [`GOLDConfig`] include:
+The [`GOLDTrainer`] accepts the same datasets as other TRL trainers (lists of ChatML style messages). Important configuration flags on [`GOLDConfig`] include:
 
 * `use_uld_loss` – toggles Universal Logit Distillation. Set this to `True` for cross-tokenizer setups.
 * `teacher_tokenizer_name_or_path` – required when `use_uld_loss=True`; GOLD uses the teacher tokenizer to align tokens.
