@@ -18,7 +18,6 @@ import textwrap
 import warnings
 from collections import defaultdict, deque
 from contextlib import nullcontext
-from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
 import torch
@@ -55,11 +54,11 @@ from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
+    DataCollatorForChatML,
     create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
-    pad,
 )
 from .gold_config import GOLDConfig
 
@@ -82,35 +81,6 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-
-
-@dataclass
-class _GoldDataCollator:
-    tokenizer: PreTrainedTokenizerBase
-    ignore_index: int = -100
-
-    def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        batch: dict[str, torch.Tensor] = {}
-        keys = features[0].keys()
-
-        for key in keys:
-            tensors = []
-            for example in features:
-                value = example[key]
-                if not isinstance(value, torch.Tensor):
-                    value = torch.tensor(value, dtype=torch.long)
-                tensors.append(value)
-
-            if key in {"attention_mask", "prompt_attention_mask"}:
-                pad_value = 0
-            elif key == "labels":
-                pad_value = self.ignore_index
-            else:
-                pad_value = self.tokenizer.pad_token_id
-
-            batch[key] = pad(tensors, padding_side="left", padding_value=pad_value)
-
-        return batch
 
 
 def print_prompt_completions_sample_uld(
@@ -793,7 +763,7 @@ class GOLDTrainer(SFTTrainer):
 
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
         if data_collator is None:
-            data_collator = _GoldDataCollator(tokenizer=processing_class)
+            data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
