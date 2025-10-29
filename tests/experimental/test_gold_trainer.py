@@ -19,8 +19,12 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
-from trl.trainer.utils import DataCollatorForChatML
+from trl.experimental.gold.gold_trainer import (
+    GOLDTrainer,
+    ULDLoss,
+    _GoldDataCollator,
+    build_teacher_inputs_from_texts,
+)
 
 
 @pytest.fixture(scope="module")
@@ -95,8 +99,9 @@ def _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teach
 
 @pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokenizer, openr1_examples):
-    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
-    batch = collator(openr1_examples)
+    collator = _GoldDataCollator(tokenizer=llama_tokenizer)
+    features = [_messages_to_feature(llama_tokenizer, ex) for ex in openr1_examples]
+    batch = collator(features)
 
     assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
     decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
@@ -140,8 +145,9 @@ def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokeni
 
 @pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, qwen_tokenizer, countdown_examples):
-    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
-    batch = collator(countdown_examples)
+    collator = _GoldDataCollator(tokenizer=llama_tokenizer)
+    features = [_messages_to_feature(llama_tokenizer, ex) for ex in countdown_examples]
+    batch = collator(features)
 
     assistant_texts = [example["messages"][-1]["content"] for example in countdown_examples]
     decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
@@ -185,8 +191,9 @@ def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, q
 
 @pytest.mark.slow
 def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_tokenizer, openr1_examples):
-    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=512)
-    batch = collator(openr1_examples)
+    collator = _GoldDataCollator(tokenizer=smollm_tokenizer)
+    features = [_messages_to_feature(smollm_tokenizer, ex) for ex in openr1_examples]
+    batch = collator(features)
 
     assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
     decoded_batch = smollm_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
@@ -279,6 +286,60 @@ def encode_prompt_completion(tokenizer, prompt, completion):
     input_ids = prompt_ids + completion_ids
     labels = [-100] * len(prompt_ids) + completion_ids
     return input_ids, labels
+
+
+def _messages_to_feature(tokenizer, example):
+    prompt_messages = example["messages"][:-1]
+    full_messages = example["messages"]
+
+    formatted_prompt = tokenizer.apply_chat_template(
+        prompt_messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    formatted_conversation = tokenizer.apply_chat_template(
+        full_messages,
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+
+    tokenized = tokenizer(
+        formatted_conversation,
+        truncation=False,
+        padding=False,
+        return_offsets_mapping=True,
+        add_special_tokens=False,
+    )
+    message_input_ids = tokenized["input_ids"]
+    offsets = tokenized.get("offset_mapping")
+
+    if offsets is not None:
+        prompt_char_len = len(formatted_prompt)
+        completion_start = next(
+            (idx for idx, (start, _) in enumerate(offsets) if start >= prompt_char_len),
+            len(message_input_ids),
+        )
+    else:
+        tokenized_prompt = tokenizer(
+            formatted_prompt,
+            truncation=False,
+            padding=False,
+            add_special_tokens=False,
+        )
+        completion_start = len(tokenized_prompt["input_ids"])
+
+    prompt_ids = message_input_ids[:completion_start]
+    completion_ids = message_input_ids[completion_start:]
+
+    labels = [-100] * len(prompt_ids) + completion_ids.copy()
+
+    return {
+        "input_ids": message_input_ids,
+        "attention_mask": [1] * len(message_input_ids),
+        "labels": labels,
+        "prompts": prompt_ids,
+        "prompt_attention_mask": [1] * len(prompt_ids),
+    }
 
 
 def pad_tokens(ids, pad_id, target_length):
