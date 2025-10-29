@@ -1084,13 +1084,13 @@ class RLOOTrainer(BaseTrainer):
             processor_kwargs = {
                 "max_length": self.max_prompt_length,
                 "truncation": True,
-                "add_generation_prompt": True,
                 "add_special_tokens": False,
             }
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
                     **processor_kwargs,
+                    add_generation_prompt=True,
                     tokenize=True,
                     return_dict=True,
                 )
