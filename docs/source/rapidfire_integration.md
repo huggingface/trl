@@ -190,7 +190,6 @@ training_args = RFSFTConfig(
     learning_rate=5e-5,
     per_device_train_batch_size=4,
     num_train_epochs=3,
-    max_seq_length=512,
     # ... all other SFTConfig parameters supported
 )
 ```
