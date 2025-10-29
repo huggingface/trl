@@ -1081,7 +1081,12 @@ class RLOOTrainer(BaseTrainer):
                     self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            processor_kwargs = {"max_length": self.max_prompt_length, "truncation": True, "add_special_tokens": False}
+            processor_kwargs = {
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "add_generation_prompt": True,
+                "add_special_tokens": False,
+            }
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
@@ -1126,7 +1131,11 @@ class RLOOTrainer(BaseTrainer):
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                    conversation=prompts,
+                    **processor_kwargs,
+                    add_generation_kwargs=True,
+                    tokenize=True,
+                    return_dict=True,
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
