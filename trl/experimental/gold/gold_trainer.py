@@ -688,16 +688,15 @@ class ULDLoss(nn.Module):
         answers_size = []
 
         for answer in answer_tensors:
-            is_value = answer.eq(self.ignore_index)
-            answers_size.append(len(answer) - int(is_value.sum()))
-            indices = is_value.nonzero(as_tuple=True)[0]
-            if len(indices) == 0 or indices[0] != 0:
+            answer_mask = answer.ne(self.ignore_index)
+            if not answer_mask.any():
                 answers_index.append(0)
-            else:
-                diff_indices = indices[1:] - indices[:-1]
-                break_index = (diff_indices != 1).nonzero()
-                length = (break_index[0].item() + 1) if len(break_index) > 0 else len(indices)
-                answers_index.append(length - 1)
+                answers_size.append(0)
+                continue
+
+            valid_indices = answer_mask.nonzero(as_tuple=True)[0]
+            answers_index.append(int(valid_indices[0].item()))
+            answers_size.append(int(answer_mask.sum().item()))
         return answers_index, answers_size
 
 
@@ -1567,25 +1566,64 @@ class GOLDTrainer(SFTTrainer):
             # Get the generated token IDs
             generated_tokens = generated_outputs.sequences
 
-        # Calculate new attention mask
-        new_attention_mask = torch.ones_like(generated_tokens)
-        new_labels = generated_tokens.clone()
+        batch_size = generated_tokens.size(0)
+        device = generated_tokens.device
 
-        # If there's pad_token_id, set attention mask to 0 for padding tokens
+        prompt_mask = inputs.get("prompt_attention_mask")
+        pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
+
+        if prompt_mask is not None:
+            prompt_lengths = prompt_mask.sum(dim=1).to(torch.long)
+        else:
+            if pad_token_id is not None:
+                prompt_lengths = (inputs["prompts"] != pad_token_id).sum(dim=1).to(torch.long)
+            else:
+                prompt_lengths = torch.full(
+                    (batch_size,),
+                    inputs["prompts"].shape[1],
+                    dtype=torch.long,
+                    device=device,
+                )
+
+        new_input_ids = generated_tokens
+        new_attention_mask = torch.ones_like(new_input_ids)
         if pad_token_id is not None:
-            new_labels[new_labels == pad_token_id] = -100
-            new_attention_mask[generated_tokens == pad_token_id] = 0
+            new_attention_mask[new_input_ids == pad_token_id] = 0
 
-        # IMPORTANT: Preserve original text for cross-tokenizer ULD loss
-        # Decode the prompts and completions separately to maintain boundaries
-        prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
+        new_labels = torch.full_like(new_input_ids, -100)
+        for idx in range(batch_size):
+            length = int(prompt_lengths[idx].item())
+            new_labels[idx, length:] = new_input_ids[idx, length:]
 
-        # Extract completions by removing prompt from generated sequences
-        prompt_lengths = inputs["prompts"].shape[1]
-        completion_tokens = generated_tokens[:, prompt_lengths:]
-        completion_texts = self.processing_class.batch_decode(completion_tokens, skip_special_tokens=False)
+        if pad_token_id is not None:
+            new_labels[new_input_ids == pad_token_id] = -100
 
-        return generated_tokens, new_attention_mask, new_labels, prompt_texts, completion_texts
+        prompt_texts = []
+        completion_texts = []
+        for idx in range(batch_size):
+            length = int(prompt_lengths[idx].item())
+            prompt_tokens = inputs["prompts"][idx]
+            if prompt_mask is not None:
+                prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
+            elif pad_token_id is not None:
+                prompt_tokens = prompt_tokens[prompt_tokens != pad_token_id]
+            prompt_texts.append(
+                self.processing_class.decode(
+                    prompt_tokens.tolist(),
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+            completion_tokens = new_input_ids[idx, length:]
+            completion_texts.append(
+                self.processing_class.decode(
+                    completion_tokens.tolist(),
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+
+        return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
 
     @profiling_decorator
     def _generate_on_policy_outputs_vllm(self, inputs, generation_config, pad_token_id=None):

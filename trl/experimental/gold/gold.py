@@ -51,8 +51,6 @@ python trl/experimental/gold/gold.py \
     --lora_alpha 16
 """
 
-import os
-
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 

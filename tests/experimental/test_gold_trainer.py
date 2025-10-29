@@ -336,6 +336,70 @@ def test_initialize_vocabulary_mapping_contains_common_tokens(llama_tokenizer, q
         assert student_id in loss._student_matched_ids
 
 
+def test_get_start_and_size_answers_skips_prompt_tokens():
+    trainer = ULDLoss.__new__(ULDLoss)
+    trainer.ignore_index = -100
+
+    answers = torch.tensor(
+        [
+            [-100, -100, -100, 10, 20, 30, -100, -100],
+            [-100, 5, 6, 7, -100, -100, -100, -100],
+            [-100, -100, -100, -100, -100, -100, -100, -100],
+        ]
+    )
+
+    starts, sizes = trainer._get_start_and_size_answers(answers)
+
+    assert starts == [3, 1, 0]
+    assert sizes == [3, 3, 0]
+
+
+@pytest.mark.slow
+def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_transformers_paged = False
+    trainer.processing_class = llama_tokenizer
+
+    prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
+    completion_text = "<|start_header_id|>assistant<|end_header_id|>\nHi there!"
+
+    prompt_ids = llama_tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    completion_ids = llama_tokenizer(completion_text, add_special_tokens=False)["input_ids"]
+
+    pad_id = llama_tokenizer.pad_token_id
+    pad_width = 3
+    prompt_tensor = torch.full((1, len(prompt_ids) + pad_width), pad_id, dtype=torch.long)
+    prompt_tensor[0, pad_width:] = torch.tensor(prompt_ids, dtype=torch.long)
+    prompt_mask = (prompt_tensor != pad_id).long()
+
+    generated_sequence = torch.tensor(prompt_ids + completion_ids, dtype=torch.long).unsqueeze(0)
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            assert torch.equal(input_ids, prompt_tensor)
+            assert torch.equal(attention_mask, prompt_mask)
+            return SimpleNamespace(sequences=generated_sequence)
+
+    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
+    new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
+        trainer,
+        DummyModel(),
+        {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
+        generation_config,
+        pad_id,
+    )
+
+    assert torch.equal(new_ids, generated_sequence)
+    assert torch.all(new_mask == 1)
+
+    prompt_len = len(prompt_ids)
+    assert torch.all(new_labels[0, :prompt_len] == -100)
+    assert torch.equal(new_labels[0, prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
+
+    assert prompt_texts[0] == llama_tokenizer.decode(prompt_ids, skip_special_tokens=False)
+    assert completion_texts[0] == llama_tokenizer.decode(completion_ids, skip_special_tokens=False)
+
+
 def test_generalized_jsd_loss_accepts_probability_inputs():
     student_probs = torch.tensor([[[0.6, 0.3, 0.1]]])
     teacher_probs = torch.tensor([[[0.5, 0.4, 0.1]]])
