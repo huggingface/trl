@@ -18,93 +18,6 @@ from typing import Any, Optional
 from transformers import TrainingArguments
 
 
-
-@dataclass
-class GOLDConfig(SFTConfig):
-    """s
-    Configuration class for [`GOLDTrainer`].
-
-    This class includes only the parameters that are specific to GOLD training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
-
-    Args:
-        temperature (`float`, *optional*, defaults to `0.9`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
-        lmbda (`float`, *optional*, defaults to `0.5`):
-            Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy
-            student-generated outputs).
-        beta (`float`, *optional*, defaults to `0.5`):
-            Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
-            beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
-        max_completion_length (`int`, *optional*, defaults to `128`):
-            Maximum number of tokens to generate per completion.
-        teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
-            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
-            trained.
-        teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
-        teacher_tokenizer_name_or_path (`str` or `None`, *optional*, defaults to `None`):
-            Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same tokenizer as
-            the student model (not recommended for cross-tokenizer distillation).
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
-        seq_kd (`bool`, *optional*, defaults to `False`):
-            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
-            teacher-generated output).
-        use_uld_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
-            loss.
-        uld_crossentropy_weight (`float`, *optional*, defaults to `0.0`):
-            Weight for the cross-entropy loss component in ULD loss. If 0, only ULD distillation loss is used.
-        uld_distillation_weight (`float`, *optional*, defaults to `1.0`):
-            Weight for the distillation loss component in ULD loss.
-        uld_student_temperature (`float`, *optional*, defaults to `1.0`):
-            Temperature for student logits in ULD loss computation.
-        uld_teacher_temperature (`float`, *optional*, defaults to `1.0`):
-            Temperature for teacher logits in ULD loss computation.
-        uld_skip_student_eos (`bool`, *optional*, defaults to `True`):
-            Whether to skip EOS token for student in ULD loss computation.
-        uld_skip_teacher_eos (`bool`, *optional*, defaults to `True`):
-            Whether to skip EOS token for teacher in ULD loss computation.
-        use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
-        vllm_mode (`str`, *optional*, defaults to `"server"`):
-            Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
-            (run vLLM in the same process).
-        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
-            Host of the vLLM server for the student model (if `vllm_mode="server"`).
-        vllm_server_port (`int`, *optional*, defaults to `8001`):
-            Port of the vLLM server for the student model (if `vllm_mode="server"`).
-        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Timeout for connecting to the student vLLM server (if `vllm_mode="server"`).
-        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
-            GPU memory utilization for the colocated student vLLM engine (if `vllm_mode="colocate"`). It is recommended
-            to set this to a low value if the student and teacher models share the same GPU.
-        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
-            Tensor parallel size for the colocated student vLLM engine (if `vllm_mode="colocate"`).
-        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
-            Regex for vLLM guided decoding for the student model.
-        vllm_sync_frequency (`int`, *optional*, defaults to `1`):
-            Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
-            every step.
-        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for the student vLLM engine. If set to `True`, the engine will enter sleep
-            mode after each training step to save resources.
-    """
-
-    
-
-
-
-
-
-from dataclasses import dataclass, field
-from typing import Any, Optional
-
-from transformers import TrainingArguments
-
-
 @dataclass
 class GOLDConfig(TrainingArguments):
     r"""
@@ -266,30 +179,8 @@ class GOLDConfig(TrainingArguments):
         default=True,
         metadata={"help": "Whether to disable dropouts in `model`."},
     )
-    chat_template_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
-            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
-            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
-            "that the model's embedding layer is resized accordingly."
-        },
-    )
 
     # Parameters that control the data preprocessing
-    dataset_text_field: str = field(
-        default="text",
-        metadata={"help": "Name of the column that contains text data in the dataset."},
-    )
-    dataset_kwargs: Optional[dict[str, Any]] = field(
-        default=None,
-        metadata={
-            "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
-            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
-            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
-            "since preprocessing is done on the fly."
-        },
-    )
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
@@ -315,37 +206,9 @@ class GOLDConfig(TrainingArguments):
             "sequence length."
         },
     )
-    packing: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
-            "and reduce padding. Uses `max_length` to define sequence length."
-        },
-    )
-    packing_strategy: str = field(
-        default="bfd",
-        metadata={
-            "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
-            "`'wrapped'`."
-        },
-    )
-    padding_free: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
-            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
-            "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
-            "value of this parameter."
-        },
-    )
     pad_to_multiple_of: Optional[int] = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
-    )
-    eval_packing: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
     )
 
     # Parameters that control generation
@@ -379,29 +242,8 @@ class GOLDConfig(TrainingArguments):
         },
     )
 
+
     # Parameters that control the training
-    completion_only_loss: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": (
-                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
-                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
-                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
-                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
-                "language modeling datasets."
-            )
-        },
-    )
-    assistant_only_loss: bool = field(
-        default=False,
-        metadata={
-            "help": (
-                "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
-                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
-                "loss is computed on the entire sequence."
-            )
-        },
-    )
     beta: float = field(
         default=0.5,
         metadata={
@@ -415,45 +257,30 @@ class GOLDConfig(TrainingArguments):
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
-    # --------------------------------
-    
-
-    student_model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "Revision of the student model to use. If not specified, the default revision of the model will be used."
-        },
-    )
-    teacher_model_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Model name or path of the teacher model. If `None`, the teacher model will be the same as the "
-            "model being trained."
-        },
-    )
-    teacher_model_init_kwargs: Optional[dict[str, Any]] = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "teacher model from a string."
-        },
-    )
-    teacher_tokenizer_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same "
-            "tokenizer as the student model (not recommended for cross-tokenizer distillation)."
-        },
-    )
-
-    
-    seq_kd: bool = field(
+    # Parameters that control the logging
+    log_completions: bool = field(
         default=False,
         metadata={
-            "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
-            "FT on teacher-generated output)."
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
+    num_completions_to_print: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
+    )
+    wandb_log_unique_prompts: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
+            "all prompts are logged."
+        },
+    )
+
+
+
+    # --------------------------------
+    
     steps_per_generation: Optional[int] = field(
         default=None,
         metadata={
@@ -596,24 +423,6 @@ class GOLDConfig(TrainingArguments):
         },
     )
 
-    # Parameters that control the logging
-    log_completions: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
-            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
-        },
-    )
-    wandb_log_unique_prompts: bool = field(
-        default=True,
-        metadata={
-            "help": ("Whether to log the unique prompts to wandb. This will create a new run for each unique prompt.")
-        },
-    )
-    num_completions_to_print: Optional[int] = field(
-            default=None,
-            metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
-        )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
