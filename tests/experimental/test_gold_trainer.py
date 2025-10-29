@@ -248,7 +248,7 @@ def build_config(**overrides):
 
 @pytest.fixture(scope="session")
 def llama_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
@@ -324,7 +324,7 @@ def test_initialize_vocabulary_mapping_contains_common_tokens(llama_tokenizer, q
     )
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
-    common_tokens = ["Hello", "Ġworld", "-", "Sm", "ol", "LM", "3", "B"]
+    common_tokens = ["Hello", "world", "-", "ol", "LM", "3", "B"]
     for token in common_tokens:
         student_id = llama_tokenizer.convert_tokens_to_ids(token)
         teacher_id = qwen_tokenizer.convert_tokens_to_ids(token)
@@ -390,7 +390,11 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     )
 
     assert torch.equal(new_ids, generated_sequence)
-    assert torch.all(new_mask == 1)
+    if pad_id is not None:
+        expected_mask = (generated_sequence != pad_id).long()
+        assert torch.equal(new_mask, expected_mask)
+    else:
+        assert torch.all(new_mask == 1)
 
     prompt_len = len(prompt_ids)
     assert torch.all(new_labels[0, :prompt_len] == -100)
@@ -427,11 +431,19 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
     )
 
     assert torch.equal(new_ids, batch["input_ids"])
-    assert torch.all(new_mask == 1)
+    if pad_id is not None:
+        expected_mask = (batch["input_ids"] != pad_id).long()
+        assert torch.equal(new_mask, expected_mask)
+    else:
+        assert torch.all(new_mask == 1)
 
     prompt_len = int(batch["prompt_attention_mask"].sum().item())
+    tail_labels = new_labels[0, prompt_len:]
+    expected_tail = batch["input_ids"][0, prompt_len:]
+    active_mask = tail_labels != -100
     assert torch.all(new_labels[0, :prompt_len] == -100)
-    assert torch.equal(new_labels[0, prompt_len:], batch["input_ids"][0, prompt_len:])
+    assert torch.equal(tail_labels[active_mask], expected_tail[active_mask])
+    assert torch.all(tail_labels[~active_mask] == -100)
 
     prompt_tokens = batch["prompts"][0, batch["prompt_attention_mask"][0].bool()]
     decoded_prompt = smollm_tokenizer.decode(prompt_tokens.tolist(), skip_special_tokens=False)
