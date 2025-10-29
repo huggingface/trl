@@ -228,8 +228,9 @@ class PAPOTrainer(GRPOTrainer):
             compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
+            num_images = inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
-            image_sizes=inputs.get("image_sizes"),
+            image_sizes=inputs.get("image_sizes")
         )
 
         if self.top_entropy_quantile < 1.0:
@@ -299,6 +300,7 @@ class PAPOTrainer(GRPOTrainer):
             compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
+            num_images = inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
         )
