@@ -1300,7 +1300,6 @@ class GRPOTrainer(BaseTrainer):
                 "padding": True,
                 "padding_side": "left",
                 "max_length": self.max_prompt_length,
-                "add_generation_prompt": True,
                 "truncation": True,
                 "add_special_tokens": False,
             }
