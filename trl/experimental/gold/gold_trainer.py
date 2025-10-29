@@ -724,16 +724,14 @@ class GOLDTrainer(SFTTrainer):
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
     _paper = {
-        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-        "id": "2306.13649",
+        "title": "Unlocking On-Policy Distillation for Any Model Family",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-            @inproceedings{rafailov2023direct,
-                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-                year         = 2024,
-                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            @misc{patino2025unlocking,
+                title        = {{Unlocking On-Policy Distillation for Any Model Family}},
+                author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
+                year         = 2025,
+                url          = {https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation},
             }"""),
     }
 

@@ -111,7 +111,7 @@ boundaries.
 
 ## GOLDTrainer
 
-[[autodoc]] GOLDTrainer
+[[autodoc]] experimental.gold.GOLDTrainer
     - train
     - generate_on_policy_outputs
     - save_model
@@ -119,4 +119,4 @@ boundaries.
 
 ## GOLDConfig
 
-[[autodoc]] GOLDConfig
+[[autodoc]] experimental.gold.GOLDConfig
