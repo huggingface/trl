@@ -42,6 +42,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    is_trackio_available,
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
@@ -89,6 +90,9 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+if is_trackio_available():
+    import trackio
 
 
 logger = logging.get_logger(__name__)
@@ -1081,17 +1085,21 @@ class RLOOTrainer(BaseTrainer):
                     self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            processor_kwargs = {"max_length": self.max_prompt_length, "truncation": True, "add_special_tokens": False}
+            processor_kwargs = {
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "add_special_tokens": False,
+            }
             if is_conversational({"prompt": prompts[0]}):
-                generate_inputs = self.processing_class.apply_chat_template(
+                processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
                     **processor_kwargs,
+                    add_generation_prompt=True,
                     tokenize=True,
                     return_dict=True,
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
-            generate_inputs["inputs"] = generate_inputs.pop("input_ids")
+                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -1107,12 +1115,13 @@ class RLOOTrainer(BaseTrainer):
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
+                    # Continuous batching API expects 'inputs' arg only
                     all_outputs = unwrapped_model.generate_batch(
-                        **generate_inputs, generation_config=self.generation_config, progress_bar=False
+                        processor_outputs["input_ids"], generation_config=self.generation_config, progress_bar=False
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = generate_inputs["inputs"]
+            prompt_ids = processor_outputs["input_ids"]
 
         else:
             # Regular generation path
@@ -1126,7 +1135,11 @@ class RLOOTrainer(BaseTrainer):
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                    conversation=prompts,
+                    **processor_kwargs,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1502,7 +1515,13 @@ class RLOOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
+            logging_backends = []
             if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
+
+            if logging_backends:
                 import pandas as pd
 
                 table = {
@@ -1513,16 +1532,28 @@ class RLOOTrainer(BaseTrainer):
                     "advantage": self._logs["advantages"],
                 }
 
-                if self._logs["images"]:
-                    table["images"] = []
-                    for image_list in self._logs["images"]:
-                        # Convert images to wandb Image objects for proper visualization
-                        table["images"].append([wandb.Image(image) for image in image_list])
+                df_base = pd.DataFrame(table)
+                images_raw = self._logs["images"] or []
 
-                df = pd.DataFrame(table)
-                if self.wandb_log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+                for logging_backend in logging_backends:
+                    if images_raw:
+                        # Convert images per backend and derive a dataframe that shares base columns
+                        if logging_backend is wandb:
+                            images = []
+                            for image_list in self._logs["images"]:
+                                images.append([wandb.Image(image) for image in image_list])
+                            df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
+                        elif logging_backend is trackio:
+                            # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/327
+                            logger.info("Skipping image logging for Trackio")
+                            df = df_base
+                    else:
+                        df = df_base
+
+                    if self.wandb_log_unique_prompts:
+                        df = df.drop_duplicates(subset=["prompt"])
+
+                    logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

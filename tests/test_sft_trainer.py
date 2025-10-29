@@ -1381,13 +1381,19 @@ class TestSFTTrainer(TrlTestCase):
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @pytest.mark.xfail(
         parse_version(transformers.__version__) < parse_version("4.57.0"),
         reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
         strict=False,
     )
     @require_vision
-    def test_train_vlm_multi_image(self):
+    def test_train_vlm_multi_image(self, model_id):
         # Get the dataset
         dataset = load_dataset(
             "trl-internal-testing/zen-multi-image", "conversational_prompt_completion", split="train"
@@ -1400,7 +1406,7 @@ class TestSFTTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1419,8 +1425,14 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_train_vlm_prompt_completion(self):
+    def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
 
@@ -1431,7 +1443,7 @@ class TestSFTTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1494,6 +1506,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,
             max_length=None,
             per_device_train_batch_size=1,
             gradient_checkpointing=True,
@@ -1514,20 +1527,26 @@ class TestSFTTrainer(TrlTestCase):
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if "model.vision_tower" in n:
-                # The vision tower is not updated, not sure why at this point.
+            if "model.audio_tower" in n or "model.embed_audio" in n:
+                # The audio embedding parameters are not updated because this dataset contains no audio data
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_train_vlm_text_only_data(self):
+    def test_train_vlm_text_only_data(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )
