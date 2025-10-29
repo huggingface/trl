@@ -790,6 +790,14 @@ class GOLDTrainer(SFTTrainer):
                 else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
             )
 
+        if args.use_uld_loss and args.teacher_tokenizer_name_or_path is None:
+            if isinstance(teacher_model, str):
+                args.teacher_tokenizer_name_or_path = teacher_model
+            else:
+                raise ValueError(
+                    "`teacher_tokenizer_name_or_path` must be set when using ULD loss with a pre-instantiated teacher model."
+                )
+
         if isinstance(teacher_model, str):
             init_kwargs = dict(teacher_model_init_kwargs)
             if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
@@ -1003,11 +1011,10 @@ class GOLDTrainer(SFTTrainer):
         # 1. ULD loss with cross-tokenizer (need original text preservation)
         # 2. Any unprocessed dataset (need attention_mask for DataCollatorForChatML)
         if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None):
-            if not is_processed:
-                # For unprocessed datasets, use our enhanced tokenization
-                return self._prepare_dataset_with_original_text(
-                    dataset, processing_class, args, packing, formatting_func, dataset_name
-                )
+            # For unprocessed datasets, use our enhanced tokenization
+            return self._prepare_dataset_with_original_text(
+                dataset, processing_class, args, packing, formatting_func, dataset_name
+            )
 
         # Use parent implementation for all other cases
         return super()._prepare_dataset(dataset, processing_class, args, packing, formatting_func, dataset_name)
