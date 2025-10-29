@@ -1256,14 +1256,18 @@ class GRPOTrainer(BaseTrainer):
                     self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            processor_kwargs = {"max_length": self.max_prompt_length, "truncation": True, "add_special_tokens": False}
+            processor_kwargs = {
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "add_generation_prompt": True,
+                "add_special_tokens": False,
+            }
             if is_conversational({"prompt": prompts[0]}):
-                generate_inputs = self.processing_class.apply_chat_template(
+                processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
-            generate_inputs["inputs"] = generate_inputs.pop("input_ids")
+                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -1279,12 +1283,13 @@ class GRPOTrainer(BaseTrainer):
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
+                    # Continuous batching API expects 'inputs' arg only
                     all_outputs = unwrapped_model.generate_batch(
-                        **generate_inputs, generation_config=self.generation_config, progress_bar=False
+                        processor_outputs["input_ids"], generation_config=self.generation_config, progress_bar=False
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = generate_inputs["inputs"]
+            prompt_ids = processor_outputs["input_ids"]
             logprobs = None  # not used in this case
             extra_fields = {}  # No extra fields for paged mode
 
@@ -1300,7 +1305,11 @@ class GRPOTrainer(BaseTrainer):
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                    conversation=prompts,
+                    **processor_kwargs,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
