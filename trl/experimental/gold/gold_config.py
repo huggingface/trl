@@ -17,7 +17,6 @@ from typing import Any, Optional
 
 from transformers import TrainingArguments
 
-from ...trainer.sft_config import SFTConfig
 
 
 @dataclass
@@ -94,8 +93,273 @@ class GOLDConfig(SFTConfig):
             mode after each training step to save resources.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+    
 
+
+
+
+
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from transformers import TrainingArguments
+
+
+@dataclass
+class GOLDConfig(TrainingArguments):
+    r"""
+    Configuration class for the [`GOLDTrainer`].
+
+    This class includes only the parameters that are specific to GOLD training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
+    Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
+            include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            `output_router_logits=True` in this dictionary.
+        chat_template_path (`str`, *optional*):
+            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
+            or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
+            ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
+            embedding layer is resized accordingly.
+
+        > Parameters that control the data preprocessing
+
+        dataset_text_field (`str`, *optional*, defaults to `"text"`):
+            Name of the column that contains text data in the dataset.
+        dataset_kwargs (`dict[str, Any]`, *optional*):
+            Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
+            `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
+            regardless of the provided value, since preprocessing is done on the fly.
+        dataset_num_proc (`int`, *optional*):
+            Number of processes to use for processing the dataset.
+        eos_token (`str`, *optional*):
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
+            `processing_class.eos_token`.
+        pad_token (`str`, *optional*):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
+            If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
+        packing (`bool`, *optional*, defaults to `False`):
+            Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
+            padding. Uses `max_length` to define sequence length.
+        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
+            Strategy for packing sequences. Can be either `"bfd"` (best-fit decreasing, default), or `"wrapped"`.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
+            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
+            packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
+            parameter.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
+        eval_packing (`bool`, *optional*):
+            Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
+
+        > Parameters that control generation
+
+        generation_batch_size: (`int`, *optional*):
+            Batch size to use for generation. If `None`, it defaults to the effective training batch size:
+            `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
+            generation batch processed per optimization step. Mutually exclusive with `steps_per_generation`.
+        steps_per_generation: (`int`, *optional*):
+            Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
+            with `generation_batch_size`.
+        temperature (`float`, defaults to `1.0`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
+            `1.0` to consider all tokens.
+        top_k (`int`, *optional*):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
+            disabled and all tokens are considered.
+        min_p (`float`, *optional*):
+            Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
+            value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
+            Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
+            tokens.
+        use_transformers_paged (`bool`, *optional*, defaults to `False`):
+            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
+            paged implementation will be used for generation instead of the default padded implementation. This
+            parameter is only effective when `use_vllm` is set to `False`.
+        cache_implementation (`str`, *optional*):
+            Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
+        generation_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
+
+            
+        > Parameters that control the training
+
+        completion_only_loss (`bool`, *optional*):
+            Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
+            only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
+            `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
+            sequence for [language modeling](#language-modeling) datasets.
+        assistant_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
+            on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
+            `False`, loss is computed on the entire sequence.
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
+            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+    """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=2e-5,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
+
+    # Parameters that control the model
+    model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
+            "load balancing/auxilliary loss as a part of the final loss, remember to set `output_router_logits=True` "
+            "in this dictionary."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropouts in `model`."},
+    )
+    chat_template_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
+            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
+            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
+            "that the model's embedding layer is resized accordingly."
+        },
+    )
+
+    # Parameters that control the data preprocessing
+    dataset_text_field: str = field(
+        default="text",
+        metadata={"help": "Name of the column that contains text data in the dataset."},
+    )
+    dataset_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
+            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
+            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
+            "since preprocessing is done on the fly."
+        },
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    eos_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
+        },
+    )
+    pad_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
+        },
+    )
+    max_length: Optional[int] = field(
+        default=1024,
+        metadata={
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
+            "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
+            "sequence length."
+        },
+    )
+    packing: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
+            "and reduce padding. Uses `max_length` to define sequence length."
+        },
+    )
+    packing_strategy: str = field(
+        default="bfd",
+        metadata={
+            "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
+            "`'wrapped'`."
+        },
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
+            "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
+            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
+            "value of this parameter."
+        },
+    )
+    pad_to_multiple_of: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
+    eval_packing: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
+    )
+
+    # Parameters that control generation
+    lmbda: float = field(
+        default=0.5,
+        metadata={
+            "help": "Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy "
+            "student-generated outputs)."
+        },
+    )
+    max_completion_length: int = field(
+        default=128,
+        metadata={"help": "Maximum number of tokens to generate per completion."},
+    )
     temperature: float = field(
         default=0.9,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
@@ -103,19 +367,39 @@ class GOLDConfig(SFTConfig):
     top_p: float = field(
         default=0.95,
         metadata={
-            "help": "If set to float < 1, only the smallest set of most probable tokens with probabilities that add up to "
-            "`top_p` or higher are kept for generation."
+            "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. "
+            "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: int = field(
-        default=0,
-        metadata={"help": "The number of highest probability vocabulary tokens to keep for top-k-filtering."},
-    )
-    lmbda: float = field(
-        default=0.5,
+    top_k: Optional[int] = field(
+        default=None,
         metadata={
-            "help": "Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy "
-            "student-generated outputs)."
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "top-k-filtering is disabled and all tokens are considered."
+        },
+    )
+
+    # Parameters that control the training
+    completion_only_loss: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
+                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
+                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
+                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
+                "language modeling datasets."
+            )
+        },
+    )
+    assistant_only_loss: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
+                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
+                "loss is computed on the entire sequence."
+            )
         },
     )
     beta: float = field(
@@ -126,10 +410,14 @@ class GOLDConfig(SFTConfig):
             "Divergence."
         },
     )
-    max_completion_length: int = field(
-        default=128,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
+
+    # --------------------------------
+    
+
     student_model_revision: str = field(
         default="main",
         metadata={
@@ -157,10 +445,8 @@ class GOLDConfig(SFTConfig):
             "tokenizer as the student model (not recommended for cross-tokenizer distillation)."
         },
     )
-    disable_dropout: bool = field(
-        default=True,
-        metadata={"help": "Whether to disable dropouts in `model`."},
-    )
+
+    
     seq_kd: bool = field(
         default=False,
         metadata={
@@ -309,6 +595,7 @@ class GOLDConfig(SFTConfig):
             "help": "Whether to enable sleep mode for the colocated vLLM engine. When `True`, the engine sleeps during the optimizer step and wakes for weight sync and generation."
         },
     )
+
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
@@ -317,55 +604,21 @@ class GOLDConfig(SFTConfig):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
-    log_completions_steps: int = field(
-        default=100,
-        metadata={
-            "help": "Number of steps between logging (prompt, completion) pairs. Only used if `log_completions` is "
-            "set to `True`."
-        },
-    )
-    num_completions_to_print: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
-    )
-    wandb_entity: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The entity to store runs under.")},
-    )
-    wandb_project: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The project to store runs under.")},
-    )
-    wandb_run_group: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The group to store runs under.")},
-    )
     wandb_log_unique_prompts: bool = field(
         default=True,
         metadata={
             "help": ("Whether to log the unique prompts to wandb. This will create a new run for each unique prompt.")
         },
     )
-    callbacks: list[str] = field(
-        default_factory=lambda: [],
-        metadata={"help": "The callbacks to run during training."},
-    )
-    hub_model_revision: Optional[str] = field(
-        default="main", metadata={"help": "The Hub model branch to push the model to."}
-    )
-    num_completions_to_print: int = field(default=5, metadata={"help": "Number of completions to print."})
-    overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
-    push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
-    trl_project: str = field(
-        default="smollm3",
-        metadata={
-            "help": "The TRL project to use for evaluation. This is used to determine the path to the evaluation script."
-        },
-    )
+    num_completions_to_print: Optional[int] = field(
+            default=None,
+            metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
+        )
 
     def __post_init__(self):
-        super().__post_init__()
-        # check lmbda and beta are in the range [0, 1]
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0.0 or self.lmbda > 1.0:
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
         if self.beta < 0.0 or self.beta > 1.0:
@@ -374,8 +627,9 @@ class GOLDConfig(SFTConfig):
         # Validate that max_length is sufficient for max_completion_length
         if self.max_length is not None and self.max_completion_length >= self.max_length:
             raise ValueError(
-                f"max_completion_length ({self.max_completion_length}) must be smaller than max_length ({self.max_length}) "
-                f"to leave room for the prompt. Consider increasing max_length or reducing max_completion_length."
+                f"max_completion_length ({self.max_completion_length}) must be smaller than max_length "
+                f"({self.max_length}) to leave room for the prompt. Consider increasing max_length or reducing "
+                "max_completion_length."
             )
 
         if self.steps_per_generation is None:
