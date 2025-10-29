@@ -96,6 +96,13 @@ class GOLDConfig(SFTConfig):
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=1e-7,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+
+    # GOLD-specific parameters
     temperature: float = field(
         default=0.9,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
