@@ -72,7 +72,6 @@ scikit = [
     "scikit-learn"
 ]
 test = [
-    "parameterized",
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
@@ -89,6 +88,9 @@ vlm = [
     "Pillow",
     "torchvision",
     "num2words==0.5.14"
+]
+math_verify = [
+    "math-verify>=0.5.2",
 ]
 dev = [
     # bco
@@ -110,7 +112,6 @@ dev = [
     "bitsandbytes",
     # scikit: included in bco
     # test
-    "parameterized",
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",

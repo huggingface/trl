@@ -16,12 +16,12 @@
 import torch
 from torch import nn
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_torch_accelerator, torch_device
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
 
-from .testing_utils import TrlTestCase, require_peft
+from .testing_utils import TrlTestCase, require_peft, require_torch_accelerator
 
 
 if is_peft_available():
@@ -154,3 +154,56 @@ class TestActivationOffloading(TrlTestCase):
         assert torch.allclose(out1, out2, rtol=1e-5)
         for g1, g2 in zip(grads1, grads2):
             assert torch.allclose(g1, g2, rtol=1e-5)
+
+    @require_torch_accelerator
+    def test_tensor_deduplication(self):
+        """Test that deduplication works correctly for tensors sharing storage"""
+
+        class ModelWithViews(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(100, 100)
+
+            def forward(self, x):
+                out = self.linear(x)
+                view1 = out.view(-1)
+                view2 = out.transpose(0, 1)
+                return view1.sum() + view2.sum()
+
+        model = ModelWithViews().to(torch_device)
+        offload_ctx = OffloadActivations(min_offload_size=1)
+        offload_ctx.update_model_params(model)
+
+        x = torch.randn(10, 100, device=torch_device, requires_grad=True)
+        with offload_ctx:
+            loss = model(x)
+
+        total_tensor_ids = offload_ctx.tensor_id
+        assert total_tensor_ids > 0, "Should have created tensor IDs"
+
+        # modified=True means offloaded to CPU, modified=False means kept on GPU (deduplicated)
+        deduplicated_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if not modified)
+        offloaded_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if modified)
+
+        assert offloaded_count > 0, "Should have offloaded at least one tensor"
+        assert deduplicated_count > 0, "Should have deduplicated at least one tensor (view)"
+
+        unique_storages_offloaded = len(offload_ctx.storage_to_tensor_id)
+        assert unique_storages_offloaded < total_tensor_ids, (
+            f"Deduplication should result in fewer storages ({unique_storages_offloaded}) "
+            f"than total tensors ({total_tensor_ids})"
+        )
+
+        loss.backward()
+
+    @require_torch_accelerator
+    def test_parameter_filtering(self):
+        """Test that model parameters are filtered during offloading"""
+        model = nn.Sequential(nn.Linear(10, 20), nn.Linear(20, 10)).to(torch_device)
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+
+        assert len(offload_ctx.param_storages) > 0, "Should have tracked parameter storages"
+
+        param_ptrs = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
+        assert offload_ctx.param_storages == param_ptrs, "Tracked storages should match parameter storages"

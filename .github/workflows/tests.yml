@@ -12,6 +12,9 @@ on:
       - "tests/**.py"
       - "trl/**.py"
       - "pyproject.toml"
+      # Exclude if only experimental code/tests
+      - "!trl/experimental/**"
+      - "!tests/experimental/**"
 
 env:
   TQDM_DISABLE: 1

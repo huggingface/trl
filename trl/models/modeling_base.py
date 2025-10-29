@@ -153,8 +153,13 @@ class PreTrainedModelWrapper(nn.Module):
 
         current_device = cls._get_current_device()
         if isinstance(pretrained_model_name_or_path, str):
-            is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
-            is_loaded_in_4bit = pretrained_kwargs["load_in_4bit"] if "load_in_4bit" in pretrained_kwargs else False
+            quantization_config = pretrained_kwargs.get("quantization_config", None)
+            if quantization_config is not None:
+                is_loaded_in_8bit = getattr(quantization_config, "load_in_8bit", False)
+                is_loaded_in_4bit = getattr(quantization_config, "load_in_4bit", False)
+            else:
+                is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
+                is_loaded_in_4bit = pretrained_kwargs["load_in_4bit"] if "load_in_4bit" in pretrained_kwargs else False
         else:
             is_loaded_in_8bit = getattr(pretrained_model_name_or_path, "is_loaded_in_8bit", False)
             is_loaded_in_4bit = getattr(pretrained_model_name_or_path, "is_loaded_in_4bit", False)
