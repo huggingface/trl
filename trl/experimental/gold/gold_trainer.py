@@ -1528,10 +1528,16 @@ class GOLDTrainer(SFTTrainer):
                 model.config._attn_implementation = "paged_attention"
             else:
                 model.config._attn_implementation = "sdpa_paged"
-            generated_outputs = model.generate_batch(
-                inputs["prompts"].tolist(),
-                generation_config=generation_config,
-            )
+            prompt_mask = inputs.get("prompt_attention_mask")
+            prompts_tensor = inputs["prompts"]
+            if prompt_mask is not None:
+                prompt_sequences = [
+                    row[mask.bool()].detach().cpu().tolist()
+                    for row, mask in zip(prompts_tensor, prompt_mask, strict=True)
+                ]
+            else:
+                prompt_sequences = [row.detach().cpu().tolist() for row in prompts_tensor]
+            generated_outputs = model.generate_batch(prompt_sequences, generation_config=generation_config)
             model.config._attn_implementation = previous_attn
 
             completion_ids = [output.generated_tokens for output in generated_outputs.values()]
