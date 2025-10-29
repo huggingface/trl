@@ -1135,7 +1135,6 @@ class RLOOTrainer(BaseTrainer):
                 "padding": True,
                 "padding_side": "left",
                 "max_length": self.max_prompt_length,
-                "add_generation_prompt": True,
                 "truncation": True,
                 "add_special_tokens": False,
             }
@@ -1145,6 +1144,7 @@ class RLOOTrainer(BaseTrainer):
                     **processor_kwargs,
                     tokenize=True,
                     return_dict=True,
+                    add_generation_kwargs=True,
                     **self.chat_template_kwargs,
                 )
             else:
