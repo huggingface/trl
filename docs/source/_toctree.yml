@@ -111,6 +111,8 @@
 - sections:
   - local: bco_trainer
     title: BCO
+  - local: gold_trainer
+    title: GOLD
   - local: openenv
     title: OpenEnv Integration
   title: Experimental
