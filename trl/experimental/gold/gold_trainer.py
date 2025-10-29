@@ -966,7 +966,15 @@ class GOLDTrainer(SFTTrainer):
 
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
-        required_columns = ["prompts", "prompt_attention_mask"]
+        required_columns = [
+            "prompts",
+            "prompt_attention_mask",
+            "messages",
+            "chat_template_kwargs",
+            "tools",
+            "original_prompt_text",
+            "original_completion_text",
+        ]
         if self._signature_columns is None:
             self._signature_columns = required_columns
         else:
