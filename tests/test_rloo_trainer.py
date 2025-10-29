@@ -1291,10 +1291,11 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_thinking_disabled(self):
+    def test_training_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = RLOOConfig(
+            bf16=False,
             output_dir=self.tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=3,
