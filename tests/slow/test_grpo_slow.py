@@ -67,12 +67,12 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
     @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
-    def test_training_with_liger_grpo_loss(self, model_name):
+    def test_training_with_liger_grpo_kernel(self, model_name):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,
             num_generations=3,
-            use_liger_loss=True,
+            use_liger_kernel=True,
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
@@ -108,14 +108,14 @@ class TestGRPOTrainerSlow(TrlTestCase):
     @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     @require_peft
-    def test_training_with_liger_grpo_loss_and_peft(self, model_name):
+    def test_training_with_liger_grpo_kernel_and_peft(self, model_name):
         from peft import LoraConfig, TaskType
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,
             num_generations=3,
-            use_liger_loss=True,
+            use_liger_kernel=True,
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",

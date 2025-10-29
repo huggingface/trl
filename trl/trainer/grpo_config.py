@@ -218,8 +218,6 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
-        use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use the Liger GRPO loss.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
             logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
@@ -594,10 +592,6 @@ class GRPOConfig(TrainingArguments):
             "non-truncated completions are considered."
         },
     )
-    use_liger_loss: bool = field(
-        default=False,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
-    )
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
@@ -687,5 +681,5 @@ class GRPOConfig(TrainingArguments):
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
-        if self.delta is not None and self.use_liger_loss:
-            raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+        if self.delta is not None and self.use_liger_kernel:
+            raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")

@@ -156,11 +156,9 @@ class DPOConfig(TrainingArguments):
             [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
             corresponding weights for each loss type.
 
-        use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use Liger loss.
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
-            the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is `True`.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -377,16 +375,12 @@ class DPOConfig(TrainingArguments):
             "corresponding weights for each loss type."
         },
     )
-    use_liger_loss: bool = field(
-        default=False,
-        metadata={"help": "Whether to use Liger loss."},
-    )
     base_model_attribute_name: str = field(
         default="model",
         metadata={
             "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
             "model  from the model when the model does not have a `get_decoder` method in the case when "
-            "`use_liger_loss` is `True`."
+            "`use_liger_kernel` is `True`."
         },
     )
     beta: float = field(
