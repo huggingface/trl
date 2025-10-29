@@ -39,6 +39,8 @@
     title: Liger Kernel
   - local: peft_integration
     title: PEFT
+  - local: rapidfire_integration
+    title: RapidFire AI
   - local: trackio_integration
     title: Trackio
   - local: unsloth_integration
