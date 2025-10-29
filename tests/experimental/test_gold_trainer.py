@@ -400,6 +400,47 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     assert completion_texts[0] == llama_tokenizer.decode(completion_ids, skip_special_tokens=False)
 
 
+@pytest.mark.slow
+def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.use_transformers_paged = False
+    trainer.processing_class = smollm_tokenizer
+
+    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
+    batch = collator([openr1_examples[0]])
+    batch = {k: v.cpu() for k, v in batch.items()}
+
+    class DummyModel:
+        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+            assert torch.equal(input_ids, batch["prompts"])
+            assert torch.equal(attention_mask, batch["prompt_attention_mask"])
+            return SimpleNamespace(sequences=batch["input_ids"])
+
+    generation_config = SimpleNamespace(max_completion_length=None, temperature=None, top_k=None, top_p=None)
+    pad_id = smollm_tokenizer.pad_token_id
+    new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
+        trainer,
+        DummyModel(),
+        {"prompts": batch["prompts"], "prompt_attention_mask": batch["prompt_attention_mask"]},
+        generation_config,
+        pad_id,
+    )
+
+    assert torch.equal(new_ids, batch["input_ids"])
+    assert torch.all(new_mask == 1)
+
+    prompt_len = int(batch["prompt_attention_mask"].sum().item())
+    assert torch.all(new_labels[0, :prompt_len] == -100)
+    assert torch.equal(new_labels[0, prompt_len:], batch["input_ids"][0, prompt_len:])
+
+    prompt_tokens = batch["prompts"][0, batch["prompt_attention_mask"][0].bool()]
+    decoded_prompt = smollm_tokenizer.decode(prompt_tokens.tolist(), skip_special_tokens=False)
+    assert prompt_texts[0] == decoded_prompt
+
+    assistant_completion = openr1_examples[0]["messages"][-1]["content"].strip()
+    assert assistant_completion in completion_texts[0]
+
+
 def test_generalized_jsd_loss_accepts_probability_inputs():
     student_probs = torch.tensor([[[0.6, 0.3, 0.1]]])
     teacher_probs = torch.tensor([[[0.5, 0.4, 0.1]]])
