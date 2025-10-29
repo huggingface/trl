@@ -42,7 +42,7 @@ class GKDConfig(SFTConfig):
         teacher_model_name_or_path (`str`, *optional*):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
             trained.
-        teacher_model_init_kwargs (`dict[str, Any]]`, *optional*):
+        teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):

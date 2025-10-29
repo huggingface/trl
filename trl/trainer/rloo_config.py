@@ -378,7 +378,7 @@ class RLOOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
-            "and woken for weight sync and generation."
+            "and be woken for weight sync and generation."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
@@ -512,7 +512,7 @@ class RLOOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_log_unique_prompts: Optional[bool] = field(
+    wandb_log_unique_prompts: bool = field(
         default=False,
         metadata={
             "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
