@@ -37,6 +37,3 @@ previous_trainable_params = {n: param.clone() for n, param in trainer.model.name
 
 trainer.train()
 ```
-
-
-
