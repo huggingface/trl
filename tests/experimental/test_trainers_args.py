@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
@@ -21,9 +22,14 @@ from ..testing_utils import TrlTestCase, require_sklearn
 
 
 class TestTrainerArg(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_sklearn
-    def test_bco(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_bco(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = BCOConfig(
