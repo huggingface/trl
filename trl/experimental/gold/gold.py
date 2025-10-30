@@ -21,17 +21,34 @@
 # ///
 
 """
-# Full training: python trl/experimental/gold/gold.py \
-    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \ --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \ --learning_rate 2e-5 \ --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 8 \ --output_dir gold-model \ --num_train_epochs 1 \ --push_to_hub \
+# Full training:
+python trl/experimental/gold/gold.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gold-model \
+    --num_train_epochs 1 \
+    --push_to_hub \
     --gradient_checkpointing
 
-# LoRA: python trl/experimental/gold/gold.py \
-    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \ --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name trl-lib/chatbot_arena_completions \ --learning_rate 2e-4 \ --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 8 \ --output_dir gold-model \ --num_train_epochs 1 \ --push_to_hub \
-    --gradient_checkpointing \ --use_peft \ --lora_r 64 \ --lora_alpha 16
+# LoRA:
+python trl/experimental/gold/gold.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-4 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gold-model \
+    --num_train_epochs 1 \
+    --push_to_hub \
+    --gradient_checkpointing \
+    --use_peft \
+    --lora_r 64 \
+    --lora_alpha 16
 """
 
 from datasets import load_dataset
