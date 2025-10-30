@@ -1286,8 +1286,6 @@ class GOLDTrainer(SFTTrainer):
         """
 
         if logits_are_probs:
-            student_logits = student_logits.clamp_min(0)
-            teacher_logits = teacher_logits.clamp_min(0)
             student_log_probs = torch.log(student_logits.clamp_min(1e-8))
             teacher_log_probs = torch.log(teacher_logits.clamp_min(1e-8))
         else:
