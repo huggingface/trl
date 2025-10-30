@@ -17,47 +17,141 @@ from typing import Any, Optional
 
 from transformers import TrainingArguments
 
-from ...trainer.sft_config import SFTConfig
-
 
 @dataclass
-class GOLDConfig(SFTConfig):
-    """s
-    Configuration class for [`GOLDTrainer`].
+class GOLDConfig(TrainingArguments):
+    r"""
+    Configuration class for the [`GOLDTrainer`].
 
     This class includes only the parameters that are specific to GOLD training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
 
-    Args:
-        temperature (`float`, *optional*, defaults to `0.9`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
+    Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`GOLDTrainer`] is provided as a string.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropouts in `model`.
+
+        > Parameters that control the data preprocessing
+
+        dataset_num_proc (`int`, *optional*):
+            Number of processes to use for processing the dataset.
+        eos_token (`str`, *optional*):
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
+            `processing_class.eos_token`.
+        pad_token (`str`, *optional*):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
+        max_length (`int`, *optional*, defaults to `1024`):
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
+            If `None`, no truncation is applied.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
+
+        > Parameters that control generation
+
         lmbda (`float`, *optional*, defaults to `0.5`):
             Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy
             student-generated outputs).
+        steps_per_generation (`int`, *optional*):
+            Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`.
+        max_completion_length (`int`, *optional*, defaults to `128`):
+            Maximum number of tokens to generate per completion.
+        temperature (`float`, *optional*, defaults to `0.9`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float`, *optional*, defaults to `0.95`):
+            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
+            `1.0` to consider all tokens.
+        top_k (`int`, *optional*):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
+            disabled and all tokens are considered.
+        use_transformers_paged (`bool`, *optional*, defaults to `False`):
+            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
+            paged implementation will be used for generation instead of the default padded implementation. This
+            parameter is only effective when `use_vllm` is set to `False`.
+
+        > Parameters that control generation acceleration powered by vLLM
+
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
+            instead of the default model.generate(). Requires `vllm` to be installed.
+        vllm_mode (`str`, *optional*, defaults to `"server"`):
+            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
+            `"colocate"`.
+
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+              server is running (start with `trl vllm-serve`).
+            - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
+              separate server but may cause resource contention with training.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
+        vllm_guided_decoding_regex (`str`, *optional*):
+            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+
+        > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+
+        vllm_server_base_url (`str`, *optional*):
+            Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `vllm_server_host` and
+            `vllm_server_port` are ignored.
+        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server to connect to. Ignored if `vllm_server_base_url` is provided.
+        vllm_server_port (`int`, *optional*, defaults to `8000`):
+            Port of the vLLM server to connect to. Ignored if `vllm_server_base_url` is provided.
+        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
+            timeout, a `ConnectionError` is raised.
+
+        > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
+
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
+            Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
+            `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
+            `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
+            for weight sync and generation.
+
+        > Parameters that control the training
         beta (`float`, *optional*, defaults to `0.5`):
             Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
             beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
-        max_completion_length (`int`, *optional*, defaults to `128`):
-            Maximum number of tokens to generate per completion.
-        teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
-            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
-            trained.
-        teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
-        teacher_tokenizer_name_or_path (`str` or `None`, *optional*, defaults to `None`):
-            Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same tokenizer as
-            the student model (not recommended for cross-tokenizer distillation).
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
-        seq_kd (`bool`, *optional*, defaults to `False`):
-            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
-            teacher-generated output).
         use_uld_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
+        use_extended_uld (`bool`, *optional*, defaults to `True`):
+            Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities across
+            student and teacher tokenizations. When True, the trainer will compute token mappings and merge
+            probabilities for split tokens; when False, ULD will use simple positional truncation like in the original
+            ULD paper.
+        uld_use_hybrid_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use a hybrid loss that combines ULD loss and JSD loss. When True, the final loss is a
+            combination of JSD for known token mappings and ULD for unknown token mappings.
+        uld_hybrid_matched_weight (`float`, *optional*):
+            Weight for the matched token loss component when using hybrid ULD + JSD loss. This weight scales the JSD
+            loss computed over tokens that have a direct mapping between student and teacher tokenizations. If None,
+            uses adaptive weighting based on vocabulary overlap. Must be set together with
+            `uld_hybrid_unmatched_weight` (both None or both float).
+        uld_hybrid_unmatched_weight (`float`, *optional*):
+            Weight for the unmatched token loss component when using hybrid ULD + JSD loss. This weight scales the ULD
+            loss computed over tokens that do not have a direct mapping between student and teacher tokenizations. If
+            None, uses adaptive weighting based on vocabulary overlap. Must be set together with
+            `uld_hybrid_matched_weight` (both None or both float).
         uld_crossentropy_weight (`float`, *optional*, defaults to `0.0`):
-            Weight for the cross-entropy loss component in ULD loss. If 0, only ULD distillation loss is used.
+            Weight for the cross-entropy loss component in ULD loss.
         uld_distillation_weight (`float`, *optional*, defaults to `1.0`):
             Weight for the distillation loss component in ULD loss.
         uld_student_temperature (`float`, *optional*, defaults to `1.0`):
@@ -68,56 +162,95 @@ class GOLDConfig(SFTConfig):
             Whether to skip EOS token for student in ULD loss computation.
         uld_skip_teacher_eos (`bool`, *optional*, defaults to `True`):
             Whether to skip EOS token for teacher in ULD loss computation.
-        use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
-        vllm_mode (`str`, *optional*, defaults to `"server"`):
-            Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
-            (run vLLM in the same process).
-        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
-            Host of the vLLM server for the student model (if `vllm_mode="server"`).
-        vllm_server_port (`int`, *optional*, defaults to `8001`):
-            Port of the vLLM server for the student model (if `vllm_mode="server"`).
-        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Timeout for connecting to the student vLLM server (if `vllm_mode="server"`).
-        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
-            GPU memory utilization for the colocated student vLLM engine (if `vllm_mode="colocate"`). It is recommended
-            to set this to a low value if the student and teacher models share the same GPU.
-        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
-            Tensor parallel size for the colocated student vLLM engine (if `vllm_mode="colocate"`).
-        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
-            Regex for vLLM guided decoding for the student model.
-        vllm_sync_frequency (`int`, *optional*, defaults to `1`):
-            Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
-            every step.
-        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for the student vLLM engine. If set to `True`, the engine will enter sleep
-            mode after each training step to save resources.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
+        > Parameters that control the logging
+
+        log_completions (`bool`, *optional*, defaults to `False`):
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
+            it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+        num_completions_to_print (`int`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
+        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
+            are logged.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-7,
         metadata={"help": "The initial learning rate for AdamW."},
     )
-
-    # GOLD-specific parameters
-    temperature: float = field(
-        default=0.9,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
-    )
-    top_p: float = field(
-        default=0.95,
+    logging_steps: float = field(
+        default=10,
         metadata={
-            "help": "If set to float < 1, only the smallest set of most probable tokens with probabilities that add up to "
-            "`top_p` or higher are kept for generation."
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
         },
     )
-    top_k: int = field(
-        default=0,
-        metadata={"help": "The number of highest probability vocabulary tokens to keep for top-k-filtering."},
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
     )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
+
+    # Parameters that control the model
+    model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "the `GOLDTrainer` is provided as a string."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropouts in `model`."},
+    )
+
+    # Parameters that control the data preprocessing
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    eos_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to "
+            "`processing_class.eos_token`."
+        },
+    )
+    pad_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is "
+            "also `None`, it falls back to `processing_class.eos_token`."
+        },
+    )
+    max_length: Optional[int] = field(
+        default=1024,
+        metadata={
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
+            "the right. If `None`, no truncation is applied."
+        },
+    )
+    pad_to_multiple_of: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
+
+    # Parameters that control generation
     lmbda: float = field(
         default=0.5,
         metadata={
@@ -125,6 +258,122 @@ class GOLDConfig(SFTConfig):
             "student-generated outputs)."
         },
     )
+    steps_per_generation: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`."},
+    )
+    max_completion_length: int = field(
+        default=128,
+        metadata={"help": "Maximum number of tokens to generate per completion."},
+    )
+    temperature: float = field(
+        default=0.9,
+        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+    )
+    top_p: float = field(
+        default=0.95,
+        metadata={
+            "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. "
+            "Set to 1.0 to consider all tokens."
+        },
+    )
+    top_k: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "top-k-filtering is disabled and all tokens are considered."
+        },
+    )
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
+            "`transformers` paged implementation will be used for generation instead of the default padded "
+            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
+        },
+    )
+
+    # Parameters that control generation acceleration powered by vLLM
+    use_vllm: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for "
+            "generation instead of the default `model.generate()`. Requires `vllm` to be installed."
+        },
+    )
+    vllm_mode: str = field(
+        default="server",
+        metadata={
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
+            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
+            "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
+            "contention with training."
+        },
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
+            "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
+            "model implementation."
+        },
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
+            "and be woken for weight sync and generation."
+        },
+    )
+    vllm_guided_decoding_regex: Optional[str] = field(
+        default=None,
+        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
+
+    # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+    vllm_server_base_url: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
+            "and `vllm_server_port` are ignored."
+        },
+    )
+    vllm_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": "Host of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
+    )
+    vllm_server_port: int = field(
+        default=8000,
+        metadata={"help": "Port of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
+    )
+    vllm_server_timeout: float = field(
+        default=240.0,
+        metadata={
+            "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up "
+            "after the timeout, a `ConnectionError` is raised."
+        },
+    )
+
+    # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
+    vllm_gpu_memory_utilization: float = field(
+        default=0.3,
+        metadata={
+            "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
+        },
+    )
+    vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "launching the vLLM server via the `--vllm_tensor_parallel_size` flag."
+        },
+    )
+
+    # Parameters that control the training
     beta: float = field(
         default=0.5,
         metadata={
@@ -133,56 +382,6 @@ class GOLDConfig(SFTConfig):
             "Divergence."
         },
     )
-    max_completion_length: int = field(
-        default=128,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
-    )
-    student_model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "Revision of the student model to use. If not specified, the default revision of the model will be used."
-        },
-    )
-    teacher_model_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Model name or path of the teacher model. If `None`, the teacher model will be the same as the "
-            "model being trained."
-        },
-    )
-    teacher_model_init_kwargs: Optional[dict[str, Any]] = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "teacher model from a string."
-        },
-    )
-    teacher_tokenizer_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same "
-            "tokenizer as the student model (not recommended for cross-tokenizer distillation)."
-        },
-    )
-    disable_dropout: bool = field(
-        default=True,
-        metadata={"help": "Whether to disable dropouts in `model`."},
-    )
-    seq_kd: bool = field(
-        default=False,
-        metadata={
-            "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
-            "FT on teacher-generated output)."
-        },
-    )
-    steps_per_generation: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps."
-        },
-    )
-
-    # ULD Loss parameters
     use_uld_loss: bool = field(
         default=False,
         metadata={
@@ -193,10 +392,10 @@ class GOLDConfig(SFTConfig):
         default=True,
         metadata={
             "help": (
-                "Whether to enable extended ULD alignment that uses tokenizers to align and merge token "
-                "probabilities across student and teacher tokenizations. When True, the trainer will compute "
-                "token mappings and merge probabilities for split tokens; when False, ULD will use simple "
-                "positional truncation like in the original ULD paper."
+                "Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities "
+                "across student and teacher tokenizations. When True, the trainer will compute token mappings and "
+                "merge probabilities for split tokens; when False, ULD will use simple positional truncation like in "
+                "the original ULD paper."
             )
         },
     )
@@ -205,7 +404,7 @@ class GOLDConfig(SFTConfig):
         metadata={
             "help": (
                 "Whether to use a hybrid loss that combines ULD loss and JSD loss. When True, the final loss is a "
-                "a combination of JSD for known token mappings and ULD for unknown token mappings."
+                "combination of JSD for known token mappings and ULD for unknown token mappings."
             )
         },
     )
@@ -216,7 +415,7 @@ class GOLDConfig(SFTConfig):
                 "Weight for the matched token loss component when using hybrid ULD + JSD loss. This weight scales "
                 "the JSD loss computed over tokens that have a direct mapping between student and teacher "
                 "tokenizations. If None, uses adaptive weighting based on vocabulary overlap. Must be set together "
-                "with uld_hybrid_unmatched_weight (both None or both float)."
+                "with `uld_hybrid_unmatched_weight` (both None or both float)."
             )
         },
     )
@@ -227,7 +426,7 @@ class GOLDConfig(SFTConfig):
                 "Weight for the unmatched token loss component when using hybrid ULD + JSD loss. This weight scales "
                 "the ULD loss computed over tokens that do not have a direct mapping between student and teacher "
                 "tokenizations. If None, uses adaptive weighting based on vocabulary overlap. Must be set together "
-                "with uld_hybrid_matched_weight (both None or both float)."
+                "with `uld_hybrid_matched_weight` (both None or both float)."
             )
         },
     )
@@ -247,7 +446,6 @@ class GOLDConfig(SFTConfig):
         default=1.0,
         metadata={"help": "Temperature for teacher logits in ULD loss computation."},
     )
-
     uld_skip_student_eos: bool = field(
         default=True,
         metadata={"help": "Whether to skip EOS token for student in ULD loss computation."},
@@ -256,66 +454,11 @@ class GOLDConfig(SFTConfig):
         default=True,
         metadata={"help": "Whether to skip EOS token for teacher in ULD loss computation."},
     )
-
-    # transformers paged attention
-    use_transformers_paged: bool = field(
+    activation_offloading: bool = field(
         default=False,
-        metadata={
-            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
-            "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation."
-        },
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
-    # vLLM parameters
-    use_vllm: bool = field(
-        default=False,
-        metadata={"help": "Whether to use vLLM for generating completions. Requires `vllm` to be installed."},
-    )
-    vllm_mode: str = field(
-        default="server",
-        metadata={
-            "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
-        },
-    )
-    vllm_server_host: str = field(
-        default="0.0.0.0",
-        metadata={"help": 'Host of the vLLM server when `vllm_mode="server"`.'},
-    )
-    vllm_server_port: int = field(
-        default=8001,
-        metadata={"help": 'Port of the vLLM server when `vllm_mode="server"`.'},
-    )
-    vllm_server_timeout: float = field(
-        default=240.0,
-        metadata={"help": 'Timeout (in seconds) for connecting to the vLLM server when `vllm_mode="server"`.'},
-    )
-    vllm_gpu_memory_utilization: float = field(
-        default=0.9,
-        metadata={
-            "help": 'GPU memory utilization for the colocated vLLM engine when `vllm_mode="colocate"`. Lower values reduce contention when sharing a device with the student/teacher models.'
-        },
-    )
-    vllm_tensor_parallel_size: int = field(
-        default=1,
-        metadata={"help": 'Tensor parallel size for the colocated vLLM engine when `vllm_mode="colocate"`.'},
-    )
-    vllm_guided_decoding_regex: Optional[str] = field(
-        default=None,
-        metadata={"help": "Regex pattern used for vLLM guided decoding (optional)."},
-    )
-    vllm_sync_frequency: int = field(
-        default=1,
-        metadata={
-            "help": "Frequency (in training steps) to synchronize model weights to the vLLM engine. Set to 1 to sync after every step."
-        },
-    )
-    vllm_enable_sleep_mode: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to enable sleep mode for the colocated vLLM engine. When `True`, the engine sleeps during the optimizer step and wakes for weight sync and generation."
-        },
-    )
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
@@ -324,55 +467,24 @@ class GOLDConfig(SFTConfig):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
-    log_completions_steps: int = field(
-        default=100,
-        metadata={
-            "help": "Number of steps between logging (prompt, completion) pairs. Only used if `log_completions` is "
-            "set to `True`."
-        },
-    )
     num_completions_to_print: Optional[int] = field(
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_entity: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The entity to store runs under.")},
-    )
-    wandb_project: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The project to store runs under.")},
-    )
-    wandb_run_group: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The group to store runs under.")},
-    )
     wandb_log_unique_prompts: bool = field(
-        default=True,
+        default=False,
         metadata={
-            "help": ("Whether to log the unique prompts to wandb. This will create a new run for each unique prompt.")
-        },
-    )
-    callbacks: list[str] = field(
-        default_factory=lambda: [],
-        metadata={"help": "The callbacks to run during training."},
-    )
-    hub_model_revision: Optional[str] = field(
-        default="main", metadata={"help": "The Hub model branch to push the model to."}
-    )
-    num_completions_to_print: int = field(default=5, metadata={"help": "Number of completions to print."})
-    overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
-    push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
-    trl_project: str = field(
-        default="smollm3",
-        metadata={
-            "help": "The TRL project to use for evaluation. This is used to determine the path to the evaluation script."
+            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
+            "all prompts are logged."
         },
     )
 
     def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
         super().__post_init__()
-        # check lmbda and beta are in the range [0, 1]
+
+        # Check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0.0 or self.lmbda > 1.0:
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
         if self.beta < 0.0 or self.beta > 1.0:
@@ -381,8 +493,9 @@ class GOLDConfig(SFTConfig):
         # Validate that max_length is sufficient for max_completion_length
         if self.max_length is not None and self.max_completion_length >= self.max_length:
             raise ValueError(
-                f"max_completion_length ({self.max_completion_length}) must be smaller than max_length ({self.max_length}) "
-                f"to leave room for the prompt. Consider increasing max_length or reducing max_completion_length."
+                f"max_completion_length ({self.max_completion_length}) must be smaller than max_length "
+                f"({self.max_length}) to leave room for the prompt. Consider increasing max_length or reducing "
+                "max_completion_length."
             )
 
         if self.steps_per_generation is None:

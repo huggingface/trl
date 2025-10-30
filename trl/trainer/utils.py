@@ -1566,9 +1566,9 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 def print_prompt_completions_sample(
     prompts: list,
     completions: list,
-    rewards: dict[str, list[float]],
-    advantages: list[float],
     step: int,
+    rewards: Optional[dict[str, list[float]]] = None,
+    advantages: Optional[list[float]] = None,
     num_samples: int = None,
 ) -> None:
     """
@@ -1582,12 +1582,12 @@ def print_prompt_completions_sample(
             List of prompts. Can be either strings or lists of messages.
         completions (`list`):
             List of completions corresponding to the prompts. Can be either strings or lists of messages.
-        rewards (`dict[str, list[float]]`):
-            Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
+        rewards (`dict[str, list[float]]`, *optional*):
+            Dictionary where keys are reward names and values are lists of rewards.
+        advantages (`list[float]`, *optional*):
+            List of advantages corresponding to the prompts and completions.
         num_samples (`int`, *optional*):
             Number of random samples to display. If `None` (default), all items will be displayed.
 
@@ -1599,7 +1599,7 @@ def print_prompt_completions_sample(
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
     >>> advantages = [0.987, 0.654]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
+    >>> print_prompt_completions_sample(prompts, completions, step=42, rewards=rewards, advantages=advantages)
     ╭──────────────────────────── Step 42 ─────────────────────────────╮
     │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
     │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
@@ -1622,9 +1622,11 @@ def print_prompt_completions_sample(
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
+    rewards = rewards or {}
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
-    table.add_column("Advantage", style="bold magenta", justify="right")
+    if advantages is not None:
+        table.add_column("Advantage", style="bold magenta", justify="right")
 
     def format_entry(entry) -> Text:
         t = Text()
@@ -1661,15 +1663,18 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
-        advantages = [advantages[i] for i in indices]
+        advantages = [advantages[i] for i in indices] if advantages is not None else None
 
     for i in range(len(prompts)):
-        reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
+        reward_and_advantage_values = []
+        for key in rewards.keys():
+            reward_and_advantage_values.append(f"{rewards[key][i]:.2f}")  # 2 decimals
+        if advantages is not None:
+            reward_and_advantage_values.append(f"{advantages[i]:.2f}")
         table.add_row(
             format_entry(prompts[i]),
             format_entry(completions[i]),
-            *reward_values,
-            f"{advantages[i]:.2f}",
+            *reward_and_advantage_values,
         )
         table.add_section()  # Adds a separator between rows
 
