@@ -41,6 +41,7 @@ from transformers import (
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
+    PretrainedConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
@@ -114,41 +115,76 @@ class DataCollatorForChatML:
                 formatted_message = self.tokenizer.apply_chat_template(
                     message, tokenize=False, add_generation_prompt=False
                 )
+
                 tokenized_message = self.tokenizer(
                     formatted_message,
+                    truncation=False,
+                    padding=False,
+                    return_tensors=None,
+                    add_special_tokens=False,
+                    return_offsets_mapping=True,
+                )
+                message_input_ids_full = tokenized_message["input_ids"]
+                offsets = tokenized_message.get("offset_mapping")
+
+                if offsets is not None:
+                    prompt_char_len = len(formatted_prompt)
+                    completion_start_idx_full = next(
+                        (idx for idx, (start, _) in enumerate(offsets) if start >= prompt_char_len),
+                        len(message_input_ids_full),
+                    )
+                else:
+                    tokenized_prompt_full = self.tokenizer(
+                        formatted_prompt,
+                        truncation=False,
+                        padding=False,
+                        return_tensors=None,
+                        add_special_tokens=False,
+                    )
+                    completion_start_idx_full = len(tokenized_prompt_full["input_ids"])
+
+                prompt_tokens_full = message_input_ids_full[:completion_start_idx_full]
+                completion_input_ids_full = message_input_ids_full[completion_start_idx_full:]
+
+                if self.max_length is not None and len(message_input_ids_full) > self.max_length:
+                    completion_ids = completion_input_ids_full
+                    if len(completion_ids) >= self.max_length:
+                        completion_ids = completion_ids[-self.max_length :]
+                        prompt_ids = []
+                    else:
+                        max_prompt_tokens = self.max_length - len(completion_ids)
+                        prompt_ids = prompt_tokens_full[-max_prompt_tokens:] if max_prompt_tokens > 0 else []
+                    message_input_ids = prompt_ids + completion_ids
+                else:
+                    message_input_ids = message_input_ids_full
+                    prompt_ids = prompt_tokens_full
+
+                input_ids.append(message_input_ids)
+                attention_mask.append([1] * len(message_input_ids))
+                current_prompt_ids = prompt_ids
+            else:
+                message_input_ids = example["input_ids"]
+                input_ids.append(message_input_ids)
+                if "attention_mask" in example:
+                    attention_mask.append(example["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(message_input_ids))
+
+                tokenized_prompt = self.tokenizer(
+                    formatted_prompt,
                     truncation=True,
-                    max_length=self.max_length,
+                    max_length=len(message_input_ids),
                     padding=False,
                     return_tensors=None,
                     add_special_tokens=False,
                 )
-                input_ids.append(tokenized_message["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(tokenized_message["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
-            else:
-                input_ids.append(example["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(example["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(example["input_ids"]))
+                current_prompt_ids = tokenized_prompt["input_ids"]
 
-            tokenized_prompt = self.tokenizer(
-                formatted_prompt,
-                truncation=True,
-                max_length=len(input_ids[-1]),
-                padding=False,
-                return_tensors=None,
-                add_special_tokens=False,
-            )
+            prompts_input_ids.append(current_prompt_ids)
+            prompt_attention_mask.append([1] * len(current_prompt_ids))
 
-            prompts_input_ids.append(tokenized_prompt["input_ids"])
-            prompt_attention_mask.append(tokenized_prompt["attention_mask"])
-
-            # Create the labels that will have all but the completion tokens of the example["input_ids"] set to ignore_index
             label = [self.ignore_index] * len(input_ids[-1])
-            completion_start_idx = len(tokenized_prompt["input_ids"])
+            completion_start_idx = len(current_prompt_ids)
             label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
             labels.append(label)
 
@@ -226,7 +262,7 @@ class RewardDataCollatorWithPadding:
     `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
 
     Args:
-        tokenizer (`PreTrainedTokenizerBase`):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used for encoding the data.
         padding (`bool | str | PaddingStrategy`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
@@ -245,7 +281,7 @@ class RewardDataCollatorWithPadding:
         warnings.warn(
             "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
             "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
-            DeprecationWarning,
+            FutureWarning,
         )
         super().__init__(*args, **kwargs)
 
@@ -1116,7 +1152,7 @@ def generate(
             The tensor containing the input queries.
         pad_token_id (`int`):
             The token ID representing the pad token.
-        generation_config (`GenerationConfig`):
+        generation_config ([`~transformers.GenerationConfig`]):
             The configuration for the generation process.
 
     Returns:
@@ -1256,34 +1292,6 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
-    # docstyle-ignore
-    """
-    Decodes the input tensor and strips the padding tokens.
-
-    > [!WARNING]
-    > This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy
-    > the code into your codebase and use it from there.
-
-    Args:
-        inputs (`torch.Tensor`):
-            The input tensor to be decoded.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer used to decode the input tensor.
-
-    Returns:
-        `list[str]`:
-            The list of decoded strings with padding tokens stripped.
-    """
-    warnings.warn(
-        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
-        "to keep using it, please copy the code into your codebase and use it from there.",
-        DeprecationWarning,
-    )
-    decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
-    return [d.replace(tokenizer.pad_token, "") for d in decoded]
-
-
 def generate_model_card(
     base_model: str | None,
     model_name: str,
@@ -1299,7 +1307,7 @@ def generate_model_card(
     comet_url: str | None = None,
 ) -> ModelCard:
     """
-    Generate a `ModelCard` from a template.
+    Generate a [`~huggingface_hub.ModelCard`] from a template.
 
     Args:
         base_model (`str` or `None`):
@@ -1328,7 +1336,7 @@ def generate_model_card(
             ArXiv paper ID as `YYMM.NNNNN`.
 
     Returns:
-        `ModelCard`:
+        [`~huggingface_hub.ModelCard`]:
             A ModelCard object.
     """
     card_data = ModelCardData(
@@ -1382,7 +1390,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     Args:
         name (`str`):
             Table name.
-        table (`pd.DataFrame`):
+        table (`pandas.DataFrame`):
             The Pandas DataFrame containing the table to log.
     """
     if not is_comet_available():
@@ -1930,47 +1938,6 @@ def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tens
     return batch
 
 
-def truncate_with_protected_tokens(ids: list[int], target_length: int, protected_tokens: list[int]) -> list[int]:
-    """
-    Truncate list to target length while preserving protected tokens.
-
-    Args:
-        ids (`list[int]`):
-            Input sequence of token IDs.
-        target_length (`int`):
-            Desired length of the output sequence.
-        protected_tokens (`list[int]`):
-            List of token IDs that should be preserved in the output.
-
-    Returns:
-        `list[int]`: Truncated sequence.
-
-    Raises:
-        `ValueError`: If `len(protected_tokens ∩ seq) > target_length`.
-    """
-    protected_set = set(protected_tokens)
-
-    # Count protected tokens
-    num_protected = sum(1 for t in ids if t in protected_set)
-    if num_protected > target_length:
-        raise ValueError(
-            f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-            f"Please increase target length to at least {num_protected} or disable truncation."
-        )
-    num_non_protected_needed = target_length - num_protected
-    result = []
-
-    # Iterate backward to select all protected tokens and rightmost non-protected tokens
-    for t in reversed(ids):
-        if t in protected_set:
-            result.append(t)
-        elif num_non_protected_needed > 0:
-            result.append(t)
-            num_non_protected_needed -= 1
-    # Reverse to restore original order
-    return result[::-1]
-
-
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
 
@@ -2036,3 +2003,19 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
     architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
+
+
+def get_config_model_id(config: PretrainedConfig) -> str:
+    """
+    Retrieve the model identifier from a given model configuration.
+
+    Args:
+        config ([`~transformers.PreTrainedConfig`]):
+            Configuration from which to extract the model identifier.
+
+    Returns:
+        `str`:
+            The model identifier associated with the model configuration.
+    """
+    # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing: Qwen2-VL and Qwen2.5-VL. See GH-4323
+    return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")

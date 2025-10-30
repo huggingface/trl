@@ -62,4 +62,3 @@ class TestRichProgressCallback(TrlTestCase):
         )
 
         trainer.train()
-        trainer.train()

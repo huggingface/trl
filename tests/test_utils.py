@@ -20,7 +20,6 @@ import numpy as np
 import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.utils import is_peft_available
 
@@ -30,7 +29,6 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     RepeatSampler,
     batch_generation,
-    decode_and_strip_padding,
     entropy_from_logits,
     flush_left,
     flush_right,
@@ -42,7 +40,6 @@ from trl.trainer.utils import (
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
     split_tensor_dict,
-    truncate_with_protected_tokens,
     unsplit_pixel_values_by_grid,
 )
 
@@ -169,21 +166,6 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
-
-
-class TestDecodeAndStripPadding(TrlTestCase):
-    def setup_method(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-
-    def test_example_with_padding(self):
-        inputs = self.tokenizer(["Hello world", "Hello"], padding=True, return_tensors="pt")
-        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        assert decoded == ["Hello world", "Hello"]
-
-    def test_example_without_padding(self):
-        inputs = self.tokenizer(["Hello", "Hello"], padding=False, return_tensors="pt")
-        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        assert decoded == ["Hello", "Hello"]
 
 
 class TestGenerateModelCard(TrlTestCase):
@@ -646,14 +628,9 @@ class TestRepeatRandomSampler(TrlTestCase):
 
 
 class TestEntropyFromLogits(TrlTestCase):
-    @parameterized.expand(
-        [
-            (dtype, chunk_size, shape)
-            for dtype in (torch.float64, torch.float32, torch.float16, torch.bfloat16)
-            for chunk_size in (1, 16)
-            for shape in [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)]
-        ]
-    )
+    @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
+    @pytest.mark.parametrize("chunk_size", [1, 16])
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     def test_entropy_from_logits_2_dims(self, dtype, chunk_size, shape):
         logits = torch.randn(*shape, dtype=dtype)
         if dtype in (torch.float64, torch.float32):
@@ -820,7 +797,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
 
 class TestSelectiveLogSoftmax(TrlTestCase):
-    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
         vocab_size = 1024
@@ -1007,84 +984,6 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert len(result["image_grid_thw"]) == 2
         assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
         assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
-
-
-class TestTruncateWithProtectedTokens(TrlTestCase):
-    def test_basic_example(self):
-        """Test the basic example from the problem description."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = [2, 3]
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        expected_ids = [2, 3, 5]
-        assert new_ids == expected_ids
-
-    def test_no_truncation_needed(self):
-        """Test when target length equals current length."""
-        prompt_ids = [1, 2, 3]
-        protected_tokens = [2]
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        assert new_ids == prompt_ids
-
-    def test_no_protected_tokens(self):
-        """Test truncation with no protected tokens (normal right truncation)."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = []
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        expected_ids = [3, 4, 5]  # Last 3 tokens
-        assert new_ids == expected_ids
-
-    def test_all_tokens_protected(self):
-        """Test when all remaining tokens are protected."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = [3, 4, 5]
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        expected_ids = [3, 4, 5]
-        assert new_ids == expected_ids
-
-    def test_too_many_protected_tokens(self):
-        """Test error when too many protected tokens for target length."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = [1, 2, 3, 4]
-        target_length = 3
-
-        with pytest.raises(ValueError):
-            truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-    def test_single_batch_single_token(self):
-        """Test edge case with single batch and single token."""
-        prompt_ids = [5]
-        protected_tokens = [5]
-        target_length = 1
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        assert new_ids == prompt_ids
-
-    def test_order_preservation(self):
-        """Test that relative order is preserved."""
-        prompt_ids = [10, 2, 20, 3, 30, 40]
-        protected_tokens = [2, 3]
-        target_length = 4
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        # Should keep protected tokens 2, 3 and last 2 non-protected tokens 30, 40
-        # Order should be: 2, 3, 30, 40 (maintaining original relative positions)
-        expected_ids = [2, 3, 30, 40]
-
-        assert new_ids == expected_ids
 
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):

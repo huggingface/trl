@@ -19,7 +19,6 @@ import numpy as np
 import pytest
 import torch
 from datasets import Dataset, features, load_dataset
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -29,15 +28,19 @@ from transformers import (
     PreTrainedTokenizerBase,
     is_vision_available,
 )
-from transformers.testing_utils import (
-    get_device_properties,
-    require_liger_kernel,
-    require_torch_gpu_if_bnb_not_multi_backend_enabled,
-)
+from transformers.testing_utils import get_device_properties
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_no_wandb, require_peft, require_vision
+from .testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_no_wandb,
+    require_peft,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+    require_vision,
+)
 
 
 if is_vision_available():
@@ -185,22 +188,23 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "loss_type",
         [
-            ("sigmoid",),
-            ("hinge",),
-            ("ipo",),
-            ("exo_pair",),
-            ("nca_pair",),
-            ("robust",),
-            ("bco_pair",),
-            ("sppo_hard",),
-            ("aot",),
-            ("aot_pair",),
-            ("discopop",),
-            ("apo_zero",),
-            ("apo_down",),
-        ]
+            "sigmoid",
+            "hinge",
+            "ipo",
+            "exo_pair",
+            "nca_pair",
+            "robust",
+            "bco_pair",
+            "sppo_hard",
+            "aot",
+            "aot_pair",
+            "discopop",
+            "apo_zero",
+            "apo_down",
+        ],
     )
     def test_train_loss_types(self, loss_type):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -338,7 +342,7 @@ class TestDPOTrainer(TrlTestCase):
                 loss_weights=[1.0, 0.5, 0.1],  # Wrong length
             )
 
-    @parameterized.expand([(None,), (0.5,)])
+    @pytest.mark.parametrize("rpo_alpha", [None, 0.5])
     def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -635,6 +639,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_dpo_lora_bf16_autocast_llama(self):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
+        from transformers import BitsAndBytesConfig
 
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -648,7 +653,9 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -682,7 +689,8 @@ class TestDPOTrainer(TrlTestCase):
         # save peft adapter
         trainer.save_model()
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "loss_type, pre_compute, gen_during_eval",
         [
             ("sigmoid", False, False),
             ("sigmoid", False, True),
@@ -708,7 +716,7 @@ class TestDPOTrainer(TrlTestCase):
             ("robust", False, True),
             ("robust", True, False),
             ("robust", True, True),
-        ]
+        ],
     )
     @require_bitsandbytes
     @require_peft
@@ -718,6 +726,7 @@ class TestDPOTrainer(TrlTestCase):
     )
     def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
         from peft import LoraConfig
+        from transformers import BitsAndBytesConfig
 
         lora_config = LoraConfig(
             r=16,
@@ -728,7 +737,9 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1284,7 +1295,8 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "beta, loss_type",
         [
             (0.1, "sigmoid"),
             (0.1, "apo_zero"),
@@ -1296,7 +1308,7 @@ class TestDPOTrainer(TrlTestCase):
             (0.5, "apo_down"),
             (0.5, "sppo_hard"),
             (0.5, "nca_pair"),
-        ]
+        ],
     )
     @require_liger_kernel
     def test_dpo_trainer_with_liger(self, beta, loss_type):
@@ -1402,13 +1414,15 @@ class TestDPOTrainer(TrlTestCase):
 
 @require_vision
 class TestDPOVisionTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            # ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # ("trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
-        ]
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        ],
     )
     def test_vdpo_trainer(self, model_id):
         # fmt: off
@@ -1494,7 +1508,8 @@ class TestDPOVisionTrainer(TrlTestCase):
 
 
 class TestDPOConfig(TrlTestCase):
-    @parameterized.expand([(f_div_type, as_str) for f_div_type in list(FDivergenceType) for as_str in [False, True]])
+    @pytest.mark.parametrize("as_string", [False, True])
+    @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
     def test_f_divergence_type(self, f_divergence_type, as_string: bool):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,

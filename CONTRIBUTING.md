@@ -1,15 +1,10 @@
 # How to contribute to TRL?
 
-Everyone is welcome to contribute, and we value everybody's contribution. Code
-contributions are not the only way to help the community. Answering questions, helping
-others, and improving the documentation are also immensely valuable.
+Everyone is welcome to contribute, and we value everybody's contribution. Code contributions are not the only way to help the community. Answering questions, helping others, and improving the documentation are also immensely valuable.
 
-It also helps us if you spread the word! Reference the library in blog posts
-about the awesome projects it made possible, shout out on Twitter every time it has
-helped you, or simply ⭐️ the repository to say thank you.
+It also helps us if you spread the word! Reference the library in blog posts about the awesome projects it made possible, shout out on Twitter every time it has helped you, or simply ⭐️ the repository to say thank you.
 
-However you choose to contribute, please be mindful and respect our
-[code of conduct](https://github.com/huggingface/trl/blob/main/CODE_OF_CONDUCT.md).
+However you choose to contribute, please be mindful and respect our [code of conduct](https://github.com/huggingface/trl/blob/main/CODE_OF_CONDUCT.md).
 
 **This guide was heavily inspired by the awesome [scikit-learn guide to contributing](https://github.com/scikit-learn/scikit-learn/blob/main/CONTRIBUTING.md).**
 
@@ -22,9 +17,7 @@ There are several ways you can contribute to TRL:
 * Implement trainers for new post-training algorithms.
 * Contribute to the examples or the documentation.
 
-If you don't know where to start, there is a special [Good First
-Issue](https://github.com/huggingface/trl/labels/%F0%9F%91%B6%20good%20first%20issue) listing. It will give you a list of
-open issues that are beginner-friendly and help you start contributing to open-source. The best way to do that is to open a Pull Request and link it to the issue that you'd like to work on. We try to give priority to opened PRs as we can easily track the progress of the fix, and if the contributor does not have time anymore, someone else can take the PR over.
+If you don't know where to start, there is a special [Good First Issue](https://github.com/huggingface/trl/labels/%F0%9F%91%B6%20good%20first%20issue) listing. It will give you a list of open issues that are beginner-friendly and help you start contributing to open-source. The best way to do that is to open a Pull Request and link it to the issue that you'd like to work on. We try to give priority to opened PRs as we can easily track the progress of the fix, and if the contributor does not have time anymore, someone else can take the PR over.
 
 For something slightly more challenging, you can also take a look at the [Good Second Issue](https://github.com/huggingface/trl/labels/Good%20Second%20Issue) list. In general though, if you feel like you know what you're doing, go for it and we'll help you get there! 🚀
 
@@ -48,14 +41,12 @@ Do your best to follow these guidelines when submitting a bug-related issue or a
 
 The TRL library is robust and reliable thanks to users who report the problems they encounter.
 
-Before you report an issue, we would really appreciate it if you could **make sure the bug was not
-already reported** (use the search bar on GitHub under Issues). Your issue should also be related to bugs in the library itself, and not your code.
+Before you report an issue, we would really appreciate it if you could **make sure the bug was not already reported** (use the search bar on GitHub under Issues). Your issue should also be related to bugs in the library itself, and not your code.
 
 Once you've confirmed the bug hasn't already been reported, please include the following information in your issue so we can quickly resolve it:
 
 * Your **OS type and version**, **Python**, **PyTorch**, **TRL** and **Transformers** versions.
-* A short, self-contained, code snippet that allows us to reproduce the bug in
-  less than 30s.
+* A short, self-contained, code snippet that allows us to reproduce the bug in less than 30s.
 * The *full* traceback if an exception is raised.
 * Attach any other additional information, like screenshots, you think may help.
 
@@ -106,29 +97,20 @@ We're always looking for improvements to the documentation that make it more cle
 
 ## Submitting a pull request (PR)
 
-Before writing code, we strongly advise you to search through the existing PRs or
-issues to make sure that nobody is already working on the same thing. If you are
-unsure, it is always a good idea to open an issue to get some feedback.
+Before writing code, we strongly advise you to search through the existing PRs or issues to make sure that nobody is already working on the same thing. If you are unsure, it is always a good idea to open an issue to get some feedback.
 
-You will need basic `git` proficiency to be able to contribute to
-TRL. `git` is not the easiest tool to use but it has the greatest
-manual. Type `git --help` in a shell and enjoy. If you prefer books, [Pro
-Git](https://git-scm.com/book/en/v2) is a very good reference.
+You will need basic `git` proficiency to be able to contribute to TRL. `git` is not the easiest tool to use but it has the greatest manual. Type `git --help` in a shell and enjoy. If you prefer books, [Pro Git](https://git-scm.com/book/en/v2) is a very good reference.
 
 Follow these steps to start contributing:
 
-1. Fork the [repository](https://github.com/huggingface/trl) by
-   clicking on the 'Fork' button on the repository's page. This creates a copy of the code
-   under your GitHub user account.
+1. Fork the [repository](https://github.com/huggingface/trl) by clicking on the 'Fork' button on the repository's page. This creates a copy of the code under your GitHub user account.
 
-2. Clone your fork to your local disk, and add the base repository as a remote. The following command
-   assumes you have your public SSH key uploaded to GitHub. See the following guide for more
-   [information](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository).
+2. Clone your fork to your local disk, and add the base repository as a remote. The following command assumes you have your public SSH key uploaded to GitHub. See the following guide for more [information](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository).
 
    ```bash
-   $ git clone git@github.com:<your Github handle>/trl.git
-   $ cd trl
-   $ git remote add upstream https://github.com/huggingface/trl.git
+   git clone git@github.com:<your Github handle>/trl.git
+   cd trl
+   git remote add upstream https://github.com/huggingface/trl.git
    ```
 
 3. Create a new branch to hold your development changes, and do this for every new PR you work on.
@@ -136,15 +118,15 @@ Follow these steps to start contributing:
    Start by synchronizing your `main` branch with the `upstream/main` branch (more details in the [GitHub Docs](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/syncing-a-fork)):
 
    ```bash
-   $ git checkout main
-   $ git fetch upstream
-   $ git merge upstream/main
+   git checkout main
+   git fetch upstream
+   git merge upstream/main
    ```
 
    Once your `main` branch is synchronized, create a new branch from it:
 
    ```bash
-   $ git checkout -b a-descriptive-name-for-my-changes
+   git checkout -b a-descriptive-name-for-my-changes
    ```
 
    **Do not** work on the `main` branch.
@@ -152,32 +134,28 @@ Follow these steps to start contributing:
 4. Set up a development environment by running the following command in a conda or a virtual environment you've created for working on this library:
 
    ```bash
-   $ pip install -e .[dev]
+   pip install -e .[dev]
    ```
 
-   (If TRL was already installed in the virtual environment, remove
-   it with `pip uninstall trl` before reinstalling it.)
+   (If TRL was already installed in the virtual environment, remove it with `pip uninstall trl` before reinstalling it.)
 
-   Alternatively, if you are using [Visual Studio Code](https://code.visualstudio.com/Download), the fastest way to get set up is by using
-   the provided Dev Container. Documentation on how to get started with dev containers is available [here](https://code.visualstudio.com/docs/remote/containers).
+   Alternatively, if you are using [Visual Studio Code](https://code.visualstudio.com/Download), the fastest way to get set up is by using the provided Dev Container. Check [the documentation on how to get started with dev containers](https://code.visualstudio.com/docs/remote/containers).
 
 5. Develop the features on your branch.
 
-   As you work on the features, you should make sure that the test suite
-   passes. You should run the tests impacted by your changes like this (see 
-   below an explanation regarding the environment variable):
+    As you work on the features, you should make sure that the test suite passes. You should run the tests impacted by your changes like this (see below an explanation regarding the environment variable):
 
-   ```bash
-   $ pytest tests/<TEST_TO_RUN>.py
-   ```
-   
-   > For the following commands leveraging the `make` utility.
+    ```bash
+    pytest tests/<TEST_TO_RUN>.py
+    ```
 
-   You can also run the full suite with the following command.
+    > For the following commands leveraging the `make` utility.
 
-   ```bash
-   $ make test
-   ```
+    You can also run the full suite with the following command.
+
+    ```bash
+    make test
+    ```
 
     TRL relies on `ruff` for maintaining consistent code formatting across its source files. Before submitting any PR, you should apply automatic style corrections and run code verification checks.
 
@@ -186,58 +164,50 @@ Follow these steps to start contributing:
     To apply these checks and corrections in one step, use:
 
     ```bash
-    $ make precommit
+    make precommit
     ```
 
     This command runs the following:
-    - Executes `pre-commit` hooks to automatically fix style issues with `ruff` and other tools.
-    - Runs additional scripts such as adding copyright information.
+
+    * Executes `pre-commit` hooks to automatically fix style issues with `ruff` and other tools.
+    * Runs additional scripts such as adding copyright information.
 
     If you prefer to apply the style corrections separately or review them individually, the `pre-commit` hook will handle the formatting for the files in question.
 
-   Once you're happy with your changes, add changed files using `git add` and
-   make a commit with `git commit` to record your changes locally:
+    Once you're happy with your changes, add changed files using `git add` and make a commit with `git commit` to record your changes locally:
 
-   ```bash
-   $ git add modified_file.py
-   $ git commit
-   ```
+    ```bash
+    git add modified_file.py
+    git commit
+    ```
 
-   Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
+    Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
 
-   It is a good idea to sync your copy of the code with the original
-   repository regularly. This way you can quickly account for changes:
+    It is a good idea to sync your copy of the code with the original
+    repository regularly. This way you can quickly account for changes:
 
-   ```bash
-   $ git fetch upstream
-   $ git rebase upstream/main
-   ```
+    ```bash
+    git fetch upstream
+    git rebase upstream/main
+    ```
 
-   Push the changes to your account using:
+    Push the changes to your account using:
 
-   ```bash
-   $ git push -u origin a-descriptive-name-for-my-changes
-   ```
+    ```bash
+    git push -u origin a-descriptive-name-for-my-changes
+    ```
 
-6. Once you are satisfied (**and the checklist below is happy too**), go to the
-   webpage of your fork on GitHub. Click on 'Pull request' to send your changes
-   to the project maintainers for review.
+6. Once you are satisfied (**and the checklist below is happy too**), go to the webpage of your fork on GitHub. Click on 'Pull request' to send your changes to the project maintainers for review.
 
 7. It's ok if maintainers ask you for changes. It happens to core contributors too! To ensure everyone can review your changes in the pull request, work on your local branch and push the updates to your fork. They will automatically appear in the pull request.
-
 
 ### Checklist
 
 1. The title of your pull request should be a summary of its contribution;
-2. If your pull request addresses an issue, please mention the issue number in
-   the pull request description to make sure they are linked (and people
-   consulting the issue know you are working on it);
-3. To indicate a work in progress please prefix the title with `[WIP]`, or mark
-   the PR as a draft PR. These are useful to avoid duplicated work, and to differentiate
-   it from PRs ready to be merged;
+2. If your pull request addresses an issue, please mention the issue number in the pull request description to make sure they are linked (and people consulting the issue know you are working on it);
+3. To indicate a work in progress please prefix the title with `[WIP]`, or mark the PR as a draft PR. These are useful to avoid duplicated work, and to differentiate it from PRs ready to be merged;
 4. Make sure existing tests pass;
 5. Add high-coverage tests. No quality testing = no merge.
-
 
 ### Tests
 
@@ -248,7 +218,7 @@ We use `pytest` to run the tests. From the root of the
 repository here's how to run tests with `pytest` for the library:
 
 ```bash
-$ python -m pytest -sv ./tests
+python -m pytest -sv ./tests
 ```
 
 That's how `make test` is implemented (without the `pip install` line)!
@@ -260,23 +230,23 @@ you're working on.
 
 1. **Use defaults when appropriate**:  
 
-Provide default values unless the parameter's value varies significantly by use case. For example, datasets or models should not have defaults, but parameters like `learning_rate` should.
+    Provide default values unless the parameter's value varies significantly by use case. For example, datasets or models should not have defaults, but parameters like `learning_rate` should.
 
 2. **Prioritize proven defaults**:  
 
-Default values should align with those recommended in the original paper or method. Alternatives require strong evidence of superior performance in most cases.
+    Default values should align with those recommended in the original paper or method. Alternatives require strong evidence of superior performance in most cases.
 
 3. **Ensure safety and predictability**:  
 
-Defaults must be safe, expected and reliable. Avoid settings that could lead to surprising outcomes, such as excessive memory usage or poor performance in edge cases.
+    Defaults must be safe, expected and reliable. Avoid settings that could lead to surprising outcomes, such as excessive memory usage or poor performance in edge cases.
 
 4. **Balance consistency and flexibility**:  
 
-Aim for consistent defaults across similar functions or methods. However, consistency should not be preferred to point 2 or 3.
+    Aim for consistent defaults across similar functions or methods. However, consistency should not be preferred to point 2 or 3.
 
 5. **Opt-in for new features**:  
 
-Do not enable new features or improvements (e.g., novel loss functions) by default. Users should explicitly opt-in to use these.
+    Do not enable new features or improvements (e.g., novel loss functions) by default. Users should explicitly opt-in to use these.
 
 ### Writing documentation
 
@@ -319,7 +289,7 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
 * **String Defaults:**
   * Ensured that default string values are wrapped in double quotes:
 
-    ```python
+    ```txt
     defaults to `"foo"`
     ```
 
@@ -328,7 +298,7 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
 * **Default Value Formatting:**
   * Consistently surrounded default values with backticks for improved formatting:
 
-    ```python
+    ```txt
     defaults to `4`
     ```
 
@@ -365,8 +335,8 @@ Our approach to deprecation and backward compatibility is flexible and based on 
 
 When a feature or component is marked for deprecation, its use will emit a warning message. This warning will include:
 
-- **Transition Guidance**: Instructions on how to migrate to the alternative solution or replacement.
-- **Removal Version**: The target version when the feature will be removed, providing users with a clear timeframe to transition.
+* **Transition Guidance**: Instructions on how to migrate to the alternative solution or replacement.
+* **Removal Version**: The target version when the feature will be removed, providing users with a clear timeframe to transition.
 
 Example:
 
@@ -380,9 +350,9 @@ Example:
 
 The deprecation and removal schedule is based on each feature's usage and impact, with examples at two extremes:
 
-- **Experimental or Low-Use Features**: For a feature that is experimental or has limited usage, backward compatibility may not be maintained between releases. Users should therefore anticipate potential breaking changes from one version to the next.
+* **Experimental or Low-Use Features**: For a feature that is experimental or has limited usage, backward compatibility may not be maintained between releases. Users should therefore anticipate potential breaking changes from one version to the next.
 
-- **Widely-Used Components**: For a feature with high usage, we aim for a more gradual transition period of approximately **5 months**, generally scheduling deprecation around **5 minor releases** after the initial warning.
+* **Widely-Used Components**: For a feature with high usage, we aim for a more gradual transition period of approximately **5 months**, generally scheduling deprecation around **5 minor releases** after the initial warning.
 
 These examples represent the two ends of a continuum. The specific timeline for each feature will be determined individually, balancing innovation with user stability needs.
 
@@ -392,22 +362,22 @@ Warnings play a critical role in guiding users toward resolving potential issues
 
 #### Definitions
 
-- **Correct**: An operation is correct if it is valid, follows the intended approach, and aligns with the current best practices or guidelines within the codebase. This is the recommended or intended way to perform the operation.
-- **Supported**: An operation is supported if it is technically valid and works within the current codebase, but it may not be the most efficient, optimal, or recommended way to perform the task. This includes deprecated features or legacy approaches that still work but may be phased out in the future.
+* **Correct**: An operation is correct if it is valid, follows the intended approach, and aligns with the current best practices or guidelines within the codebase. This is the recommended or intended way to perform the operation.
+* **Supported**: An operation is supported if it is technically valid and works within the current codebase, but it may not be the most efficient, optimal, or recommended way to perform the task. This includes deprecated features or legacy approaches that still work but may be phased out in the future.
 
 #### Choosing the right message
 
-- **Correct → No warning**:  
+* **Correct → No warning**:  
    If the operation is fully valid and expected, no message should be issued. The system is working as intended, so no warning is necessary.  
 
-- **Correct but deserves attention → No warning, possibly a log message**:
+* **Correct but deserves attention → No warning, possibly a log message**:
    When an operation is correct but uncommon or requires special attention, providing an informational message can be helpful. This keeps users informed without implying any issue. If available, use the logger to output this message. Example:  
 
    ```python
    logger.info("This is an informational message about a rare but correct operation.")
    ```
 
-- **Correct but very likely a mistake → Warning with option to disable**:  
+* **Correct but very likely a mistake → Warning with option to disable**:  
    In rare cases, you may want to issue a warning for a correct operation that’s very likely a mistake. In such cases, you must provide an option to suppress the warning. This can be done with a flag in the function. Example:  
 
    ```python
@@ -418,7 +388,7 @@ Warnings play a critical role in guiding users toward resolving potential issues
            # Do something
    ```
 
-- **Supported but not correct → Warning**:  
+* **Supported but not correct → Warning**:  
    If the operation is technically supported but is deprecated, suboptimal, or could cause future issues (e.g., conflicting arguments), a warning should be raised. This message should be actionable, meaning it must explain how to resolve the issue. Example:  
 
    ```python
@@ -428,7 +398,7 @@ Warnings play a critical role in guiding users toward resolving potential issues
            # Do something
    ```
 
-- **Not supported → Exception**:  
+* **Not supported → Exception**:  
    If the operation is invalid or unsupported, raise an exception. This indicates that the operation cannot be performed and requires immediate attention. Example:  
 
    ```python

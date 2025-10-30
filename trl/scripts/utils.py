@@ -59,7 +59,8 @@ class DatasetConfig:
     Configuration for a dataset.
 
     This class matches the signature of [`~datasets.load_dataset`] and the arguments are used directly in the
-    `datasets.load_dataset` function. You can refer to the `datasets.load_dataset` documentation for more details.
+    [`~datasets.load_dataset`] function. You can refer to the [`~datasets.load_dataset`] documentation for more
+    details.
 
     Parameters:
         path (`str`):
@@ -421,11 +422,11 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
     Load a mixture of datasets based on the configuration.
 
     Args:
-        mixture_config (`DatasetMixtureConfig`):
+        mixture_config ([`DatasetMixtureConfig`]):
             Script arguments containing dataset configuration.
 
     Returns:
-        `DatasetDict`:
+        [`~datasets.DatasetDict`]:
             Combined dataset(s) from the mixture configuration, with optional train/test split if `test_split_size` is
             set.
 

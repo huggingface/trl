@@ -59,25 +59,26 @@ class NashMDTrainer(OnlineDPOTrainer):
     It is implemented as a subclass of [`OnlineDPOTrainer`].
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model (`PreTrainedModelWrapper`):
+        ref_model ([`PreTrainedModelWrapper`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        reward_funcs (`transformers.PreTrainedModel`):
-            The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
-        judge (`BasePairwiseJudge`):
+        reward_funcs ([`~transformers.PreTrainedModel`]):
+            The reward model to score completions with, preferably an
+            [`~transformers.AutoModelForSequenceClassification`].
+        judge ([`BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
-        args (`NashMDConfig`):
+        args ([`NashMDConfig`]):
             The NashMD config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
@@ -94,14 +95,6 @@ class NashMDTrainer(OnlineDPOTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-
-        reward_model:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "nash-md"]
@@ -141,8 +134,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        # Deprecated parameters
-        reward_model: PreTrainedModel | nn.Module | None = None,
     ) -> None:
         super().__init__(
             model=model,
@@ -160,7 +151,6 @@ class NashMDTrainer(OnlineDPOTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-            reward_model=reward_model,
         )
 
         self._mixture_coef = self.args.mixture_coef

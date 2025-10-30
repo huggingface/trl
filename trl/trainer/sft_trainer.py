@@ -55,6 +55,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    get_config_model_id,
     pad,
     remove_none_values,
     selective_log_softmax,
@@ -62,7 +63,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig, PeftModel, PeftType
 
 
 logger = logging.get_logger(__name__)
@@ -274,9 +275,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
 
     Args:
-        processor (`ProcessorMixin`):
-            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin` and
-            include a `tokenizer` with a defined `pad_token_id`.
+        processor ([`~transformers.ProcessorMixin`]):
+            The processor used to tokenize text and process images. It must be a subclass of
+            [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         completion_only_loss (`bool`, *optional*, defaults to `False`):
@@ -349,11 +350,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
 
         if "messages" in examples[0]:  # conversational case
-            for example in examples:
-                prepare_multimodal_messages(example["messages"], len(example["images"]))
-            messages = [example["messages"] for example in examples]
+            messages = [prepare_multimodal_messages(example["messages"], example["images"]) for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
@@ -389,9 +391,13 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "prompt-completion data yet."
             )
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["completion"] = prepare_multimodal_messages(example["completion"], images=[])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
@@ -419,15 +425,26 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+        if "token_type_ids" in processed_prompts:  # special case for Gemma
+            prompt_token_type_ids = processed_prompts["token_type_ids"]
+            completion_token_type_ids = processed_completions["token_type_ids"]
+            token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
 
         # Flush left to reduce padding
-        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+        if "token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids
+            )
+        else:
+            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
         # Truncate if necessary
         if self.max_length is not None:
             input_ids = input_ids[:, : self.max_length]
             attention_mask = attention_mask[:, : self.max_length]
             completion_mask = completion_mask[:, : self.max_length]
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = token_type_ids[:, : self.max_length]
 
         # Create labels and mask padding tokens
         labels = input_ids.clone()
@@ -440,6 +457,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         output["input_ids"] = input_ids
         output["attention_mask"] = attention_mask
         output["labels"] = labels
+        if "token_type_ids" in processed_prompts:
+            output["token_type_ids"] = token_type_ids
         return output
 
 
@@ -573,7 +592,7 @@ class SFTTrainer(BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
@@ -591,11 +610,10 @@ class SFTTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -933,10 +951,13 @@ class SFTTrainer(BaseTrainer):
                         output = {}
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["prompt"], num_images=0)
-                                prepare_multimodal_messages(example["completion"], num_images=0)
+                                prompt = prepare_multimodal_messages(example["prompt"], images=[])
+                                completion = prepare_multimodal_messages(example["completion"], images=[])
+                            else:
+                                prompt = example["prompt"]
+                                completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"],
+                                prompt,
                                 tokenize=True,
                                 add_generation_prompt=True,
                                 tools=example.get("tools"),
@@ -946,7 +967,7 @@ class SFTTrainer(BaseTrainer):
                             # even for single examples, while for LLMs it returns lists of ints.
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"],
+                                prompt + completion,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -984,9 +1005,11 @@ class SFTTrainer(BaseTrainer):
                     else:  # language modeling case
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["messages"], num_images=0)
+                                messages = prepare_multimodal_messages(example["messages"], images=[])
+                            else:
+                                messages = example["messages"]
                             processed = processing_class.apply_chat_template(
-                                example["messages"],
+                                messages,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1085,13 +1108,15 @@ class SFTTrainer(BaseTrainer):
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 per_token_entropy = entropy_from_logits(outputs.logits)
+                # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
+                # do not correspond to actual input tokens.
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
                 if "attention_mask" in inputs:
                     attention_mask = inputs["attention_mask"]
-                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-                    virtual_attention_mask = torch.ones(
-                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                    )
-                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
                     entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
                 elif "position_ids" in inputs:
                     entropy = torch.mean(per_token_entropy)
@@ -1126,9 +1151,12 @@ class SFTTrainer(BaseTrainer):
                     shift_logits = outputs.logits[..., :-1, :].contiguous()
                     shift_labels = labels[..., 1:].contiguous()
 
-                # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
-                # not correspond to actual input labels.
-                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 # Get predictions
                 predictions = shift_logits.argmax(dim=-1)

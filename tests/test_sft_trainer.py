@@ -17,20 +17,36 @@ from unittest.mock import MagicMock
 
 import pytest
 import torch
+import transformers
 from datasets import load_dataset
-from parameterized import parameterized
+from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_flash_attn, require_liger_kernel
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 
-from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes, require_peft, require_vision
+from .testing_utils import (
+    TrlTestCase,
+    ignore_warnings,
+    require_bitsandbytes,
+    require_flash_attn,
+    require_liger_kernel,
+    require_peft,
+    require_vision,
+)
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
+    from peft import (
+        LoraConfig,
+        PeftModel,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
 
 
 class TestDFTLoss(TrlTestCase):
@@ -240,12 +256,13 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM",),
-            ("trl-internal-testing/tiny-GptOssForCausalLM",),
-        ]
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ],
     )
     def test_train(self, model_id):
         # Get the dataset
@@ -451,7 +468,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
-    def test_train_dense_with_peft_config(self):
+    def test_train_dense_with_peft_config_lora(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -485,6 +502,67 @@ class TestSFTTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model parameters to be the same
                 assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    @pytest.mark.parametrize(
+        "peft_type",
+        [
+            "prompt_tuning",
+            "prefix_tuning",
+            "prompt_encoder",
+        ],
+    )
+    @require_peft
+    def test_train_with_peft_config_prompt_tuning(self, peft_type):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer, p-tuning doesn't support gradient checkpointing
+        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        if peft_type == "prompt_tuning":
+            peft_config = PromptTuningConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+                tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            )
+        elif peft_type == "prefix_tuning":
+            peft_config = PrefixTuningConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+            )
+        elif peft_type == "prompt_encoder":
+            peft_config = PromptEncoderConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+                encoder_hidden_size=model.config.hidden_size,  # This will be overwritten below
+            )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+            else:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
@@ -811,7 +889,7 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    @parameterized.expand([("bfd",), ("wrapped",)])
+    @pytest.mark.parametrize("packing_strategy", ["bfd", "wrapped"])
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_train_packing(self, packing_strategy):
@@ -1251,17 +1329,18 @@ class TestSFTTrainer(TrlTestCase):
         for tag in ["sft", "trl"]:
             assert tag in trainer.model.model_tags
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # ("trl-internal-testing/tiny-Idefics3ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-        ]
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+        ],
     )
     @require_vision
     def test_train_vlm(self, model_id):
@@ -1302,8 +1381,58 @@ class TestSFTTrainer(TrlTestCase):
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
+    @pytest.mark.xfail(
+        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
+        strict=False,
+    )
     @require_vision
-    def test_train_vlm_prompt_completion(self):
+    def test_train_vlm_multi_image(self, model_id):
+        # Get the dataset
+        dataset = load_dataset(
+            "trl-internal-testing/zen-multi-image", "conversational_prompt_completion", split="train"
+        )
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
+    @require_vision
+    def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
 
@@ -1314,7 +1443,39 @@ class TestSFTTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+
+    # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator.
+    @require_vision
+    def test_train_vlm_prompt_completion_gemma(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1337,6 +1498,7 @@ class TestSFTTrainer(TrlTestCase):
     # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
     @pytest.mark.slow
     @require_vision
+    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
     def test_train_vlm_gemma_3n(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
@@ -1344,6 +1506,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,
             max_length=None,
             per_device_train_batch_size=1,
             gradient_checkpointing=True,
@@ -1364,20 +1527,26 @@ class TestSFTTrainer(TrlTestCase):
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if "model.vision_tower" in n:
-                # The vision tower is not updated, not sure why at this point.
+            if "model.audio_tower" in n or "model.embed_audio" in n:
+                # The audio embedding parameters are not updated because this dataset contains no audio data
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_train_vlm_text_only_data(self):
+    def test_train_vlm_text_only_data(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )

@@ -219,7 +219,7 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.24.0">
 
-            This parameter is deprecated and will be removed in version 0.25.0. Use `pad_token` (`str`) instead.
+            This parameter is deprecated and will be removed in version 0.26.0. Use `pad_token` (`str`) instead.
 
             </Deprecated>
     """

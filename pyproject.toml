@@ -70,7 +70,6 @@ scikit = [
     "scikit-learn"
 ]
 test = [
-    "parameterized",
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
@@ -88,27 +87,35 @@ vlm = [
     "torchvision",
     "num2words==0.5.14"
 ]
+math_verify = [
+    "math-verify>=0.5.2",
+]
 dev = [
+    # bco
     "scikit-learn",
     "joblib",
+    # deepspeed
     "deepspeed>=0.14.4",
+    # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
+    # liger
     "liger-kernel>=0.6.2",
+    # peft
     "peft>=0.8.0",
+    # quality
     "pre-commit",
     "hf-doc-builder",
+    # quantization
     "bitsandbytes",
-    "parameterized",
+    # scikit: included in bco
+    # test
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
-    "vllm==0.10.2",
-    "fastapi",
-    "pydantic",
-    "requests",
-    "uvicorn",
+    # vllm: not included in dev by default due to CUDA error; see GH-4228
+    # vlm
     "Pillow",
     "torchvision",
     "num2words==0.5.14"
