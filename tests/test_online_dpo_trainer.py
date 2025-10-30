@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+
 import pytest
 import transformers
 from datasets import Dataset, features, load_dataset
@@ -424,6 +426,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
 
+    @pytest.mark.xfail(
+        sys.version_info[:2] == (3, 9) and Version(transformers.__version__) < Version("4.57.2"),
+        reason="Blocked by upstream bug in transformers#41747 (tracked in trl#4308): fix merged, awaiting release >= 4.57.2",
+        strict=True,
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):
