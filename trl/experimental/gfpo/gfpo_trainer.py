@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from accelerate.utils import gather_object
@@ -194,7 +195,7 @@ class GFPOTrainer(_GRPOTrainer):
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
-            for prompt, completion in zip(prompts, completions_text):
+            for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:

@@ -12,23 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import os
-import sys
 from io import StringIO
 from unittest.mock import patch
 
-import pytest
 import yaml
 
 from .testing_utils import TrlTestCase
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="Transformers' generation codebase uses a Python >3.10 syntax (`str | None`), which seems to cause the CLI tests "
-    "to fail on Python <3.10.",  # let's say it's a known issue, but not expected to be fixed, because too niche
-)
 class TestCLI(TrlTestCase):
     def test_dpo(self):
         from trl.cli import main

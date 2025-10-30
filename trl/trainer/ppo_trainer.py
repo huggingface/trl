@@ -21,7 +21,6 @@ import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -147,18 +146,18 @@ class PPOTrainer(BaseTrainer):
     def __init__(
         self,
         args: PPOConfig,
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         model: nn.Module,
-        ref_model: Optional[nn.Module],
+        ref_model: nn.Module | None,
         reward_model: nn.Module,
         train_dataset: Dataset,
         value_model: nn.Module,
-        data_collator: Optional[DataCollatorWithPadding] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
+        data_collator: DataCollatorWithPadding | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
         # less commonly used
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        callbacks: Optional[list[TrainerCallback]] = None,
-        peft_config: Optional["PeftConfig"] = None,
+        callbacks: list[TrainerCallback] | None = None,
+        peft_config: "PeftConfig | None" = None,
     ) -> None:
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -379,7 +378,7 @@ class PPOTrainer(BaseTrainer):
             if self.ref_adapter_name:
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+    def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
 

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -107,7 +107,7 @@ class CPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -116,18 +116,18 @@ class CPOConfig(TrainingArguments):
         },
     )
 
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={
             "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
             "collator and your model is an encoder-decoder."
         },
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=None,
         metadata={
             "help": "Maximum length of the completion. This argument is required if you want to use the default data "
@@ -176,7 +176,7 @@ class CPOConfig(TrainingArguments):
         default=-100,
         metadata={"help": "Label pad token id."},
     )
-    padding_value: Optional[int] = field(
+    padding_value: int | None = field(
         default=None,
         metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
     )
@@ -191,18 +191,18 @@ class CPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "If `True`, generates and logs completions from the model to W&B during evaluation."},
     )
-    is_encoder_decoder: Optional[bool] = field(
+    is_encoder_decoder: bool | None = field(
         default=None,
         metadata={"help": "Whether the model is an encoder-decoder model."},
     )
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
             "from a string."
         },
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )

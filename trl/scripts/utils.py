@@ -21,7 +21,6 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Optional, Union
 
 import datasets
 import yaml
@@ -81,11 +80,11 @@ class DatasetConfig:
     """
 
     path: str
-    name: Optional[str] = None
-    data_dir: Optional[str] = None
-    data_files: Optional[Union[str, list[str], dict[str, str]]] = None
+    name: str | None = None
+    data_dir: str | None = None
+    data_files: str | list[str] | dict[str, str] | None = None
     split: str = "train"
-    columns: Optional[list[str]] = None
+    columns: list[str] | None = None
 
 
 @dataclass
@@ -136,7 +135,7 @@ class DatasetMixtureConfig:
         default=False,
         metadata={"help": "Whether to stream the datasets. If True, the datasets will be loaded in streaming mode."},
     )
-    test_split_size: Optional[float] = field(
+    test_split_size: float | None = field(
         default=None,
         metadata={
             "help": "Size of the test split. Refer to the `test_size` parameter in the `datasets.train_test_split` "
@@ -178,11 +177,11 @@ class ScriptArguments:
             https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: Optional[str] = field(
+    dataset_name: str | None = field(
         default=None,
         metadata={"help": "Path or name of the dataset to load. If `datasets` is provided, this will be ignored."},
     )
-    dataset_config: Optional[str] = field(
+    dataset_config: str | None = field(
         default=None,
         metadata={
             "help": "Dataset configuration name. Corresponds to the `name` argument of the `datasets.load_dataset` "
@@ -251,7 +250,7 @@ class TrlParser(HfArgumentParser):
     configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`, *optional*):
+        dataclass_types (`DataClassType | Iterable[DataClassType]`, *optional*):
             Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.
@@ -295,7 +294,7 @@ class TrlParser(HfArgumentParser):
 
     def __init__(
         self,
-        dataclass_types: Optional[Union[DataClassType, Iterable[DataClassType]]] = None,
+        dataclass_types: DataClassType | Iterable[DataClassType] | None = None,
         **kwargs,
     ):
         # Make sure dataclass_types is an iterable
@@ -316,7 +315,7 @@ class TrlParser(HfArgumentParser):
 
     def parse_args_and_config(
         self,
-        args: Optional[Iterable[str]] = None,
+        args: Iterable[str] | None = None,
         return_remaining_strings: bool = False,
         fail_with_unknown_args: bool = True,
     ) -> tuple[DataClass, ...]:

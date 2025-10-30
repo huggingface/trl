@@ -285,24 +285,6 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
 * **Definite Articles:** Removed definite articles where possible to streamline language. (Eg: Changed "The string to replicate" to "String to replicate")
 * **Type Annotations:**
   * Always include type definitions, indicating if a parameter is optional and specifying the default value.
-  * Note that `Optional` means that the value can be `None`, and `*optional*` means that it is not required for the user to pass a value.
-    E.g., for arguments that can't be `None` and aren't required:
-
-    ```txt
-    foo (`int`, *optional*, defaults to `4`):
-    ```
-
-    For arguments that can be `None` and are required:
-
-    ```txt
-    foo (`Optional[int]`):
-    ```
-
-    for arguments that can be `None` and aren't required (in this case, if the default value is `None`, you can omit it):
-
-    ```txt
-    foo (`Optional[int]`, *optional*):
-    ```
 
 * **String Defaults:**
   * Ensured that default string values are wrapped in double quotes:

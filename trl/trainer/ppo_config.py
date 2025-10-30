@@ -14,7 +14,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Literal
 
 from ..trainer.utils import OnPolicyConfig
 
@@ -76,11 +76,11 @@ class PPOConfig(OnPolicyConfig):
         default="EleutherAI/pythia-160m",
         metadata={"help": "Path to the reward model."},
     )
-    model_adapter_name: Optional[str] = field(
+    model_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
     )
-    ref_adapter_name: Optional[str] = field(
+    ref_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
     )

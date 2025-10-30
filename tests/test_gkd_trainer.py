@@ -68,7 +68,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         generated_texts = self.tokenizer.batch_decode(new_input_ids, skip_special_tokens=True)
 
         # Check if the generated texts start with the original prompts
-        for prompt, generated_text in zip(prompts, generated_texts):
+        for prompt, generated_text in zip(prompts, generated_texts, strict=True):
             assert generated_text.startswith(prompt), (
                 f"Generated text '{generated_text}' does not start with prompt '{prompt}'"
             )
