@@ -307,6 +307,7 @@ class PAPOTrainer(GRPOTrainer):
         perception_kl = (
             torch.exp(mask_img_per_token_logps - per_token_logps) - (mask_img_per_token_logps - per_token_logps) - 1
         )
+        perception_kl = torch.clamp(perception_kl, min=0.0, max=0.2)
         perception_loss = self.perception_loss_weight * perception_kl
 
         # >>> 3. Double Entropy Loss
