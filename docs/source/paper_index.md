@@ -612,7 +612,7 @@ config = GKDConfig(
 )
 ```
 
-Alternatively, you can use the [`GoldTrainer`] and [`GoldConfig`] to perform on-policy distillation with similar configuration:
+Alternatively, you can use the [`GoldTrainer`] and [`GoldConfig`] to perform on-policy distillation with a similar configuration:
 
 ```python
 from trl.experimental import GoldConfig
