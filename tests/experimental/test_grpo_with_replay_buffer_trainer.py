@@ -16,6 +16,7 @@ import pytest
 import torch
 from datasets import load_dataset
 
+from trl import GRPOTrainer
 from trl.experimental.grpo_with_replay_buffer import (
     GRPOWithReplayBufferConfig,
     GRPOWithReplayBufferTrainer,
@@ -270,7 +271,7 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
             replay_buffer_size=8,
             report_to="none",
         )
-        trainer = GRPOWithReplayBufferTrainer(
+        trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=[custom_reward_func],
             args=training_args,
