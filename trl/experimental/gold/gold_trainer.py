@@ -60,6 +60,7 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
+    pad,
 )
 from .gold_config import GOLDConfig
 
@@ -170,62 +171,58 @@ def build_teacher_inputs_from_texts(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
     """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss."""
 
-    teacher_prompts = tokenizer(
-        prompt_texts,
-        return_tensors="pt",
-        padding="longest",
-        truncation=True,
-        add_special_tokens=True,
-    )
-    teacher_completions = tokenizer(
-        completion_texts,
-        return_tensors="pt",
-        padding="longest",
-        truncation=True,
-        add_special_tokens=False,
-    )
-
-    teacher_input_ids = torch.cat([teacher_prompts["input_ids"], teacher_completions["input_ids"]], dim=1).long()
-
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
 
-    if eos_token_id is not None:
-        batch_size = teacher_input_ids.size(0)
-        for row in range(batch_size):
-            non_pad_mask = (
-                teacher_input_ids[row] != pad_token_id
-                if pad_token_id is not None
-                else torch.ones_like(teacher_input_ids[row], dtype=torch.bool)
-            )
-            if non_pad_mask.any():
-                last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
-                if teacher_input_ids[row, last_token_idx] != eos_token_id:
-                    if last_token_idx + 1 < teacher_input_ids.size(1):
-                        teacher_input_ids[row, last_token_idx + 1] = eos_token_id
-                    else:
-                        teacher_input_ids[row, last_token_idx] = eos_token_id
+    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
+    completion_token_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
 
-    teacher_attention_mask = torch.cat(
-        [teacher_prompts["attention_mask"], teacher_completions["attention_mask"]], dim=1
-    ).bool()
+    sequences: list[torch.Tensor] = []
+    attention_masks: list[torch.Tensor] = []
+    labels_list: list[torch.Tensor] = []
+    prompt_lengths: list[int] = []
+
+    for prompt_ids, completion_ids in zip(prompt_token_ids, completion_token_ids, strict=True):
+        # Remove trailing EOS from prompt so completions can extend cleanly
+        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+            prompt_ids = prompt_ids[:-1]
+
+        prompt_lengths.append(len(prompt_ids))
+        sequence = list(prompt_ids)
+        sequence.extend(completion_ids)
+        if eos_token_id is not None:
+            sequence.append(eos_token_id)
+
+        seq_tensor = torch.tensor(sequence, dtype=torch.long)
+        sequences.append(seq_tensor)
+        attention_masks.append(torch.ones_like(seq_tensor))
+
+        labels = seq_tensor.clone()
+        labels[: len(prompt_ids)] = -100
+        if pad_token_id is not None:
+            labels[labels == pad_token_id] = -100
+        labels_list.append(labels)
+
+    teacher_input_ids = pad(
+        sequences,
+        padding_side="right",
+        padding_value=pad_token_id if pad_token_id is not None else 0,
+    )
+    teacher_attention_mask = pad(attention_masks, padding_side="right", padding_value=0).bool()
+    teacher_labels = pad(labels_list, padding_side="right", padding_value=-100)
 
     if eos_token_id is not None:
         for row in range(teacher_attention_mask.size(0)):
-            non_pad_mask = (
-                teacher_input_ids[row] != pad_token_id if pad_token_id is not None else teacher_attention_mask[row]
+            valid = (
+                teacher_input_ids[row] != pad_token_id
+                if pad_token_id is not None
+                else teacher_attention_mask[row].bool()
             )
-            if non_pad_mask.any():
-                last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
-                teacher_attention_mask[row, : last_token_idx + 1] = True
-                if last_token_idx + 1 < teacher_attention_mask.size(1):
-                    teacher_attention_mask[row, last_token_idx + 1 :] = False
+            if valid.any():
+                last_idx = valid.nonzero(as_tuple=True)[0][-1]
+                teacher_attention_mask[row, last_idx + 1 :] = False
 
-    teacher_prompt_length = teacher_prompts["input_ids"].shape[1]
-    teacher_labels = teacher_input_ids.clone()
-    teacher_labels[:, :teacher_prompt_length] = -100
-    if pad_token_id is not None:
-        teacher_labels[teacher_input_ids == pad_token_id] = -100
+    teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
 
     return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
 
@@ -1291,14 +1288,13 @@ class GOLDTrainer(SFTTrainer):
             loss: Scalar tensor with the generalized JSD loss
         """
 
-        # Apply temperature scaling
-        student_logits = student_logits / temperature
-        teacher_logits = teacher_logits / temperature
-
         if logits_are_probs:
             student_log_probs = torch.log(student_logits.clamp_min(1e-8))
             teacher_log_probs = torch.log(teacher_logits.clamp_min(1e-8))
         else:
+            # Apply temperature scaling to logits before computing probabilities
+            student_logits = student_logits / temperature
+            teacher_logits = teacher_logits / temperature
             # Compute log probabilities for student and probabilities for teacher
             student_log_probs = F.log_softmax(student_logits, dim=-1)
             teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
