@@ -71,9 +71,9 @@ model = AutoModelForCausalLM.from_pretrained(student_name)
 teacher_model = AutoModelForCausalLM.from_pretrained(teacher_name)
 
 train_dataset = load_dataset(
-    "HuggingFaceTB/OpenR1-Math-220k-default-verified",
-    "all",
-    split="train[:1024]",
+    "HuggingFaceTB/Countdown-Task-GOLD",
+    "verified_Qwen2.5-0.5B-Instruct",
+    split="train",
 )
 
 training_args = GOLDConfig(
@@ -83,8 +83,6 @@ training_args = GOLDConfig(
     teacher_tokenizer_name_or_path=teacher_name,
     use_uld_loss=True,
     uld_use_hybrid_loss=True,
-    uld_hybrid_matched_weight=0.6,
-    uld_hybrid_unmatched_weight=0.4,
 )
 
 trainer = GOLDTrainer(
