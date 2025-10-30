@@ -1408,6 +1408,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
@@ -1445,6 +1446,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
