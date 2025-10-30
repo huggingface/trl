@@ -303,6 +303,11 @@ def request_vllm_completion(
         "text": (texts[0] if texts else None),
     }
 
+def scale_repetition_score(previous_occurrences: int, max_occurrences: int) -> float:
+    """Scale the repetition score based on the number of previous occurrences from 0 to 1"""
+    if max_occurrences == 0:
+        return 0.0
+    return (max_occurrences - previous_occurrences) / max_occurrences
 
 def rollout_once(
     env: TextArenaEnv,
@@ -326,8 +331,12 @@ def rollout_once(
     guess_counts: Dict[str, int] = {}
 
     for _turn in range(cli_args.max_turns):
+
+        # when the game is over the environment will return a done=True 
         if result.done:
             break
+
+        # set up the prompt for the model
         base_prompt = observation.prompt or dataset_prompt
         user_prompt = make_user_prompt(base_prompt, observation.messages)
         messages = [
@@ -341,6 +350,7 @@ def rollout_once(
             enable_thinking=False,
         )
 
+        # generate the completion from the model using vLLM
         vllm_result = request_vllm_completion(
             prompt_text,
             args,
@@ -348,76 +358,46 @@ def rollout_once(
             timeout=cli_args.request_timeout,
             fallback=cli_args,
         )
-
         prompt_ids.extend(vllm_result["prompt_ids"])
         completion_ids.extend(vllm_result["completion_ids"])
         logprobs.extend(vllm_result["logprobs"])
-
         completion_text = vllm_result.get("text") or tokenizer.decode(
             vllm_result["completion_ids"], skip_special_tokens=True
         )
+        # extract the guess from the completion
         guess = extract_guess(completion_text)
 
+        # step the environment with the guess
         result = env.step(TextArenaAction(message=guess))
         raw_rewards.append(float(result.reward or 0.0))
-
         observation = result.observation
-        reward_signals = (
-            observation.info.get("reward_signals") if observation.info else None
-        )
-        feedback: Optional[str] = None
-        normalized_guess = guess if guess and guess != "[dunno]" else ""
-        previous_occurrences = (
-            guess_counts.get(normalized_guess, 0) if normalized_guess else 0
-        )
+        correct_score = float(result.reward or 0.0)
+        feedback = extract_wordle_feedback(observation)
 
-        if reward_signals:
-            green_score = float(reward_signals.get("wordle.greens", 0.0))
-            yellow_score = float(reward_signals.get("wordle.yellows", 0.0))
-            repetition_score = float(reward_signals.get("wordle.repetitions", 0.0))
-            correct_score = float(reward_signals.get("wordle.correct", 0.0))
+        # Update guess counts
+        previous_occurrences = guess_counts[guess] 
+        repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
+        guess_counts[guess] += 1
+
+        # calculate custom reward signals from the feedback
+        if not feedback:
+            green_score = 0.0
+            yellow_score = 0.0
         else:
-            feedback = extract_wordle_feedback(observation)
-            if not feedback:
-                green_score = 0.0
-                yellow_score = 0.0
-                repetition_score = 1.0 - previous_occurrences
-                correct_score = float(result.reward or 0.0)
-            else:
-                green_count, yellow_count = extract_feedback_counts(feedback)
-                green_score = green_count / 5.0
-                yellow_score = yellow_count / 5.0
-                repetition_score = 1.0 - previous_occurrences
-                correct_score = float(result.reward or 0.0)
+            green_count, yellow_count = extract_feedback_counts(feedback)
+            green_score = green_count / 5.0
+            yellow_score = yellow_count / 5.0
 
-        repetition_score = max(0.0, repetition_score)
         repetition_scores.append(repetition_score)
         green_scores.append(green_score)
         yellow_scores.append(yellow_score)
         correct_scores.append(correct_score)
-
-        if normalized_guess:
-            guess_counts[normalized_guess] = previous_occurrences + 1
-
-        if cli_args.debug:
-            print("=" * 100)
-            print(f"Guess: {guess}")
-            print(f"Feedback: {reward_signals or feedback}")
-            print(f"Green score: {green_score}")
-            print(f"Yellow score: {yellow_score}")
-            print(f"Repetition score: {repetition_score}")
-            print(f"Correct score (env reward): {correct_score}")
-            print(f"Raw reward: {result.reward}")
-            print("=" * 100)
 
     correct_reward_value = (
         correct_scores[-1]
         if correct_scores
         else (raw_rewards[-1] if raw_rewards else 0.0)
     )
-    green_reward = green_scores[-1] if green_scores else 0.0
-    yellow_reward = yellow_scores[-1] if yellow_scores else 0.0
-    repetition_reward = repetition_scores[-1] if repetition_scores else 0.0
 
     return {
         "prompt_ids": prompt_ids,
@@ -425,9 +405,9 @@ def rollout_once(
         "logprobs": logprobs,
         "raw_rewards": raw_rewards,
         "correct_reward": correct_reward_value,
-        "green_reward": green_reward,
-        "yellow_reward": yellow_reward,
-        "repetition_reward": repetition_reward,
+        "green_reward": green_scores[-1] if green_scores else 0.0,
+        "yellow_reward": yellow_scores[-1] if yellow_scores else 0.0,
+        "repetition_reward": repetition_scores[-1] if repetition_scores else 0.0,
     }
 
 
