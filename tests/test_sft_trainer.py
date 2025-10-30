@@ -256,15 +256,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
-    @pytest.fixture(
-        scope="class",
-        params=[
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-        ],
-    )
-    def model_id(self, request):
-        return request.param
-
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -320,6 +311,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_model(self, model_id):
         # Instantiate the model
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -345,6 +342,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_dft_loss(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
@@ -409,6 +412,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_formatting_func(self, model_id):
         # Dummy formatting function
         def formatting_prompts_func(example):
@@ -441,6 +450,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_model_dtype(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -474,6 +489,12 @@ class TestSFTTrainer(TrlTestCase):
             assert new_param.dtype == torch.float16
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_train_dense_with_peft_config_lora(self, model_id):
         # Get the base model parameter names
@@ -510,6 +531,12 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize(
         "peft_type",
         [
@@ -607,6 +634,12 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_train_peft_model(self, model_id):
         # Get the base model
@@ -643,6 +676,12 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_train_dense_with_peft_config_and_gradient_checkpointing(self, model_id):
         # Get the base model parameter names
@@ -716,6 +755,12 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_train_with_peft_model_and_gradient_checkpointing(self, model_id):
         # Get the base model parameter names
@@ -751,6 +796,12 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_liger_kernel
     def test_train_with_liger(self, model_id):
         # Get the dataset
@@ -774,6 +825,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_non_chatml_conversational_data(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -802,6 +859,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_pretokenized_data(self, model_id):
         # Get the dataset
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -831,6 +894,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_iterable_dataset(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
@@ -853,6 +922,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_flash_attn
     def test_train_padding_free(self, model_id):
         # Get the dataset
@@ -882,6 +957,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize("packing_strategy", ["bfd", "wrapped"])
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
@@ -909,6 +990,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_eval_packing(self, model_id):
@@ -943,6 +1030,12 @@ class TestSFTTrainer(TrlTestCase):
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
         assert len(trainer.eval_dataset["input_ids"]) == 1  # w/ this dataset, we end up with 6 seqs
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_only_train_packing(self, model_id):
@@ -978,6 +1071,12 @@ class TestSFTTrainer(TrlTestCase):
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
         assert len(trainer.eval_dataset["input_ids"]) == 2  # w/ this dataset, we end up with 6 seqs
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_chat_template_kwargs(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1204,6 +1303,12 @@ class TestSFTTrainer(TrlTestCase):
             original_template_content = f.read()
         assert template_content == original_template_content, "Chat template content does not match the original"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_toolcall_data(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")
@@ -1226,6 +1331,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_eval(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
@@ -1245,6 +1356,12 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the eval loss is not None
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_multiple_eval_dataset(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
@@ -1264,6 +1381,12 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_gradient_checkpointing(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1286,6 +1409,12 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_tag_added(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1296,6 +1425,12 @@ class TestSFTTrainer(TrlTestCase):
         for tag in ["sft", "trl"]:
             assert tag in trainer.model.model_tags
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_tag_added_peft(self, model_id):
         # Get the dataset
@@ -1550,6 +1685,12 @@ class TestSFTTrainer(TrlTestCase):
             else:
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_prompt_tuning(self, model_id):
         """Test that SFT works with Prompt Tuning."""
@@ -1582,6 +1723,12 @@ class TestSFTTrainer(TrlTestCase):
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     @require_bitsandbytes
     def test_peft_model_with_quantization(self, model_id):
@@ -1675,6 +1822,12 @@ class TestSFTTrainer(TrlTestCase):
             "All original LoRA parameters should remain trainable after SFTTrainer initialization"
         )
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_prompt_tuning_peft_model(self, model_id):
         """Test that SFT works with Prompt Tuning and a pre-converted PeftModel"""
