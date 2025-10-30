@@ -653,7 +653,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         advantages = [0.987, 0.654]
         step = 42
 
-        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+        print_prompt_completions_sample(prompts, completions, step, rewards, advantages)
 
         output = mock_stdout.getvalue()
 
@@ -673,6 +673,31 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         assert output == expected_output
 
     @patch("sys.stdout", new_callable=StringIO)
+    def test_print_output_no_rewards_no_advantages(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────── Step 42 ───────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │ │
+        │ ├────────────┼──────────────┤ │
+        │ │ The sun is │  in the sky. │ │
+        │ └────────────┴──────────────┘ │
+        ╰───────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_num_samples(self, mock_stdout):
         prompts = ["A", "B"]
         completions = ["1", "2"]
@@ -680,7 +705,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         advantages = [0.3, 0.4]
         step = 10
 
-        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
+        print_prompt_completions_sample(prompts, completions, step, rewards, advantages, num_samples=1)
         output = mock_stdout.getvalue()
 
         # docstyle-ignore
@@ -727,7 +752,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         advantages = [0.987, 0.654]
         step = 42
 
-        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+        print_prompt_completions_sample(prompts, completions, step, rewards, advantages)
 
         output = mock_stdout.getvalue()
 
@@ -770,7 +795,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         advantages = [0.987, 0.654]
         step = 42
 
-        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+        print_prompt_completions_sample(prompts, completions, step, rewards, advantages)
 
         output = mock_stdout.getvalue()
 

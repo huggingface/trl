@@ -24,11 +24,11 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -50,15 +50,17 @@ from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_datas
 from ...extras.profiling import profiling_decorator
 from ...extras.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
-from ...models import prepare_deepspeed
+from ...models import prepare_deepspeed, prepare_peft_model
 from ...models.utils import unwrap_model_for_generation
-from ...trainer.sft_trainer import SFTTrainer
+from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     DataCollatorForChatML,
     create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
+    get_config_model_id,
+    print_prompt_completions_sample,
 )
 from .gold_config import GOLDConfig
 
@@ -76,90 +78,7 @@ if is_vllm_available():
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
-if is_rich_available():
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-    from rich.text import Text
-
-
-def print_prompt_completions_sample_uld(
-    prompts: list[str],
-    completions: list[str],
-    step: int,
-    num_samples: int = None,
-) -> None:
-    """
-    Print out a sample of model completions to the console with multiple reward metrics.
-
-    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
-    during training. It requires the `rich` library to be installed.
-
-    Args:
-        prompts (`list[str]`):
-            List of prompts.
-        completions (`list[str]`):
-            List of completions corresponding to the prompts.
-        rewards (`dict[str, list[float]]`):
-            Dictionary where keys are reward names and values are lists of rewards.
-        advantages (`list[float]`):
-            List of advantages corresponding to the prompts and completions.
-        step (`int`):
-            Current training step number, used in the output title.
-        num_samples (`int` or `None`, *optional*, defaults to `None`):
-            Number of random samples to display. If `None` (default), all items will be displayed.
-
-    Example:
-    ```python
-    >>> from trl.trainer.utils import print_prompt_completions_sample
-
-    >>> prompts = ["The sky is", "The sun is"]
-    >>> completions = [" blue.", " in the sky."]
-    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
-    >>> advantages = [0.987, 0.654]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
-    ╭──────────────────────────── Step 42 ─────────────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
-    ╰──────────────────────────────────────────────────────────────────╯
-    ```
-    """
-    if not is_rich_available():
-        raise ImportError(
-            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
-            "`pip install rich`."
-        )
-    console = Console()
-    table = Table(show_header=True, header_style="bold white", expand=True)
-
-    # Add columns
-    table.add_column("Prompt", style="bright_yellow")
-    table.add_column("Completion", style="bright_green")
-
-    # Some basic input validation
-    if num_samples is not None:
-        if num_samples >= len(prompts):
-            num_samples = None
-        elif num_samples <= 0:
-            return
-
-    # Subsample data if num_samples is specified
-    if num_samples is not None:
-        indices = random.sample(range(len(prompts)), num_samples)
-        prompts = [prompts[i] for i in indices]
-        completions = [completions[i] for i in indices]
-
-    for i in range(len(prompts)):
-        table.add_row(Text(prompts[i]), Text(completions[i]))
-        table.add_section()  # Adds a separator between rows
-
-    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
-    console.print(panel)
+logger = logging.get_logger(__name__)
 
 
 def build_teacher_inputs_from_texts(
@@ -243,7 +162,6 @@ class ULDLoss(nn.Module):
         self.skip_student_eos = config.uld_skip_student_eos
         self.skip_teacher_eos = config.uld_skip_teacher_eos
         self.use_extended_uld = config.use_extended_uld
-        self.ignore_index = -100
 
         # Add tokenizers for enhanced alignment
         self.student_tokenizer = student_tokenizer
@@ -283,7 +201,7 @@ class ULDLoss(nn.Module):
         if self.crossentropy_weight > 0:
             shift_logits = student_logits[..., :-1, :].contiguous()
             shift_labels = student_labels[..., 1:].contiguous()
-            loss_fct = nn.CrossEntropyLoss(ignore_index=self.ignore_index)
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
             crossentropy_loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             crossentropy_loss = self.crossentropy_weight * crossentropy_loss
         else:
@@ -688,7 +606,7 @@ class ULDLoss(nn.Module):
         answers_size = []
 
         for answer in answer_tensors:
-            answer_mask = answer.ne(self.ignore_index)
+            answer_mask = answer.ne(-100)
             if not answer_mask.any():
                 answers_index.append(0)
                 answers_size.append(0)
@@ -720,7 +638,7 @@ class GOLDVLLMSyncCallback(TrainerCallback):
                 self.trainer._last_vllm_sync_step = state.global_step
 
 
-class GOLDTrainer(SFTTrainer):
+class GOLDTrainer(BaseTrainer):
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
     _paper = {
@@ -737,21 +655,112 @@ class GOLDTrainer(SFTTrainer):
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        teacher_model: Union[PreTrainedModel, nn.Module, str] = None,
+        model: Union[str, PreTrainedModel],
         args: Optional[GOLDConfig] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Dataset] = None,
+        data_collator: Optional[DataCollator] = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
+        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
+        # Args
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = GOLDConfig(f"{model_name}-GOLD")
+
+        # Model
+        if isinstance(model, str):
+            model = create_model_from_path(model, **args.model_init_kwargs or {})
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
+
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if args.eos_token is not None:
+            eos_token = args.eos_token
+            eos_token_id = tokenizer.convert_tokens_to_ids(eos_token)
+            if eos_token_id is None:
+                raise ValueError(
+                    f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
+                    "in the vocabulary before using it as an EOS token."
+                )
+            tokenizer.eos_token_id = eos_token_id
+
+        # PEFT configuration and model wrapping
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+            model = prepare_peft_model(model, peft_config, args)
+
+        # Data collator
+        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
+        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
+
+        # Determine if the dataset is vision-related
+        dataset_sample = next(iter(train_dataset))
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
+
+        if data_collator is None and not self._is_vision_dataset:
+            # Get the pad token: if not provided, use the one from the processing class or the eos token
+            # if the processing class does not have a pad token.
+            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
+            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
+            if pad_token_id is None:
+                raise ValueError(
+                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
+                    "in the vocabulary before using it as a padding token."
+                )
+            data_collator = DataCollatorForLanguageModeling(
+                pad_token_id=pad_token_id,
+                completion_only_loss=self.completion_only_loss,
+                padding_free=self.padding_free,
+                pad_to_multiple_of=args.pad_to_multiple_of,
+            )
+        elif data_collator is None and self._is_vision_dataset:
+            raise NotImplementedError("Vision dataset data collator is not implemented yet.")
+
+        # Dataset
+        train_dataset = self._prepare_dataset(
+            train_dataset, processing_class, args, "train"
+        )
+        if eval_dataset is not None:
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, processing_class, args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(
+                    eval_dataset, processing_class, args, "eval"
+                )
+
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
         self.model_revision = getattr(args, "student_model_revision", None)
         if isinstance(model, str) and self.model_revision is not None:
@@ -1034,27 +1043,6 @@ class GOLDTrainer(SFTTrainer):
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            # Apply the formatting function if any
-            if formatting_func is not None:
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
-
-                def _func(example):
-                    return {"text": formatting_func(example)}
-
-                try:
-                    dataset = dataset.map(_func, batched=False, **map_kwargs)
-                except Exception as e:
-                    warnings.warn(
-                        f"Failed to apply the formatting function due to the following error: {e}. This may be "
-                        "because the function is designed for batched input. Please update it to process one example "
-                        "at a time (i.e., accept and return a single example). For now, we will attempt to apply the "
-                        "function in batched mode, but note that batched formatting is deprecated and will be removed "
-                        "in version 0.21.",
-                        DeprecationWarning,
-                    )
-                    dataset = dataset.map(_func, batched=True, **map_kwargs)
-
             # Convert the dataset to ChatML if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
@@ -2019,7 +2007,7 @@ class GOLDTrainer(SFTTrainer):
             and ((self.state.global_step % self.log_completion_steps) == 0)
         ):
             if is_rich_available():
-                print_prompt_completions_sample_uld(
+                print_prompt_completions_sample(
                     self._textual_logs["prompt"],
                     self._textual_logs["completion"],
                     self.state.global_step,
