@@ -108,15 +108,12 @@ class TestGetHighEntropyMask(TrlTestCase):
 
 
 class TestGRPOTrainer(TrlTestCase):
-    @pytest.fixture(
-        scope="class",
-        params=[
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         ],
     )
-    def model_id(self, request):
-        return request.param
-
     def test_init_minimal(self, model_id):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -126,6 +123,12 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training(self, config_name, model_id):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
@@ -156,6 +159,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo"])
     def test_training_loss_types(self, loss_type, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -188,6 +197,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_with_eval(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
@@ -211,6 +226,12 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_multiple_iterations(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -241,6 +262,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_training_peft(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -277,6 +304,12 @@ class TestGRPOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_training_peft_with_gradient_checkpointing(self, model_id):
         """Test that training works with PEFT and gradient checkpointing enabled."""
@@ -326,6 +359,12 @@ class TestGRPOTrainer(TrlTestCase):
             else:  # Base model parameters should not change
                 assert torch.equal(param, new_param), f"Base parameter {n} has changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_different_reward_model(self, model_id):
         # Use a reward model different from the model: different chat template, tokenization, etc.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -365,6 +404,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_reward_func_standard(self, model_id):
         # Test if trainer can handle reward function with standard format
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -399,6 +444,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_reward_func_conversational(self, model_id):
         # Test if trainer can handle reward function with conversational format
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -434,6 +485,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_multiple_reward_funcs(self, model_id):
         # Test that GRPOTrainer can be instantiated with multiple reward functions
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -472,6 +529,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_multiple_reward_funcs_with_None_output(self, model_id):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -516,6 +579,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_multiple_reward_funcs_with_weights(self, model_id):
         """Test that GRPOTrainer can handle multiple reward functions with weights."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -560,6 +629,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_multiple_mixed_reward_funcs(self, model_id):
         # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -594,6 +669,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_reward_func_additional_column(self, model_id):
         # Test if trainer can handle reward function that rely on additional columns in the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -632,6 +713,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_with_sync_ref_model(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -663,6 +750,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -692,6 +785,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_with_entropy_filter(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -836,6 +935,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_with_additional_generation_kwargs(self, model_id):
         """Test that training works with additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -909,6 +1014,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize("scale_rewards", [False, "group", "batch", True, "none"])
     def test_training_scale_rewards(self, scale_rewards, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -940,6 +1051,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @patch("transformers.generation.utils.GenerationMixin.generate")
     def test_training_with_mask_truncated_completions(self, mock_generate, model_id):
         """Test that training works with mask_truncated_completions=True parameter."""
@@ -990,6 +1107,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_with_mask_truncated_completions_all_masked(self, model_id):
         """
         Test that when all generated completions are truncated (i.e., none contain an EOS token), and
@@ -1028,6 +1151,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_warning_raised_all_rewards_none(self, model_id, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1057,6 +1186,12 @@ class TestGRPOTrainer(TrlTestCase):
         expected_warning = "All reward functions returned None for the following kwargs:"
         assert expected_warning in caplog.text
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_num_generations_larger_than_batch_size(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1087,6 +1222,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_delta_clipping(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1117,6 +1258,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_multiple_dataloader_workers(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1147,6 +1294,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_with_generation_kwargs(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1177,6 +1330,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_with_reward_func_accessing_trainer_state(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1202,6 +1361,12 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer.train()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_prepare_input_called_with_correct_data(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -1584,6 +1749,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_sequence_importance_sampling(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1645,6 +1816,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_mismatched_reward_processing_classes_length(self, model_id):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1671,6 +1848,12 @@ class TestGRPOTrainer(TrlTestCase):
                 train_dataset=dataset,
             )
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_correct_reward_processing_classes_list(self, model_id):
         """Test that correct list of reward_processing_classes works properly."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1702,6 +1885,12 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert len(trainer.reward_processing_classes) == len(reward_models)
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_single_reward_model_with_single_processing_class(self, model_id):
         """Test that single reward model with single processing class works."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1729,7 +1918,13 @@ class TestGRPOTrainer(TrlTestCase):
 
 
 class TestGSPOTokenTrainer(TrlTestCase):
-    def test_training(self):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_training(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1743,7 +1938,7 @@ class TestGSPOTokenTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GSPOTokenTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,

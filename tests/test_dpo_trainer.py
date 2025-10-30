@@ -153,15 +153,6 @@ class TestTokenizeRow(TrlTestCase):
 
 
 class TestDPOTrainer(TrlTestCase):
-    @pytest.fixture(
-        scope="class",
-        params=[
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-        ],
-    )
-    def model_id(self, request):
-        return request.param
-
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -169,6 +160,12 @@ class TestDPOTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -197,6 +194,12 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize(
         "loss_type",
         [
@@ -308,6 +311,12 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_multiple_loss_types(self, model_id):
         """
         Tests multi-loss combinations, loss type inference, and weight configuration. MPO combines DPO (sigmoid), BCO
@@ -641,6 +650,12 @@ class TestDPOTrainer(TrlTestCase):
         except OSError:
             pytest.fail("Loading the saved peft adapter failed")
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_dpo_lora_bf16_autocast_llama(self, model_id):
@@ -782,6 +797,12 @@ class TestDPOTrainer(TrlTestCase):
         # save peft adapter
         trainer.save_model()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_dpo_lora_tags(self, model_id):
         from peft import LoraConfig
@@ -827,6 +848,12 @@ class TestDPOTrainer(TrlTestCase):
         for tag in ["dpo", "trl"]:
             assert tag in trainer.model.model_tags
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_peft
     def test_dpo_tags(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -998,6 +1025,12 @@ class TestDPOTrainer(TrlTestCase):
                 train_dataset=dummy_dataset["train"],
             )
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_dpo_loss_alpha_div_f(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -1038,6 +1071,12 @@ class TestDPOTrainer(TrlTestCase):
         )
         assert torch.isfinite(losses).cpu().numpy().all()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_dpo_loss_js_div_f(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -1231,6 +1270,12 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_compute_metrics(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -1266,6 +1311,12 @@ class TestDPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_length_desensitization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1379,6 +1430,12 @@ class TestDPOTrainer(TrlTestCase):
         assert output is not None
         assert "loss" not in output.keys()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_train_with_iterable_dataset(self, model_id):
         dataset = load_dataset(
             "trl-internal-testing/zen",

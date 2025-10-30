@@ -25,15 +25,6 @@ from .testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, 
 
 
 class TestKTOTrainer(TrlTestCase):
-    @pytest.fixture(
-        scope="class",
-        params=[
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-        ],
-    )
-    def model_id(self, request):
-        return request.param
-
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -399,6 +390,12 @@ class TestKTOTrainer(TrlTestCase):
             if param.sum() != 0:
                 assert not torch.equal(param, new_param)
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_compute_metrics(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)

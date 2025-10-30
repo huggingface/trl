@@ -42,15 +42,6 @@ if is_vision_available():
 
 
 class TestOnlineDPOTrainer(TrlTestCase):
-    @pytest.fixture(
-        scope="class",
-        params=[
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-        ],
-    )
-    def model_id(self, request):
-        return request.param
-
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -89,6 +80,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_training_model_str(self, model_id):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,

@@ -30,15 +30,12 @@ from .testing_utils import TrlTestCase
     "to fail on Python <3.10.",  # let's say it's a known issue, but not expected to be fixed, because too niche
 )
 class TestCLI(TrlTestCase):
-    @pytest.fixture(
-        scope="class",
-        params=[
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         ],
     )
-    def model_id(self, request):
-        return request.param
-
     def test_dpo(self, model_id):
         from trl.cli import main
 
@@ -46,6 +43,12 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_dpo_multiple_loss_types(self, model_id):
         from trl.cli import main
 
@@ -62,6 +65,12 @@ class TestCLI(TrlTestCase):
             main()
         assert "TRL version: " in mock_stdout.getvalue().strip()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_grpo(self, model_id):
         from trl.cli import main
 
@@ -69,6 +78,12 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_kto(self, model_id):
         from trl.cli import main
 
@@ -83,6 +98,12 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_rloo(self, model_id):
         from trl.cli import main
 
@@ -90,6 +111,12 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_sft(self, model_id):
         from trl.cli import main
 
@@ -97,6 +124,12 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     def test_sft_config_file(self, model_id):
         from trl.cli import main
 

@@ -28,15 +28,12 @@ if is_peft_available():
 
 
 class TestActivationOffloading(TrlTestCase):
-    @pytest.fixture(
-        scope="class",
-        params=[
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         ],
     )
-    def model_id(self, request):
-        return request.param
-
     @require_torch_accelerator
     @require_peft
     def test_offloading_with_peft_models(self, model_id) -> None:
@@ -83,6 +80,12 @@ class TestActivationOffloading(TrlTestCase):
                         f"Gradient mismatch for {name_orig}"
                     )
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_torch_accelerator
     def test_noop_manager_with_offloading(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
@@ -129,6 +132,12 @@ class TestActivationOffloading(TrlTestCase):
         # The test passes if no errors occur, as we're mainly testing
         # that the logic handles both offloaded and non-offloaded tensors
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_torch_accelerator
     def test_real_hf_model(self, model_id):
         """Test with an actual HuggingFace model"""
