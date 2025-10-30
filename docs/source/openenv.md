@@ -159,10 +159,7 @@ To learn more about how to create custom environments, see the [OpenEnv document
 
 ## Advanced Example
 
-Let's level this up a bit by training a model to interact with a more complex environment. We'll use the game [wordle](https://www.nytimes.com/games/wordle/index.html) from the `textarena` environment. 
-
-> [!NOTE]
-> Wordle is a word guessing game where the player has to guess a 5-letter word. They will receive feedback on each guess, and the goal is to guess the word in 6 guesses or less.
+Let's level this up a bit by training a model to interact with a more complex environment. We'll use the game word guessing game [wordle](https://www.nytimes.com/games/wordle/index.html) from the `textarena` environment. 
 
 ### The TextArena Environment
 
@@ -187,7 +184,7 @@ Wordle is a useful game to train a model on because it requires the model to rea
 > ```
 > The model has guessed the word "GUESS" and the environment has provided feedback as the letters X, G, and Y. Referring to colors in the original game blank, green, and yellow. From this feedback, the model should learn that the word is "GUESS" is incorrect. The letter "E" is in the word, but in the wrong position. The letter "U" is correct and in the correct position.
  
-In the TextArena environment, reward is only given when the model wins the game. The reward is 1.0 if the model wins, and 0.0 otherwise. This is not a ver efficient reward signal for the model, so we have added a number of custom reward functions to the script to help the model learn to play the game. The extensible nature of `reward_funcs` and `rollout_func` allows you to add any custom reward function you want to the script.
+In the TextArena environment, reward is only given when the model wins the game. The reward is 1.0 if the model wins, and 0.0 otherwise. This is not a very efficient reward signal for the model, so we have added a number of custom reward functions to the script to help the model learn to play the game. The extensible nature of `reward_funcs` and `rollout_func` allows you to add any custom reward function you want to the script.  
 
 ### Rollout Function
 
@@ -216,9 +213,12 @@ def rollout_once(
     guess_counts: Dict[str, int] = {}
 
     for _turn in range(cli_args.max_turns):
+
+        # when the game is over the environment will return a done=True 
         if result.done:
             break
 
+        # set up the prompt for the model
         base_prompt = observation.prompt or dataset_prompt
         user_prompt = make_user_prompt(base_prompt, observation.messages)
         messages = [
@@ -232,6 +232,7 @@ def rollout_once(
             enable_thinking=False,
         )
 
+        # generate the completion from the model using vLLM
         vllm_result = request_vllm_completion(
             prompt_text,
             args,
@@ -239,56 +240,40 @@ def rollout_once(
             timeout=cli_args.request_timeout,
             fallback=cli_args,
         )
-
         prompt_ids.extend(vllm_result["prompt_ids"])
         completion_ids.extend(vllm_result["completion_ids"])
         logprobs.extend(vllm_result["logprobs"])
-
         completion_text = vllm_result.get("text") or tokenizer.decode(
             vllm_result["completion_ids"], skip_special_tokens=True
         )
+        # extract the guess from the completion
         guess = extract_guess(completion_text)
 
+        # step the environment with the guess
         result = env.step(TextArenaAction(message=guess))
         raw_rewards.append(float(result.reward or 0.0))
-
         observation = result.observation
-        reward_signals = (
-            observation.info.get("reward_signals") if observation.info else None
-        )
-        feedback = None
-        normalized_guess = guess if guess and guess != "[dunno]" else ""
-        previous_occurrences = (
-            guess_counts.get(normalized_guess, 0) if normalized_guess else 0
-        )
+        correct_score = float(result.reward or 0.0)
+        feedback = extract_wordle_feedback(observation)
 
-        if reward_signals:
-            green_score = float(reward_signals.get("wordle.greens", 0.0))
-            yellow_score = float(reward_signals.get("wordle.yellows", 0.0))
-            repetition_score = float(reward_signals.get("wordle.repetitions", 0.0))
-            correct_score = float(reward_signals.get("wordle.correct", 0.0))
+        # Update guess counts
+        previous_occurrences = guess_counts[guess] 
+        repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
+        guess_counts[guess] += 1
+
+        # calculate custom reward signals from the feedback
+        if not feedback:
+            green_score = 0.0
+            yellow_score = 0.0
         else:
-            feedback = extract_wordle_feedback(observation)
-            if feedback:
-                green_count, yellow_count = extract_feedback_counts(feedback)
-                green_score = green_count / 5.0
-                yellow_score = yellow_count / 5.0
-                repetition_score = 1.0 - previous_occurrences
-                correct_score = float(result.reward or 0.0)
-            else:
-                green_score = 0.0
-                yellow_score = 0.0
-                repetition_score = 1.0 - previous_occurrences
-                correct_score = float(result.reward or 0.0)
+            green_count, yellow_count = extract_feedback_counts(feedback)
+            green_score = green_count / 5.0
+            yellow_score = yellow_count / 5.0
 
-        repetition_score = max(0.0, repetition_score)
         repetition_scores.append(repetition_score)
         green_scores.append(green_score)
         yellow_scores.append(yellow_score)
         correct_scores.append(correct_score)
-
-        if normalized_guess:
-            guess_counts[normalized_guess] = previous_occurrences + 1
 
     correct_reward_value = (
         correct_scores[-1]
@@ -296,6 +281,7 @@ def rollout_once(
         else (raw_rewards[-1] if raw_rewards else 0.0)
     )
 
+    # return the rollout results as a dictionary
     return {
         "prompt_ids": prompt_ids,
         "completion_ids": completion_ids,
@@ -308,8 +294,7 @@ def rollout_once(
     }
 ```
 
-> [!TIP]
-> When the environment does not expose structured `reward_signals`, the rollout falls back to parsing the textual feedback so the auxiliary rewards remain available.
+The environment has a reward signal based on the completion of the game. We found that most models struggle to ever win the game, so we have added a number of custom reward functions to the script to help the model learn to play the game more iteratively. At first, the model will learn to cover new letters and avoid repeating guesses. As it improves, it will learn to win the game.
 
 ### Reward Functions
 
@@ -387,6 +372,8 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
 
 ### Results
 
-The resulting model improves it's performance on the game, both by reducing the number of repetitions and by increasing the number of correct guesses. However, the the Qwen3.1-17B model we trained is not able to consistently win the game. The following reward curve shows the coverage of the model's guesses and the coverage of correct Y and G letters.
+The resulting model improves it's performance on the game, both by reducing the number of repetitions and by increasing the number of correct guesses. However, the the Qwen3-1.7B model we trained is not able to consistently win the game. The following reward curve shows the coverage of the model's guesses and the coverage of correct Y and G letters.
 
 <iframe src="https://burtenshaw-wordle-grpo.hf.space/?project=group-Qwen-Qwen3-17B&metrics=train/rewards/reward_coverage/mean&runs=run-2025-10-26_09-39-49&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>
+
+We experimented larger models like `gpt-oss-20b` and found that model was able to consistently win the game. However, this requires a lot of compute to train and the model. Why not try this out yourself?
