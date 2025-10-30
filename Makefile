@@ -16,4 +16,4 @@ slow_tests:
 	pytest -m "slow" tests/ $(if $(IS_GITHUB_CI),--report-log "slow_tests.log",)
 
 test_experimental:
-	pytest -k "experimental"
+	pytest -k "experimental" -n auto -s -v

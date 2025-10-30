@@ -39,6 +39,8 @@
     title: Liger Kernel
   - local: peft_integration
     title: PEFT
+  - local: rapidfire_integration
+    title: RapidFire AI
   - local: trackio_integration
     title: Trackio
   - local: unsloth_integration
@@ -109,6 +111,8 @@
 - sections:
   - local: bco_trainer
     title: BCO
+  - local: gold_trainer
+    title: GOLD
   - local: openenv
     title: OpenEnv Integration
   title: Experimental

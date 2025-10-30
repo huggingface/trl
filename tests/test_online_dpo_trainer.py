@@ -38,7 +38,7 @@ if is_peft_available():
 if is_vision_available():
     import numpy as np
     from PIL import Image
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+    from transformers import AutoModelForImageTextToText, AutoProcessor
 
 
 class TestOnlineDPOTrainer(TrlTestCase):
@@ -519,7 +519,7 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         dataset = Dataset.from_dict(dataset_dict)
         dataset = dataset.cast_column("images", features.Sequence(features.Image()))
 
-        model = AutoModelForVision2Seq.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id)
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
         )
