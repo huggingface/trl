@@ -29,9 +29,10 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
     @classmethod
     def setup_class(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        cls.device = "cuda" if torch.cuda.is_available() else "cpu"
         cls.tokenizer = AutoTokenizer.from_pretrained(model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.model = AutoModelForCausalLM.from_pretrained(model_id)
+        cls.model = AutoModelForCausalLM.from_pretrained(model_id).to(cls.device)
         cls.generation_config = GenerationConfig(
             max_new_tokens=20,
             num_return_sequences=1,
@@ -44,8 +45,8 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)
 
         inputs = {
-            "prompts": tokenized_prompts["input_ids"],
-            "prompt_attention_mask": tokenized_prompts["attention_mask"],
+            "prompts": tokenized_prompts["input_ids"].to(self.device),
+            "prompt_attention_mask": tokenized_prompts["attention_mask"].to(self.device),
         }
 
         # Set temperature to 0 for deterministic output
@@ -91,8 +92,8 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)
 
         inputs = {
-            "prompts": tokenized_prompts["input_ids"],
-            "attention_mask": tokenized_prompts["attention_mask"],
+            "prompts": tokenized_prompts["input_ids"].to(self.device),
+            "attention_mask": tokenized_prompts["attention_mask"].to(self.device),
         }
 
         outputs = GKDTrainer.generate_on_policy_outputs(
