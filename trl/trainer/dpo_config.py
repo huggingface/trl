@@ -513,7 +513,9 @@ class DPOConfig(TrainingArguments):
         if self.use_liger_loss:
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
-                "`use_liger_kernel` instead."
+                "`use_liger_kernel` instead.",
+                FutureWarning,
+                stacklevel=2,
             )
             self.use_liger_kernel = self.use_liger_loss
         super().__post_init__()
