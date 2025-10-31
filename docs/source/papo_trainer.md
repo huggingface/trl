@@ -10,11 +10,11 @@ The abstract from the paper is the following:
 
 ## PAPOTrainer
 
-[[autodoc]] experimental.bco.PAPOTrainer
+[[autodoc]] experimental.papo.PAPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## PAPOConfig
 
-[[autodoc]] experimental.bco.PAPOConfig
+[[autodoc]] experimental.papo.PAPOConfig
