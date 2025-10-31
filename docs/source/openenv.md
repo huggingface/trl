@@ -198,23 +198,22 @@ def rollout_once(
     dataset_prompt: str,
     cli_args: argparse.Namespace,
     system_prompt: str,
-) -> Dict[str, List]:
+) -> dict[str, list]:
     result = env.reset()
     observation = result.observation
 
-    prompt_ids: List[int] = []
-    completion_ids: List[int] = []
-    logprobs: List[float] = []
-    raw_rewards: List[float] = []
-    green_scores: List[float] = []
-    yellow_scores: List[float] = []
-    repetition_scores: List[float] = []
-    correct_scores: List[float] = []
-    guess_counts: Dict[str, int] = {}
+    prompt_ids: list[int] = []
+    completion_ids: list[int] = []
+    logprobs: list[float] = []
+    raw_rewards: list[float] = []
+    green_scores: list[float] = []
+    yellow_scores: list[float] = []
+    repetition_scores: list[float] = []
+    correct_scores: list[float] = []
+    guess_counts: dict[str, int] = {}
 
     for _turn in range(cli_args.max_turns):
-
-        # when the game is over the environment will return a done=True 
+        # when the game is over the environment will return a done=True
         if result.done:
             break
 
@@ -257,7 +256,7 @@ def rollout_once(
         feedback = extract_wordle_feedback(observation)
 
         # Update guess counts
-        previous_occurrences = guess_counts[guess] 
+        previous_occurrences = guess_counts[guess]
         repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
         guess_counts[guess] += 1
 
@@ -275,13 +274,8 @@ def rollout_once(
         yellow_scores.append(yellow_score)
         correct_scores.append(correct_score)
 
-    correct_reward_value = (
-        correct_scores[-1]
-        if correct_scores
-        else (raw_rewards[-1] if raw_rewards else 0.0)
-    )
+    correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
 
-    # return the rollout results as a dictionary
     return {
         "prompt_ids": prompt_ids,
         "completion_ids": completion_ids,

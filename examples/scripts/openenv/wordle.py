@@ -19,7 +19,7 @@ Usage:
     # First, start the TextArena Wordle server (Docker or local):
     TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 \
         python -m src.envs.textarena_env.server.app
-    
+
     # Then run this training script:
     python grpo.py
 """
@@ -29,14 +29,16 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
 
 import requests
 from datasets import Dataset
 from transformers import AutoTokenizer
+
 from trl import GRPOConfig, GRPOTrainer
+
 
 # Ensure src/ is on the path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -225,13 +227,14 @@ def resolve_system_prompt(path: str) -> str:
 def sanitize_name(name: str) -> str:
     return name.replace("/", "-")
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def format_history(messages: Iterable[TextArenaMessage]) -> str:
-    lines: List[str] = []
+    lines: list[str] = []
     for message in messages:
         tag = message.category or "MESSAGE"
         content = message.content.strip()
@@ -258,14 +261,12 @@ def request_vllm_completion(
     endpoint: str,
     timeout: int,
     fallback: argparse.Namespace,
-) -> Dict[str, List]:
-    payload: Dict[str, object] = {
+) -> dict[str, list]:
+    payload: dict[str, object] = {
         "prompts": [prompt],
         "n": 1,
         "temperature": getattr(trainer_args, "temperature", fallback.temperature),
-        "max_tokens": getattr(
-            trainer_args, "max_completion_length", fallback.max_new_tokens
-        ),
+        "max_tokens": getattr(trainer_args, "max_completion_length", fallback.max_new_tokens),
         "logprobs": True,
     }
 
@@ -290,9 +291,7 @@ def request_vllm_completion(
     data = response.json()
 
     prompt_ids = data.get("prompt_ids") or data.get("prompt_token_ids") or [[]]
-    completion_ids = (
-        data.get("completion_ids") or data.get("completion_token_ids") or [[]]
-    )
+    completion_ids = data.get("completion_ids") or data.get("completion_token_ids") or [[]]
     logprobs = data.get("logprobs") or data.get("completion_logprobs") or [[]]
     texts = data.get("completions") or data.get("completion_texts") or data.get("texts")
 
@@ -303,11 +302,13 @@ def request_vllm_completion(
         "text": (texts[0] if texts else None),
     }
 
+
 def scale_repetition_score(previous_occurrences: int, max_occurrences: int) -> float:
     """Scale the repetition score based on the number of previous occurrences from 0 to 1"""
     if max_occurrences == 0:
         return 0.0
     return (max_occurrences - previous_occurrences) / max_occurrences
+
 
 def rollout_once(
     env: TextArenaEnv,
@@ -316,23 +317,22 @@ def rollout_once(
     dataset_prompt: str,
     cli_args: argparse.Namespace,
     system_prompt: str,
-) -> Dict[str, List]:
+) -> dict[str, list]:
     result = env.reset()
     observation = result.observation
 
-    prompt_ids: List[int] = []
-    completion_ids: List[int] = []
-    logprobs: List[float] = []
-    raw_rewards: List[float] = []
-    green_scores: List[float] = []
-    yellow_scores: List[float] = []
-    repetition_scores: List[float] = []
-    correct_scores: List[float] = []
-    guess_counts: Dict[str, int] = {}
+    prompt_ids: list[int] = []
+    completion_ids: list[int] = []
+    logprobs: list[float] = []
+    raw_rewards: list[float] = []
+    green_scores: list[float] = []
+    yellow_scores: list[float] = []
+    repetition_scores: list[float] = []
+    correct_scores: list[float] = []
+    guess_counts: dict[str, int] = {}
 
     for _turn in range(cli_args.max_turns):
-
-        # when the game is over the environment will return a done=True 
+        # when the game is over the environment will return a done=True
         if result.done:
             break
 
@@ -375,7 +375,7 @@ def rollout_once(
         feedback = extract_wordle_feedback(observation)
 
         # Update guess counts
-        previous_occurrences = guess_counts[guess] 
+        previous_occurrences = guess_counts[guess]
         repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
         guess_counts[guess] += 1
 
@@ -393,11 +393,7 @@ def rollout_once(
         yellow_scores.append(yellow_score)
         correct_scores.append(correct_score)
 
-    correct_reward_value = (
-        correct_scores[-1]
-        if correct_scores
-        else (raw_rewards[-1] if raw_rewards else 0.0)
-    )
+    correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
 
     return {
         "prompt_ids": prompt_ids,
@@ -419,19 +415,18 @@ def rollout_once(
 def rollout_func(
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
-    prompts: List[str],
+    prompts: list[str],
     args: GRPOConfig,
     cli_args: argparse.Namespace,
     system_prompt: str,
-) -> Dict[str, List]:
-
-    all_prompt_ids: List[List[int]] = []
-    all_completion_ids: List[List[int]] = []
-    all_logprobs: List[List[float]] = []
-    correctness_rewards: List[float] = []
-    green_rewards: List[float] = []
-    yellow_rewards: List[float] = []
-    repetition_rewards: List[float] = []
+) -> dict[str, list]:
+    all_prompt_ids: list[list[int]] = []
+    all_completion_ids: list[list[int]] = []
+    all_logprobs: list[list[float]] = []
+    correctness_rewards: list[float] = []
+    green_rewards: list[float] = []
+    yellow_rewards: list[float] = []
+    repetition_rewards: list[float] = []
     num_generations = args.num_generations or cli_args.num_generations
 
     for _ in range(num_generations):
@@ -468,28 +463,28 @@ def rollout_func(
 # ---------------------------------------------------------------------------
 
 
-def reward_correct(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+def reward_correct(completions: list[str], **kwargs) -> list[float]:
     rewards = kwargs.get("correct_reward") if kwargs else None
     if rewards is None:
         return [0.0 for _ in completions]
     return [float(r) for r in rewards]
 
 
-def reward_greens(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+def reward_greens(completions: list[str], **kwargs) -> list[float]:
     rewards = kwargs.get("green_reward") if kwargs else None
     if rewards is None:
         return [0.0 for _ in completions]
     return [float(r) for r in rewards]
 
 
-def reward_yellows(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+def reward_yellows(completions: list[str], **kwargs) -> list[float]:
     rewards = kwargs.get("yellow_reward") if kwargs else None
     if rewards is None:
         return [0.0 for _ in completions]
     return [float(r) for r in rewards]
 
 
-def reward_repetition(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
+def reward_repetition(completions: list[str], **kwargs) -> list[float]:
     rewards = kwargs.get("repetition_reward") if kwargs else None
     if rewards is None:
         return [0.0 for _ in completions]
@@ -511,14 +506,10 @@ def main() -> None:
 
     system_prompt = resolve_system_prompt(cli_args.system_prompt_path)
 
-    dataset = Dataset.from_dict(
-        {"prompt": [cli_args.dataset_prompt] * cli_args.dataset_size}
-    )
+    dataset = Dataset.from_dict({"prompt": [cli_args.dataset_prompt] * cli_args.dataset_size})
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    default_output_dir = (
-        Path("outputs") / f"wordle-grpo-{sanitize_name(cli_args.model_id)}-{timestamp}"
-    )
+    default_output_dir = Path("outputs") / f"wordle-grpo-{sanitize_name(cli_args.model_id)}-{timestamp}"
     output_dir = Path(cli_args.output_dir or default_output_dir)
 
     grpo_config = GRPOConfig(
@@ -543,9 +534,7 @@ def main() -> None:
     grpo_config.project = cli_args.project or f"group-{sanitize_name(cli_args.model_id)}"
     grpo_config.trackio_space_id = cli_args.trackio_space_id
 
-    def wrapped_rollout(
-        prompts: List[str], args: GRPOConfig, processing_class
-    ) -> Dict[str, List]:
+    def wrapped_rollout(prompts: list[str], args: GRPOConfig, processing_class) -> dict[str, list]:
         return rollout_func(
             env=env,
             tokenizer=tokenizer,
