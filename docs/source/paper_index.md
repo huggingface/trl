@@ -1,10 +1,7 @@
 # Paper Index
 
-<Tip warning={true}>
-
-Section under construction. Feel free to contribute!
-
-</Tip>
+> [!WARNING]
+> Section under construction. Feel free to contribute!
 
 ## Group Relative Policy Optimization
 
@@ -31,6 +28,8 @@ training_args = GRPOConfig(
 ```
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
+
+TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](experimental#gspo-token).
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -171,7 +170,7 @@ $$
 }
 $$
 
-Despite  \\( \textcolor{red}{\pi_{\text{inference}}} \\) and  \\( \textcolor{blue}{\pi_{\text{training}}} \\) sharing the same model parameters  \\( \theta \\), they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy. 
+Despite  \\( \textcolor{red}{\pi_{\text{inference}}} \\) and  \\( \textcolor{blue}{\pi_{\text{training}}} \\) sharing the same model parameters  \\( \theta \\), they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy.
 
 Truncated Importance Sampling (TIS) addresses this issue by adapting the model update via importance-sampling correction. The gradient computation of the aforementioned PPO objective becomes
 
@@ -201,6 +200,12 @@ training_args = GRPOConfig(
     vllm_importance_sampling_cap=2.0, # hyper-parameter C
 )
 ```
+
+### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2508.09726
+
+See [Experimental - GFPO](experimental#gfpo).
 
 ## Direct Policy Optimization
 
@@ -261,7 +266,7 @@ These parameters only appear in the [published version](https://openreview.net/p
 
 ### Towards Efficient and Exact Optimization of Language Model Alignment
 
-**📜 Paper**: https://huggingface.co/papers/2305.10425
+**📜 Paper**: https://huggingface.co/papers/2402.00856
 
 Efficient exact optimization (EXO) method is proposed to align language models with human preferences, providing a guaranteed and efficient alternative to reinforcement learning and direct preference optimization. To reproduce the paper's setting, use this configuration:
 
@@ -333,7 +338,7 @@ training_args = DPOConfig(
 )
 ```
 
-For the unpaired version, the user should utilize `BCOConfig` and `BCOTrainer`.
+For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
 ### Self-Play Preference Optimization for Language Model Alignment
 
@@ -453,10 +458,7 @@ trainer = SFTTrainer(
 Dynamic Fine-Tuning (DFT) improves the generalization of Large Language Models (LLMs) by dynamically rescaling gradients, outperforming standard Supervised Fine-Tuning (SFT) and showing competitive results in offline reinforcement learning.
 
 $$
-\mathcal{L}_{\text{DFT}}(\theta) 
-= \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ - \sum_{t=1}^{|y|} 
-\textcolor{red}{\text{sg}\big(\pi_\theta(y_t \mid y_{<t}, x)\big)} 
-\; \log \pi_\theta(y_t \mid y_{<t}, x) \right]
+\mathcal{L}_{\text{DFT}}(\theta) = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ - \sum_{t=1}^{|y|} \textcolor{red}{\text{sg}\big(\pi_\theta(y_t \mid y_{<t}, x)\big)} \; \log \pi_\theta(y_t \mid y_{<t}, x) \right]
 $$
 
 where  \\( \text{sg}(\cdot) \\) is the stop-gradient operator. To use DFT with SFT as described in the paper, you can use the `loss_type="dft"` argument:
@@ -527,4 +529,54 @@ training_args = CPOConfig(
     learning_rate=7e-7,
     ...
 )
+```
+
+## Reward Modeling
+
+Papers relating to the [`RewardTrainer`]
+
+### Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking
+
+**📜 Paper**: https://huggingface.co/papers/2312.09244
+
+This paper proposed an auxiliary loss function designed to directly learn a centered reward model. This auxiliary loss minimizes the squared sum of the rewards, encouraging the model to naturally produce mean-zero outputs and thereby resolving the issue of underdetermination.
+
+$$
+\mathcal{L}(\theta) = - \mathbb{E}_{(x,y^+,y^-) \sim \mathcal{D}} \left[ \log \sigma(r_\theta(x, y^+) - r_\theta(x, y^-)) \textcolor{red}{- \eta \cdot (r_\theta(x, y^+) + r_\theta(x, y^-))^2} \right].
+$$
+
+To use this auxiliary loss with [`RewardTrainer`], you can use the `center_rewards_coefficient` argument in [`RewardConfig`] as follows:
+
+```python
+from trl import RewardConfig
+
+training_args = RewardConfig(
+    center_rewards_coefficient=0.01,  # η in the paper
+    ...
+)
+```
+
+### Llama 2: Open Foundation and Fine-Tuned Chat Models
+
+**📜 Paper**: https://huggingface.co/papers/2307.09288
+
+In this paper, the authors propose to leverage their preference ratings being decomposed as a scale of four points (e.g., _significantly better_) to provide more informative feedback to the reward model. This is done by adding a margin to the loss function, which encourages the reward model to assign larger gaps in scores for pairs with higher preference ratings.
+
+$$
+\mathcal{L}(\theta) = - \mathbb{E}_{(x,y^+,y^-,\textcolor{red}{m}) \sim \mathcal{D}} \left[ \log \sigma(r_\theta(x, y^+) - r_\theta(x, y^-) \textcolor{red}{- m}) \right].
+$$
+
+You can add a margin to the loss by adding a `margin` column to the dataset. The following example shows how to set up a the "Margin Small" setting of the paper.
+
+```python
+def add_margin(example):
+    preference_to_margin = {
+        "significantly better": 1.0,
+        "better": 2.0/3.0,
+        "slightly better": 1.0/3.0,
+        "negligibly better / unsure": 0.0,
+    }
+    return {"margin": preference_to_margin[example["preference_label"]]}
+
+dataset = dataset.map(add_margin)
 ```

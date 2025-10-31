@@ -13,27 +13,25 @@
 # limitations under the License.
 
 import gc
-import itertools
 
 import pytest
 import torch
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.testing_utils import (
-    backend_empty_cache,
-    require_liger_kernel,
-    require_peft,
-    require_torch_accelerator,
-    require_torch_multi_accelerator,
-    torch_device,
-)
+from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 
-from ..testing_utils import TrlTestCase, require_bitsandbytes
+from ..testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+    require_torch_multi_accelerator,
+)
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
@@ -44,9 +42,8 @@ if is_peft_available():
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
-class SFTTrainerSlowTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestSFTTrainerSlow(TrlTestCase):
+    def setup_method(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
         self.max_length = 128
@@ -58,13 +55,13 @@ class SFTTrainerSlowTester(TrlTestCase):
             task_type="CAUSAL_LM",
         )
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
-        super().tearDown()
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     def test_sft_trainer_str(self, model_name, packing):
         """
         Simply tests if passing a simple str to `SFTTrainer` loads and runs the trainer as expected.
@@ -88,7 +85,8 @@ class SFTTrainerSlowTester(TrlTestCase):
 
         trainer.train()
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     def test_sft_trainer_transformers(self, model_name, packing):
         """
         Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected.
@@ -118,7 +116,8 @@ class SFTTrainerSlowTester(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_peft
     def test_sft_trainer_peft(self, model_name, packing):
         """
@@ -148,13 +147,14 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
         release_memory(model, trainer)
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     def test_sft_trainer_transformers_mp(self, model_name, packing):
         """
         Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
@@ -186,7 +186,9 @@ class SFTTrainerSlowTester(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS)))
+    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     def test_sft_trainer_transformers_mp_gc(self, model_name, packing, gradient_checkpointing_kwargs):
         """
         Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
@@ -220,7 +222,9 @@ class SFTTrainerSlowTester(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS)))
+    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_peft
     def test_sft_trainer_transformers_mp_gc_peft(self, model_name, packing, gradient_checkpointing_kwargs):
         """
@@ -252,15 +256,16 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
         release_memory(model, trainer)
 
-    @parameterized.expand(
-        list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, DEVICE_MAP_OPTIONS))
-    )
+    @pytest.mark.parametrize("device_map", DEVICE_MAP_OPTIONS)
+    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_torch_multi_accelerator
     def test_sft_trainer_transformers_mp_gc_device_map(
         self, model_name, packing, gradient_checkpointing_kwargs, device_map
@@ -297,7 +302,9 @@ class SFTTrainerSlowTester(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS)))
+    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_peft
     @require_bitsandbytes
     def test_sft_trainer_transformers_mp_gc_peft_qlora(self, model_name, packing, gradient_checkpointing_kwargs):
@@ -332,13 +339,14 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
         release_memory(model, trainer)
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_peft
     @require_bitsandbytes
     def test_sft_trainer_with_chat_format_qlora(self, model_name, packing):
@@ -372,13 +380,14 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
         release_memory(model, trainer)
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     def test_sft_trainer_with_liger(self, model_name, packing):
         """
@@ -415,14 +424,15 @@ class SFTTrainerSlowTester(TrlTestCase):
             eval_dataset=self.eval_dataset,
         )
 
-        # Register cleanup now that we have the trainer
-        self.addCleanup(cleanup_liger_patches, trainer)
+        # Ensure cleanup of liger patches after the test
+        try:
+            trainer.train()
+            release_memory(trainer.model, trainer)
+        finally:
+            cleanup_liger_patches(trainer)
 
-        trainer.train()
-
-        release_memory(trainer.model, trainer)
-
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_torch_accelerator
     def test_train_offloading(self, model_name, packing):
         """Test that activation offloading works with SFTTrainer."""
@@ -447,11 +457,11 @@ class SFTTrainerSlowTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)

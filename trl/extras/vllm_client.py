@@ -22,7 +22,9 @@ from typing import Optional, Union
 from urllib.parse import urlparse
 
 import torch
+import torch.distributed.distributed_c10d as c10d
 from torch import nn
+from transformers import is_torch_xpu_available
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -81,8 +83,12 @@ class VLLMClient:
 
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
-        [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
-         [911, 7988, 1251, 382, 3838, 653, 498, 1618, 4325, 879, 2581, 20027, 264, 21428, 30, 362]]
+        {'prompt_ids': [[9707, 11, 15235, 0],
+                        [40451, 752, 264, 21646]],
+         'completion_ids': [[11479, 752, 5046, 279, 1465, 304, 419, 23670, 2038, 358, 2776, 4378, 369, 847, 15549, 6733],
+                            [911, 19654, 382, 3838, 1558, 279, 16158, 1977, 979, 498, 2299, 4460, 311, 10542, 432, 518]],
+         'logprobs': [[-5.193126201629639, -0.05592319369316101, -4.861808776855469, -1.673396110534668, -2.6316866874694824, -0.2861405313014984, -0.35006725788116455, -5.23351526260376, -0.1447441577911377, -5.21489953994751, -1.6022650003433228, -1.9649192094802856, -2.1338791847229004, -1.2775304317474365, -10.004860877990723, -4.171003818511963],
+                      [-0.012896230444312096, -5.747106552124023, -1.5248860120773315, -1.9286258220672607, -2.8512537479400635, -2.8055880069732666, -3.019822835922241, -0.37132859230041504, -0.6311739087104797, -2.562908411026001, -3.1664533615112305, -2.685293436050415, -0.007259538397192955, -7.339841842651367, -1.188662052154541, -3.54781436920166]]}
 
         >>> from transformers import AutoModelForCausalLM
 
@@ -112,7 +118,7 @@ class VLLMClient:
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
         if not is_vllm_available():
-            raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
+            raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
 
@@ -176,6 +182,7 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        truncate_prompt_tokens: Optional[int] = None,
         guided_decoding_regex: Optional[str] = None,
         generation_kwargs: Optional[dict] = None,
     ) -> list[list[int]]:
@@ -201,6 +208,10 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
+            truncate_prompt_tokens (`int`, *optional*):
+                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
+                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
+                disabled.
             guided_decoding_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
@@ -210,6 +221,8 @@ class VLLMClient:
 
         Returns:
             `dict` with keys:
+                - `prompt_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the tokenized input prompts.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each prompt.
                 - `logprobs` (`list[list[float]]`):
@@ -238,13 +251,18 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "truncate_prompt_tokens": truncate_prompt_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
                 "generation_kwargs": generation_kwargs or {},
             },
         )
         if response.status_code == 200:
             json_response = response.json()
-            return {"completion_ids": json_response["completion_ids"], "logprobs": json_response["logprobs"]}
+            return {
+                "prompt_ids": json_response["prompt_ids"],
+                "completion_ids": json_response["completion_ids"],
+                "logprobs": json_response["logprobs"],
+            }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -270,9 +288,17 @@ class VLLMClient:
 
         # Initialize weight update group
         url = f"{self.base_url}/init_communicator/"
-        client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
+        # Will simplify it after torch xpu 2.9 support get uuid.
+        if is_torch_xpu_available():
+            if hasattr(torch.xpu.get_device_properties(device), "uuid"):
+                client_device_uuid = str(torch.xpu.get_device_properties(device).uuid)
+            else:
+                client_device_uuid = "42"
+        else:
+            client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
 
-        # In the server side, the host is set to 0.0.0.0
+        # Set the weight update group's host to "0.0.0.0" so that
+        # clients from different IPs can send updated weights
         response = self.session.post(
             url,
             json={
@@ -291,8 +317,22 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=device)
+        if is_torch_xpu_available():
+            store = torch.distributed.TCPStore(
+                host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
+            )
+            prefixed_store = c10d.PrefixStore("client2server", store)
+            pg = c10d.ProcessGroupXCCL(
+                store=prefixed_store,
+                rank=self.rank,
+                size=world_size,
+            )
+            self.communicator = pg
+        else:
+            pg = StatelessProcessGroup.create(
+                host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
+            )
+            self.communicator = PyNcclCommunicator(pg, device=device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -313,9 +353,14 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        # Broadcast the weights to the other processes
-        self.pynccl_comm.broadcast(weights, src=self.rank)
-        self.pynccl_comm.group.barrier()
+        if is_torch_xpu_available():
+            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, root=self.rank)
+            self.communicator.barrier()
+        else:
+            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, src=self.rank)
+            self.communicator.group.barrier()
 
     def update_model_params(self, model: nn.Module):
         """
@@ -358,8 +403,9 @@ class VLLMClient:
 if __name__ == "__main__":
     from vllm import SamplingParams
 
+    device = "xpu" if is_torch_xpu_available() else "cuda"
     client = VLLMClient()
-    client.init_communicator(device="cuda")
+    client.init_communicator(device=device)
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
@@ -368,5 +414,5 @@ if __name__ == "__main__":
     # Update model weights
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to(device)
     client.update_model_params(model)

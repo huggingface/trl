@@ -67,7 +67,7 @@ from typing import Optional
 import torch
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 from trl import (
     DatasetMixtureConfig,
@@ -81,7 +81,6 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 logger = logging.get_logger(__name__)
@@ -92,7 +91,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 def main(script_args, training_args, model_args, dataset_args):
     ################
-    # Model & Tokenizer
+    # Model
     ###################
     dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
@@ -116,13 +115,6 @@ def main(script_args, training_args, model_args, dataset_args):
         )
     else:
         ref_model = None
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if script_args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -135,6 +127,7 @@ def main(script_args, training_args, model_args, dataset_args):
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )
+        dataset = get_dataset(dataset_args)
     elif dataset_args.datasets and not script_args.dataset_name:
         dataset = get_dataset(dataset_args)
     elif not dataset_args.datasets and script_args.dataset_name:
@@ -151,12 +144,14 @@ def main(script_args, training_args, model_args, dataset_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
         peft_config=peft_config,
     )
 
     # Train the model
     trainer.train()
+
+    # Log training complete
+    trainer.accelerator.print("✅ Training completed.")
 
     if training_args.eval_strategy != "no":
         metrics = trainer.evaluate()
@@ -165,8 +160,11 @@ def main(script_args, training_args, model_args, dataset_args):
 
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
 def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):

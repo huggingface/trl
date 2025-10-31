@@ -11,23 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
+import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
-from transformers.testing_utils import require_peft
 
 from trl import ORPOConfig, ORPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
-class ORPOTrainerTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestORPOTrainer(TrlTestCase):
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -39,13 +35,14 @@ class ORPOTrainerTester(TrlTestCase):
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "name, config_name",
         [
             ("qwen", "standard_preference"),
             ("t5", "standard_implicit_prompt_preference"),
             ("qwen", "conversational_preference"),
             ("t5", "conversational_implicit_prompt_preference"),
-        ]
+        ],
     )
     def test_orpo_trainer(self, name, config_name):
         training_args = ORPOConfig(
@@ -82,21 +79,22 @@ class ORPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.equal(param, new_param))
+                assert not torch.equal(param, new_param)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "config_name",
         [
-            ("standard_preference",),
-            ("standard_implicit_prompt_preference",),
-            ("conversational_preference",),
-            ("conversational_implicit_prompt_preference",),
-        ]
+            "standard_preference",
+            "standard_implicit_prompt_preference",
+            "conversational_preference",
+            "conversational_implicit_prompt_preference",
+        ],
     )
     @require_peft
     def test_orpo_trainer_with_lora(self, config_name):
@@ -137,14 +135,14 @@ class ORPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.equal(param, new_param))
+                    assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -178,4 +176,4 @@ class ORPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
+        assert trainer.state.log_history[-2]["eval_test"] == 0.0

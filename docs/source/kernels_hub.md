@@ -43,12 +43,8 @@ Or using the TRL CLI:
 trl sft ... --attn_implementation kernels-community/flash-attn
 ```
 
-<Tip>
-
-Now you can leverage faster attention backends with a pre-optimized kernel for your hardware configuration from the Hub, speeding up both development and training.
-
-</Tip>
-
+> [!TIP]
+> Now you can leverage faster attention backends with a pre-optimized kernel for your hardware configuration from the Hub, speeding up both development and training.
 
 ## Comparing Attention Implementations
 
@@ -57,15 +53,14 @@ The experiments were run on a single **H100 GPU** with **CUDA 12.9**, leveraging
 Keep in mind that the results shown here are specific to this setup and may vary with different training configurations.
 
 The following figure illustrates both **latency** (time per training step) and **peak allocated memory** for the different attention implementations and kernel backends.  
-Kernel-based implementations perform on par with custom-installed attention, and increasing the model’s `max_length` further enhances performance. Memory consumption is similar across all implementations, showing no significant differences. We get the same performance but with less friction, as described in [the following section](#benchmarking-flash-attention-build-from-source-vs-hub-kernels).
-
+Kernel-based implementations perform on par with custom-installed attention, and increasing the model’s `max_length` further enhances performance. Memory consumption is similar across all implementations, showing no significant differences. We get the same performance but with less friction, as described in [the following section](#flash-attention-vs-hub-kernels).
 
 <div class="flex justify-center">
-  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_latency.png" alt="Latency and Memory Usage" width="600"/>
-  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_peak_allocated_memory.png" alt="Latency and Memory Usage" width="600"/>
+  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_latency.png" alt="Latency and Memory Usage" width="45%"/>
+  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_peak_allocated_memory.png" alt="Latency and Memory Usage" width="45%"/>
 </div>
 
-## Flash Attention (Build-from-Source) vs. Hub Kernels
+## Flash Attention vs. Hub Kernels
 
 Building Flash Attention from source can be time-consuming, often taking anywhere from several minutes to hours, depending on your hardware, CUDA/PyTorch configuration, and whether precompiled wheels are available.  
 
@@ -76,7 +71,6 @@ In contrast, **Hugging Face Kernels** provide a much faster and more reliable wo
 You can combine **FlashAttention kernels** with **Liger kernels** for additional TRL performance improvements.
 
 First, install the Liger kernel dependency:
-
 
 ```bash
 pip install liger-kernel
@@ -99,6 +93,4 @@ training_args = SFTConfig(
 )
 ```
 
-Learn more about this integration [here](./liger_kernel_integration).
-
-
+Learn more about the [Liger Kernel Integration](./liger_kernel_integration).

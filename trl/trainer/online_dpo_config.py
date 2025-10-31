@@ -59,9 +59,6 @@ class OnlineDPOConfig(TrainingArguments):
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
-
-        dataset_num_proc (`int`, *optional*):
-            Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -87,10 +84,10 @@ class OnlineDPOConfig(TrainingArguments):
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
         generation_kwargs (`dict[str, Any]`, *optional*):
-            Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
-            using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
-            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
-            parameters (like `min_p`, `top_p`, etc.), they will override them.
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -237,7 +234,7 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
-            "generation behavior, such as setting `supress_tokens`, `num_beams`, etc. If it contains keys that "
+            "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
@@ -285,7 +282,7 @@ class OnlineDPOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to use vLLM for generating completions. Requires vLLM to be installed "
-            "(`pip install vllm`)."
+            "(`pip install trl[vllm]`)."
         },
     )
     vllm_model_impl: str = field(
@@ -372,35 +369,17 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
 
-    # Deprecated parameters
-    dataset_num_proc: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    gpu_memory_utilization: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.25.0. Please use "
-            "`vllm_gpu_memory_utilization` instead.",
-        },
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
 
-        if self.dataset_num_proc is not None:
-            warnings.warn(
-                "The parameter `dataset_num_proc` is deprecated and will be removed in version 0.25.0. "
-                "Since OnlineDPO does not involve dataset preparation, you can safely remove it.",
-            )
-        if self.gpu_memory_utilization is not None:
-            warnings.warn(
-                "The parameter `gpu_memory_utilization` is deprecated and will be removed in version 0.25.0. "
-                "Please use `vllm_gpu_memory_utilization` instead.",
-            )
-            self.vllm_gpu_memory_utilization = self.gpu_memory_utilization
-
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]
+
+        if self.max_new_tokens >= self.max_length:
+            warnings.warn(
+                f"The configuration has `max_new_tokens` ({self.max_new_tokens}) >= `max_length` ({self.max_length}). "
+                "This will cause prompts to be truncated or completely removed in the forward pass. "
+                "To preserve prompts, ensure  e.g. `max_length > max_new_tokens + 512`. ",
+            )

@@ -11,17 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
+import pytest
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import XPOConfig, XPOTrainer
 
-from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender
+from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
 
 
 if is_peft_available():
@@ -29,8 +26,7 @@ if is_peft_available():
 
 
 class TestXPOTrainer(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -38,7 +34,7 @@ class TestXPOTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_xpo_trainer_training(self, config_name):
         training_args = XPOConfig(
             output_dir=self.tmp_dir,
@@ -65,7 +61,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft(self):
@@ -93,7 +89,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft_and_ref_model(self):
@@ -122,7 +118,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft_model_and_peft_config(self):
@@ -153,7 +149,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_pre_pefted_model_implicit_ref(self):
@@ -182,10 +178,10 @@ class TestXPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_xpo_trainer_judge_training(self, config_name):
         training_args = XPOConfig(
             output_dir=self.tmp_dir,
@@ -213,4 +209,4 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]

@@ -20,12 +20,37 @@ from transformers import TrainingArguments
 
 
 class FDivergenceType(Enum):
+    """Types of f-divergence functions for DPO loss regularization.
+
+    Attributes:
+        REVERSE_KL: Reverse KL divergence.
+        JS_DIVERGENCE: Jensen-Shannon divergence.
+        ALPHA_DIVERGENCE: Alpha divergence.
+
+    Examples:
+        ```python
+        >>> from trl.trainer.dpo_config import DPOConfig, FDivergenceType
+
+        >>> config = DPOConfig(
+        ...     f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE,
+        ...     f_alpha_divergence_coef=0.5,  # used only with ALPHA_DIVERGENCE
+        ... )
+        ```
+    """
+
     REVERSE_KL = "reverse_kl"
     JS_DIVERGENCE = "js_divergence"
     ALPHA_DIVERGENCE = "alpha_divergence"
 
 
 class FDivergenceConstants:
+    """Constants for f-divergence types and their parameters.
+
+    Attributes:
+        ALPHA_DIVERGENCE_COEF_KEY (`str`): Key for the alpha divergence coefficient.
+        ALPHA_DIVERGENCE_COEF_DEFAULT (`float`): Default value for the alpha divergence coefficient.
+    """
+
     ALPHA_DIVERGENCE_COEF_KEY = "alpha_divergence_coef"
     ALPHA_DIVERGENCE_COEF_DEFAULT = 1.0
 
@@ -70,8 +95,9 @@ class DPOConfig(TrainingArguments):
 
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        padding_value (`int`, *optional*):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
+        pad_token (`str`, *optional*):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
@@ -139,7 +165,7 @@ class DPOConfig(TrainingArguments):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
             the [paper](https://huggingface.co/papers/2310.12036).
-        f_divergence_type (`str`, *optional*, defaults to `FDivergenceType.REVERSE_KL`):
+        f_divergence_type ([`FDivergenceType`] or `str`, *optional*, defaults to `FDivergenceType.REVERSE_KL`):
             Type of f-divergence regularization function to compute divergence between policy and reference model.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
             α coefficient in the α-divergence u^-α regularization function for DPO loss.
@@ -186,6 +212,16 @@ class DPOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to generate and log completions from both the model and the reference model to W&B or Comet during
             evaluation.
+
+        > Deprecated parameters
+
+        padding_value:
+
+            <Deprecated version="0.24.0">
+
+            This parameter is deprecated and will be removed in version 0.26.0. Use `pad_token` (`str`) instead.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
@@ -265,9 +301,12 @@ class DPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    padding_value: Optional[int] = field(
+    pad_token: Optional[str] = field(
         default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
+        },
     )
     label_pad_token_id: int = field(
         default=-100,
@@ -357,7 +396,7 @@ class DPOConfig(TrainingArguments):
             "Higher β means less deviation from the reference model."
         },
     )
-    f_divergence_type: FDivergenceType = field(
+    f_divergence_type: Union[FDivergenceType, str] = field(
         default=FDivergenceType.REVERSE_KL,
         metadata={
             "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
@@ -449,8 +488,15 @@ class DPOConfig(TrainingArguments):
         },
     )
 
+    # Deprecated arguments
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Deprecated, use `pad_token` (str) instead."},
+    )
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+        self.f_divergence_type = FDivergenceType(self.f_divergence_type)
 
         # Normalize loss_type to string format for internal use
         if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:

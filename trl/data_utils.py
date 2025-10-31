@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from itertools import takewhile
@@ -22,25 +23,36 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types
 from datasets import Dataset, DatasetDict
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
-def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int) -> None:
+def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) -> list[dict[str, Any]]:
+    # docstyle-ignore  # because <Image> is not parsable in the code block
     """
-    Convert messages into a structured multimodal format if needed.
-
-    Each message's content is transformed from a raw string into a list of typed parts. The first user message is
-    prefixed with an image placeholder, while all other user and assistant messages are wrapped as text entries.
+    Convert messages into a structured multimodal format and inject the provided images into the message contents.
 
     Args:
         messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content may be a raw string before transformation.
-        num_images (`int`):
-            Number of images to include in the first user message. This is used to determine how many image
-            placeholders to add.
+            Messages with `"role"` and `"content"`. Content may be a raw string before transformation. List of messages
+            a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing either a string or
+            a list of structured blocks if already prepared.
+        images (`list`):
+            List of image objects to insert.
+
+    Returns:
+        `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
+        content blocks, and all `"image"` placeholders are populated with the corresponding image objects.
+
+    Notes:
+        - When the input `messages` isn't already in the structured format, (i.e., all `"content"` values are strings),
+          the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
+          and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
+        - When the input `messages` is already in the structured format (i.e., all `"content"` values are lists of
+          structured blocks), the function only fills in the actual images in the existing `{"type": "image"}`
+          placeholders. If the number of placeholders does not match the number of provided images, an error is raised.
 
     Example:
     ```python
@@ -50,30 +62,84 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int)
         {"role": "assistant", "content": "It looks like a cat."},
     ]
 
-    # Output (num_images=1)
+    # Output, one image provided
     [
-        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
+        {"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
     ]
     ```
     """
-    image_included = False
+
+    messages = copy.deepcopy(messages)  # avoid modifying the original messages
+
+    # First, convert all messages to the structured format if needed, and insert image placeholders if needed
+    images_included = False
     for message in messages:
         if message["role"] == "system":
             if isinstance(message["content"], str):  # if already prepared, the content will be a list
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "user":
-            if isinstance(message["content"], str) and not image_included:
-                placeholders = [{"type": "image"}] * num_images
-                message["content"] = [*placeholders, {"type": "text", "text": message["content"]}]
-                image_included = True
-            elif isinstance(message["content"], str) and image_included:
+            if isinstance(message["content"], str) and not images_included:
+                image_entries = [{"type": "image"} for _ in range(len(images))]
+                message["content"] = [*image_entries, {"type": "text", "text": message["content"]}]
+                images_included = True
+            elif isinstance(message["content"], str) and images_included:
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "assistant":
             if isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
         else:
             raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
+
+    # Then, check that the number of image placeholders matches the number of images provided
+    num_placeholders = sum(sum(1 for part in message["content"] if part["type"] == "image") for message in messages)
+    if num_placeholders != len(images):
+        raise ValueError(
+            f"Number of images provided ({len(images)}) does not match number of image placeholders ({num_placeholders})."
+        )
+
+    # Then, fill in the actual images in the placeholders
+    img_idx = 0
+    for message in messages:
+        for part in message["content"]:
+            if part["type"] == "image":
+                part["image"] = images[img_idx]
+                img_idx += 1
+
+    return messages
+
+
+def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # docstyle-ignore  # because <Image> is not parsable in the code block
+    """
+    Convert structured multimodal messages into a format compatible with vLLM. Replaces `"type": "image"` blocks with
+    `"type": "image_pil"` blocks, and `"image": Image` with `"image_pil": Image`.
+
+    Args:
+        messages (`list[dict[str, Any]]`):
+            Messages with `"role"` and `"content"`. Content is expected to be a list of structured blocks.
+
+    Returns:
+        `list[dict[str, Any]]`:
+            A deep-copied list of messages compatible with vLLM's expected input format.
+
+    Example:
+    ```python
+    # Input
+    [{"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
+
+    # Output
+    [{"role": "user", "content": [{"type": "image_pil", "image_pil": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
+    ```
+    """
+    messages = copy.deepcopy(messages)  # avoid modifying the original messages
+    for message in messages:
+        if isinstance(message["content"], list):
+            for part in message["content"]:
+                if part["type"] == "image":
+                    part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
+                    part["image_pil"] = part.pop("image")
+    return messages
 
 
 def is_conversational(example: dict[str, Any]) -> bool:
@@ -119,7 +185,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: Union[PreTrainedTokenizerBase, ProcessorMixin],
     tools: Optional[list[Union[dict, Callable]]] = None,
     **template_kwargs,
 ) -> dict[str, str]:
@@ -143,7 +209,13 @@ def apply_chat_template(
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
-        messages = tokenizer.apply_chat_template(example["messages"], tools=tools, tokenize=False, **template_kwargs)
+        messages = tokenizer.apply_chat_template(
+            example["messages"],
+            tools=tools,
+            tokenize=False,
+            **example.get("chat_template_kwargs", {}),
+            **template_kwargs,
+        )
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
@@ -162,6 +234,7 @@ def apply_chat_template(
             continue_final_message=continue_final_message,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **example.get("chat_template_kwargs", {}),
             **template_kwargs,
         )
 
@@ -169,7 +242,11 @@ def apply_chat_template(
     if "prompt" in example:  # explicit prompt and prompt-completion case
         if "chosen" in example:
             prompt_chosen = tokenizer.apply_chat_template(
-                example["prompt"] + example["chosen"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["chosen"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # DeepSeek-R1 inserts a <tool_call> token when using `add_generation_prompt`, which can cause discrepancies
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
@@ -179,24 +256,42 @@ def apply_chat_template(
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = tokenizer.apply_chat_template(
-                example["prompt"] + example["rejected"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["rejected"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
-                example["prompt"] + example["completion"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["completion"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
-            chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False, **template_kwargs)
+            chosen = tokenizer.apply_chat_template(
+                example["chosen"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
+            )
         if "rejected" in example:
             rejected = tokenizer.apply_chat_template(
-                example["rejected"], tools=tools, tokenize=False, **template_kwargs
+                example["rejected"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
 
     # Extract the completion by removing the prompt part from the prompt-completion string
@@ -239,8 +334,10 @@ def maybe_apply_chat_template(
                 - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
-            messages, where each message is a dictionary with keys `"role"` and `"content"`.
-        tokenizer (`PreTrainedTokenizerBase`):
+            messages, where each message is a dictionary with keys `"role"` and `"content"`. Additionally, the example
+            may contain a `"chat_template_kwargs"` key, which is a dictionary of additional keyword arguments to pass
+            to the chat template renderer.
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]`, *optional*):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
@@ -297,7 +394,7 @@ def unpair_preference_dataset(
     Unpair a preference dataset.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
         num_proc (`int`, *optional*):
@@ -306,7 +403,7 @@ def unpair_preference_dataset(
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
-        `Dataset`: The unpaired preference dataset.
+        [`~datasets.Dataset`]: The unpaired preference dataset.
 
     Example:
 
@@ -340,7 +437,7 @@ def maybe_unpair_preference_dataset(
     Unpair a preference dataset if it is paired.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
         num_proc (`int`, *optional*):
@@ -349,7 +446,8 @@ def maybe_unpair_preference_dataset(
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The unpaired preference dataset if it was paired, otherwise the original dataset.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The unpaired preference dataset if it was paired, otherwise
+        the original dataset.
 
     Example:
 
@@ -442,7 +540,7 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
 
-    Or, with the `map` method of `datasets.Dataset`:
+    Or, with the `map` method of [`~datasets.Dataset`]:
 
     ```python
     >>> from trl import extract_prompt
@@ -633,7 +731,7 @@ def pack_dataset(
     Pack sequences in a dataset into chunks of size `seq_length`.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
@@ -648,8 +746,8 @@ def pack_dataset(
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with packed sequences. The number of examples may decrease as sequences
-        are combined.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with packed sequences. The number of examples
+        may decrease as sequences are combined.
 
     Example:
     ```python
@@ -689,7 +787,7 @@ def truncate_dataset(
     Truncate sequences in a dataset to a specified `max_length`.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Dataset to truncate.
         max_length (`int`):
             Maximum sequence length to truncate to.
@@ -697,7 +795,7 @@ def truncate_dataset(
             Additional keyword arguments to pass to the dataset's map method when truncating examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with truncated sequences.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with truncated sequences.
 
     Example:
     ```python

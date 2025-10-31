@@ -23,7 +23,6 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, Features, Image, Value, load_dataset
 from packaging.version import Version
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -31,21 +30,21 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
-from transformers.testing_utils import (
-    backend_empty_cache,
-    require_bitsandbytes,
-    require_flash_attn,
-    require_liger_kernel,
-    require_peft,
-    require_torch_accelerator,
-    torch_device,
-)
+from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.utils import get_kbit_device_map
 
-from ..testing_utils import TrlTestCase, require_vllm
+from ..testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_flash_attn,
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+    require_vllm,
+)
 from .testing_constants import MODELS_TO_TEST
 
 
@@ -55,20 +54,18 @@ if is_peft_available():
 
 @pytest.mark.slow
 @require_torch_accelerator
-class GRPOTrainerSlowTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestGRPOTrainerSlow(TrlTestCase):
+    def setup_method(self):
         self.train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         self.eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test")
         self.max_length = 128
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
-        super().tearDown()
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     def test_training_with_liger_grpo_loss(self, model_name):
         training_args = GRPOConfig(
@@ -79,6 +76,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
+            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -103,11 +101,11 @@ class GRPOTrainerSlowTester(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
         release_memory(model, trainer)
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     @require_liger_kernel
     @require_peft
     def test_training_with_liger_grpo_loss_and_peft(self, model_name):
@@ -121,6 +119,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
+            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -153,28 +152,28 @@ class GRPOTrainerSlowTester(TrlTestCase):
         # Verify PEFT adapter is properly initialized
         from peft import PeftModel
 
-        self.assertTrue(isinstance(trainer.model, PeftModel), "Model should be wrapped with PEFT")
+        assert isinstance(trainer.model, PeftModel), "Model should be wrapped with PEFT"
 
         # Store adapter weights before training
         previous_trainable_params = {
             n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
         }
-        self.assertTrue(len(previous_trainable_params) > 0, "No trainable parameters found in PEFT model")
+        assert len(previous_trainable_params) > 0, "No trainable parameters found in PEFT model"
 
         trainer.train()
 
         # Verify adapter weights have changed after training
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
         release_memory(model, trainer)
 
-    @parameterized.expand(MODELS_TO_TEST)
+    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
-        if Version(transformers.__version__) < Version("4.56.2"):
-            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.56.2")
+        if Version(transformers.__version__) < Version("4.57.0"):
+            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.57.0")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -199,23 +198,24 @@ class GRPOTrainerSlowTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
         release_memory(model, trainer)
 
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
+        ],
+    )
     @require_flash_attn
     @require_bitsandbytes
     @require_peft
-    @parameterized.expand(
-        [
-            ("HuggingFaceTB/SmolVLM-Instruct",),  # Only test the smaller model to avoid OOM
-        ]
-    )
     def test_vlm_training(self, model_name):
         """
         Test VLM training with aggressive memory optimization.
@@ -310,13 +310,13 @@ class GRPOTrainerSlowTester(TrlTestCase):
                 peft_config=lora_config,
             )
 
-            self.assertIsInstance(trainer.model, PeftModel)
+            assert isinstance(trainer.model, PeftModel)
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[-1]["train_loss"] is not None
 
             # Check that LoRA parameters have changed
             # For VLM models, we're more permissive about which parameters can change
@@ -328,14 +328,14 @@ class GRPOTrainerSlowTester(TrlTestCase):
                         lora_params_changed = True
 
             # At least some LoRA parameters should have changed during training
-            self.assertTrue(lora_params_changed, "No LoRA parameters were updated during training.")
+            assert lora_params_changed, "No LoRA parameters were updated during training."
 
         except torch.OutOfMemoryError as e:
-            self.skipTest(f"Skipping VLM training test due to insufficient GPU memory: {e}")
+            pytest.skip(f"Skipping VLM training test due to insufficient GPU memory: {e}")
         except Exception as e:
             # Check for other memory-related errors
             if any(keyword in str(e).lower() for keyword in ["memory", "cuda", "out of memory", "insufficient"]):
-                self.skipTest(f"Skipping VLM training test due to hardware constraints: {e}")
+                pytest.skip(f"Skipping VLM training test due to hardware constraints: {e}")
             else:
                 raise
 
@@ -378,8 +378,8 @@ class GRPOTrainerSlowTester(TrlTestCase):
         processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left")
 
         # Verify processor has both required attributes for VLM detection
-        self.assertTrue(hasattr(processor, "tokenizer"))
-        self.assertTrue(hasattr(processor, "image_processor"))
+        assert hasattr(processor, "tokenizer")
+        assert hasattr(processor, "image_processor")
 
         def dummy_reward_func(completions, **kwargs):
             return [1.0] * len(completions)
@@ -438,16 +438,14 @@ class GRPOTrainerSlowTester(TrlTestCase):
                     )
 
                     # Should detect VLM processor correctly and allow vLLM
-                    self.assertTrue(trainer.use_vllm, "vLLM should be enabled for VLM processors in colocate mode")
-                    self.assertEqual(trainer.vllm_mode, "colocate", "Should use colocate mode")
+                    assert trainer.use_vllm, "vLLM should be enabled for VLM processors in colocate mode"
+                    assert trainer.vllm_mode == "colocate", "Should use colocate mode"
 
                     # Check if signature columns were set properly
                     if trainer._signature_columns is not None:
                         # Should include 'image' in signature columns for VLM processors
-                        self.assertIn(
-                            "image",
-                            trainer._signature_columns,
-                            "Should include 'image' in signature columns for VLM",
+                        assert "image" in trainer._signature_columns, (
+                            "Should include 'image' in signature columns for VLM"
                         )
 
                     # Should not emit any warnings about VLM incompatibility
@@ -457,10 +455,8 @@ class GRPOTrainerSlowTester(TrlTestCase):
                         if "does not support VLMs" in str(w_item.message)
                         or "not compatible" in str(w_item.message).lower()
                     ]
-                    self.assertEqual(
-                        len(incompatibility_warnings),
-                        0,
-                        f"Should not emit VLM incompatibility warnings, but got: {incompatibility_warnings}",
+                    assert len(incompatibility_warnings) == 0, (
+                        f"Should not emit VLM incompatibility warnings, but got: {incompatibility_warnings}"
                     )
 
                     # Test passes if we get this far without exceptions
@@ -480,11 +476,11 @@ class GRPOTrainerSlowTester(TrlTestCase):
                             "decrease gpu memory",
                         ]
                     ):
-                        self.skipTest(f"Skipping vLLM colocate test due to hardware constraints: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to hardware constraints: {e}")
                     elif "KeyError" in str(e) and "RANK" in str(e):
-                        self.skipTest(f"Skipping vLLM colocate test due to environment setup issues: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to environment setup issues: {e}")
                     elif "ValueError" in str(e) and "memory" in str(e).lower():
-                        self.skipTest(f"Skipping vLLM colocate test due to memory constraints: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to memory constraints: {e}")
                     else:
                         raise
         finally:
@@ -525,12 +521,12 @@ class GRPOTrainerSlowTester(TrlTestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[-1]["train_loss"] is not None
 
             # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
         except Exception as e:
             # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
@@ -547,11 +543,11 @@ class GRPOTrainerSlowTester(TrlTestCase):
                     "decrease gpu memory",
                 ]
             ):
-                self.skipTest(f"Skipping vLLM training test due to hardware constraints: {e}")
+                pytest.skip(f"Skipping vLLM training test due to hardware constraints: {e}")
             elif "KeyError" in str(e) and "RANK" in str(e):
-                self.skipTest(f"Skipping vLLM training test due to environment setup issues: {e}")
+                pytest.skip(f"Skipping vLLM training test due to environment setup issues: {e}")
             elif "ValueError" in str(e) and "memory" in str(e).lower():
-                self.skipTest(f"Skipping vLLM training test due to memory constraints: {e}")
+                pytest.skip(f"Skipping vLLM training test due to memory constraints: {e}")
             else:
                 raise
 

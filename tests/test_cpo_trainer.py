@@ -11,23 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
+import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
-from transformers.testing_utils import require_peft
 
 from trl import CPOConfig, CPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
-class CPOTrainerTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestCPOTrainer(TrlTestCase):
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -39,7 +35,8 @@ class CPOTrainerTester(TrlTestCase):
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "name, loss_type, config_name",
         [
             ("qwen", "sigmoid", "standard_preference"),
             ("t5", "hinge", "standard_implicit_prompt_preference"),
@@ -48,7 +45,7 @@ class CPOTrainerTester(TrlTestCase):
             ("qwen", "simpo", "standard_preference"),
             ("t5", "simpo", "standard_implicit_prompt_preference"),
             ("qwen", "hinge", "conversational_preference"),
-        ]
+        ],
     )
     def test_cpo_trainer(self, name, loss_type, config_name):
         training_args = CPOConfig(
@@ -87,21 +84,22 @@ class CPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.equal(param, new_param))
+                assert not torch.equal(param, new_param)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "config_name",
         [
-            ("standard_preference",),
-            ("standard_implicit_prompt_preference",),
-            ("conversational_preference",),
-            ("conversational_implicit_prompt_preference",),
-        ]
+            "standard_preference",
+            "standard_implicit_prompt_preference",
+            "conversational_preference",
+            "conversational_implicit_prompt_preference",
+        ],
     )
     @require_peft
     def test_cpo_trainer_with_lora(self, config_name):
@@ -143,14 +141,14 @@ class CPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.equal(param, new_param))
+                    assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
@@ -180,7 +178,7 @@ class CPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
+        assert trainer.state.log_history[-2]["eval_test"] == 0.0
 
     def test_alphapo_trainer(self):
         training_args = CPOConfig(
@@ -212,9 +210,9 @@ class CPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
-                self.assertFalse(torch.equal(param, new_param))
+                assert not torch.equal(param, new_param)
