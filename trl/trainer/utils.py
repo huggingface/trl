@@ -115,41 +115,76 @@ class DataCollatorForChatML:
                 formatted_message = self.tokenizer.apply_chat_template(
                     message, tokenize=False, add_generation_prompt=False
                 )
+
                 tokenized_message = self.tokenizer(
                     formatted_message,
+                    truncation=False,
+                    padding=False,
+                    return_tensors=None,
+                    add_special_tokens=False,
+                    return_offsets_mapping=True,
+                )
+                message_input_ids_full = tokenized_message["input_ids"]
+                offsets = tokenized_message.get("offset_mapping")
+
+                if offsets is not None:
+                    prompt_char_len = len(formatted_prompt)
+                    completion_start_idx_full = next(
+                        (idx for idx, (start, _) in enumerate(offsets) if start >= prompt_char_len),
+                        len(message_input_ids_full),
+                    )
+                else:
+                    tokenized_prompt_full = self.tokenizer(
+                        formatted_prompt,
+                        truncation=False,
+                        padding=False,
+                        return_tensors=None,
+                        add_special_tokens=False,
+                    )
+                    completion_start_idx_full = len(tokenized_prompt_full["input_ids"])
+
+                prompt_tokens_full = message_input_ids_full[:completion_start_idx_full]
+                completion_input_ids_full = message_input_ids_full[completion_start_idx_full:]
+
+                if self.max_length is not None and len(message_input_ids_full) > self.max_length:
+                    completion_ids = completion_input_ids_full
+                    if len(completion_ids) >= self.max_length:
+                        completion_ids = completion_ids[-self.max_length :]
+                        prompt_ids = []
+                    else:
+                        max_prompt_tokens = self.max_length - len(completion_ids)
+                        prompt_ids = prompt_tokens_full[-max_prompt_tokens:] if max_prompt_tokens > 0 else []
+                    message_input_ids = prompt_ids + completion_ids
+                else:
+                    message_input_ids = message_input_ids_full
+                    prompt_ids = prompt_tokens_full
+
+                input_ids.append(message_input_ids)
+                attention_mask.append([1] * len(message_input_ids))
+                current_prompt_ids = prompt_ids
+            else:
+                message_input_ids = example["input_ids"]
+                input_ids.append(message_input_ids)
+                if "attention_mask" in example:
+                    attention_mask.append(example["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(message_input_ids))
+
+                tokenized_prompt = self.tokenizer(
+                    formatted_prompt,
                     truncation=True,
-                    max_length=self.max_length,
+                    max_length=len(message_input_ids),
                     padding=False,
                     return_tensors=None,
                     add_special_tokens=False,
                 )
-                input_ids.append(tokenized_message["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(tokenized_message["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
-            else:
-                input_ids.append(example["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(example["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(example["input_ids"]))
+                current_prompt_ids = tokenized_prompt["input_ids"]
 
-            tokenized_prompt = self.tokenizer(
-                formatted_prompt,
-                truncation=True,
-                max_length=len(input_ids[-1]),
-                padding=False,
-                return_tensors=None,
-                add_special_tokens=False,
-            )
+            prompts_input_ids.append(current_prompt_ids)
+            prompt_attention_mask.append([1] * len(current_prompt_ids))
 
-            prompts_input_ids.append(tokenized_prompt["input_ids"])
-            prompt_attention_mask.append(tokenized_prompt["attention_mask"])
-
-            # Create the labels that will have all but the completion tokens of the example["input_ids"] set to ignore_index
             label = [self.ignore_index] * len(input_ids[-1])
-            completion_start_idx = len(tokenized_prompt["input_ids"])
+            completion_start_idx = len(current_prompt_ids)
             label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
             labels.append(label)
 
