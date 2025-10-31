@@ -90,22 +90,10 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         if images is not None:
             prompts = [prepare_multimodal_messages(prompt, image_list) for prompt, image_list in zip(prompts, images)]
 
-        # (
-        #     prompt_ids,
-        #     completion_ids,
-        #     prompt_mask,
-        #     completion_mask,
-        #     num_items_in_batch,
-        #     sampling_per_token_logps,
-        #     forward_kwargs,
-        # ) = self._generate(prompts, images)
         prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
             self._generate(prompts)
         )
 
-        # # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
-        # # to re-tokenize completions if the reward is computed from tokens.
-        # completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
@@ -364,7 +352,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if "token_type_ids" in forward_kwargs:
                 output["token_type_ids"] = forward_kwargs["token_type_ids"]
             if images is not None:
-                output["images"] = images
+                output["num_images"] = num_images
             return output
 
     def slice_group_data(
