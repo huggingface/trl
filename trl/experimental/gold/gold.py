@@ -20,6 +20,7 @@
 # ]
 # ///
 
+# docstyle-ignore
 """
 # Full training:
 python trl/experimental/gold/gold.py \
@@ -86,6 +87,8 @@ if __name__ == "__main__":
     )
     training_args.model_init_kwargs = model_kwargs
 
+    if training_args.teacher_tokenizer_name_or_path is None and training_args.use_uld_loss:
+        training_args.teacher_tokenizer_name_or_path = training_args.teacher_model_name_or_path
     teacher_model_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
