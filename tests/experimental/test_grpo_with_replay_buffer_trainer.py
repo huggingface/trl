@@ -83,11 +83,12 @@ class TestReplayBuffer:
 @pytest.mark.low_priority
 class TestUpdateWithReplayBuffer:
     def setup_method(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         config = GRPOWithReplayBufferConfig(
             replay_buffer_size=5,
         )
         self.trainer = GRPOWithReplayBufferTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=config,
             train_dataset=None,
@@ -238,7 +239,13 @@ class TestUpdateWithReplayBuffer:
 
 @pytest.mark.low_priority
 class TestGRPOWithReplayBufferTrainer(TrlTestCase):
-    def test_training_with_replay_buffer(self):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_training_with_replay_buffer(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         # Guarantee that some rewards have 0 std
@@ -258,7 +265,7 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=[custom_reward_func],
             args=training_args,
             train_dataset=dataset,

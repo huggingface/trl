@@ -121,8 +121,9 @@ class TestDatasetFormatting(TrlTestCase):
 @pytest.mark.filterwarnings("ignore::FutureWarning")
 class TestSetupChatFormat(TrlTestCase):
     def setup_method(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(model_id)
         # remove built-in chat_template to simulate a model having no chat_template
         self.tokenizer.chat_template = None
 

@@ -341,10 +341,16 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_vllm
     @require_bitsandbytes
     @require_peft
-    def test_vlm_processor_vllm_colocate_mode(self):
+    def test_vlm_processor_vllm_colocate_mode(self, model_id):
         """
         Test that VLM processors work with vLLM in colocate mode.
 
@@ -423,9 +429,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
                 try:
                     # Load model with quantization for memory efficiency
                     model = AutoModelForCausalLM.from_pretrained(
-                        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                        quantization_config=quantization_config,
-                        dtype=torch.bfloat16,
+                        model_id, quantization_config=quantization_config, dtype=torch.bfloat16
                     )
 
                     trainer = GRPOTrainer(
