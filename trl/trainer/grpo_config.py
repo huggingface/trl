@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
@@ -84,6 +85,13 @@ class GRPOConfig(TrainingArguments):
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
+        generation_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
+        chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
@@ -94,11 +102,6 @@ class GRPOConfig(TrainingArguments):
             parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
-        generation_kwargs (`dict[str, Any]`, *optional*):
-            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
-            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
-            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
-            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -221,8 +224,15 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
-        use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use the Liger GRPO loss.
+        use_liger_loss (`bool`, *optional*):
+            Whether to use Liger loss.
+
+            <Deprecated version="0.25.0">
+
+            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
+
+            </Deprecated>
+
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
             logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
@@ -237,7 +247,8 @@ class GRPOConfig(TrainingArguments):
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
-            it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+            it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
+            `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
@@ -383,6 +394,13 @@ class GRPOConfig(TrainingArguments):
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
             "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+        },
+    )
+    chat_template_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
+            "completions."
         },
     )
     repetition_penalty: float = field(
@@ -606,7 +624,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     use_liger_loss: bool = field(
-        default=False,
+        default=None,
         metadata={"help": "Whether to use the Liger GRPO loss."},
     )
     vllm_importance_sampling_correction: bool = field(
@@ -698,5 +716,14 @@ class GRPOConfig(TrainingArguments):
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
-        if self.delta is not None and self.use_liger_loss:
-            raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+        if self.use_liger_loss is not None:
+            warnings.warn(
+                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
+                "`use_liger_kernel` instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.use_liger_kernel = self.use_liger_loss
+
+        if self.delta is not None and self.use_liger_kernel:
+            raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")

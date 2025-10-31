@@ -336,9 +336,9 @@ for model_id, model_class in [
         vision_config["depth"] = 2
 
     if issubclass(model_class.config_class, (Qwen2VLConfig, Qwen2_5_VLConfig)):
-        text_config["rope_scaling"] = {"type": "default", "mrope_section": [2], "rope_type": "default"}
+        text_config["rope_scaling"] = {"type": "default", "mrope_section": [1, 1], "rope_type": "default"}
         # Different dict object from text_config; see GH-4101 and transformers#41020
-        kwargs["rope_scaling"] = {"type": "default", "mrope_section": [2], "rope_type": "default"}
+        kwargs["rope_scaling"] = {"type": "default", "mrope_section": [1, 1], "rope_type": "default"}
 
     if issubclass(model_class.config_class, Qwen2_5_VLConfig):
         vision_config["out_hidden_size"] = 16

@@ -12,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import pathlib
 from unittest.mock import MagicMock
 
 import pytest
 import torch
 import transformers
+from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from packaging.version import parse as parse_version
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -33,6 +36,8 @@ from .testing_utils import (
     require_flash_attn,
     require_liger_kernel,
     require_peft,
+    require_torch_accelerator,
+    require_torch_multi_accelerator,
     require_vision,
 )
 
@@ -1381,13 +1386,19 @@ class TestSFTTrainer(TrlTestCase):
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @pytest.mark.xfail(
         parse_version(transformers.__version__) < parse_version("4.57.0"),
         reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
         strict=False,
     )
     @require_vision
-    def test_train_vlm_multi_image(self):
+    def test_train_vlm_multi_image(self, model_id):
         # Get the dataset
         dataset = load_dataset(
             "trl-internal-testing/zen-multi-image", "conversational_prompt_completion", split="train"
@@ -1396,11 +1407,12 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1419,51 +1431,28 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator:
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_train_vlm_prompt_completion(self):
+    def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
-
-    # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator.
-    @require_vision
-    def test_train_vlm_prompt_completion_gemma(self):
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
-            report_to="none",
-        )
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1520,15 +1509,21 @@ class TestSFTTrainer(TrlTestCase):
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_train_vlm_text_only_data(self):
+    def test_train_vlm_text_only_data(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1705,3 +1700,505 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+
+@pytest.mark.slow
+@require_torch_accelerator
+@require_peft
+class TestSFTTrainerSlow(TrlTestCase):
+    def setup_method(self):
+        self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
+        self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
+        self.max_length = 128
+        self.peft_config = LoraConfig(
+            lora_alpha=16,
+            lora_dropout=0.1,
+            r=8,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+    def teardown_method(self):
+        gc.collect()
+        backend_empty_cache(torch_device)
+        gc.collect()
+
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    def test_sft_trainer_str(self, model_name, packing):
+        """
+        Simply tests if passing a simple str to `SFTTrainer` loads and runs the trainer as expected.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            packing=packing,
+            max_length=self.max_length,
+        )
+
+        trainer = SFTTrainer(
+            model_name,
+            args=training_args,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+        )
+
+        trainer.train()
+
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    def test_sft_trainer_transformers(self, model_name, packing):
+        """
+        Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            packing=packing,
+            max_length=self.max_length,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+        )
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_peft
+    def test_sft_trainer_peft(self, model_name, packing):
+        """
+        Simply tests if passing a transformers model + peft config to `SFTTrainer` loads and runs the trainer as
+        expected.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            fp16=True,
+            packing=packing,
+            max_length=self.max_length,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            peft_config=self.peft_config,
+        )
+
+        assert isinstance(trainer.model, PeftModel)
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    def test_sft_trainer_transformers_mp(self, model_name, packing):
+        """
+        Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
+        precision.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            fp16=True,  # this is sufficient to enable amp
+            packing=packing,
+            max_length=self.max_length,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+        )
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    def test_sft_trainer_transformers_mp_gc(self, model_name, packing, gradient_checkpointing_kwargs):
+        """
+        Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
+        precision + different scenarios of gradient_checkpointing.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            packing=packing,
+            max_length=self.max_length,
+            fp16=True,  # this is sufficient to enable amp
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+        )
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_peft
+    def test_sft_trainer_transformers_mp_gc_peft(self, model_name, packing, gradient_checkpointing_kwargs):
+        """
+        Simply tests if passing a transformers model + PEFT to `SFTTrainer` loads and runs the trainer as expected in
+        mixed precision + different scenarios of gradient_checkpointing.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            packing=packing,
+            max_length=self.max_length,
+            fp16=True,  # this is sufficient to enable amp
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            peft_config=self.peft_config,
+        )
+
+        assert isinstance(trainer.model, PeftModel)
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize("device_map", [{"": 0}, "auto"])
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_torch_multi_accelerator
+    def test_sft_trainer_transformers_mp_gc_device_map(
+        self, model_name, packing, gradient_checkpointing_kwargs, device_map
+    ):
+        """
+        Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
+        precision + different scenarios of gradient_checkpointing (single, multi-gpu, etc).
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            packing=packing,
+            max_length=self.max_length,
+            fp16=True,  # this is sufficient to enable amp
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+        )
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_peft
+    @require_bitsandbytes
+    def test_sft_trainer_transformers_mp_gc_peft_qlora(self, model_name, packing, gradient_checkpointing_kwargs):
+        """
+        Simply tests if passing a transformers model + PEFT + bnb to `SFTTrainer` loads and runs the trainer as
+        expected in mixed precision + different scenarios of gradient_checkpointing.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            packing=packing,
+            max_length=self.max_length,
+            fp16=True,  # this is sufficient to enable amp
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+        )
+
+        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+
+        model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            peft_config=self.peft_config,
+        )
+
+        assert isinstance(trainer.model, PeftModel)
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_peft
+    @require_bitsandbytes
+    def test_sft_trainer_with_chat_format_qlora(self, model_name, packing):
+        """
+        Simply tests if using setup_chat_format with a transformers model + peft + bnb config to `SFTTrainer` loads and
+        runs the trainer as expected.
+        """
+        train_dataset = load_dataset("trl-internal-testing/dolly-chatml-sft", split="train")
+
+        training_args = SFTConfig(
+            packing=packing,
+            max_length=self.max_length,
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            fp16=True,
+        )
+
+        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+
+        model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=train_dataset,
+            peft_config=self.peft_config,
+        )
+
+        assert isinstance(trainer.model, PeftModel)
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_liger_kernel
+    def test_sft_trainer_with_liger(self, model_name, packing):
+        """
+        Tests if passing use_liger=True to SFTConfig loads and runs the trainer with AutoLigerKernelForCausalLM as
+        expected.
+        """
+        import importlib
+
+        def cleanup_liger_patches(trainer):
+            """Clean up liger_kernel patches by reloading the model's specific module"""
+            try:
+                # Get the specific module that was used by the trainer's model
+                module_path = trainer.model.__module__
+                reload_module = importlib.import_module(module_path)
+                importlib.reload(reload_module)
+            except Exception:
+                pass  # Continue if reload fails
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=2,
+            packing=packing,
+            max_length=self.max_length,
+            use_liger_kernel=True,
+        )
+
+        trainer = SFTTrainer(
+            model_name,
+            args=training_args,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+        )
+
+        # Ensure cleanup of liger patches after the test
+        try:
+            trainer.train()
+            release_memory(trainer.model, trainer)
+        finally:
+            cleanup_liger_patches(trainer)
+
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_torch_accelerator
+    def test_train_offloading(self, model_name, packing):
+        """Test that activation offloading works with SFTTrainer."""
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            activation_offloading=True,
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=2,
+            packing=packing,
+            max_length=self.max_length,
+        )
+        trainer = SFTTrainer(
+            model=model_name, args=training_args, train_dataset=self.train_dataset, eval_dataset=self.eval_dataset
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+        release_memory(trainer.model, trainer)

@@ -141,7 +141,7 @@ class PRMTrainer(BaseTrainer):
                 raise ValueError(
                     "A processing_class must be specified when using the default DataCollatorForTokenClassification"
                 )
-            data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
+            data_collator = DataCollatorForTokenClassification(processing_class)
 
         if "input_ids" not in train_dataset.column_names:
             with PartialState().main_process_first():
