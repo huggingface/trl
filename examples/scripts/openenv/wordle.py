@@ -20,8 +20,11 @@ Usage:
     TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 \
         python -m src.envs.textarena_env.server.app
 
+    # Start the vLLM server with your model
+    CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+    
     # Then run this training script:
-    python grpo.py
+    CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
 """
 
 from __future__ import annotations
