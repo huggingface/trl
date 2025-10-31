@@ -29,7 +29,6 @@ from transformers.utils import is_peft_available
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 
-from .slow.testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 from .testing_utils import (
     TrlTestCase,
     ignore_warnings,
@@ -1755,8 +1754,14 @@ class TestSFTTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     def test_sft_trainer_str(self, model_name, packing):
         """
         Simply tests if passing a simple str to `SFTTrainer` loads and runs the trainer as expected.
@@ -1780,8 +1785,14 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         trainer.train()
 
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     def test_sft_trainer_transformers(self, model_name, packing):
         """
         Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected.
@@ -1811,8 +1822,14 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_peft
     def test_sft_trainer_peft(self, model_name, packing):
         """
@@ -1848,8 +1865,14 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     def test_sft_trainer_transformers_mp(self, model_name, packing):
         """
         Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
@@ -1881,9 +1904,17 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     def test_sft_trainer_transformers_mp_gc(self, model_name, packing, gradient_checkpointing_kwargs):
         """
         Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
@@ -1917,9 +1948,17 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_peft
     def test_sft_trainer_transformers_mp_gc_peft(self, model_name, packing, gradient_checkpointing_kwargs):
         """
@@ -1957,10 +1996,18 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("device_map", DEVICE_MAP_OPTIONS)
-    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("device_map", [{"": 0}, "auto"])
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_torch_multi_accelerator
     def test_sft_trainer_transformers_mp_gc_device_map(
         self, model_name, packing, gradient_checkpointing_kwargs, device_map
@@ -1997,9 +2044,17 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_peft
     @require_bitsandbytes
     def test_sft_trainer_transformers_mp_gc_peft_qlora(self, model_name, packing, gradient_checkpointing_kwargs):
@@ -2040,8 +2095,14 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_peft
     @require_bitsandbytes
     def test_sft_trainer_with_chat_format_qlora(self, model_name, packing):
@@ -2081,8 +2142,14 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_liger_kernel
     def test_sft_trainer_with_liger(self, model_name, packing):
         """
@@ -2126,8 +2193,14 @@ class TestSFTTrainerSlow(TrlTestCase):
         finally:
             cleanup_liger_patches(trainer)
 
-    @pytest.mark.parametrize("packing", PACKING_OPTIONS)
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_torch_accelerator
     def test_train_offloading(self, model_name, packing):
         """Test that activation offloading works with SFTTrainer."""

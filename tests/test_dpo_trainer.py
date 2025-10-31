@@ -37,12 +37,6 @@ from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
-from .slow.testing_constants import (
-    DPO_LOSS_TYPES,
-    DPO_PRECOMPUTE_LOGITS,
-    GRADIENT_CHECKPOINTING_KWARGS,
-    MODELS_TO_TEST,
-)
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
@@ -1542,9 +1536,6 @@ class TestDPOConfig(TrlTestCase):
         assert configparser_dict["f_divergence_type"] == f_divergence_type.value
 
 
-# Slow tests moved from tests/slow/test_dpo_slow.py
-
-
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
@@ -1565,9 +1556,15 @@ class TestDPOTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("pre_compute_logits", DPO_PRECOMPUTE_LOGITS)
-    @pytest.mark.parametrize("loss_type", DPO_LOSS_TYPES)
-    @pytest.mark.parametrize("model_id", MODELS_TO_TEST)
+    @pytest.mark.parametrize("pre_compute_logits", [True, False])
+    @pytest.mark.parametrize("loss_type", ["sigmoid", "ipo"])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     def test_dpo_bare_model(self, model_id, loss_type, pre_compute_logits):
         """
         A test that tests the simple usage of `DPOTrainer` using a bare model in full precision.
@@ -1611,10 +1608,18 @@ class TestDPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
-    @pytest.mark.parametrize("pre_compute_logits", DPO_PRECOMPUTE_LOGITS)
-    @pytest.mark.parametrize("loss_type", DPO_LOSS_TYPES)
-    @pytest.mark.parametrize("model_id", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("pre_compute_logits", [True, False])
+    @pytest.mark.parametrize("loss_type", ["sigmoid", "ipo"])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_peft
     def test_dpo_peft_model(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
         """
@@ -1667,10 +1672,18 @@ class TestDPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("gradient_checkpointing_kwargs", GRADIENT_CHECKPOINTING_KWARGS)
-    @pytest.mark.parametrize("pre_compute_logits", DPO_PRECOMPUTE_LOGITS)
-    @pytest.mark.parametrize("loss_type", DPO_LOSS_TYPES)
-    @pytest.mark.parametrize("model_id", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("pre_compute_logits", [True, False])
+    @pytest.mark.parametrize("loss_type", ["sigmoid", "ipo"])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_bitsandbytes
     @require_peft
     def test_dpo_peft_model_qlora(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):

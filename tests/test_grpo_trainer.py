@@ -39,7 +39,6 @@ from trl import GRPOConfig, GRPOTrainer
 from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 from trl.trainer.utils import get_kbit_device_map
 
-from .slow.testing_constants import MODELS_TO_TEST
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
@@ -1787,7 +1786,13 @@ class TestGRPOTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_liger_kernel
     def test_training_with_liger_grpo_loss(self, model_name):
         training_args = GRPOConfig(
@@ -1827,7 +1832,13 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     @require_liger_kernel
     @require_peft
     def test_training_with_liger_grpo_loss_and_peft(self, model_name):
@@ -1891,7 +1902,13 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("model_name", MODELS_TO_TEST)
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
         if Version(transformers.__version__) < Version("4.57.0"):
