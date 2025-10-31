@@ -157,7 +157,7 @@ class DPOConfig(TrainingArguments):
             [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
             corresponding weights for each loss type.
 
-        use_liger_loss (`bool`, *optional*, defaults to `None`):
+        use_liger_loss (`bool`, *optional*):
             Whether to use Liger loss.
 
             <Deprecated version="0.25.0">

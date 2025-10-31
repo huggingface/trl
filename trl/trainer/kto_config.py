@@ -81,7 +81,7 @@ class KTOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
-        use_liger_loss (`bool`, *optional*, defaults to `None`):
+        use_liger_loss (`bool`, *optional*):
             Whether to use Liger loss.
 
             <Deprecated version="0.25.0">
