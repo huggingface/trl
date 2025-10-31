@@ -19,19 +19,19 @@ from typing import Optional, Union
 import torch
 from datasets import Dataset, IterableDataset
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
-from trl import GRPOTrainer
-from trl.trainer.grpo_trainer import RewardFunc
+
+from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
+from ...trainer.utils import nanmax, nanmin
 from .papo_config import PAPOConfig
-from trl.trainer.utils import nanmax, nanmin
 
 
 class PAPOTrainer(GRPOTrainer):
     """
     Trainer for Perception-Aware Policy Optimization (PAPO).
 
-    PAPO extends GRPO/DAPO for multimodal reasoning by adding an implicit perception loss that
-    encourages the model to better utilize visual information. The key innovation is computing
-    KL divergence between model outputs on original vs. corrupted (masked) images.
+    PAPO extends GRPO/DAPO for multimodal reasoning by adding an implicit perception loss that encourages the model to
+    better utilize visual information. The key innovation is computing KL divergence between model outputs on original
+    vs. corrupted (masked) images.
 
     Two variants are supported:
     - PAPO-G: PAPO + GRPO (use loss_type="grpo")
@@ -45,9 +45,11 @@ class PAPOTrainer(GRPOTrainer):
 
     dataset = load_dataset("your-vlm-dataset", split="train")
 
+
     def reward_func(completions, **kwargs):
         # Your reward function for multimodal reasoning
         return [compute_reward(c) for c in completions]
+
 
     # PAPO-G
     config = PAPOConfig(
@@ -228,9 +230,9 @@ class PAPOTrainer(GRPOTrainer):
             compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
-            num_images = inputs.get("num_images"),
+            num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
-            image_sizes=inputs.get("image_sizes")
+            image_sizes=inputs.get("image_sizes"),
         )
 
         if self.top_entropy_quantile < 1.0:
@@ -300,7 +302,7 @@ class PAPOTrainer(GRPOTrainer):
             compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
-            num_images = inputs.get("num_images"),
+            num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
         )

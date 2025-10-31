@@ -23,14 +23,13 @@ class PAPOConfig(GRPOConfig):
     """
     Configuration class for PAPOTrainer.
 
-    PAPO (Perception-Aware Policy Optimization) extends GRPO/DAPO for multimodal reasoning
-    by adding an implicit perception loss and double entropy regularization.
+    PAPO (Perception-Aware Policy Optimization) extends GRPO/DAPO for multimodal reasoning by adding an implicit
+    perception loss and double entropy regularization.
 
     Args:
         perception_loss_weight (`float`, *optional*, defaults to `0.1`):
-            gamma
-            Weight coefficient for the perception loss term. This encourages the model to
-            be sensitive to visual changes.
+            gamma Weight coefficient for the perception loss term. This encourages the model to be sensitive to visual
+            changes.
 
         mask_ratio (`float`, *optional*, defaults to `0.3`):
             Ratio of the image to mask when computing perception loss.
@@ -39,16 +38,12 @@ class PAPOConfig(GRPOConfig):
             Type of masking strategy to use.
 
         der_loss_weight1 (`float`, *optional*, defaults to `0.03`):
-            eta1
-            Weight coefficient for the Double Entropy Regularization (DER) term. This term
-            encourages confident predictions with original images (low entropy) and
-            uncertain predictions with masked images (high entropy).
+            eta1 Weight coefficient for the Double Entropy Regularization (DER) term. This term encourages confident
+            predictions with original images (low entropy) and uncertain predictions with masked images (high entropy).
 
         der_loss_weight2 (`float`, *optional*, defaults to `0.03`):
-            eta2
-            Weight coefficient for the Double Entropy Regularization (DER) term. This term
-            encourages confident predictions with original images (low entropy) and
-            uncertain predictions with masked images (high entropy).
+            eta2 Weight coefficient for the Double Entropy Regularization (DER) term. This term encourages confident
+            predictions with original images (low entropy) and uncertain predictions with masked images (high entropy).
 
         loss_type (`Literal["grpo", "dapo"]`, inherited from GRPOConfig):
             Base loss type to use. Set to "grpo" for PAPO-G or "dapo" for PAPO-D.
