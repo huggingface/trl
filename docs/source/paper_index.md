@@ -212,7 +212,7 @@ See [Experimental - GFPO](experimental#gfpo).
 **📜 Paper**: https://huggingface.co/papers/2507.06448
 
 A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adaptation. The TRL implementation is not the official one provided by the authors.
-This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [this repository](https://github.com/MikeWangWZHL/PAPO)
+This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [MikeWangWZHL/PAPO](https://github.com/MikeWangWZHL/PAPO).
 
 ```python
 from trl.experimental.papo import PAPOConfig, PAPOTrainer
