@@ -221,6 +221,14 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+        use_liger_loss (`bool`, *optional*, defaults to `None`):
+            Whether to use Liger loss.
+
+            <Deprecated version="0.25.0">
+
+            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
+
+            </Deprecated>
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
             logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
@@ -604,7 +612,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     use_liger_loss: bool = field(
-        default=False,
+        default=None,
         metadata={"help": "Whether to use the Liger GRPO loss."},
     )
     vllm_importance_sampling_correction: bool = field(

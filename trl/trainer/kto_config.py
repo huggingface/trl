@@ -81,6 +81,14 @@ class KTOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
+        use_liger_loss (`bool`, *optional*, defaults to `None`):
+            Whether to use Liger loss.
+
+            <Deprecated version="0.25.0">
+
+            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
+
+            </Deprecated>
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is `True`.
@@ -222,7 +230,7 @@ class KTOConfig(TrainingArguments):
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
     use_liger_loss: bool = field(
-        default=False,
+        default=None,
         metadata={"help": "Whether to use Liger loss. It requires liger-kernel to be installed."},
     )
     base_model_attribute_name: str = field(
@@ -240,7 +248,7 @@ class KTOConfig(TrainingArguments):
         if self.use_liger_loss:
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
-                "`use_liger_kernel` instead."
+                "`use_liger_kernel` instead.",
                 FutureWarning,
                 stacklevel=2,
             )
