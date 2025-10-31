@@ -11,7 +11,7 @@ In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel 
 To use OpenEnv with TRL, install the framework:
 
 ```bash
-pip install openenv-core
+pip install git+https://github.com/meta-pytorch/OpenEnv.git
 ```
 
 ## Using `rollout_func` with OpenEnv environments
