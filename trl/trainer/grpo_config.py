@@ -229,6 +229,7 @@ class GRPOConfig(TrainingArguments):
             Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
 
             </Deprecated>
+
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
             logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL

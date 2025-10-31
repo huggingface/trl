@@ -89,6 +89,7 @@ class KTOConfig(TrainingArguments):
             Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
 
             </Deprecated>
+
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is `True`.
