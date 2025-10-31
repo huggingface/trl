@@ -20,6 +20,7 @@
 # ]
 # ///
 
+# docstyle-ignore
 """
 # Full training:
 python trl/experimental/gold/gold.py \

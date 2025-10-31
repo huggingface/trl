@@ -102,30 +102,48 @@ For more information, see [Liger Kernel Integration](liger_kernel_integration).
 To use Liger for reducing peak memory usage, use the following code snippet:
 
 <hfoptions id="liger">
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
 <hfoption id="DPO">
-  
+
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., use_liger_loss=True)
+training_args = DPOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
 <hfoption id="GRPO">
-  
+
 ```python
 from trl import GRPOConfig
 
-training_args = GRPOConfig(..., use_liger_loss=True)
+training_args = GRPOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
 <hfoption id="KTO">
-  
+
 ```python
 from trl import KTOConfig
 
-training_args = KTOConfig(..., use_liger_loss=True)
+training_args = KTOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GKD">
+
+```python
+from trl import GKDConfig
+
+training_args = GKDConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>

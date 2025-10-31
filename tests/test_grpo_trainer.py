@@ -1460,7 +1460,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_liger_loss=True,  # enable Liger loss
+            use_liger_kernel=True,  # enable Liger kernel
             loss_type="bnpo",  # default dapo is not supported yet
             report_to="none",
         )
