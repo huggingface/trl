@@ -246,7 +246,7 @@ class KTOConfig(TrainingArguments):
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
-        if self.use_liger_loss:
+        if self.use_liger_loss is not None:
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
                 "`use_liger_kernel` instead.",
