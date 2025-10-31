@@ -157,6 +157,21 @@ def main(script_args, training_args, model_args, dataset_args):
         metrics = trainer.evaluate()
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
+        # 💡 Tip: To log and save evaluation metrics during regular evaluations (not only the final one),
+# you can use a custom callback:
+#
+# from transformers import TrainerCallback
+#
+# class LogEvalMetricsCallback(TrainerCallback):
+#     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+#         if metrics:
+#             trainer.log_metrics("eval", metrics)
+#             trainer.save_metrics("eval", metrics)
+#
+# trainer = Trainer(..., callbacks=[LogEvalMetricsCallback])
+#
+# Note: Metrics logged to Weights & Biases (W&B) are aggregated over the entire evaluation dataset,
+# not per batch. For per-batch logging, use `on_prediction_step`.
 
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
