@@ -612,12 +612,12 @@ config = GKDConfig(
 )
 ```
 
-Alternatively, you can use the [`GoldTrainer`] and [`GoldConfig`] to perform on-policy distillation with a similar configuration:
+Alternatively, you can use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
 
 ```python
-from trl.experimental import GoldConfig
+from trl.experimental import GOLDConfig
 
-config = GoldConfig(
+config = GOLDConfig(
     lmbda=1.0, # student produces rollouts for all batches
     beta=1.0, # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model", # specify the teacher model
