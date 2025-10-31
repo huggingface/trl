@@ -11,8 +11,6 @@
     title: Dataset Formats
   - local: paper_index
     title: Paper Index
-  - local: experimental
-    title: Experimental
   title: Conceptual Guides
 - sections:
   - local: clis
