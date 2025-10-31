@@ -140,7 +140,7 @@ class TestUpdateWithReplayBuffer:
             "prompt_mask": torch.ones(4, 2, dtype=torch.long),
             "completion_ids": torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]]),
             "completion_mask": torch.ones(4, 2, dtype=torch.long),
-            "prompt_inputs": {"pixel_values": torch.randn(4, 3, 224, 224)} if with_pixels else {},
+            "forward_kwargs": {"pixel_values": torch.randn(4, 3, 224, 224)} if with_pixels else {},
             "old_per_token_logps": torch.randn(4, 2) if with_logprobs else None,
         }
         inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
@@ -217,7 +217,7 @@ class TestUpdateWithReplayBuffer:
                 ]
             ),
             "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1], [1, 1, 0], [1, 1, 1]], dtype=torch.long),
-            "prompt_inputs": {},
+            "forward_kwargs": {},
         }
         inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
 
