@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
@@ -375,6 +376,10 @@ class DPOConfig(TrainingArguments):
             "corresponding weights for each loss type."
         },
     )
+    use_liger_loss: bool = field(
+        default=None,
+        metadata={"help": "Whether to use Liger loss."},
+    )
     base_model_attribute_name: str = field(
         default="model",
         metadata={
@@ -504,4 +509,11 @@ class DPOConfig(TrainingArguments):
                     f"Length of loss_weights list ({self.loss_weights}) must match number of loss types "
                     f"({loss_types})."
                 )
+
+        if self.use_liger_loss:
+            warnings.warn(
+                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
+                "`use_liger_kernel` instead."
+            )
+            self.use_liger_kernel = self.use_liger_loss
         super().__post_init__()

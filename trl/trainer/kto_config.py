@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -220,6 +221,10 @@ class KTOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss. It requires liger-kernel to be installed."},
+    )
     base_model_attribute_name: str = field(
         default="model",
         metadata={
@@ -231,5 +236,12 @@ class KTOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        if self.use_liger_loss:
+            warnings.warn(
+                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
+                "`use_liger_kernel` instead."
+            )
+            self.use_liger_kernel = self.use_liger_loss
 
         super().__post_init__()

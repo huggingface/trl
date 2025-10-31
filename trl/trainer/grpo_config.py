@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
@@ -592,6 +593,10 @@ class GRPOConfig(TrainingArguments):
             "non-truncated completions are considered."
         },
     )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
@@ -680,6 +685,13 @@ class GRPOConfig(TrainingArguments):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
+
+        if self.use_liger_loss:
+            warnings.warn(
+                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
+                "`use_liger_kernel` instead."
+            )
+            self.use_liger_kernel = self.use_liger_loss
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
