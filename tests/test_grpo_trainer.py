@@ -1772,7 +1772,6 @@ class TestGSPOTokenTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
-# Slow tests moved from tests/slow/test_grpo_slow.py
 @pytest.mark.slow
 @require_torch_accelerator
 class TestGRPOTrainerSlow(TrlTestCase):

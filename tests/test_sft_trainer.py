@@ -1732,7 +1732,6 @@ class TestSFTTrainer(TrlTestCase):
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
 
-# Slow tests moved from tests/slow/test_sft_slow.py
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
