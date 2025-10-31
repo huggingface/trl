@@ -258,7 +258,7 @@ class TestDPOTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             learning_rate=9e-1,
             report_to="none",
-            use_liger_loss=True,
+            use_liger_kernel=True,
         )
         trainer = DPOTrainer(
             model=model,
@@ -1338,7 +1338,7 @@ class TestDPOTrainer(TrlTestCase):
             learning_rate=9e-1,
             eval_strategy="steps",
             beta=beta,
-            use_liger_loss=True,  # Enable Liger loss
+            use_liger_kernel=True,  # Enable Liger kernel
             loss_type=loss_type,
             report_to="none",
         )
