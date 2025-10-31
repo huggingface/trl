@@ -11,8 +11,6 @@
     title: Dataset Formats
   - local: paper_index
     title: Paper Index
-  - local: experimental
-    title: Experimental
   title: Conceptual Guides
 - sections:
   - local: clis
@@ -109,10 +107,20 @@
     title: Others
   title: API
 - sections:
+  - local: experimental_overview
+    title: Experimental Overview
+  - local: bema_for_reference_model # Sorted alphabetically
+    title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
+  - local: gfpo
+    title: GFPO
   - local: gold_trainer
     title: GOLD
+  - local: grpo_with_replay_buffer
+    title: GRPO With Replay Buffer
+  - local: gspo_token
+    title: GSPO-token
   - local: openenv
     title: OpenEnv Integration
   title: Experimental
