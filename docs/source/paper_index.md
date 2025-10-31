@@ -266,7 +266,7 @@ These parameters only appear in the [published version](https://openreview.net/p
 
 ### Towards Efficient and Exact Optimization of Language Model Alignment
 
-**📜 Paper**: https://huggingface.co/papers/2305.10425
+**📜 Paper**: https://huggingface.co/papers/2402.00856
 
 Efficient exact optimization (EXO) method is proposed to align language models with human preferences, providing a guaranteed and efficient alternative to reinforcement learning and direct preference optimization. To reproduce the paper's setting, use this configuration:
 
