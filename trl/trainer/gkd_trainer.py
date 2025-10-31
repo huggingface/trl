@@ -305,7 +305,6 @@ class GKDTrainer(SFTTrainer):
             student_outputs = base_student(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
-                output_hidden_states=True,
                 use_cache=False,
             )
 
@@ -321,13 +320,15 @@ class GKDTrainer(SFTTrainer):
                 teacher_outputs = base_teacher(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
-                    output_hidden_states=True,
                     use_cache=False,
                 )
 
             # hidden states (shifted)
-            student_hidden = student_outputs.last_hidden_state[:, :-1].contiguous()
-            teacher_hidden = teacher_outputs.last_hidden_state[:, :-1].contiguous()
+            student_hidden = student_outputs.last_hidden_state[:, :-1]
+            teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
+
+            # Release full outputs to free memory
+            del student_outputs, teacher_outputs
 
             # labels mask and labels (shifted)
             labels_mask = inputs["labels"] != -100
@@ -335,6 +336,9 @@ class GKDTrainer(SFTTrainer):
                 labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
             )
             true_labels = masked_input_ids[:, 1:].contiguous()
+
+            # Release intermediate tensors
+            del labels_mask, masked_input_ids
 
             # heads
             student_head = unwrapped_student.get_output_embeddings()
@@ -350,6 +354,9 @@ class GKDTrainer(SFTTrainer):
                 student_bias=getattr(student_head, "bias", None),
                 teacher_bias=getattr(teacher_head, "bias", None),
             )
+
+            # Release hidden states after loss computation
+            del student_hidden, teacher_hidden, true_labels
         else:
             # compute student output
             student_outputs = model(
