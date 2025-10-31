@@ -241,6 +241,8 @@ class KTOConfig(TrainingArguments):
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
                 "`use_liger_kernel` instead."
+                FutureWarning,
+                stacklevel=2,
             )
             self.use_liger_kernel = self.use_liger_loss
 
