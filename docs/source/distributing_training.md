@@ -302,17 +302,6 @@ Scaling configurations:
 4. **Use DeepSpeed ZeRO Stage 3** for large models
 5. **Combine with memory optimizations** like Liger kernels and gradient checkpointing
 
-### Troubleshooting
-
-**Sequence divisibility errors**: Set `pad_to_multiple_of=cp_size` and enable `packing=True`.
-
-**Packing warnings with SDPA**: These are informational only - training works correctly. Use Flash Attention 2 to eliminate warnings.
-
-**Flash Attention not installed**: Transformers automatically uses `kernels-community/vllm-flash-attn3`. Alternatively:
-```bash
-pip install flash-attn --no-build-isolation
-```
-
 ### Complete Example
 
 Here's how to run ALST/Ulysses training using the built-in [`sft.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) script with 4 GPUs:
@@ -344,8 +333,7 @@ This command automatically:
 ### Further Reading
 
 - [DeepSpeed Sequence Parallelism Documentation](https://www.deepspeed.ai/tutorials/ds-sequence/)
-- [Accelerate DeepSpeed Integration](https://huggingface.co/docs/accelerate/usage_guides/deepspeed)
-- [TRL Example Scripts](https://github.com/huggingface/trl/tree/main/examples/scripts)
+
 
 ## Multi-Node Training
 
