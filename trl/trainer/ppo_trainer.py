@@ -563,7 +563,7 @@ class PPOTrainer(BaseTrainer):
                 rewards = non_score_reward.clone()
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
                 actual_end = torch.where(sequence_lengths_p1 < rewards.size(1), sequence_lengths_p1, sequence_lengths)
-                rewards[[actual_start, actual_end]] += scores
+                rewards[actual_start, actual_end] += scores
 
                 # 5. whiten rewards
                 if args.whiten_rewards:

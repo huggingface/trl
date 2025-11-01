@@ -188,7 +188,7 @@ Example:
 from trl.experimental.new_trainer import NewTrainer
 ```
 
-Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimental).
+Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimental_overview).
 
 ## Citation
 

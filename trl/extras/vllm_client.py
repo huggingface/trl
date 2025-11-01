@@ -297,7 +297,8 @@ class VLLMClient:
         else:
             client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
 
-        # In the server side, the host is set to 0.0.0.0
+        # Set the weight update group's host to "0.0.0.0" so that
+        # clients from different IPs can send updated weights
         response = self.session.post(
             url,
             json={
