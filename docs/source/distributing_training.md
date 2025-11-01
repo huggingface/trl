@@ -185,6 +185,168 @@ These results show that **Context Parallelism (CP) scales effectively with more 
 - [Hugging Face Blog: Enabling Long-Context Training with Sequence Parallelism in Axolotl](https://huggingface.co/blog/axolotl-ai-co/long-context-with-sequence-parallelism-in-axolotl)  
 - [Snowflake Engineering Blog: Arctic Long Sequence Training (ALST) — Scalable and Efficient Training for Multi-Million Token Sequences (Note that they use a different strategy)](https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/)
 
+## ALST/Ulysses Sequence Parallelism (DeepSpeed)
+
+ALST (Arctic Long Sequence Training) / Ulysses is an alternative Context Parallelism implementation available through DeepSpeed. Unlike the FSDP2-based approach described above, ALST/Ulysses uses DeepSpeed's sequence parallelism infrastructure to split long sequences across GPUs.
+
+### Key Differences from FSDP2 Context Parallelism
+
+| Feature | FSDP2 CP | ALST/Ulysses (DeepSpeed) |
+|---------|----------|-------------------------|
+| Backend | PyTorch FSDP2 | DeepSpeed ZeRO |
+| Attention | SDPA only | Flash Attention 2 or SDPA |
+| Minimum Accelerate | 1.10+ | 1.10+ |
+| Minimum DeepSpeed | N/A | 0.18.1+ |
+| Sequence Divisibility | `cp_size * 2` | `cp_size` |
+| Zero Stage | N/A | ZeRO Stage 1/2/3 |
+
+### Requirements and Limitations
+
+ALST/Ulysses has specific requirements:
+
+1. **DeepSpeed 0.18.1 or higher** is required
+2. **Accelerate 1.10 or higher** for parallelism configuration support
+3. **Attention implementation** - Flash Attention 2 recommended (clean output), SDPA works as fallback
+4. **Sequence length divisibility** - sequences must be divisible by `cp_size`. Use `pad_to_multiple_of` in your training config.
+
+### Configuration
+
+To enable ALST/Ulysses, you need to configure both Accelerate and your training arguments:
+
+#### Accelerate Configuration
+
+Use one of the provided accelerate config files (e.g. [`alst_ulysses_2gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/alst_ulysses_2gpu.yaml) for 2 GPUs):
+
+```yaml
+compute_environment: LOCAL_MACHINE
+debug: false
+deepspeed_config:
+  zero_stage: 3
+  seq_parallel_communication_data_type: bf16
+distributed_type: DEEPSPEED
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2  # Number of GPUs
+```
+
+#### Training Configuration
+
+```python
+from accelerate.utils import DeepSpeedContextParallelConfig, ParallelismConfig
+from trl import SFTConfig
+
+# Setup ALST/Ulysses parallelism
+cp_handler = DeepSpeedContextParallelConfig(
+    cp_seq_length=4096,
+    cp_seq_length_is_variable=True,
+    cp_attn_implementation="flash_attention_2",  # or "sdpa" as fallback
+)
+
+parallelism_config = ParallelismConfig(
+    cp_backend="deepspeed",
+    cp_size=2,                # Number of GPUs for sequence parallelism
+    cp_handler=cp_handler,
+)
+
+# Training configuration
+training_args = SFTConfig(
+    max_length=4096,
+    packing=True,
+    pad_to_multiple_of=2,    # Must equal cp_size
+    parallelism_config=parallelism_config,
+    gradient_checkpointing=True,
+    attn_implementation="flash_attention_2",
+    per_device_train_batch_size=1,
+    ...
+)
+```
+
+Then, launch your training script:
+
+```bash
+accelerate launch --config_file alst_ulysses_2gpu.yaml train.py
+```
+
+### 2D Parallelism
+
+For larger scale training with 4+ GPUs, you can combine Data Parallelism (DP) with Context Parallelism (CP). Set `dp_shard_size` to automatically distribute across available GPUs:
+
+```python
+import os
+
+num_gpus = int(os.environ.get("WORLD_SIZE", "1"))
+cp_size = 2
+dp_shard_size = num_gpus // cp_size  # Automatically calculated
+
+parallelism_config = ParallelismConfig(
+    cp_backend="deepspeed",
+    cp_size=cp_size,
+    dp_shard_size=dp_shard_size,  # Enable 2D parallelism
+    cp_handler=cp_handler,
+)
+```
+
+Example configurations ([`alst_ulysses_4gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/alst_ulysses_4gpu.yaml)):
+
+| GPUs | cp_size | dp_shard_size | Use Case |
+|------|---------|---------------|----------|
+| 2 | 2 | 1 | Pure CP for very long sequences |
+| 4 | 2 | 2 | Balanced - longer sequences + more data |
+| 8 | 2 | 4 | Large-scale training |
+
+### Best Practices
+
+1. **Use `pad_to_multiple_of`** to ensure sequences are divisible by `cp_size`
+2. **Use Flash Attention 2** for clean output (SDPA works but shows packing warnings)
+3. **Start with `cp_size=2`** before scaling to larger values
+4. **Use DeepSpeed ZeRO Stage 3** for large models
+5. **Combine with memory optimizations** like Liger kernels and gradient checkpointing
+
+### Troubleshooting
+
+**Sequence divisibility errors**: Set `pad_to_multiple_of=cp_size` and enable `packing=True`.
+
+**Packing warnings with SDPA**: These are informational only - training works correctly. Use Flash Attention 2 to eliminate warnings.
+
+**Flash Attention not installed**: Transformers automatically uses `kernels-community/vllm-flash-attn3`. Alternatively:
+```bash
+pip install flash-attn --no-build-isolation
+```
+
+### Complete Example
+
+Here's how to run ALST/Ulysses training using the built-in [`sft.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) script with 4 GPUs:
+
+```bash
+accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.yaml \
+    trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2e-4 \
+    --max_steps 100 \
+    --max_seq_length 4096 \
+    --packing \
+    --packing_strategy wrapped \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --attn_implementation flash_attention_2 \
+    --output_dir output-alst-4gpu \
+    --logging_steps 10 \
+    --report_to tensorboard
+```
+
+This command automatically:
+- Configures 2D parallelism (CP=2, DP=2) across 4 GPUs
+- Uses Flash Attention 2 for clean training
+- Enables packing with automatic padding to ensure sequence divisibility
+- Leverages DeepSpeed ZeRO Stage 3 for memory efficiency
+
+### Further Reading
+
+- [DeepSpeed Ulysses Documentation](https://www.deepspeed.ai/tutorials/ulysses/)
+- [Accelerate DeepSpeed Integration](https://huggingface.co/docs/accelerate/usage_guides/deepspeed)
+- [TRL Example Scripts](https://github.com/huggingface/trl/tree/main/examples/scripts)
+
 ## Multi-Node Training
 
 We're working on a guide for multi-node training. Stay tuned! 🚀
