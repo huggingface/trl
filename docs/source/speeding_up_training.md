@@ -1,7 +1,6 @@
 # Speeding Up Training
 
-> [!WARNING]
-> Section under construction. Feel free to contribute!
+This guide covers various methods to accelerate training in TRL. Each technique includes minimal examples with links to more comprehensive documentation.
 
 ## vLLM for fast generation in online methods
 
@@ -95,3 +94,80 @@ You can customize the server configuration by passing additional arguments. For 
 
 </hfoption>
 </hfoptions>
+
+## Flash Attention 2 for faster attention computation
+
+Flash Attention 2 is an optimized implementation of the attention mechanism that can significantly speed up training while reducing memory usage. It's particularly effective for long sequences.
+
+To enable Flash Attention 2, pass `attn_implementation="flash_attention_2"` in the model initialization arguments:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    ...,
+    model_init_kwargs={"attn_implementation": "flash_attention_2"}
+)
+```
+
+Flash Attention 2 works across all TRL trainers. For padding-free batching with Flash Attention, see [Reducing Memory Usage](reducing_memory_usage#padding-free).
+
+## PEFT for parameter-efficient training
+
+PEFT (Parameter-Efficient Fine-Tuning) methods like LoRA significantly reduce memory usage and training time by only training a small number of adapter parameters instead of the full model.
+
+```python
+from peft import LoraConfig
+from trl import SFTConfig, SFTTrainer
+
+peft_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    target_modules=["q_proj", "v_proj"],
+)
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    peft_config=peft_config,
+    args=training_args,
+)
+```
+
+For more details, see [PEFT Integration](peft_integration).
+
+## Liger Kernel for memory optimization
+
+Liger Kernel is a collection of Triton kernels designed for LLM training that can increase throughput by 20% and reduce memory usage by 60%.
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_liger_kernel=True)
+```
+
+Liger Kernel is supported across multiple trainers (SFT, DPO, GRPO, KTO, GKD). For more information, see [Liger Kernel Integration](liger_kernel_integration).
+
+## Gradient checkpointing for memory savings
+
+Gradient checkpointing trades compute for memory by not storing all intermediate activations during the forward pass, recomputing them during the backward pass instead.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., gradient_checkpointing=True)
+```
+
+Gradient checkpointing is available across all TRL trainers. For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
+
+## Mixed precision training
+
+Mixed precision training using bf16 or fp16 can speed up training and reduce memory usage with minimal impact on model quality.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., bf16=True)  # or fp16=True for older GPUs
+```
+
+Use `bf16=True` for Ampere GPUs (A100, RTX 30xx) or newer, and `fp16=True` for older GPUs. Mixed precision training is supported across all TRL trainers.
