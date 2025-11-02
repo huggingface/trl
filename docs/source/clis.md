@@ -54,6 +54,33 @@ trl reward \
 ```
 
 </hfoption>
+<hfoption id="GRPO">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback-prompt
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name AI-MO/NuminaMath-TIR
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k
+```
+
+</hfoption>
 </hfoptions>
 
 ### Using Configuration Files
@@ -103,6 +130,51 @@ Launch with:
 
 ```bash
 trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback-prompt
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: AI-MO/NuminaMath-TIR
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
 ```
 
 </hfoption>
@@ -190,6 +262,84 @@ Launch with:
 
 ```bash
 trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO inline">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback-prompt \
+  --num_processes 4
+```
+
+</hfoption>
+<hfoption id="GRPO w/ config file">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback-prompt
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO inline">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name AI-MO/NuminaMath-TIR \
+  --num_processes 4
+```
+
+</hfoption>
+<hfoption id="RLOO w/ config file">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: AI-MO/NuminaMath-TIR
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO inline">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k \
+  --num_processes 4
+```
+
+</hfoption>
+<hfoption id="KTO w/ config file">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
 ```
 
 </hfoption>
@@ -299,6 +449,84 @@ trl reward --config reward_config.yaml
 ```
 
 </hfoption>
+<hfoption id="GRPO inline">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback-prompt \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO w/ config file">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback-prompt
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO inline">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name AI-MO/NuminaMath-TIR \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO w/ config file">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: AI-MO/NuminaMath-TIR
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO inline">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO w/ config file">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
+```
+
+</hfoption>
 </hfoptions>
 
 ### Using dataset mixtures
@@ -354,6 +582,57 @@ Launch with:
 
 ```bash
 trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/ultrafeedback-prompt
+  - path: BAAI/Infinity-Preference
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: AI-MO/NuminaMath-TIR
+  - path: deepmind/math_dataset
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/kto-mix-14k
+  - path: argilla/ultrafeedback-binarized-preferences-cleaned
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
 ```
 
 </hfoption>
