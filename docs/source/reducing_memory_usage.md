@@ -93,6 +93,34 @@ training_args = SFTConfig(..., packing=True, max_length=512)
 > [!WARNING]
 > Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
 
+## PEFT for parameter-efficient fine-tuning
+
+Parameter-Efficient Fine-Tuning (PEFT) methods like LoRA are among the most effective techniques for reducing memory usage during training. Instead of training all model parameters, PEFT methods train only a small number of adapter parameters, significantly reducing memory requirements and enabling fine-tuning of larger models on limited hardware.
+
+For comprehensive details on using PEFT with TRL, including various adapter methods, quantization options, and advanced configurations, see [PEFT Integration](peft_integration).
+
+To use PEFT for reducing memory usage:
+
+```python
+from peft import LoraConfig
+from trl import SFTConfig, SFTTrainer
+
+peft_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    target_modules=["q_proj", "v_proj"],
+)
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    peft_config=peft_config,
+    args=training_args,
+)
+```
+
+PEFT can be combined with other memory reduction techniques such as quantization (4-bit or 8-bit) for even greater memory savings. See [PEFT Integration](peft_integration) for quantization examples.
+
 ## Liger for reducing peak memory usage
 
 > [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
