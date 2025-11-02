@@ -26,7 +26,7 @@ Simply declare a [`~peft.PeftConfig`] object in your script and pass it through 
 from peft import LoraConfig
 from trl import AutoModelForCausalLMWithValueHead
 
-model_id = "edbeeching/gpt-neo-125M-imdb"
+model_id = "trl-lib/Qwen2-0.5B-XPO"
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
