@@ -55,8 +55,6 @@
     title: LoRA Without Regret
   - local: sentiment_tuning
     title: Sentiment Tuning
-  - local: multi_adapter_rl
-    title: Multi Adapter RLHF
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
