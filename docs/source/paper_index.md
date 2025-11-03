@@ -593,10 +593,50 @@ SFTConfig(
     gradient_accumulation_steps=32,
 )
 ```
+## Parameter-Efficient Fine-Tuning (PEFT)
+
 ### LoRA: Low-Rank Adaptation of Large Language Models
 **📜 Paper**: https://huggingface.co/papers/2106.09685
 
 Parameter-efficient fine-tuning via **low-rank adapters**, cutting trainable parameters and memory while preserving quality (see PEFT integration in TRL).
+```python
+# LoRA adapters with SFT (works the same for DPO/GRPO by passing peft_config to those trainers)
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import LoraConfig
+from trl import SFTTrainer, SFTConfig
+
+model_id = "meta-llama/Llama-3.1-8B-Instruct"  # any causal LM on HF Hub
+tok = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+
+peft_cfg = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+    # common modules for LLaMA/Mistral/Qwen/Gemma; adjust per model if needed
+    target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+)
+
+args = SFTConfig(
+    max_seq_length=2048,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=8,
+    learning_rate=2e-4,
+    bf16=True,
+)
+
+trainer = SFTTrainer(
+    model=model,
+    args=args,
+    tokenizer=tok,
+    peft_config=peft_cfg,   # <- LoRA enabled
+    train_dataset=...,
+)
+trainer.train()
+
+```
 
 ## Reinforce Leave-One-Out
 
