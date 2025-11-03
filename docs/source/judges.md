@@ -1,7 +1,7 @@
 # Judges
 
 > [!WARNING]
-> TRL Judges is an experimental API which is subject to change at any time.
+> TRL Judges is an experimental API which is subject to change at any time. As of TRL v1.0, judges have been moved to the `trl.experimental.judges` module.
 
 TRL provides judges to easily compare two completions.
 
@@ -16,7 +16,7 @@ pip install trl[judges]
 TRL provides several judges out of the box. For example, you can use the [`HfPairwiseJudge`] to compare two completions using a pre-trained model from the Hugging Face model hub:
 
 ```python
-from trl import HfPairwiseJudge
+from trl.experimental.judges import HfPairwiseJudge
 
 judge = HfPairwiseJudge()
 judge.judge(
@@ -32,7 +32,7 @@ To define your own judge, we provide several base classes that you can subclass.
 As an example, let's define a pairwise judge that prefers shorter completions:
 
 ```python
-from trl import BasePairwiseJudge
+from trl.experimental.judges import BasePairwiseJudge
 
 class PrefersShorterJudge(BasePairwiseJudge):
     def judge(self, prompts, completions, shuffle_order=False):

@@ -36,9 +36,9 @@ from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
+from ..experimental.judges import BasePairwiseJudge
 from ..import_utils import is_weave_available
 from ..models.utils import unwrap_model_for_generation
-from .judges import BasePairwiseJudge
 from .utils import log_table_to_comet_experiment
 
 
