@@ -21,7 +21,6 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl import GKDConfig, GKDTrainer
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 from .testing_utils import TrlTestCase, require_liger_kernel
 
@@ -205,10 +204,6 @@ class TestGKDTrainer(TrlTestCase):
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # Ensure the tokenizer has a chat template
-        if not hasattr(self.tokenizer, "chat_template") or self.tokenizer.chat_template is None:
-            self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def test_gkd_trainer(self):
         training_args = GKDConfig(
