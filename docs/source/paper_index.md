@@ -231,6 +231,11 @@ trainer = PAPOTrainer(
     ...
 )
 ```
+### DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models
+**📜 Paper**: https://huggingface.co/papers/2402.03300
+
+Introduces **GRPO** and shows strong math-reasoning gains from math-centric pretraining plus group-relative PPO-style optimization.  
+**Used in TRL via:** [`GRPOTrainer`]
 
 ## Direct Policy Optimization
 
@@ -457,6 +462,21 @@ training_args = DPOConfig(
 
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
+### Statistical Rejection Sampling Improves Preference Optimization
+**📜 Paper**: https://huggingface.co/papers/2309.06657
+
+Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC.
+
+### Nash Learning from Human Feedback
+**📜 Paper**: https://huggingface.co/papers/2312.00886
+
+Frames alignment as a **two-player game**, learning Nash policies from human feedback; connects to multi-objective and competitive preference training.
+
+### Direct Language Model Alignment from Online AI Feedback
+**📜 Paper**: https://huggingface.co/papers/2402.04792
+
+Uses **online AI feedback (OAIF)** to supply real-time preference signals, improving direct alignment beyond purely offline pairs.
+
 ## Supervised Fine-Tuning
 
 Papers relating to the [`SFTTrainer`]
@@ -509,6 +529,10 @@ SFTConfig(
     gradient_accumulation_steps=32,
 )
 ```
+### LoRA: Low-Rank Adaptation of Large Language Models
+**📜 Paper**: https://huggingface.co/papers/2106.09685
+
+Parameter-efficient fine-tuning via **low-rank adapters**, cutting trainable parameters and memory while preserving quality (see PEFT integration in TRL).
 
 ## Reinforce Leave-One-Out
 
@@ -555,6 +579,11 @@ training_args = CPOConfig(
     ...
 )
 ```
+### Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation
+**📜 Paper**: https://huggingface.co/papers/2401.08417
+
+Trains models to **avoid adequate but sub-optimal outputs** using contrastive pairs; improves 7B–13B MT models to SOTA.  
+**Used in TRL via:** [`CPOTrainer`]
 
 ## Reward Modeling
 
@@ -605,3 +634,30 @@ def add_margin(example):
 
 dataset = dataset.map(add_margin)
 ```
+### Solving Math Word Problems with Process- and Outcome-Based Feedback
+**📜 Paper**: https://huggingface.co/papers/2211.14275
+
+Shows benefits of **process supervision** (step-level) alongside outcome labels for math reasoning, motivating richer feedback signals for alignment.
+
+
+## Distillation / Post-training (Background)
+
+### On-Policy Distillation of Language Models
+**📜 Paper**: https://huggingface.co/papers/2306.13649
+
+Introduces **GKD**, aligning student with teacher **on-policy** to stabilize/boost instruction tuning and integrate cleanly with RLHF pipelines.
+
+## Foundations & Systems (Background)
+
+### Proximal Policy Optimization Algorithms
+**📜 Paper**: https://huggingface.co/papers/1707.06347
+
+Foundational **PPO** objective with clipped ratios and minibatch epochs—baseline for many RL/RLHF variants used in TRL.
+
+### ZeRO: Memory Optimizations Toward Training Trillion-Parameter Models
+**📜 Paper**: https://huggingface.co/papers/1910.02054
+
+**ZeRO** partitions optimizer states/gradients/params to scale training efficiently; relevant when configuring DeepSpeed/Accelerate with TRL.
+
+
+
