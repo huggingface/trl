@@ -658,9 +658,3 @@ Foundational **PPO** objective with clipped ratios and minibatch epochs—baseli
 **📜 Paper**: https://huggingface.co/papers/1910.02054
 
 **ZeRO** partitions optimizer states/gradients/params to scale training efficiently; relevant when configuring DeepSpeed/Accelerate with TRL.
-
-
-[`GRPOTrainer`]: grpo_trainer
-[`CPOTrainer`]: cpo_trainer
-
-
