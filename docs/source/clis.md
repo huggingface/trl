@@ -26,7 +26,7 @@ Currently supported commands are:
 
 You can launch training directly from the CLI by specifying required arguments like the model and dataset:
 
-<hfoptions id="command_line">
+<hfoptions id="trainers">
 <hfoption id="SFT">
 
 ```bash
@@ -54,13 +54,40 @@ trl reward \
 ```
 
 </hfoption>
+<hfoption id="GRPO">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback-prompt
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name AI-MO/NuminaMath-TIR
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k
+```
+
+</hfoption>
 </hfoptions>
 
 ### Using Configuration Files
 
 To keep your CLI commands clean and reproducible, you can define all training arguments in a YAML configuration file:
 
-<hfoptions id="config_file">
+<hfoptions id="trainers">
 <hfoption id="SFT">
 
 ```yaml
@@ -106,6 +133,51 @@ trl reward --config reward_config.yaml
 ```
 
 </hfoption>
+<hfoption id="GRPO">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback-prompt
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: AI-MO/NuminaMath-TIR
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
+```
+
+</hfoption>
 </hfoptions>
 
 ### Scaling Up with Accelerate
@@ -114,8 +186,8 @@ TRL CLI natively supports [🤗 Accelerate](https://huggingface.co/docs/accelera
 
 You can pass any `accelerate launch` arguments directly to `trl`, such as `--num_processes`. For more information see [Using accelerate launch](https://huggingface.co/docs/accelerate/en/basic_tutorials/launch#using-accelerate-launch).
 
-<hfoptions id="launch_args">
-<hfoption id="SFT inline">
+<hfoptions id="trainers">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -124,8 +196,7 @@ trl sft \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="SFT w/ config file">
+Or with config file:
 
 ```yaml
 # sft_config.yaml
@@ -141,7 +212,7 @@ trl sft --config sft_config.yaml
 ```
 
 </hfoption>
-<hfoption id="DPO inline">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
@@ -150,8 +221,7 @@ trl dpo \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="DPO w/ config file">
+Or with config file:
 
 ```yaml
 # dpo_config.yaml
@@ -167,7 +237,7 @@ trl dpo --config dpo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="Reward inline">
+<hfoption id="Reward">
 
 ```bash
 trl reward \
@@ -176,8 +246,7 @@ trl reward \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="Reward w/ config file">
+Or with config file:
 
 ```yaml
 # reward_config.yaml
@@ -190,6 +259,81 @@ Launch with:
 
 ```bash
 trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback-prompt \
+  --num_processes 4
+```
+
+Or with config file:
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback-prompt
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name AI-MO/NuminaMath-TIR \
+  --num_processes 4
+```
+
+Or with config file:
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: AI-MO/NuminaMath-TIR
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k \
+  --num_processes 4
+```
+
+Or with config file:
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
 ```
 
 </hfoption>
@@ -220,8 +364,8 @@ To use one of these, just pass the name to `--accelerate_config`. TRL will autom
 
 #### Example Usage
 
-<hfoptions id="accelerate_config">
-<hfoption id="SFT inline">
+<hfoptions id="trainers">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -230,8 +374,7 @@ trl sft \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="SFT w/ config file">
+Or with config file:
 
 ```yaml
 # sft_config.yaml
@@ -247,7 +390,7 @@ trl sft --config sft_config.yaml
 ```
 
 </hfoption>
-<hfoption id="DPO inline">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
@@ -256,8 +399,7 @@ trl dpo \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="DPO w/ config file">
+Or with config file:
 
 ```yaml
 # dpo_config.yaml
@@ -273,7 +415,7 @@ trl dpo --config dpo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="Reward inline">
+<hfoption id="Reward">
 
 ```bash
 trl reward \
@@ -282,8 +424,7 @@ trl reward \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="Reward w/ config file">
+Or with config file:
 
 ```yaml
 # reward_config.yaml
@@ -299,13 +440,88 @@ trl reward --config reward_config.yaml
 ```
 
 </hfoption>
+<hfoption id="GRPO">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback-prompt \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Or with config file:
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback-prompt
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name AI-MO/NuminaMath-TIR \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Or with config file:
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: AI-MO/NuminaMath-TIR
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Or with config file:
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
+```
+
+</hfoption>
 </hfoptions>
 
 ### Using dataset mixtures
 
 You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
 
-<hfoptions id="dataset_mixtures">
+<hfoptions id="trainers">
 <hfoption id="SFT">
 
 ```yaml
@@ -354,6 +570,57 @@ Launch with:
 
 ```bash
 trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/ultrafeedback-prompt
+  - path: BAAI/Infinity-Preference
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: AI-MO/NuminaMath-TIR
+  - path: deepmind/math_dataset
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/kto-mix-14k
+  - path: argilla/ultrafeedback-binarized-preferences-cleaned
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
 ```
 
 </hfoption>
