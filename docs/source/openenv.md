@@ -74,7 +74,7 @@ from envs.echo_env import EchoEnv, EchoAction
 from trl import GRPOConfig, GRPOTrainer
 
 # Create HTTP client for Echo Environment
-client = EchoEnv.from_docker_image("echo-env:latest")
+client = EchoEnv.from_docker_image("echo-env:latest") # or client = EchoEnv(base_url=f"{ENV_URL}")
 
 def rollout_func(prompts, args, processing_class):
     # 1. Generate completions via vLLM inference server (running on port 8000)
