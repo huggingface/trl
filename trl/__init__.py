@@ -64,6 +64,15 @@ _import_structure = {
         "setup_chat_format",
     ],
     "trainer": [
+        # Deprecated judges (will be removed in v1.2.0) - use trl.experimental.judges instead
+        "AllTrueJudge",
+        "BaseBinaryJudge",
+        "BaseJudge",
+        "BasePairwiseJudge",
+        "BaseRankJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
+        "PairRMJudge",
         "BCOConfig",
         "BCOTrainer",
         "CPOConfig",
@@ -136,6 +145,11 @@ if TYPE_CHECKING:
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
+        AllTrueJudge,  # Deprecated
+        BaseBinaryJudge,  # Deprecated
+        BaseJudge,  # Deprecated
+        BasePairwiseJudge,  # Deprecated
+        BaseRankJudge,  # Deprecated
         BCOConfig,
         BCOTrainer,
         CPOConfig,
@@ -148,6 +162,7 @@ if TYPE_CHECKING:
         GKDTrainer,
         GRPOConfig,
         GRPOTrainer,
+        HfPairwiseJudge,  # Deprecated
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
@@ -156,8 +171,10 @@ if TYPE_CHECKING:
         NashMDTrainer,
         OnlineDPOConfig,
         OnlineDPOTrainer,
+        OpenAIPairwiseJudge,  # Deprecated
         ORPOConfig,
         ORPOTrainer,
+        PairRMJudge,  # Deprecated
         PPOConfig,
         PPOTrainer,
         PRMConfig,

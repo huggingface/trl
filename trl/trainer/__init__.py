@@ -36,6 +36,16 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
+    "judges": [  # Deprecated - will be removed in v1.2.0, use trl.experimental.judges instead
+        "AllTrueJudge",
+        "BaseBinaryJudge",
+        "BaseJudge",
+        "BasePairwiseJudge",
+        "BaseRankJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
+        "PairRMJudge",
+    ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
@@ -85,6 +95,16 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
+    from .judges import (  # Deprecated
+        AllTrueJudge,
+        BaseBinaryJudge,
+        BaseJudge,
+        BasePairwiseJudge,
+        BaseRankJudge,
+        HfPairwiseJudge,
+        OpenAIPairwiseJudge,
+        PairRMJudge,
+    )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig

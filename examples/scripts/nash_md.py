@@ -73,6 +73,7 @@ from trl import (
     get_kbit_device_map,
     get_quantization_config,
 )
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 # Enable logging in a Hugging Face Space
@@ -127,6 +128,8 @@ if __name__ == "__main__":
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 

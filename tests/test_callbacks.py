@@ -22,14 +22,15 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
 from trl import (
-    BasePairwiseJudge,
     BEMACallback,
     DPOConfig,
     DPOTrainer,
     LogCompletionsCallback,
+    MergeModelCallback,
     WinRateCallback,
 )
-from trl.experimental.mergekit import MergeConfig, MergeModelCallback
+from trl.experimental.judges import BasePairwiseJudge
+from trl.mergekit_utils import MergeConfig
 
 from .testing_utils import TrlTestCase, require_comet, require_mergekit, require_peft, require_wandb
 
