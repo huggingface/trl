@@ -457,6 +457,19 @@ training_args = DPOConfig(
 
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
+## Kahneman–Tversky Optimization
+
+Papers relating to the [`KTOTrainer`]
+
+### KTO: Model Alignment as Prospect Theoretic Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2402.01306
+
+KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.  
+**Used in TRL via:** [`KTOTrainer`]
+
+
+
 ## Supervised Fine-Tuning
 
 Papers relating to the [`SFTTrainer`]
