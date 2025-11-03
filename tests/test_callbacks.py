@@ -27,10 +27,9 @@ from trl import (
     DPOConfig,
     DPOTrainer,
     LogCompletionsCallback,
-    MergeModelCallback,
     WinRateCallback,
 )
-from trl.mergekit_utils import MergeConfig
+from trl.experimental.mergekit import MergeConfig, MergeModelCallback
 
 from .testing_utils import TrlTestCase, require_comet, require_mergekit, require_peft, require_wandb
 
