@@ -41,9 +41,12 @@ class GRPOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
+        cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
+            Whether to cast the language modeling head of the policy and reference models to float32. As recommended by
+            the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only supported when the model
+            has untied word embedding and language modeling head layers i.e. `tie_word_embeddings` in the model config is False.
 
         > Parameters that control the data preprocessing
-
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
@@ -221,7 +224,7 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
-        use_liger_loss (`bool`, *optional*, defaults to `None`):
+        use_liger_loss (`bool`, *optional*):
             Whether to use Liger loss.
 
             <Deprecated version="0.25.0">
@@ -229,6 +232,7 @@ class GRPOConfig(TrainingArguments):
             Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
 
             </Deprecated>
+
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
             logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
@@ -294,6 +298,14 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as "
             "it prevents the model from generating different logprobs for the same input."
+        },
+    )
+    cast_lm_head_to_fp32: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
+            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only supported when the model"
+            " has untied word embedding and language modeling head layers i.e. `tie_word_embeddings` in the model config is False."
         },
     )
 
@@ -704,7 +716,7 @@ class GRPOConfig(TrainingArguments):
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
-        if self.use_liger_loss:
+        if self.use_liger_loss is not None:
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
                 "`use_liger_kernel` instead.",

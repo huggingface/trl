@@ -157,7 +157,7 @@ class DPOConfig(TrainingArguments):
             [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
             corresponding weights for each loss type.
 
-        use_liger_loss (`bool`, *optional*, defaults to `None`):
+        use_liger_loss (`bool`, *optional*):
             Whether to use Liger loss.
 
             <Deprecated version="0.25.0">
@@ -165,6 +165,7 @@ class DPOConfig(TrainingArguments):
             Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
 
             </Deprecated>
+
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is `True`.
@@ -518,7 +519,7 @@ class DPOConfig(TrainingArguments):
                     f"({loss_types})."
                 )
 
-        if self.use_liger_loss:
+        if self.use_liger_loss is not None:
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
                 "`use_liger_kernel` instead.",
