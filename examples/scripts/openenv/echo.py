@@ -59,9 +59,10 @@ def parse_args():
     parser.add_argument("--env-host", type=str, default="0.0.0.0", help="Host for the Echo environment.")
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the Echo environment.")
     parser.add_argument(
-        "--use-docker-env",
-        action="store_true",
-        help="If set, assumes the Echo environment is already running (e.g., in Docker) and skips launching locally.",
+        "--env-mode",
+        choices=["local", "docker", "space"],
+        default="local",
+        help="Where to run the Echo environment: 'local' to launch it, 'docker' if already running, or 'space' to use a remote Space URL.",
     )
     parser.add_argument(
         "--gen-url",
@@ -156,15 +157,23 @@ def reward_from_env(completions, **kwargs):
 
 def main():
     args = parse_args()
-    env_url = f"http://{args.env_host}:{args.env_port}"
-    gen_url = args.gen_url
 
-    if not args.use_docker_env:
+    # Select environment mode
+    if args.env_mode == "local":
+        env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = start_env_server(args.env_host, args.env_port)
-    else:
+    elif args.env_mode == "docker":
+        env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = None
-        print(f"🌍 Using existing Echo Environment at: {env_url}")
+        print(f"🌍 Using existing Echo Environment (Docker) at: {env_url}")
+    elif args.env_mode == "space":
+        env_url = args.env_host
+        server_process = None
+        print(f"🚀 Using Hugging Face Space environment at: {env_url}")
+    else:
+        raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
+    gen_url = args.gen_url
     client = EchoEnv(base_url=env_url)
     dataset = load_dataset(args.dataset, split="train[:1000]")
 
