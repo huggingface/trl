@@ -132,8 +132,6 @@ preference_example = {
 }
 ```
 
-Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
-
 #### Tool Calling
 
 Some chat templates support *tool calling*, which allows the model to interact with external functions—referred to as **tools**—during generation. This extends the conversational capabilities of the model by enabling it to output a `"tool_calls"` field instead of a standard `"content"` message whenever it decides to invoke a tool.
@@ -404,76 +402,6 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
 | [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
 | [`XPOTrainer`] | [Prompt-only](#prompt-only) |
-
-> [!TIP]
-> TRL trainers only support standard dataset formats, [for now](https://github.com/huggingface/trl/issues/2071). If you have a conversational dataset, you must first convert it into a standard format.
-> For more information on how to work with conversational datasets, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
-
-## Working with conversational datasets in TRL
-
-Conversational datasets are increasingly common, especially for training chat models. However, some TRL trainers don't support conversational datasets in their raw format. (For more information, see [issue #2071](https://github.com/huggingface/trl/issues/2071).) These datasets must first be converted into a standard format.
-Fortunately, TRL offers tools to easily handle this conversion, which are detailed below.
-
-### Converting a conversational dataset into a standard dataset
-
-To convert a conversational dataset into a standard dataset, you need to *apply a chat template* to the dataset. A chat template is a predefined structure that typically includes placeholders for user and assistant messages. This template is provided by the tokenizer of the model you use.
-
-For detailed instructions on using chat templating, refer to the [Chat templating section in the `transformers` documentation](https://huggingface.co/docs/transformers/en/chat_templating).
-
-In TRL, the method you apply to convert the dataset will vary depending on the task. Fortunately, TRL provides a helper function called [`apply_chat_template`] to simplify this process. Here's an example of how to use it:
-
-```python
-from transformers import AutoTokenizer
-from trl import apply_chat_template
-
-tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-
-example = {
-    "prompt": [{"role": "user", "content": "What color is the sky?"}],
-    "completion": [{"role": "assistant", "content": "It is blue."}]
-}
-
-apply_chat_template(example, tokenizer)
-# Output:
-# {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
-```
-
-Alternatively, you can use the [`~datasets.Dataset.map`] method to apply the template across an entire dataset:
-
-```python
-from datasets import Dataset
-from trl import apply_chat_template
-
-dataset_dict = {
-    "prompt": [[{"role": "user", "content": "What color is the sky?"}],
-               [{"role": "user", "content": "Where is the sun?"}]],
-    "completion": [[{"role": "assistant", "content": "It is blue."}],
-                   [{"role": "assistant", "content": "In the sky."}]]
-}
-
-dataset = Dataset.from_dict(dataset_dict)
-dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
-# Output:
-# {'prompt': ['<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n',
-#             '<|user|>\nWhere is the sun?<|end|>\n<|assistant|>\n'],
-#  'completion': ['It is blue.<|end|>\n<|endoftext|>', 'In the sky.<|end|>\n<|endoftext|>']}
-```
-
-> [!WARNING]
-> We recommend using the [`apply_chat_template`] function instead of calling `tokenizer.apply_chat_template` directly. Handling chat templates for non-language modeling datasets can be tricky and may result in errors, such as mistakenly placing a system prompt in the middle of a conversation.
-> For additional examples, see [#1930 (comment)](https://github.com/huggingface/trl/pull/1930#issuecomment-2292908614). The [`apply_chat_template`] is designed to handle these intricacies and ensure the correct application of chat templates for various tasks.
-
-> [!WARNING]
-> It's important to note that chat templates are model-specific. For example, if you use the chat template from [meta-llama/Meta-Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct) with the above example, you get a different output:
->
-> ```python
-> apply_chat_template(example, AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct"))
-> # Output:
-> # {'prompt': '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n',
-> #  'completion': 'It is blue.<|im_end|>\n'}
-> ```
->
-> Always use the chat template associated with the model you're working with. Using the wrong template can lead to inaccurate or unexpected results.
 
 ## Using any dataset with TRL: preprocessing and conversion
 
