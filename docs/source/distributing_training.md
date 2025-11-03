@@ -321,7 +321,7 @@ accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.ya
     --attn_implementation flash_attention_2 \
     --output_dir output-alst-4gpu \
     --logging_steps 10 \
-    --report_to tensorboard
+    --report_to trackio
 ```
 
 This command automatically:
