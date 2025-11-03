@@ -5,7 +5,27 @@
 
 ## Group Relative Policy Optimization
 
-Papers relating to the [`GRPOTrainer`]
+### DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models
+**📜 Paper**: https://huggingface.co/papers/2402.03300
+
+Introduces **GRPO** and shows strong math-reasoning gains from math-centric pretraining plus group-relative PPO-style optimization.  
+**Used in TRL via:** [`GRPOTrainer`]
+
+```python
+# Minimal GRPO setup (mirrors style used for other papers on the page).
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="grpo",
+    beta=0.0,                 # GRPO commonly trains without explicit KL in released configs
+    epsilon=2e-4,             # clip range (use paper/experiment settings if you mirror them)
+    epsilon_high=4e-4,        # upper clip (symmetrical if not specified)
+    steps_per_generation=4,   # sample multiple completions per prompt
+    gradient_accumulation_steps=1,
+    num_generations=8,        # completions per prompt (adjust to your compute)
+    max_prompt_length=1024,
+    max_completion_length=1024,
+)
 
 ### Group Sequence Policy Optimization
 
@@ -231,15 +251,6 @@ trainer = PAPOTrainer(
     ...
 )
 ```
-### DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models
-**📜 Paper**: https://huggingface.co/papers/2402.03300
-
-Introduces **GRPO** and shows strong math-reasoning gains from math-centric pretraining plus group-relative PPO-style optimization.  
-**Used in TRL via:** [`GRPOTrainer`]
-
-## Direct Policy Optimization
-
-Papers relating to the [`DPOTrainer`]
 
 ### Direct Preference Optimization (DPO): Your Language Model is Secretly a Reward Model
 
