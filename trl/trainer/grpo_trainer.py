@@ -481,8 +481,7 @@ class GRPOTrainer(BaseTrainer):
         if args.cast_lm_head_to_fp32:
 
             def _cast_lm_head_to_fp32(target_model: PreTrainedModel):
-                """Cast lm_head to fp32 while preserving embedding output dtype if tied.
-                """
+                """Cast lm_head to fp32 while preserving embedding output dtype if tied."""
 
                 def cast_inputs_to_fp32(module, inputs):
                     # Preserve other positional args and kwargs untouched
