@@ -1,7 +1,12 @@
 # Reducing Memory Usage
 
-> [!WARNING]
-> Section under construction. Feel free to contribute!
+Training workflows can often be optimized to **reduce memory consumption**, and TRL provides several built-in features to help achieve this.
+
+Below, we outline these techniques and recommend experimenting with different combinations to figure out which configuration works best for your specific setup.
+
+Each method includes examples for the supported trainers. If you're unsure whether a technique is compatible with your trainer, please take a look at the corresponding trainer documentation.
+
+For additional strategies, such as **gradient checkpointing**, which is supported across all trainers, see the [`transformers` performance guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
 
 ## Truncation
 
@@ -54,7 +59,7 @@ training_args = SFTConfig(..., max_length=...)
 
 ### How to choose the `max_length` value?
 
-If `max_length` is too small, a significant portion of your tokens will be discarded and won't contribute to training. If it's too large, memory usage can spike, potentially leading to OOM (Out-Of-Memory) errors. Without packing or padding-free, a large `max_length` may also result in inefficient training, as many tokens will be padding.
+If `max_length` is too small, a significant portion of your tokens will be discarded and won't contribute to training. If it's too large, memory usage can spike, potentially leading to out-of-memory (OOM) errors. Without packing or padding-free, a large `max_length` may also result in inefficient training, as many tokens will be padding.
 
 To help you choose an appropriate value, we provide a utility to visualize the sequence length distribution in your dataset.
 
@@ -63,7 +68,7 @@ To help you choose an appropriate value, we provide a utility to visualize the s
 ## Packing
 
 > [!TIP]
-> This technique applies only to SFT.
+> This technique is available only for **SFT** training and setups that use **FlashAttention** (or its variants).
 
 [Truncation](#truncation) has several drawbacks:
 
@@ -90,41 +95,55 @@ training_args = SFTConfig(..., packing=True, max_length=512)
 
 ## Liger for reducing peak memory usage
 
-> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%.
+> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
 
-For more information, see [Liger Kernel Integration](liger_kernel_integration)
-
-<hfoptions id="liger">
-<hfoption id="DPO">
+For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 To use Liger for reducing peak memory usage, use the following code snippet:
-  
+
+<hfoptions id="liger">
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="DPO">
+
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., use_liger_loss=True)
+training_args = DPOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
 <hfoption id="GRPO">
 
-To use Liger for reducing peak memory usage, use the following code snippet:
-  
 ```python
 from trl import GRPOConfig
 
-training_args = GRPOConfig(..., use_liger_loss=True)
+training_args = GRPOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
 <hfoption id="KTO">
 
-To use Liger for reducing peak memory usage, use the following code snippet:
-  
 ```python
 from trl import KTOConfig
 
-training_args = KTOConfig(..., use_liger_loss=True)
+training_args = KTOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="GKD">
+
+```python
+from trl import GKDConfig
+
+training_args = GKDConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
@@ -172,25 +191,40 @@ from trl import SFTConfig
 training_args = SFTConfig(..., activation_offloading=True)
 ```
 
-> [!WARNING]
-> When using activation offloading with models that use Liger kernels, you must disable Liger cross entropy due to compatibility issues. The issue occurs specifically with `use_liger_kernel=True` because Liger cross entropy performs in-place operations which conflict with activation offloading. The default setting (`use_liger_kernel=False`) works:
->
-> ```python
-> # When using activation offloading with a model that uses Liger kernels:
-> from trl import SFTConfig
->
-> training_args = SFTConfig(
->     activation_offloading=True,
->     use_liger_kernel=False,  # Disable Liger cross entropy
->     # Other parameters...
-> )
-> ```
+Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors that would be inefficient. For performance optimization, it can, via a flag (which is true by default), use CUDA streams to overlap computation with CPU-GPU transfers.
 
-Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors which would be inefficient. For performance optimization, it can optionally use CUDA streams to overlap computation with CPU-GPU transfers.
+## Padding Sequences to a Multiple
+
+> [!TIP]
+> This technique is supported for **SFT** and **Reward** trainers currently.
+
+When enabled, this option ensures that all sequences are **padded to a multiple** of the specified value.  
+This can improve computational efficiency on some hardware by aligning sequence lengths to memory-friendly boundaries.
+
+<hfoptions id="pad_to_multiple_of">
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., pad_to_multiple_of=2048)
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```python
+from trl import RewardConfig
+
+training_args = RewardConfig(..., pad_to_multiple_of=2048)
+```
+
+</hfoption>
+</hfoptions>
 
 ## Disabling model gathering for generation in online methods
 
-When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to out-of-memory (OOM) errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
+When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to OOM errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
 
 If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
 
@@ -237,7 +271,7 @@ This adjustment prevents model weights from being gathered, avoiding OOM errors,
 
 ## vLLM sleep mode
 
-When using vLLM as the generation backend, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
+When using **vLLM** as the generation backend for online training methods, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
 
 <hfoptions id="vllm_sleep">
 <hfoption id="GRPO">

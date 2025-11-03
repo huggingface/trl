@@ -42,6 +42,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    is_trackio_available,
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
@@ -93,6 +94,9 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+if is_trackio_available():
+    import trackio
 
 
 logger = logging.get_logger(__name__)
@@ -373,6 +377,7 @@ class GRPOTrainer(BaseTrainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -385,17 +390,17 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
-        self.use_liger_loss = args.use_liger_loss
+        self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_loss and self.top_entropy_quantile < 1.0:
+        if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-        if self.use_liger_loss and not self.importance_sampling_level == "token":
+        if self.use_liger_kernel and not self.importance_sampling_level == "token":
             raise NotImplementedError(
                 "Liger Kernels currently only support token-level importance sampling. Please set"
                 "`importance_sampling_level` to 'token'."
@@ -472,11 +477,29 @@ class GRPOTrainer(BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Cast LM Head To FP32
+        if args.cast_lm_head_to_fp32:
+            if not model.config.tie_word_embeddings:
+
+                def cast_inputs_to_fp32(module, input):
+                    return (input[0].float(),)
+
+                model.lm_head = model.lm_head.float()
+                model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+                if self.ref_model is not None:
+                    self.ref_model.lm_head = self.ref_model.lm_head.float()
+                    self.ref_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+            else:
+                raise NotImplementedError(
+                    "`cast_lm_head_to_fp32=True` is only supported when the model has untied word embedding and language modeling head layers"
+                    "i.e. `tie_word_embeddings` in the model config is False."
+                )
+
         # Liger loss
-        if self.use_liger_loss:
+        if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
+                    "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
@@ -871,7 +894,6 @@ class GRPOTrainer(BaseTrainer):
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1062,7 +1084,10 @@ class GRPOTrainer(BaseTrainer):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+                        texts = [
+                            apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
+                            for x in messages
+                        ]
                     else:
                         texts = [p + c for p, c in zip(prompts, completions)]
                     reward_inputs = reward_processing_class(
@@ -1142,14 +1167,20 @@ class GRPOTrainer(BaseTrainer):
                         if self.rollout_func is not None:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 ordered_set_of_prompts = [
-                                    apply_chat_template({"prompt": p}, self.processing_class)["prompt"]
+                                    apply_chat_template(
+                                        {"prompt": p}, self.processing_class, **self.chat_template_kwargs
+                                    )["prompt"]
                                     for p in ordered_set_of_prompts
                                 ]
                             output = self.rollout_func(ordered_set_of_prompts, trainer=self)
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 # FIXME: this endpoint doesn't exist in vllm_client
-                                output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
+                                output = self.vllm_client.chat(
+                                    prompts=ordered_set_of_prompts,
+                                    **sampling_params,
+                                    chat_template_kwargs=self.chat_template_kwargs,
+                                )
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
                         # Extract required fields and collect any extra fields for reward functions
@@ -1275,14 +1306,22 @@ class GRPOTrainer(BaseTrainer):
                     self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            processor_kwargs = {"max_length": self.max_prompt_length, "truncation": True, "add_special_tokens": False}
+            processor_kwargs = {
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "add_special_tokens": False,
+            }
             if is_conversational({"prompt": prompts[0]}):
-                generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                processor_outputs = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    **processor_kwargs,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
-            generate_inputs["inputs"] = generate_inputs.pop("input_ids")
+                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -1297,13 +1336,16 @@ class GRPOTrainer(BaseTrainer):
                     unwrapped_model.to(torch.bfloat16)
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
+                if self.args.cast_lm_head_to_fp32:
+                    unwrapped_model.lm_head.to(torch.float32)
                 with torch.inference_mode():
+                    # Continuous batching API expects 'inputs' arg only
                     all_outputs = unwrapped_model.generate_batch(
-                        **generate_inputs, generation_config=self.generation_config, progress_bar=False
+                        processor_outputs["input_ids"], generation_config=self.generation_config, progress_bar=False
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = generate_inputs["inputs"]
+            prompt_ids = processor_outputs["input_ids"]
             logprobs = None  # not used in this case
             extra_fields = {}  # No extra fields for paged mode
 
@@ -1319,7 +1361,12 @@ class GRPOTrainer(BaseTrainer):
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True, return_dict=True
+                    conversation=prompts,
+                    **processor_kwargs,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1453,7 +1500,8 @@ class GRPOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
@@ -1710,7 +1758,7 @@ class GRPOTrainer(BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        if self.use_liger_loss:
+        if self.use_liger_kernel:
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
             return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
@@ -1879,7 +1927,13 @@ class GRPOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
+            logging_backends = []
             if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
+
+            if logging_backends:
                 import pandas as pd
 
                 table = {
@@ -1890,16 +1944,28 @@ class GRPOTrainer(BaseTrainer):
                     "advantage": self._logs["advantages"],
                 }
 
-                if self._logs["images"]:
-                    table["images"] = []
-                    for image_list in self._logs["images"]:
-                        # Convert images to wandb Image objects for proper visualization
-                        table["images"].append([wandb.Image(image) for image in image_list])
+                df_base = pd.DataFrame(table)
+                images_raw = self._logs["images"] or []
 
-                df = pd.DataFrame(table)
-                if self.wandb_log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+                for logging_backend in logging_backends:
+                    if images_raw:
+                        # Convert images per backend and derive a dataframe that shares base columns
+                        if logging_backend is wandb:
+                            images = []
+                            for image_list in self._logs["images"]:
+                                images.append([wandb.Image(image) for image in image_list])
+                            df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
+                        elif logging_backend is trackio:
+                            # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/327
+                            logger.info("Skipping image logging for Trackio")
+                            df = df_base
+                    else:
+                        df = df_base
+
+                    if self.wandb_log_unique_prompts:
+                        df = df.drop_duplicates(subset=["prompt"])
+
+                    logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
