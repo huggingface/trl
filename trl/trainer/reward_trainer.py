@@ -488,13 +488,15 @@ class RewardTrainer(BaseTrainer):
                         chosen_input_ids = processing_class.apply_chat_template(
                             example["chosen"],
                             tools=example.get("tools"),
+                            return_dict=True,
                             **example.get("chat_template_kwargs", {}),
-                        )
+                        )["input_ids"]
                         rejected_input_ids = processing_class.apply_chat_template(
                             example["rejected"],
                             tools=example.get("tools"),
+                            return_dict=True,
                             **example.get("chat_template_kwargs", {}),
-                        )
+                        )["input_ids"]
                         output = {"chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids}
                     else:
                         output = {

@@ -479,21 +479,31 @@ class GRPOTrainer(BaseTrainer):
 
         # Cast LM Head To FP32
         if args.cast_lm_head_to_fp32:
-            if not model.config.tie_word_embeddings:
 
-                def cast_inputs_to_fp32(module, input):
-                    return (input[0].float(),)
+            def _cast_lm_head_to_fp32(target_model: PreTrainedModel):
+                """Cast lm_head to fp32 while preserving embedding output dtype if tied."""
 
-                model.lm_head = model.lm_head.float()
-                model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
-                if self.ref_model is not None:
-                    self.ref_model.lm_head = self.ref_model.lm_head.float()
-                    self.ref_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
-            else:
-                raise NotImplementedError(
-                    "`cast_lm_head_to_fp32=True` is only supported when the model has untied word embedding and language modeling head layers"
-                    "i.e. `tie_word_embeddings` in the model config is False."
-                )
+                def cast_inputs_to_fp32(module, inputs):
+                    # Preserve other positional args and kwargs untouched
+                    if not inputs:
+                        return inputs
+                    return (inputs[0].to(torch.float32),) + inputs[1:]
+
+                original_dtype_local = target_model.lm_head.weight.dtype
+                target_model.lm_head = target_model.lm_head.float()
+                target_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+
+                if target_model.config.tie_word_embeddings:
+
+                    def cast_outputs_to_original_dtype(module, args, output):
+                        return output.to(original_dtype_local)
+
+                    # Only cast activations; weights are now fp32 (intentional for numerical stability of logits)
+                    target_model.model.embed_tokens.register_forward_hook(cast_outputs_to_original_dtype)
+
+            _cast_lm_head_to_fp32(model)
+            if self.ref_model is not None:
+                _cast_lm_head_to_fp32(self.ref_model)
 
         # Liger loss
         if self.use_liger_kernel:
