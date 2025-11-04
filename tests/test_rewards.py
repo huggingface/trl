@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 from trl.rewards import accuracy_reward, get_soft_overlong_punishment, think_format_reward
 
 from .testing_utils import TrlTestCase, require_math_latex
