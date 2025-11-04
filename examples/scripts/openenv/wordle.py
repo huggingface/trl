@@ -13,18 +13,33 @@
 # limitations under the License.
 
 """
-GRPO training for Wordle using TRL's `GRPOTrainer` and the TextArena OpenEnv environment.
+Simple script to run GRPO training with OpenEnv's Wordle environment and a vLLM server. 
 
-Usage:
-    # First, start the TextArena Wordle server (Docker or local):
-    TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 \
-        python -m src.envs.textarena_env.server.app
+Setup:
 
-    # Start the vLLM server with your model
-    CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+```sh
+uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+```
 
-    # Then run this training script:
-    CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
+Usage (2 GPUs required):
+
+# Start the docker container for the Wordle environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
+```sh
+docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
+# or TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 python -m src.envs.textarena_env.server.app
+```
+
+# Spin up vLLM server
+
+```sh
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+```
+
+# Run training
+
+```sh
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
+```
 """
 
 from __future__ import annotations
@@ -70,7 +85,7 @@ def parse_args() -> argparse.Namespace:
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
     parser.add_argument(
-        "--textarena-url",
+        "--env-url",
         default="https://burtenshaw-textarena.hf.space",
         help="Base URL for the TextArena Wordle environment.",
     )
@@ -505,7 +520,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(cli_args.tokenizer_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    env = TextArenaEnv(base_url=cli_args.textarena_url)
+    env = TextArenaEnv(base_url=cli_args.env_url)
 
     system_prompt = resolve_system_prompt(cli_args.system_prompt_path)
 
