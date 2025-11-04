@@ -18,10 +18,11 @@ import random
 import textwrap
 import warnings
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -102,19 +103,21 @@ def _tokenize(
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
     prompt_attention_mask = prompt_tokenized["attention_mask"]
-    prompt_and_completion = [prompt + completion for prompt, completion in zip(batch["prompt"], batch["completion"])]
+    prompt_and_completion = [
+        prompt + completion for prompt, completion in zip(batch["prompt"], batch["completion"], strict=True)
+    ]
     full_tokenized = tokenizer(prompt_and_completion, add_special_tokens=False)
     full_input_ids = full_tokenized["input_ids"]
     full_attention_mask = full_tokenized["attention_mask"]
 
-    answer_input_ids = [f[len(p) :] for f, p in zip(full_input_ids, prompt_input_ids)]
-    answer_attention_mask = [f[len(p) :] for f, p in zip(full_attention_mask, prompt_attention_mask)]
+    answer_input_ids = [f[len(p) :] for f, p in zip(full_input_ids, prompt_input_ids, strict=True)]
+    answer_attention_mask = [f[len(p) :] for f, p in zip(full_attention_mask, prompt_attention_mask, strict=True)]
 
     # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
-    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, answer_input_ids)]
+    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, answer_input_ids, strict=True)]
     # Prepare input tokens for token by token comparison
     full_input_ids = [np.array(f) for f in full_input_ids]
-    for full, concat in zip(full_input_ids, full_concat_input_ids):
+    for full, concat in zip(full_input_ids, full_concat_input_ids, strict=True):
         if len(full) != len(concat):
             raise ValueError(
                 "The elements in 'full_input_ids' and 'full_concat_input_ids' must have the same pairwise length."
@@ -128,19 +131,19 @@ def _tokenize(
 
     # If tokenized prompt is different than both prompt+answer, then it means the
     # last token has changed due to merging.
-    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx)):
+    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx, strict=True)):
         if not np.array_equal(p, f[:r]):
             response_token_ids_start_idx[idx] -= 1
 
-    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
-    prompt_attention_mask = [f[:r] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
+    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
+    prompt_attention_mask = [f[:r] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
 
-    for p, m in zip(prompt_input_ids, prompt_attention_mask):
+    for p, m in zip(prompt_input_ids, prompt_attention_mask, strict=True):
         if len(p) != len(m):
             raise ValueError("Prompt input ids and attention mask should have the same length.")
 
-    answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
-    answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
+    answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx, strict=True)]
+    answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx, strict=True)]
 
     output = dict(
         prompt_input_ids=prompt_input_ids,
@@ -337,23 +340,25 @@ class KTOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module, str] = None,
-        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+        model: PreTrainedModel | nn.Module | str = None,
+        ref_model: PreTrainedModel | nn.Module | str | None = None,
         args: KTOConfig = None,
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        data_collator: Optional[DataCollator] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        data_collator: DataCollator | None = None,
+        model_init: Callable[[], PreTrainedModel] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[dict] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
-        model_adapter_name: Optional[str] = None,
-        ref_adapter_name: Optional[str] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: dict | None = None,
+        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
+        model_adapter_name: str | None = None,
+        ref_adapter_name: str | None = None,
     ):
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -879,7 +884,7 @@ class KTOTrainer(BaseTrainer):
 
         return super().get_train_dataloader()
 
-    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+    def get_eval_dataloader(self, eval_dataset: Dataset | None = None) -> DataLoader:
         """
         Returns the evaluation [`~torch.utils.data.DataLoader`].
 
@@ -1066,7 +1071,7 @@ class KTOTrainer(BaseTrainer):
             return (per_token_logps * loss_mask).sum(-1)
 
     def forward(
-        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
+        self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         KL_logps = self._compute_kl_logps(model, batch)
 
@@ -1365,7 +1370,7 @@ class KTOTrainer(BaseTrainer):
     def get_batch_loss_metrics(
         self,
         model,
-        batch: dict[str, Union[list, torch.LongTensor]],
+        batch: dict[str, list | torch.LongTensor],
     ):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
@@ -1476,11 +1481,11 @@ class KTOTrainer(BaseTrainer):
 
     def compute_loss(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs=False,
         num_items_in_batch=None,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         compute_loss_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
@@ -1502,7 +1507,7 @@ class KTOTrainer(BaseTrainer):
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
-    def _get_train_sampler(self, dataset: Optional[Dataset] = None) -> Optional[torch.utils.data.Sampler]:
+    def _get_train_sampler(self, dataset: Dataset | None = None) -> torch.utils.data.Sampler | None:
         if dataset is None:
             dataset = self.train_dataset
         if dataset is None or not has_length(dataset):
@@ -1559,10 +1564,10 @@ class KTOTrainer(BaseTrainer):
 
     def prediction_step(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         prediction_loss_only: bool,
-        ignore_keys: Optional[list[str]] = None,
+        ignore_keys: list[str] | None = None,
     ):
         if ignore_keys is None:
             if hasattr(model, "config"):
@@ -1599,8 +1604,8 @@ class KTOTrainer(BaseTrainer):
         self,
         dataloader: DataLoader,
         description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[list[str]] = None,
+        prediction_loss_only: bool | None = None,
+        ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
@@ -1634,7 +1639,9 @@ class KTOTrainer(BaseTrainer):
                 columns=["Prompt", "Policy", "Ref Model"],
                 data=[
                     [prompt, pol[len(prompt) :], ref[len(prompt) :]]
-                    for prompt, pol, ref in zip(target_batch["prompt"], policy_output_decoded, ref_output_decoded)
+                    for prompt, pol, ref in zip(
+                        target_batch["prompt"], policy_output_decoded, ref_output_decoded, strict=True
+                    )
                 ],
             )
             if "wandb" in self.args.report_to:
@@ -1653,7 +1660,7 @@ class KTOTrainer(BaseTrainer):
 
         return initial_output
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 
