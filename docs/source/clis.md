@@ -59,7 +59,8 @@ trl reward \
 ```bash
 trl grpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name trl-lib/ultrafeedback-prompt
+  --dataset_name trl-lib/ultrafeedback-prompt \
+  --reward_funcs accuracy_reward think_format_reward
 ```
 
 </hfoption>
@@ -68,7 +69,8 @@ trl grpo \
 ```bash
 trl rloo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name AI-MO/NuminaMath-TIR
+  --dataset_name AI-MO/NuminaMath-TIR \
+  --reward_funcs accuracy_reward think_format_reward
 ```
 
 </hfoption>
@@ -139,6 +141,7 @@ trl reward --config reward_config.yaml
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: trl-lib/ultrafeedback-prompt
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 ```
 
 Launch with:
@@ -154,6 +157,7 @@ trl grpo --config grpo_config.yaml
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: AI-MO/NuminaMath-TIR
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 ```
 
 Launch with:
@@ -268,6 +272,7 @@ trl reward --config reward_config.yaml
 trl grpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name trl-lib/ultrafeedback-prompt \
+  --reward_funcs accuracy_reward think_format_reward \
   --num_processes 4
 ```
 
@@ -277,6 +282,7 @@ Or with config file:
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: trl-lib/ultrafeedback-prompt
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 num_processes: 4
 ```
 
@@ -293,6 +299,7 @@ trl grpo --config grpo_config.yaml
 trl rloo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name AI-MO/NuminaMath-TIR \
+  --reward_funcs accuracy_reward think_format_reward \
   --num_processes 4
 ```
 
@@ -302,6 +309,7 @@ Or with config file:
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: AI-MO/NuminaMath-TIR
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 num_processes: 4
 ```
 
@@ -446,6 +454,7 @@ trl reward --config reward_config.yaml
 trl grpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name trl-lib/ultrafeedback-prompt \
+  --reward_funcs accuracy_reward think_format_reward \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -455,6 +464,7 @@ Or with config file:
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: trl-lib/ultrafeedback-prompt
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -471,6 +481,7 @@ trl grpo --config grpo_config.yaml
 trl rloo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name AI-MO/NuminaMath-TIR \
+  --reward_funcs accuracy_reward think_format_reward \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -480,6 +491,7 @@ Or with config file:
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: AI-MO/NuminaMath-TIR
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -578,6 +590,7 @@ trl reward --config reward_config.yaml
 ```yaml
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 datasets:
   - path: trl-lib/ultrafeedback-prompt
   - path: BAAI/Infinity-Preference
@@ -595,6 +608,7 @@ trl grpo --config grpo_config.yaml
 ```yaml
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
+reward_funcs: ["accuracy_reward", "think_format_reward"]
 datasets:
   - path: AI-MO/NuminaMath-TIR
   - path: deepmind/math_dataset
