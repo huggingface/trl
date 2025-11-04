@@ -13,14 +13,13 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from ...trainer.grpo_config import GRPOConfig as _GRPOConfig
 
 
 @dataclass
 class GFPOConfig(_GRPOConfig):
-    num_remains_in_group: Optional[int] = field(
+    num_remains_in_group: int | None = field(
         default=None,
         metadata={
             "help": "number inputs remains after group filter function, `'num_remains_in_group'` must be >=2 if given."

@@ -136,3 +136,15 @@ The documentation is organized into the following sections:
     </a>
   </div>
 </div>
+
+## Talks
+
+<div class="mt-10">
+  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).pdf">
+      <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Talk given on October 30, 2025</p>
+      <p class="text-gray-700">Fine tuning with TRL</p>
+    </a>
+  </div>
+</div>

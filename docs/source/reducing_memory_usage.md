@@ -90,9 +90,6 @@ from trl import SFTConfig
 training_args = SFTConfig(..., packing=True, max_length=512)
 ```
 
-> [!WARNING]
-> Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
-
 ## Liger for reducing peak memory usage
 
 > [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.

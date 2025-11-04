@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
 from trl import PPOConfig, PPOTrainer
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 from .testing_utils import TrlTestCase, require_peft
 
@@ -36,9 +34,6 @@ class TestPPOTrainer(TrlTestCase):
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-
-        if self.tokenizer.chat_template is None:
-            self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
         # Add reward and value models as in ppo.py
         reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
