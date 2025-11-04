@@ -230,7 +230,7 @@ class TestUpdateWithReplayBuffer:
             (item[1]["prompt_ids"].tolist(), item[1]["completion_ids"].tolist())
             for item in self.trainer.replay_buffer.heap
         ]
-        buffered_prompt_ids, buffered_completion_ids = zip(*buffered_prompt_completion_ids)
+        buffered_prompt_ids, buffered_completion_ids = zip(*buffered_prompt_completion_ids, strict=True)
 
         # Check for new entry with seq len 3 in buffer
         assert [[3, 4, 5], [3, 4, 5]] in buffered_prompt_ids  # excluded no-variance group

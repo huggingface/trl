@@ -55,7 +55,7 @@ def _teacher_inputs_from_collator(student_tok, teacher_tok, batch):
 
     pad_token_id = student_tok.pad_token_id
     for prompt_ids_tensor, input_ids_tensor, labels_tensor in zip(
-        batch["prompts"], batch["input_ids"], batch["labels"]
+        batch["prompts"], batch["input_ids"], batch["labels"], strict=True
     ):
         prompt_ids = prompt_ids_tensor.tolist()
         if pad_token_id is not None:
@@ -64,7 +64,7 @@ def _teacher_inputs_from_collator(student_tok, teacher_tok, batch):
 
         input_ids = input_ids_tensor.tolist()
         labels = labels_tensor.tolist()
-        completion_token_ids = [tok for tok, label in zip(input_ids, labels) if label != -100]
+        completion_token_ids = [tok for tok, label in zip(input_ids, labels, strict=True) if label != -100]
         completion_texts.append(student_tok.decode(completion_token_ids, skip_special_tokens=False))
 
     teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
@@ -100,13 +100,13 @@ def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokeni
 
     assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
     decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
-    for decoded, assistant in zip(decoded_batch, assistant_texts):
+    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
         assert assistant.strip() in decoded
 
     teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
         llama_tokenizer, qwen_tokenizer, batch
     )
-    for completion, assistant in zip(completion_texts, assistant_texts):
+    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
         assert assistant.strip() in completion
         assert completion.strip()
 
@@ -145,13 +145,13 @@ def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, q
 
     assistant_texts = [example["messages"][-1]["content"] for example in countdown_examples]
     decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
-    for decoded, assistant in zip(decoded_batch, assistant_texts):
+    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
         assert assistant.strip() in decoded
 
     teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
         llama_tokenizer, qwen_tokenizer, batch
     )
-    for completion, assistant in zip(completion_texts, assistant_texts):
+    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
         assert assistant.strip() in completion
         assert completion.strip()
 
@@ -190,13 +190,13 @@ def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_toke
 
     assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
     decoded_batch = smollm_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
-    for decoded, assistant in zip(decoded_batch, assistant_texts):
+    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
         assert assistant.strip() in decoded
 
     teacher_input_ids, teacher_labels, completion_texts = _teacher_inputs_from_collator(
         smollm_tokenizer, qwen_tokenizer, batch
     )
-    for completion, assistant in zip(completion_texts, assistant_texts):
+    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
         assert assistant.strip() in completion
         assert completion.strip()
 

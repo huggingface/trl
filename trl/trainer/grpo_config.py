@@ -14,7 +14,6 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional, Union
 
 from transformers import TrainingArguments
 
@@ -278,7 +277,7 @@ class GRPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -288,7 +287,7 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control the model and reference model
-    model_init_kwargs: Optional[Union[dict, str]] = field(
+    model_init_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
@@ -314,27 +313,27 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the data preprocessing
     # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
     # additional columns to compute the reward
-    remove_unused_columns: Optional[bool] = field(
+    remove_unused_columns: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
             "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
         },
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={
             "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
         },
     )
-    num_generations: Optional[int] = field(
+    num_generations: int | None = field(
         default=8,
         metadata={
             "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
             "* gradient_accumulation_steps) must be evenly divisible by this value."
         },
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
     )
@@ -347,20 +346,20 @@ class GRPOConfig(TrainingArguments):
             "is not compatible with vLLM generation."
         },
     )
-    shuffle_dataset: Optional[bool] = field(
+    shuffle_dataset: bool | None = field(
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
 
     # Parameters that control generation
-    generation_batch_size: Optional[int] = field(
+    generation_batch_size: int | None = field(
         default=None,
         metadata={
             "help": "Batch size to use for generation. If `None`, it defaults to the effective training batch size: "
             "`per_device_train_batch_size * num_processes * steps_per_generation`."
         },
     )
-    steps_per_generation: Optional[int] = field(
+    steps_per_generation: int | None = field(
         default=None,
         metadata={"help": "Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`."},
     )
@@ -375,21 +374,21 @@ class GRPOConfig(TrainingArguments):
             "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: Optional[int] = field(
+    top_k: int | None = field(
         default=None,
         metadata={
             "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
-    min_p: Optional[float] = field(
+    min_p: float | None = field(
         default=None,
         metadata={
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: Optional[dict] = field(
+    generation_kwargs: dict | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -398,7 +397,7 @@ class GRPOConfig(TrainingArguments):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: Optional[dict] = field(
+    chat_template_kwargs: dict | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -421,7 +420,7 @@ class GRPOConfig(TrainingArguments):
             "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
-    cache_implementation: Optional[str] = field(
+    cache_implementation: str | None = field(
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
@@ -459,13 +458,13 @@ class GRPOConfig(TrainingArguments):
             "and woken for weight sync and generation."
         },
     )
-    vllm_guided_decoding_regex: Optional[str] = field(
+    vllm_guided_decoding_regex: str | None = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
-    vllm_server_base_url: Optional[str] = field(
+    vllm_server_base_url: str | None = field(
         default=None,
         metadata={
             "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
@@ -522,7 +521,7 @@ class GRPOConfig(TrainingArguments):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
-    delta: Optional[float] = field(
+    delta: float | None = field(
         default=None,
         metadata={
             "help": "Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` "
@@ -530,7 +529,7 @@ class GRPOConfig(TrainingArguments):
             "method is introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291)."
         },
     )
-    epsilon_high: Optional[float] = field(
+    epsilon_high: float | None = field(
         default=None,
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
@@ -547,7 +546,7 @@ class GRPOConfig(TrainingArguments):
             "sequence-level rewards."
         },
     )
-    reward_weights: Optional[list[float]] = field(
+    reward_weights: list[float] | None = field(
         default=None,
         metadata={
             "help": "Weights for each reward function. Must match the number of reward functions. If `None`, all "
@@ -655,11 +654,11 @@ class GRPOConfig(TrainingArguments):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
-    num_completions_to_print: Optional[int] = field(
+    num_completions_to_print: int | None = field(
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_log_unique_prompts: Optional[bool] = field(
+    wandb_log_unique_prompts: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
