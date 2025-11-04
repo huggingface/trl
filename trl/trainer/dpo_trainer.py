@@ -381,15 +381,15 @@ class DPOTrainer(BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Liger kernel
-        if args.use_liger_loss:
+        if args.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "You set `use_liger_loss=True` but the liger kernel is not available. "
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
             if args.loss_type not in ["sigmoid", "apo_zero", "apo_down", "sppo_hard", "nca_pair"]:
                 raise ValueError(
-                    "You set `use_liger_loss=True` but the loss type is not from `[sigmoid, apo_zero, apo_down, sppo_hard, nca_pair`. "
+                    "You set `use_liger_kernel=True` but the loss type is not from `[sigmoid, apo_zero, apo_down, sppo_hard, nca_pair`. "
                     "Please set `loss_type='[sigmoid | apo_zero | apo_down | sppo_hard | nca_pair]'` to use the liger kernel."
                 )
             self.dpo_loss_fn = LigerFusedLinearDPOLoss(
@@ -1733,7 +1733,7 @@ class DPOTrainer(BaseTrainer):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
-        if self.args.use_liger_loss:
+        if self.args.use_liger_kernel:
             model_output = self._compute_loss_liger(model, batch)
             losses = model_output["loss"]
             chosen_rewards = model_output["chosen_rewards"]

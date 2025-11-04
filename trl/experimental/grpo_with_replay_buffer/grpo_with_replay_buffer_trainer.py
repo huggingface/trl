@@ -18,7 +18,11 @@ from typing import Any
 import torch
 from accelerate.utils import gather_object
 
-from trl.data_utils import is_conversational
+from trl.data_utils import (
+    apply_chat_template,
+    is_conversational,
+    prepare_multimodal_messages,
+)
 from trl.trainer.grpo_trainer import GRPOTrainer
 from trl.trainer.utils import nanmax, nanmin, nanstd, pad
 
@@ -80,21 +84,36 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         if images is not None and all(img_list == [] for img_list in images):
             images = None
 
-        (
-            prompt_ids,
-            completion_ids,
-            prompt_mask,
-            completion_mask,
-            num_items_in_batch,
-            sampling_per_token_logps,
-            forward_kwargs,
-        ) = self._generate(prompts, images)
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            prompts = [prepare_multimodal_messages(prompt, image_list) for prompt, image_list in zip(prompts, images)]
 
-        # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
-        # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [
-            row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool(), strict=True)
-        ]
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
+            self._generate(prompts)
+        )
+
+        # Convert lists of token IDs to padded tensors
+        prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
+        completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
+        completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
+        if sampling_per_token_logps_list is not None:
+            sampling_per_token_logps = [torch.tensor(logps, device=device) for logps in sampling_per_token_logps_list]
+            sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
+        else:
+            sampling_per_token_logps = None
+
+        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        if self.mask_truncated_completions:
+            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -104,6 +123,25 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         num_images = [len(img_list) for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
 
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
@@ -173,6 +211,15 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         else:
             completions = completions_text
 
+        # Merge extra_fields from rollout_func into inputs for reward functions
+        if extra_fields:
+            for i, inp in enumerate(inputs):
+                for key, values in extra_fields.items():
+                    if isinstance(values, list) and i < len(values):
+                        inp[key] = values[i]
+                    elif not isinstance(values, list):
+                        inp[key] = values
+
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
@@ -187,7 +234,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
-        std_rewards = None
+
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
             std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
@@ -211,10 +258,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
-        if std_rewards is None:
-            std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-            std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_rewards = std_rewards[process_slice] if std_rewards is not None else None
+        std_rewards = std_rewards[process_slice]
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -308,7 +352,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if "token_type_ids" in forward_kwargs:
                 output["token_type_ids"] = forward_kwargs["token_type_ids"]
             if images is not None:
-                output["images"] = images
+                output["num_images"] = num_images
             return output
 
     def slice_group_data(

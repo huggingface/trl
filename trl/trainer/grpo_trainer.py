@@ -393,17 +393,17 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
-        self.use_liger_loss = args.use_liger_loss
+        self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_loss and self.top_entropy_quantile < 1.0:
+        if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-        if self.use_liger_loss and not self.importance_sampling_level == "token":
+        if self.use_liger_kernel and not self.importance_sampling_level == "token":
             raise NotImplementedError(
                 "Liger Kernels currently only support token-level importance sampling. Please set"
                 "`importance_sampling_level` to 'token'."
@@ -480,11 +480,29 @@ class GRPOTrainer(BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Cast LM Head To FP32
+        if args.cast_lm_head_to_fp32:
+            if not model.config.tie_word_embeddings:
+
+                def cast_inputs_to_fp32(module, input):
+                    return (input[0].float(),)
+
+                model.lm_head = model.lm_head.float()
+                model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+                if self.ref_model is not None:
+                    self.ref_model.lm_head = self.ref_model.lm_head.float()
+                    self.ref_model.lm_head.register_forward_pre_hook(cast_inputs_to_fp32)
+            else:
+                raise NotImplementedError(
+                    "`cast_lm_head_to_fp32=True` is only supported when the model has untied word embedding and language modeling head layers"
+                    "i.e. `tie_word_embeddings` in the model config is False."
+                )
+
         # Liger loss
-        if self.use_liger_loss:
+        if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
+                    "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
                 )
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
@@ -879,7 +897,6 @@ class GRPOTrainer(BaseTrainer):
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1301,6 +1318,8 @@ class GRPOTrainer(BaseTrainer):
                     unwrapped_model.to(torch.bfloat16)
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
+                if self.args.cast_lm_head_to_fp32:
+                    unwrapped_model.lm_head.to(torch.float32)
                 with torch.inference_mode():
                     # Continuous batching API expects 'inputs' arg only
                     all_outputs = unwrapped_model.generate_batch(
@@ -1724,7 +1743,7 @@ class GRPOTrainer(BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        if self.use_liger_loss:
+        if self.use_liger_kernel:
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
             return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)

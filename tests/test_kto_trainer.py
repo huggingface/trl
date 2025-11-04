@@ -360,11 +360,11 @@ class TestKTOTrainer(TrlTestCase):
 
     @require_liger_kernel
     def test_kto_trainer_with_liger(self):
-        """Test KTO trainer with Liger loss enabled."""
+        """Test KTO trainer with Liger kernel enabled."""
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            use_liger_loss=True,  # Enable Liger loss
+            use_liger_kernel=True,  # Enable Liger kernel
         )
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")

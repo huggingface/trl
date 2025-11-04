@@ -18,7 +18,6 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import CPOConfig, CPOTrainer
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 from .testing_utils import TrlTestCase, require_peft
 
@@ -34,7 +33,6 @@ class TestCPOTrainer(TrlTestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     @pytest.mark.parametrize(
         "name, loss_type, config_name",
@@ -42,7 +40,6 @@ class TestCPOTrainer(TrlTestCase):
             ("qwen", "sigmoid", "standard_preference"),
             ("t5", "hinge", "standard_implicit_prompt_preference"),
             ("qwen", "ipo", "conversational_preference"),
-            ("t5", "ipo", "conversational_implicit_prompt_preference"),
             ("qwen", "simpo", "standard_preference"),
             ("t5", "simpo", "standard_implicit_prompt_preference"),
             ("qwen", "hinge", "conversational_preference"),

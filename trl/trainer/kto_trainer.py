@@ -801,11 +801,11 @@ class KTOTrainer(BaseTrainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-        # Import Liger loss if enabled
-        if self.args.use_liger_loss:
+        # Import Liger kernel if enabled
+        if self.args.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "You set `use_liger_loss=True` but the liger kernel is not available. "
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
             if self.loss_type in ["apo_zero_unpaired"]:
@@ -820,7 +820,7 @@ class KTOTrainer(BaseTrainer):
                 )
             if self.is_peft_model or self.ref_adapter_name is not None:
                 raise ValueError(
-                    "You cannot use `use_liger_loss=True` with Peft models. Please set `use_liger_loss=False`."
+                    "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
                 )
             self.kto_loss_fn = LigerFusedLinearKTOLoss(
                 ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None)
@@ -1380,7 +1380,7 @@ class KTOTrainer(BaseTrainer):
         num_chosen = labels.sum().to(self.accelerator.device)
         num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
 
-        if self.args.use_liger_loss:
+        if self.args.use_liger_kernel:
             model_output = self._compute_loss_liger(model, batch)
             losses = model_output["loss"]
             policy_chosen_logits = model_output["chosen_logits_sum"]
