@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Simple script to run GRPO training with OpenEnv's Wordle environment and a vLLM server. 
+Simple script to run GRPO training with OpenEnv's Wordle environment and a vLLM server.
 
 Setup:
 
@@ -86,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-url",
-        default="https://0.0.0.0:8001", # default="https://burtenshaw-textarena.hf.space"
+        default="https://0.0.0.0:8001",  # default="https://burtenshaw-textarena.hf.space"
         help="Base URL for the TextArena Wordle environment.",
     )
     parser.add_argument(
