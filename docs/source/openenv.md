@@ -399,7 +399,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-### Running the Example
+### Running the Advanced Example
 
 The example requires two GPUs:
 
