@@ -80,6 +80,7 @@ You can run OpenEnv environments in three different ways:
    ```bash
    docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
     ```
+    ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
 2. **Local Python process**: launch the environment directly using Uvicorn:
    You can run the environment as a local process without Docker by starting the Uvicorn server manually:
    ```bash
