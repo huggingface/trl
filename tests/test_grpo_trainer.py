@@ -42,7 +42,7 @@ from trl.trainer.utils import get_kbit_device_map
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
-    require_flash_attn,
+    require_kernels,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
@@ -1980,7 +1980,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
         ],
     )
-    @require_flash_attn
+    @require_kernels
     @require_bitsandbytes
     @require_peft
     def test_vlm_training(self, model_name):

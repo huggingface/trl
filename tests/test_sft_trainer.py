@@ -33,7 +33,7 @@ from .testing_utils import (
     TrlTestCase,
     ignore_warnings,
     require_bitsandbytes,
-    require_flash_attn,
+    require_kernels,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
@@ -863,7 +863,7 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    @require_flash_attn
+    @require_kernels
     def test_train_padding_free(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
