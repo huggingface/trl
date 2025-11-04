@@ -83,7 +83,7 @@ You can run OpenEnv environments in three different ways:
     ```
     ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
 2. **Local Python process**: Launch the environment directly using Uvicorn.
-   You can run the environment as a local process without Docker by starting the Uvicorn server manually:
+   You can start the server manually as a local process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
    ```bash
    python -m uvicorn envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
    ```
@@ -187,16 +187,20 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
 ```
 
-Alternatively, you can manually start the Echo environment in a Docker container before running the training.
-In this case, initialize the client with
-`client = EchoEnv(base_url="http://0.0.0.0:8001")`
-instead of
-`client = EchoEnv.from_docker_image("echo-env:latest")`:
+Alternatively, you can manually start the Echo environment in a Docker container before running the training:
 
 ```bash
 # Launch the Echo environment
 docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
 ```
+
+Then, initialize the client using:
+
+`client = EchoEnv(base_url="http://0.0.0.0:8001")` 
+
+instead of:
+
+`client = EchoEnv.from_docker_image("echo-env:latest")`.
 
 Below is the reward curve from training:
 
