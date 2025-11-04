@@ -112,18 +112,6 @@ def masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = T
     return whitened
 
 
-class LengthSampler:
-    """
-    Samples a length
-    """
-
-    def __init__(self, min_value: int, max_value: int):
-        self.values = list(range(min_value, max_value))
-
-    def __call__(self) -> int:
-        return np.random.choice(self.values)
-
-
 # taken from https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/ppo/ppo_trainer.py#L29
 # we did this we can do a single `model = accelerator.prepare(model)`
 class PolicyAndValueWrapper(nn.Module):
