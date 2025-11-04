@@ -41,13 +41,6 @@ def parse_args():
         default="local",
         help="Where to run the environment: 'local', 'docker', or 'space'.",
     )
-    parser.add_argument(
-        "--space-url",
-        type=str,
-        default="https://sergiopaniego-openspiel-env.hf.space",
-        help="URL of the Hugging Face Space if using --env-mode space.",
-    )
-
     # --- Generation and model config ---
     parser.add_argument(
         "--gen-url",
@@ -209,7 +202,7 @@ def main():
         server_process = None
         print(f"🌍 Using existing Docker environment at {env_url}")
     elif args.env_mode == "space":
-        env_url = args.space_url
+        env_url = args.env_host
         server_process = None
         print(f"🚀 Using Hugging Face Space environment at {env_url}")
     else:
