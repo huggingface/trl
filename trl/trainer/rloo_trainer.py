@@ -57,7 +57,7 @@ from ..data_utils import (
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp, prepare_model, unwrap_model_for_generation
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
@@ -286,7 +286,7 @@ class RLOOTrainer(BaseTrainer):
         )
 
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
+            model = prepare_model(model, peft_config, args)
 
         # Processing class
         if processing_class is None:

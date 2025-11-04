@@ -598,7 +598,7 @@ class _SegmentTree:
     A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger
     value for a given input within the range [1, maxval].
 
-    See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
+    See [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830) for more details.
     """
 
     def __init__(self, maxval: int):

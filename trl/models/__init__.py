@@ -27,7 +27,7 @@ _import_structure = {
         "prepare_deepspeed",
         "prepare_fsdp",
         "prepare_model_for_kbit_training",
-        "prepare_peft_model",
+        "prepare_model",
         "setup_chat_format",
         "unwrap_model_for_generation",
     ],
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
         prepare_deepspeed,
         prepare_fsdp,
         prepare_model_for_kbit_training,
-        prepare_peft_model,
+        prepare_model,
         setup_chat_format,
         unwrap_model_for_generation,
     )

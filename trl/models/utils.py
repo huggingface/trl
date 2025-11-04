@@ -556,54 +556,38 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-def prepare_peft_model(
-    model: PreTrainedModel, peft_config: Optional["PeftConfig"], args: TrainingArguments
+def prepare_model(
+    model: PreTrainedModel, gradient_checkpointing: bool, gradient_checkpointing_kwargs: Optional[dict]
 ) -> PreTrainedModel:
-    """Prepares a model for PEFT training."""
-    if not is_peft_available():
-        raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
+    """Prepares a model."""
+    if gradient_checkpointing:
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+        if is_peft_available() and isinstance(model, PeftModel):
+            # When using PEFT + gradient checkpointing we need to make sure the input has requires_grad=True
+            # When training with PEFT, only LoRA layers will have requires_grad set to True, but the output of frozen
+            # layers need to propagate the gradients to make sure the gradient flows. That's why we need to enable
+            # input requires_grad.
+            model.enable_input_require_grads()
 
-    # If the model is already a PeftModel, we need to merge and unload it.
-    # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-    if isinstance(model, PeftModel) and peft_config is not None:
-        model = model.merge_and_unload()
-
-    # Handle quantized models (QLoRA)
+    # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
     is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
-    is_sharded_qlora = False
-    if getattr(model, "is_loaded_in_4bit", False):
-        # Check if model is sharded (FSDP/DS-Zero3)
-        for _, param in model.named_parameters():
-            if param.__class__.__name__ == "Params4bit":
-                is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
-                break
+    # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the original
+    # paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by passing
+    # `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for quantized models. 
+    # See: https://github.com/huggingface/peft/issues/2889
+    if is_qlora:
+        for param in model.parameters():
+            if param.requires_grad:
+                param.data = param.data.to(torch.bfloat16)
 
-    # Prepare model for kbit training if needed
-    if is_qlora and not is_sharded_qlora and not isinstance(model, PeftModel):
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.gradient_checkpointing,
-            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
-        )
-        # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-        args.gradient_checkpointing = False
-    elif args.gradient_checkpointing:
-        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
-
-    # Create PEFT model
-    if peft_config is not None:
-        if (
-            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
-            and getattr(model, "is_loaded_in_4bit", False)
-            and is_sharded_qlora
-        ):
-            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
-        else:
-            model = get_peft_model(model, peft_config)
-
-    # Handle bf16 casting for 4-bit models
-    if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
-        peft_module_casting_to_bf16(model)
+    # 
+    normalization_layers = (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d, nn.GroupNorm)
+    for name, param in model.named_parameters():
+        # Some normalization layers may not use one of the standard classes, example: Qwen uses input_layernorm as a nn.Parameter
+        if isinstance(param, normalization_layers):
+            param.data = param.data.to(torch.float32)
+        elif "layernorm" in name:
+            param.data = param.data.to(torch.float32)
 
     return model

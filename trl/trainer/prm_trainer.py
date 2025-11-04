@@ -36,7 +36,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..models import prepare_peft_model
+from ..models import prepare_model
 from .base_trainer import BaseTrainer
 from .prm_config import PRMConfig
 from .utils import compute_accuracy, disable_dropout_in_model
@@ -127,7 +127,7 @@ class PRMTrainer(BaseTrainer):
                 "TRL_EXPERIMENTAL_SILENCE=1."
             )
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
+            model = prepare_model(model, peft_config, args)
 
         # Disable dropout in the model
         if args.disable_dropout:

@@ -41,7 +41,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational
-from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
+from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_model
 from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
 from .utils import disable_dropout_in_model, get_config_model_id, pad, remove_none_values
@@ -355,7 +355,7 @@ class RewardTrainer(BaseTrainer):
                         peft_config.modules_to_save.append("lm_head")
 
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
+            model = prepare_model(model, peft_config, args)
 
         # Disable dropout in the model
         if args.disable_dropout:

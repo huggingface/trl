@@ -47,7 +47,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
     truncate_dataset,
 )
-from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
+from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_model
 from .base_trainer import BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
@@ -62,7 +62,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, PeftType
+    from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
 
 logger = logging.get_logger(__name__)
@@ -688,12 +688,22 @@ class SFTTrainer(BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
+        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+            # If the model is already a PeftModel, we need to merge and unload it.
+            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+            model = model.merge_and_unload()
+
+        # Create PEFT model
+        if peft_config is not None:
+            model = get_peft_model(model, peft_config)
+
+        model = prepare_model(model, args.gradient_checkpointing, args.gradient_checkpointing_kwargs)
+
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
         # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
         self.num_virtual_tokens = 0
 
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
             if model.active_adapter in model.peft_config:
                 peft_model_config = model.peft_config[model.active_adapter]
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
