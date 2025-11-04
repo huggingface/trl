@@ -14,7 +14,7 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -163,7 +163,7 @@ class OnlineDPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -172,13 +172,13 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
 
-    reward_model_path: Optional[str] = field(
+    reward_model_path: str | None = field(
         default=None,
         metadata={
             "help": "Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both."
         },
     )
-    judge: Optional[str] = field(
+    judge: str | None = field(
         default=None,
         metadata={
             "help": "Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both."
@@ -207,14 +207,14 @@ class OnlineDPOConfig(TrainingArguments):
             "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: Optional[int] = field(
+    top_k: int | None = field(
         default=None,
         metadata={
             "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
-    min_p: Optional[float] = field(
+    min_p: float | None = field(
         default=None,
         metadata={
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
@@ -229,7 +229,7 @@ class OnlineDPOConfig(TrainingArguments):
             "to repeat tokens."
         },
     )
-    generation_kwargs: Optional[dict] = field(
+    generation_kwargs: dict | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -246,11 +246,11 @@ class OnlineDPOConfig(TrainingArguments):
             "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
-    cache_implementation: Optional[str] = field(
+    cache_implementation: str | None = field(
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
-    missing_eos_penalty: Optional[float] = field(
+    missing_eos_penalty: float | None = field(
         default=None,
         metadata={
             "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
@@ -293,11 +293,11 @@ class OnlineDPOConfig(TrainingArguments):
             "model implementation."
         },
     )
-    vllm_guided_decoding_regex: Optional[str] = field(
+    vllm_guided_decoding_regex: str | None = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
-    vllm_gpu_memory_utilization: Optional[float] = field(
+    vllm_gpu_memory_utilization: float | None = field(
         default=0.55,
         metadata={
             "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
@@ -315,7 +315,7 @@ class OnlineDPOConfig(TrainingArguments):
             "contention with training.",
         },
     )
-    vllm_server_base_url: Optional[str] = field(
+    vllm_server_base_url: str | None = field(
         default=None,
         metadata={
             "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
@@ -354,14 +354,14 @@ class OnlineDPOConfig(TrainingArguments):
             "is not compatible with vLLM generation."
         },
     )
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
             "from a string."
         },
     )
-    reward_weights: Optional[list[float]] = field(
+    reward_weights: list[float] | None = field(
         default=None,
         metadata={
             "help": "Weights for combining multiple reward functions. Must match the number of reward functions. "
