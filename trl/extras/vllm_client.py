@@ -45,6 +45,13 @@ if is_vllm_available():
 logger = logging.getLogger(__name__)
 
 
+def pil_to_base64(image):
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    img_bytes = buffer.getvalue()
+    return base64.b64encode(img_bytes).decode("utf-8")
+
+
 class VLLMClient:
     """
     A client class to interact with a vLLM server.
@@ -230,12 +237,6 @@ class VLLMClient:
         """
         url = f"{self.base_url}/generate/"
 
-        def pil_to_base64(image):
-            buffer = BytesIO()
-            image.save(buffer, format="PNG")
-            img_bytes = buffer.getvalue()
-            return base64.b64encode(img_bytes).decode("utf-8")
-
         # Convert PIL images to base64 strings
         images = [pil_to_base64(img) for img in images] if images else None
 
@@ -254,6 +255,59 @@ class VLLMClient:
                 "truncate_prompt_tokens": truncate_prompt_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
                 "generation_kwargs": generation_kwargs or {},
+            },
+        )
+        if response.status_code == 200:
+            json_response = response.json()
+            return {
+                "prompt_ids": json_response["prompt_ids"],
+                "completion_ids": json_response["completion_ids"],
+                "logprobs": json_response["logprobs"],
+            }
+        else:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def chat(
+        self,
+        messages: list[list[dict]],
+        n: int = 1,
+        repetition_penalty: float = 1.0,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        max_tokens: int = 16,
+        truncate_prompt_tokens: int | None = None,
+        guided_decoding_regex: str | None = None,
+        generation_kwargs: dict | None = None,
+        chat_template_kwargs: dict | None = None,
+    ) -> list[list[int]]:
+        """ """
+        url = f"{self.base_url}/chat/"
+
+        # Convert PIL images to base64 strings
+        for message_list in messages:
+            for message in message_list:
+                if isinstance(message["content"], list):
+                    for part in message["content"]:
+                        if part["type"] == "image_pil":
+                            part["image_pil"] = pil_to_base64(part["image_pil"])
+
+        response = self.session.post(
+            url,
+            json={
+                "messages": messages,
+                "n": n,
+                "repetition_penalty": repetition_penalty,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "min_p": min_p,
+                "max_tokens": max_tokens,
+                "truncate_prompt_tokens": truncate_prompt_tokens,
+                "guided_decoding_regex": guided_decoding_regex,
+                "generation_kwargs": generation_kwargs or {},
+                "chat_template_kwargs": chat_template_kwargs or {},
             },
         )
         if response.status_code == 200:

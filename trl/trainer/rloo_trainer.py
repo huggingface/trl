@@ -1009,7 +1009,7 @@ class RLOOTrainer(BaseTrainer):
                     with profiling_context(self, "vLLM.generate"):
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                             output = self.vllm_client.chat(
-                                prompts=ordered_set_of_prompts,
+                                messages=ordered_set_of_prompts,
                                 **sampling_params,
                                 chat_template_kwargs=self.chat_template_kwargs,
                             )
