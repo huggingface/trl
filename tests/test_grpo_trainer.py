@@ -705,7 +705,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_cast_lm_head_to_fp32(self):
+    @pytest.mark.parametrize(
+        "model_name",
+        ["trl-internal-testing/tiny-Qwen3ForCausalLM", "trl-internal-testing/tiny-Gemma2ForCausalLM"],
+        # Gemma2 has the input word embeddings and lm_head tied, Qwen3 does not
+    )
+    def test_training_with_cast_lm_head_to_fp32(self, model_name):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -717,7 +722,7 @@ class TestGRPOTrainer(TrlTestCase):
             cast_lm_head_to_fp32=True,
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_name,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
