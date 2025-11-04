@@ -44,6 +44,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import is_peft_available, is_rich_available
+
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .base_trainer import BaseTrainer
@@ -75,7 +76,7 @@ if is_peft_available():
 INVALID_LOGPROB = 1.0
 
 
-def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: Optional[bool] = None) -> torch.Tensor:
+def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
     if axis is not None:
         return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
