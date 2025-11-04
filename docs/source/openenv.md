@@ -70,6 +70,7 @@ By using OpenEnv in this loop, you can:
 You can run OpenEnv environments in three different ways:
 
 1. **Local Docker container** *(recommended)*
+
    To start a Docker container:
    * Open the environment on the Hugging Face Hub.
    * Click the **⋮ (three dots)** menu.
@@ -81,12 +82,12 @@ You can run OpenEnv environments in three different ways:
    docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
     ```
     ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
-2. **Local Python process**: launch the environment directly using Uvicorn:
+2. **Local Python process**: Launch the environment directly using Uvicorn.
    You can run the environment as a local process without Docker by starting the Uvicorn server manually:
    ```bash
    python -m uvicorn envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
    ```
-3. **Hugging Face Spaces**: connect to a hosted environment running on the Hugging Face Hub.
+3. **Hugging Face Spaces**: Connect to a hosted environment running on the Hugging Face Hub.
    To find the connection URL, open the Space page, click the **⋮ (three dots)** menu, and select **“Embed this Space.”**
    You can then use that URL to connect directly from your client.
    Keep in mind that public Spaces may have rate limits or temporarily go offline if inactive.
