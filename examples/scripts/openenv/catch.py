@@ -12,6 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Simple script to run GRPO training with OpenEnv's Catch environment (OpenSpiel) and a vLLM server. The reward function
+is based on the catch game where the agent tries to catch falling balls.
+
+Setup:
+
+```sh
+uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+```
+
+Usage (2 GPUs required):
+
+# Spin up vLLM server
+
+```sh
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+```
+
+# Run training
+
+```sh
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/catch.py
+```
+"""
+
 # ruff: noqa: T201
 import argparse
 import os
