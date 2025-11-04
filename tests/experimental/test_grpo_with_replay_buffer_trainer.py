@@ -1,8 +1,21 @@
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import pytest
 import torch
 from datasets import load_dataset
 
-from trl import GRPOTrainer
 from trl.experimental.grpo_with_replay_buffer import (
     GRPOWithReplayBufferConfig,
     GRPOWithReplayBufferTrainer,
@@ -127,7 +140,7 @@ class TestUpdateWithReplayBuffer:
             "prompt_mask": torch.ones(4, 2, dtype=torch.long),
             "completion_ids": torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]]),
             "completion_mask": torch.ones(4, 2, dtype=torch.long),
-            "prompt_inputs": {"pixel_values": torch.randn(4, 3, 224, 224)} if with_pixels else {},
+            "forward_kwargs": {"pixel_values": torch.randn(4, 3, 224, 224)} if with_pixels else {},
             "old_per_token_logps": torch.randn(4, 2) if with_logprobs else None,
         }
         inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
@@ -204,7 +217,7 @@ class TestUpdateWithReplayBuffer:
                 ]
             ),
             "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1], [1, 1, 0], [1, 1, 1]], dtype=torch.long),
-            "prompt_inputs": {},
+            "forward_kwargs": {},
         }
         inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
 
@@ -264,7 +277,7 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
             replay_buffer_size=8,
             report_to="none",
         )
-        trainer = GRPOTrainer(
+        trainer = GRPOWithReplayBufferTrainer(
             model=model_id,
             reward_funcs=[custom_reward_func],
             args=training_args,

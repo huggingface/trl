@@ -12,15 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-MODELS_TO_TEST = [
-    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-]
 
-# We could have also not declared these variables but let's be verbose
-PACKING_OPTIONS = [True, False]
-GRADIENT_CHECKPOINTING_KWARGS = [None, {"use_reentrant": False}, {"use_reentrant": True}]
-DEVICE_MAP_OPTIONS = [{"": 0}, "auto"]
-
-DPO_LOSS_TYPES = ["sigmoid", "ipo"]
-DPO_PRECOMPUTE_LOGITS = [True, False]
+from .papo_config import PAPOConfig
+from .papo_trainer import PAPOTrainer

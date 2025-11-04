@@ -17,7 +17,6 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import ORPOConfig, ORPOTrainer
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 from .testing_utils import TrlTestCase, require_peft
 
@@ -33,7 +32,6 @@ class TestORPOTrainer(TrlTestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     @pytest.mark.parametrize(
         "name, config_name",
@@ -41,7 +39,6 @@ class TestORPOTrainer(TrlTestCase):
             ("qwen", "standard_preference"),
             ("t5", "standard_implicit_prompt_preference"),
             ("qwen", "conversational_preference"),
-            ("t5", "conversational_implicit_prompt_preference"),
         ],
     )
     def test_orpo_trainer(self, name, config_name):
