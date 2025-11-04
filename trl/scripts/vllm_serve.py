@@ -23,7 +23,6 @@ from io import BytesIO
 from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
-from typing import Optional
 
 import torch
 import torch.distributed.distributed_c10d as c10d
@@ -239,7 +238,7 @@ class ScriptArguments:
     model: str = field(
         metadata={"help": "Model name or path to load the model from."},
     )
-    revision: Optional[str] = field(
+    revision: str | None = field(
         default=None,
         metadata={"help": "Revision to use for the model. If not specified, the default branch will be used."},
     )
@@ -275,7 +274,7 @@ class ScriptArguments:
             "determined based on the model configuration. Find the supported values in the vLLM documentation."
         },
     )
-    max_model_len: Optional[int] = field(
+    max_model_len: int | None = field(
         default=None,
         metadata={
             "help": "If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced "
@@ -283,14 +282,14 @@ class ScriptArguments:
             "context size, which might be much larger than the KV cache, leading to inefficiencies."
         },
     )
-    enable_prefix_caching: Optional[bool] = field(
+    enable_prefix_caching: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the "
             "hardware support this feature."
         },
     )
-    enforce_eager: Optional[bool] = field(
+    enforce_eager: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
@@ -487,7 +486,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
-        images: Optional[list[str]] = None
+        images: list[str] | None = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -495,8 +494,8 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
-        truncate_prompt_tokens: Optional[int] = None
-        guided_decoding_regex: Optional[str] = None
+        truncate_prompt_tokens: int | None = None
+        guided_decoding_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
 
     class GenerateResponse(BaseModel):
@@ -559,7 +558,7 @@ def main(script_args: ScriptArguments):
         request.images = request.images or [None] * len(request.prompts)
 
         prompts = []
-        for prompt, image in zip(request.prompts, request.images):
+        for prompt, image in zip(request.prompts, request.images, strict=True):
             row = {"prompt": prompt}
             if image is not None:
                 row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
@@ -590,7 +589,7 @@ def main(script_args: ScriptArguments):
         chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
 
         # Send the prompts to each worker
-        for connection, prompts in zip(connections, chunked_prompts):
+        for connection, prompts in zip(connections, chunked_prompts, strict=True):
             # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
             # However, vLLM requires that we always send at least one prompt. So we send a placeholder prompt to comply
             # with vLLM's requirement, and we later ignore the result.
@@ -603,7 +602,7 @@ def main(script_args: ScriptArguments):
         all_outputs = [connection.recv() for connection in connections]
 
         # Handle empty prompts (see above)
-        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts) if prompts]
+        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
@@ -840,7 +839,7 @@ def main(script_args: ScriptArguments):
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
-def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None):
     if subparsers is not None:
         parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:
