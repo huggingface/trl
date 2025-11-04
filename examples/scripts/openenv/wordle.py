@@ -15,21 +15,26 @@
 """
 GRPO training for Wordle using TRL's `GRPOTrainer` and the TextArena OpenEnv environment.
 
-Usage:
-    # First, start the TextArena Wordle server (Docker or local):
-    TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 \
-        python -m src.envs.textarena_env.server.app
+This script supports two vLLM modes:
+- Server mode: Uses external vLLM server (requires 2 GPUs)
+- Colocate mode: Uses in-process async vLLM (requires 1 GPU, more memory efficient)
 
-    # Start the vLLM server with your model
+Usage:
+    # Option 1: Server mode (requires 2 GPUs)
+    # Terminal 1: Start vLLM inference server
     CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 
-    # Then run this training script:
-    CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
+    # Terminal 2: Run GRPO training
+    CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server
+
+    # Option 2: Colocate mode (single GPU, async vLLM)
+    CUDA_VISIBLE_DEVICES=0 python examples/scripts/openenv/wordle.py --vllm-mode colocate
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 from collections.abc import Iterable
@@ -39,8 +44,10 @@ from pathlib import Path
 import requests
 from datasets import Dataset
 from transformers import AutoTokenizer
+from vllm import SamplingParams
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.extras import AsyncVLLMColocateWrapper
 
 
 # Ensure src/ is on the path
@@ -195,15 +202,21 @@ def parse_args() -> argparse.Namespace:
         help="TrackIO space identifier.",
     )
     parser.add_argument(
+        "--vllm-mode",
+        choices=["server", "colocate"],
+        default="server",
+        help="vLLM mode: 'server' for external vLLM server, 'colocate' for in-process vLLM.",
+    )
+    parser.add_argument(
         "--vllm-endpoint",
         default=os.getenv("VLLM_ENDPOINT", "http://localhost:8000/generate/"),
-        help="Endpoint for the vLLM server.",
+        help="Endpoint for the vLLM server (only used when --vllm-mode=server).",
     )
     parser.add_argument(
         "--request-timeout",
         type=int,
         default=60,
-        help="Timeout (in seconds) for vLLM HTTP requests.",
+        help="Timeout (in seconds) for vLLM HTTP requests (only used when --vllm-mode=server).",
     )
     parser.add_argument(
         "--logging-steps",
@@ -306,6 +319,41 @@ def request_vllm_completion(
     }
 
 
+async def generate_with_vllm_colocate_async(
+    prompt: str,
+    tokenizer: AutoTokenizer,
+    async_vllm: AsyncVLLMColocateWrapper,
+    sampling_params: SamplingParams,
+) -> dict[str, list]:
+    """Generate completion using async vLLM colocate mode (in-process vLLM)."""
+    # Generate asynchronously
+    outputs = await async_vllm.generate_async(prompts=[prompt], sampling_params=sampling_params)
+    output = outputs[0]
+
+    # Extract prompt_ids
+    prompt_ids = output.prompt_token_ids
+
+    # Extract completion
+    completion_output = output.outputs[0]
+    completion_ids = completion_output.token_ids
+    completion_text = completion_output.text
+
+    # Extract logprobs
+    logprobs = []
+    if completion_output.logprobs:
+        for token_logprobs in completion_output.logprobs:
+            if token_logprobs:
+                # Get the logprob for the selected token
+                logprobs.append(list(token_logprobs.values())[0].logprob)
+
+    return {
+        "prompt_ids": prompt_ids,
+        "completion_ids": completion_ids,
+        "logprobs": logprobs,
+        "text": completion_text,
+    }
+
+
 def scale_repetition_score(previous_occurrences: int, max_occurrences: int) -> float:
     """Scale the repetition score based on the number of previous occurrences from 0 to 1"""
     if max_occurrences == 0:
@@ -313,13 +361,107 @@ def scale_repetition_score(previous_occurrences: int, max_occurrences: int) -> f
     return (max_occurrences - previous_occurrences) / max_occurrences
 
 
-def rollout_once(
+def rollout_once_sync(
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
     args: GRPOConfig,
     dataset_prompt: str,
     cli_args: argparse.Namespace,
     system_prompt: str,
+) -> dict[str, list]:
+    """Synchronous rollout for server mode using HTTP requests to vLLM."""
+    result = env.reset()
+    observation = result.observation
+
+    prompt_ids: list[int] = []
+    completion_ids: list[int] = []
+    logprobs: list[float] = []
+    raw_rewards: list[float] = []
+    green_scores: list[float] = []
+    yellow_scores: list[float] = []
+    repetition_scores: list[float] = []
+    correct_scores: list[float] = []
+    guess_counts: dict[str, int] = {}
+
+    for _turn in range(cli_args.max_turns):
+        if result.done:
+            break
+
+        base_prompt = observation.prompt or dataset_prompt
+        user_prompt = make_user_prompt(base_prompt, observation.messages)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+            enable_thinking=False,
+        )
+
+        # Use external vLLM server for server mode
+        vllm_result = request_vllm_completion(
+            prompt_text,
+            args,
+            endpoint=cli_args.vllm_endpoint,
+            timeout=cli_args.request_timeout,
+            fallback=cli_args,
+        )
+        prompt_ids.extend(vllm_result["prompt_ids"])
+        completion_ids.extend(vllm_result["completion_ids"])
+        logprobs.extend(vllm_result["logprobs"])
+        completion_text = vllm_result.get("text") or tokenizer.decode(
+            vllm_result["completion_ids"], skip_special_tokens=True
+        )
+        guess = extract_guess(completion_text)
+
+        result = env.step(TextArenaAction(message=guess))
+        raw_rewards.append(float(result.reward or 0.0))
+        observation = result.observation
+        correct_score = float(result.reward or 0.0)
+        feedback = extract_wordle_feedback(observation)
+
+        previous_occurrences = guess_counts.get(guess, 0)
+        repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
+        guess_counts[guess] = previous_occurrences + 1
+
+        if not feedback:
+            green_score = 0.0
+            yellow_score = 0.0
+        else:
+            green_count, yellow_count = extract_feedback_counts(feedback)
+            green_score = green_count / 5.0
+            yellow_score = yellow_count / 5.0
+
+        repetition_scores.append(repetition_score)
+        green_scores.append(green_score)
+        yellow_scores.append(yellow_score)
+        correct_scores.append(correct_score)
+
+    correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
+
+    return {
+        "prompt_ids": prompt_ids,
+        "completion_ids": completion_ids,
+        "logprobs": logprobs,
+        "raw_rewards": raw_rewards,
+        "correct_reward": correct_reward_value,
+        "green_reward": green_scores[-1] if green_scores else 0.0,
+        "yellow_reward": yellow_scores[-1] if yellow_scores else 0.0,
+        "repetition_reward": repetition_scores[-1] if repetition_scores else 0.0,
+    }
+
+
+async def rollout_once_async(
+    env: TextArenaEnv,
+    tokenizer: AutoTokenizer,
+    args: GRPOConfig,
+    dataset_prompt: str,
+    cli_args: argparse.Namespace,
+    system_prompt: str,
+    async_vllm: AsyncVLLMColocateWrapper,
+    sampling_params: SamplingParams,
 ) -> dict[str, list]:
     result = env.reset()
     observation = result.observation
@@ -353,13 +495,12 @@ def rollout_once(
             enable_thinking=False,
         )
 
-        # generate the completion from the model using vLLM
-        vllm_result = request_vllm_completion(
+        # generate the completion from the model using async vLLM
+        vllm_result = await generate_with_vllm_colocate_async(
             prompt_text,
-            args,
-            endpoint=cli_args.vllm_endpoint,
-            timeout=cli_args.request_timeout,
-            fallback=cli_args,
+            tokenizer,
+            async_vllm,
+            sampling_params,
         )
         prompt_ids.extend(vllm_result["prompt_ids"])
         completion_ids.extend(vllm_result["completion_ids"])
@@ -378,9 +519,9 @@ def rollout_once(
         feedback = extract_wordle_feedback(observation)
 
         # Update guess counts
-        previous_occurrences = guess_counts[guess]
+        previous_occurrences = guess_counts.get(guess, 0)
         repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
-        guess_counts[guess] += 1
+        guess_counts[guess] = previous_occurrences + 1
 
         # calculate custom reward signals from the feedback
         if not feedback:
@@ -416,13 +557,36 @@ def rollout_once(
 
 
 def rollout_func(
-    env: TextArenaEnv,
-    tokenizer: AutoTokenizer,
     prompts: list[str],
-    args: GRPOConfig,
-    cli_args: argparse.Namespace,
-    system_prompt: str,
+    args: GRPOConfig | None = None,
+    processing_class=None,
+    trainer=None,
 ) -> dict[str, list]:
+    """
+    Rollout function for GRPO training with environment interaction.
+
+    This function is called by GRPOTrainer to generate completions and compute rewards.
+    In colocate mode, it uses async vLLM generation for non-blocking inference.
+
+    Args:
+        prompts: List of prompts to generate from
+        args: GRPOConfig (unused, kept for compatibility)
+        processing_class: Tokenizer/processor (unused, kept for compatibility)
+        trainer: GRPOTrainer instance containing context and configuration
+
+    Returns:
+        Dictionary with prompt_ids, completion_ids, logprobs, and reward signals
+    """
+    # Extract context from trainer
+    if trainer is None:
+        raise ValueError("Trainer instance required for rollout_func")
+
+    env = trainer._rollout_context["env"]
+    tokenizer = trainer._rollout_context["tokenizer"]
+    cli_args = trainer._rollout_context["cli_args"]
+    system_prompt = trainer._rollout_context["system_prompt"]
+    trainer_args = trainer.args
+
     all_prompt_ids: list[list[int]] = []
     all_completion_ids: list[list[int]] = []
     all_logprobs: list[list[float]] = []
@@ -430,25 +594,71 @@ def rollout_func(
     green_rewards: list[float] = []
     yellow_rewards: list[float] = []
     repetition_rewards: list[float] = []
-    num_generations = args.num_generations or cli_args.num_generations
+    num_generations = trainer_args.num_generations or cli_args.num_generations
 
-    for _ in range(num_generations):
-        for prompt_text in prompts:
-            rollout_stats = rollout_once(
-                env=env,
-                tokenizer=tokenizer,
-                args=args,
-                dataset_prompt=prompt_text,
-                cli_args=cli_args,
-                system_prompt=system_prompt,
+    # Handle colocate mode with async vLLM
+    if cli_args.vllm_mode == "colocate":
+        # Check if vLLM is enabled
+        if not hasattr(trainer, "llm") or trainer.llm is None:
+            raise ValueError(
+                "vLLM is enabled but trainer.llm is None.\n"
+                "Ensure vllm_mode='colocate' is set in GRPOConfig"
             )
-            all_prompt_ids.append(rollout_stats["prompt_ids"])
-            all_completion_ids.append(rollout_stats["completion_ids"])
-            all_logprobs.append(rollout_stats["logprobs"])
-            correctness_rewards.append(rollout_stats["correct_reward"])
-            green_rewards.append(rollout_stats["green_reward"])
-            yellow_rewards.append(rollout_stats["yellow_reward"])
-            repetition_rewards.append(rollout_stats["repetition_reward"])
+
+        # Wrap vLLM instance for async usage
+        async_vllm = AsyncVLLMColocateWrapper(trainer.llm)
+
+        # Prepare sampling parameters for vLLM
+        sampling_params = SamplingParams(
+            temperature=trainer_args.temperature,
+            top_p=trainer_args.top_p if trainer_args.top_p is not None else 1.0,
+            top_k=trainer_args.top_k if trainer_args.top_k is not None else -1,
+            max_tokens=trainer_args.max_completion_length or cli_args.max_new_tokens,
+            logprobs=1,
+        )
+
+        # Run episodes using async vLLM
+        loop = asyncio.get_event_loop()
+        for _ in range(num_generations):
+            for prompt_text in prompts:
+                rollout_stats = loop.run_until_complete(
+                    rollout_once_async(
+                        env=env,
+                        tokenizer=tokenizer,
+                        args=trainer_args,
+                        dataset_prompt=prompt_text,
+                        cli_args=cli_args,
+                        system_prompt=system_prompt,
+                        async_vllm=async_vllm,
+                        sampling_params=sampling_params,
+                    )
+                )
+                all_prompt_ids.append(rollout_stats["prompt_ids"])
+                all_completion_ids.append(rollout_stats["completion_ids"])
+                all_logprobs.append(rollout_stats["logprobs"])
+                correctness_rewards.append(rollout_stats["correct_reward"])
+                green_rewards.append(rollout_stats["green_reward"])
+                yellow_rewards.append(rollout_stats["yellow_reward"])
+                repetition_rewards.append(rollout_stats["repetition_reward"])
+    else:
+        # Server mode - use synchronous HTTP requests
+        for _ in range(num_generations):
+            for prompt_text in prompts:
+                rollout_stats = rollout_once_sync(
+                    env=env,
+                    tokenizer=tokenizer,
+                    args=trainer_args,
+                    dataset_prompt=prompt_text,
+                    cli_args=cli_args,
+                    system_prompt=system_prompt,
+                )
+                all_prompt_ids.append(rollout_stats["prompt_ids"])
+                all_completion_ids.append(rollout_stats["completion_ids"])
+                all_logprobs.append(rollout_stats["logprobs"])
+                correctness_rewards.append(rollout_stats["correct_reward"])
+                green_rewards.append(rollout_stats["green_reward"])
+                yellow_rewards.append(rollout_stats["yellow_reward"])
+                repetition_rewards.append(rollout_stats["repetition_reward"])
 
     return {
         "prompt_ids": all_prompt_ids,
@@ -515,9 +725,13 @@ def main() -> None:
     default_output_dir = Path("outputs") / f"wordle-grpo-{sanitize_name(cli_args.model_id)}-{timestamp}"
     output_dir = Path(cli_args.output_dir or default_output_dir)
 
+    # Configure vLLM based on mode
+    use_vllm = cli_args.vllm_mode in ["server", "colocate"]
+
     grpo_config = GRPOConfig(
-        vllm_mode="server",
-        use_vllm=True,
+        vllm_mode=cli_args.vllm_mode,
+        use_vllm=use_vllm,
+        vllm_gpu_memory_utilization=0.5 if cli_args.vllm_mode == "colocate" else 0.9,
         output_dir=str(output_dir),
         num_train_epochs=cli_args.num_epochs,
         learning_rate=cli_args.learning_rate,
@@ -527,25 +741,21 @@ def main() -> None:
         warmup_steps=cli_args.warmup_steps,
         num_generations=cli_args.num_generations,
         max_completion_length=cli_args.max_new_tokens,
+        # Set max_prompt_length for vLLM max_model_len calculation
+        max_prompt_length=1400,  # Allow for Wordle prompts (~1296 tokens observed)
         logging_steps=cli_args.logging_steps,
         save_strategy="steps",
         save_steps=cli_args.save_interval,
         save_total_limit=cli_args.save_total_limit,
+        # Memory optimization
+        bf16=True,  # Use bfloat16 for memory efficiency
+        gradient_checkpointing=True,  # Enable gradient checkpointing to reduce memory
+        gradient_checkpointing_kwargs={"use_reentrant": False},  # Use non-reentrant checkpointing
     )
 
     grpo_config.run_name = cli_args.run_name or f"run-{timestamp}"
     grpo_config.project = cli_args.project or f"group-{sanitize_name(cli_args.model_id)}"
     grpo_config.trackio_space_id = cli_args.trackio_space_id
-
-    def wrapped_rollout(prompts: list[str], args: GRPOConfig, processing_class) -> dict[str, list]:
-        return rollout_func(
-            env=env,
-            tokenizer=tokenizer,
-            prompts=prompts,
-            args=args,
-            cli_args=cli_args,
-            system_prompt=system_prompt,
-        )
 
     trainer = GRPOTrainer(
         model=cli_args.model_id,
@@ -558,11 +768,20 @@ def main() -> None:
         ],
         train_dataset=dataset,
         args=grpo_config,
-        rollout_func=wrapped_rollout,
+        rollout_func=rollout_func,
     )
+
+    # Store context in trainer for rollout_func to access
+    trainer._rollout_context = {
+        "env": env,
+        "tokenizer": tokenizer,
+        "cli_args": cli_args,
+        "system_prompt": system_prompt,
+    }
 
     print("Starting GRPO training with Wordle environment...")
     print(f"Using {cli_args.num_generations} rollouts per dataset prompt")
+    print(f"vLLM mode: {cli_args.vllm_mode}")
 
     try:
         trainer.train()
