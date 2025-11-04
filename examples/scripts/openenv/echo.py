@@ -24,6 +24,11 @@ uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 
 Usage (2 GPUs required):
 
+# Start the docker container for the Echo environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
+```sh
+docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+```
+
 # Spin up server
 
 ```sh
@@ -61,7 +66,7 @@ def parse_args():
     parser.add_argument(
         "--env-mode",
         choices=["local", "docker", "space"],
-        default="local",
+        default="docker",
         help="Where to run the Echo environment: 'local' to launch it, 'docker' if already running, or 'space' to use a remote Space URL.",
     )
     parser.add_argument(

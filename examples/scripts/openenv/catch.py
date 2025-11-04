@@ -24,6 +24,11 @@ uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 
 Usage (2 GPUs required):
 
+# Start the docker container for the Catch environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
+```sh
+docker run -d -p 8001:8001 registry.hf.space/openenv-openspiel-env:latest
+```
+
 # Spin up vLLM server
 
 ```sh
@@ -63,7 +68,7 @@ def parse_args():
     parser.add_argument(
         "--env-mode",
         choices=["local", "docker", "space"],
-        default="local",
+        default="docker",
         help="Where to run the environment: 'local', 'docker', or 'space'.",
     )
     # --- Generation and model config ---
