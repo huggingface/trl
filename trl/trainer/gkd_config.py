@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -77,14 +77,14 @@ class GKDConfig(SFTConfig):
         default=128,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
-    teacher_model_name_or_path: Optional[str] = field(
+    teacher_model_name_or_path: str | None = field(
         default=None,
         metadata={
             "help": "Model name or path of the teacher model. If `None`, the teacher model will be the same as the "
             "model being trained."
         },
     )
-    teacher_model_init_kwargs: Optional[dict[str, Any]] = field(
+    teacher_model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "

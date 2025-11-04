@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
-
 import numpy as np
 import torch
 from accelerate import logging
@@ -22,7 +20,7 @@ from accelerate import logging
 logger = logging.get_logger(__name__)
 
 
-def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: Optional[bool] = None) -> torch.Tensor:
+def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
     if axis is not None:
         return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
