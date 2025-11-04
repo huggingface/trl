@@ -55,6 +55,7 @@ from transformers.utils import (
 )
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..experimental.judges import BasePairwiseJudge
 from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
@@ -66,7 +67,6 @@ from ..models import (
     unwrap_model_for_generation,
 )
 from .base_trainer import BaseTrainer
-from ..experimental.judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
