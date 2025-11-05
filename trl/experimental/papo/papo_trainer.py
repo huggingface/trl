@@ -14,7 +14,6 @@
 
 import random
 import textwrap
-from typing import Optional, Union
 
 import torch
 from datasets import Dataset, IterableDataset
@@ -114,13 +113,13 @@ class PAPOTrainer(GRPOTrainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
-        reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: Optional[PAPOConfig] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
+        model: str | PreTrainedModel,
+        reward_funcs: RewardFunc | list[RewardFunc],
+        args: PAPOConfig | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks=None,
         optimizers=(None, None),
         peft_config=None,

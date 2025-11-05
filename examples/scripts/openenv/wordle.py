@@ -32,7 +32,7 @@ docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
 # Spin up vLLM server
 
 ```sh
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
 ```
 
 # Run training
@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model-id",
-        default="willcb/Qwen3-1.7B-Wordle",
+        default="Qwen/Qwen3-1.7B",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
     parser.add_argument(
