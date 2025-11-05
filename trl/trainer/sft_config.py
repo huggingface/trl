@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -119,7 +119,7 @@ class SFTConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -129,7 +129,7 @@ class SFTConfig(TrainingArguments):
     )
 
     # Parameters that control the model
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
@@ -138,7 +138,7 @@ class SFTConfig(TrainingArguments):
             "in this dictionary."
         },
     )
-    chat_template_path: Optional[str] = field(
+    chat_template_path: str | None = field(
         default=None,
         metadata={
             "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
@@ -153,7 +153,7 @@ class SFTConfig(TrainingArguments):
         default="text",
         metadata={"help": "Name of the column that contains text data in the dataset."},
     )
-    dataset_kwargs: Optional[dict[str, Any]] = field(
+    dataset_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
@@ -162,24 +162,24 @@ class SFTConfig(TrainingArguments):
             "since preprocessing is done on the fly."
         },
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    eos_token: Optional[str] = field(
+    eos_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
         },
     )
-    pad_token: Optional[str] = field(
+    pad_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
             "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
@@ -211,17 +211,17 @@ class SFTConfig(TrainingArguments):
             "value of this parameter."
         },
     )
-    pad_to_multiple_of: Optional[int] = field(
+    pad_to_multiple_of: int | None = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
-    eval_packing: Optional[bool] = field(
+    eval_packing: bool | None = field(
         default=None,
         metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
     )
 
     # Parameters that control the training
-    completion_only_loss: Optional[bool] = field(
+    completion_only_loss: bool | None = field(
         default=None,
         metadata={
             "help": (
