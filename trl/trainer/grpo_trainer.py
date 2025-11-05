@@ -1165,8 +1165,12 @@ class GRPOTrainer(BaseTrainer):
                     # prompt individually.
                     # Determine num_generations based on mode
                     mode = "train" if self.model.training else "eval"
-                    num_gens = self.num_generations_eval if mode == "eval" and self.num_generations_eval is not None else self.num_generations
-                    ordered_set_of_prompts = all_prompts[:: num_gens]
+                    num_gens = (
+                        self.num_generations_eval
+                        if mode == "eval" and self.num_generations_eval is not None
+                        else self.num_generations
+                    )
+                    ordered_set_of_prompts = all_prompts[::num_gens]
 
                     sampling_params = {
                         "n": num_gens,
@@ -1218,10 +1222,13 @@ class GRPOTrainer(BaseTrainer):
 
                 # Determine repeat count based on mode
                 mode = "train" if self.model.training else "eval"
-                num_gens = self.num_generations_eval if mode == "eval" and self.num_generations_eval is not None else self.num_generations
+                num_gens = (
+                    self.num_generations_eval
+                    if mode == "eval" and self.num_generations_eval is not None
+                    else self.num_generations
+                )
                 # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
                 all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_gens)]
-                
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
