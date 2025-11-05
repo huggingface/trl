@@ -568,7 +568,7 @@ accelerate launch \
 ### Configuration Tips
 
 > [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`GRPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`GRPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
 >
 > ```python
 > GRPOConfig(max_length=None, ...)
