@@ -1190,9 +1190,8 @@ class GRPOTrainer(BaseTrainer):
                             )
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                                # FIXME: this endpoint doesn't exist in vllm_client
                                 output = self.vllm_client.chat(
-                                    prompts=ordered_set_of_prompts,
+                                    messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
                                 )
