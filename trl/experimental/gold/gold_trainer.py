@@ -17,8 +17,9 @@ import random
 import textwrap
 import warnings
 from collections import defaultdict, deque
+from collections.abc import Callable
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
@@ -59,6 +60,7 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
+    pad,
 )
 from .gold_config import GOLDConfig
 
@@ -169,62 +171,58 @@ def build_teacher_inputs_from_texts(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
     """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss."""
 
-    teacher_prompts = tokenizer(
-        prompt_texts,
-        return_tensors="pt",
-        padding="longest",
-        truncation=True,
-        add_special_tokens=True,
-    )
-    teacher_completions = tokenizer(
-        completion_texts,
-        return_tensors="pt",
-        padding="longest",
-        truncation=True,
-        add_special_tokens=False,
-    )
-
-    teacher_input_ids = torch.cat([teacher_prompts["input_ids"], teacher_completions["input_ids"]], dim=1).long()
-
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
 
-    if eos_token_id is not None:
-        batch_size = teacher_input_ids.size(0)
-        for row in range(batch_size):
-            non_pad_mask = (
-                teacher_input_ids[row] != pad_token_id
-                if pad_token_id is not None
-                else torch.ones_like(teacher_input_ids[row], dtype=torch.bool)
-            )
-            if non_pad_mask.any():
-                last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
-                if teacher_input_ids[row, last_token_idx] != eos_token_id:
-                    if last_token_idx + 1 < teacher_input_ids.size(1):
-                        teacher_input_ids[row, last_token_idx + 1] = eos_token_id
-                    else:
-                        teacher_input_ids[row, last_token_idx] = eos_token_id
+    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
+    completion_token_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
 
-    teacher_attention_mask = torch.cat(
-        [teacher_prompts["attention_mask"], teacher_completions["attention_mask"]], dim=1
-    ).bool()
+    sequences: list[torch.Tensor] = []
+    attention_masks: list[torch.Tensor] = []
+    labels_list: list[torch.Tensor] = []
+    prompt_lengths: list[int] = []
+
+    for prompt_ids, completion_ids in zip(prompt_token_ids, completion_token_ids, strict=True):
+        # Remove trailing EOS from prompt so completions can extend cleanly
+        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+            prompt_ids = prompt_ids[:-1]
+
+        prompt_lengths.append(len(prompt_ids))
+        sequence = list(prompt_ids)
+        sequence.extend(completion_ids)
+        if eos_token_id is not None:
+            sequence.append(eos_token_id)
+
+        seq_tensor = torch.tensor(sequence, dtype=torch.long)
+        sequences.append(seq_tensor)
+        attention_masks.append(torch.ones_like(seq_tensor))
+
+        labels = seq_tensor.clone()
+        labels[: len(prompt_ids)] = -100
+        if pad_token_id is not None:
+            labels[labels == pad_token_id] = -100
+        labels_list.append(labels)
+
+    teacher_input_ids = pad(
+        sequences,
+        padding_side="right",
+        padding_value=pad_token_id if pad_token_id is not None else 0,
+    )
+    teacher_attention_mask = pad(attention_masks, padding_side="right", padding_value=0).bool()
+    teacher_labels = pad(labels_list, padding_side="right", padding_value=-100)
 
     if eos_token_id is not None:
         for row in range(teacher_attention_mask.size(0)):
-            non_pad_mask = (
-                teacher_input_ids[row] != pad_token_id if pad_token_id is not None else teacher_attention_mask[row]
+            valid = (
+                teacher_input_ids[row] != pad_token_id
+                if pad_token_id is not None
+                else teacher_attention_mask[row].bool()
             )
-            if non_pad_mask.any():
-                last_token_idx = non_pad_mask.nonzero(as_tuple=True)[0][-1]
-                teacher_attention_mask[row, : last_token_idx + 1] = True
-                if last_token_idx + 1 < teacher_attention_mask.size(1):
-                    teacher_attention_mask[row, last_token_idx + 1 :] = False
+            if valid.any():
+                last_idx = valid.nonzero(as_tuple=True)[0][-1]
+                teacher_attention_mask[row, last_idx + 1 :] = False
 
-    teacher_prompt_length = teacher_prompts["input_ids"].shape[1]
-    teacher_labels = teacher_input_ids.clone()
-    teacher_labels[:, :teacher_prompt_length] = -100
-    if pad_token_id is not None:
-        teacher_labels[teacher_input_ids == pad_token_id] = -100
+    teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
 
     return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
 
@@ -729,7 +727,7 @@ class GOLDTrainer(SFTTrainer):
         "citation": textwrap.dedent("""\
             @misc{patino2025unlocking,
                 title        = {{Unlocking On-Policy Distillation for Any Model Family}},
-                author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
+                author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Thibaud Frere and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
                 year         = 2025,
                 url          = {https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation},
             }"""),
@@ -737,19 +735,21 @@ class GOLDTrainer(SFTTrainer):
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        teacher_model: Union[PreTrainedModel, nn.Module, str] = None,
-        args: Optional[GOLDConfig] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        model: PreTrainedModel | nn.Module | str | None = None,
+        teacher_model: PreTrainedModel | nn.Module | str = None,
+        args: GOLDConfig | None = None,
+        data_collator: DataCollator | None = None,  # type: ignore
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
@@ -989,13 +989,13 @@ class GOLDTrainer(SFTTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args,
         packing: bool,
-        formatting_func: Optional[Callable[[dict], str]],
+        formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         """
         Override dataset preparation to preserve original text for cross-tokenizer distillation and ensure
         attention_mask is always added for DataCollatorForChatML compatibility.
@@ -1018,13 +1018,13 @@ class GOLDTrainer(SFTTrainer):
 
     def _prepare_dataset_with_original_text(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args,
         packing: bool,
-        formatting_func: Optional[Callable[[dict], str]],
+        formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         """
         Prepare dataset while preserving original text for cross-tokenizer distillation.
         """
@@ -1288,14 +1288,13 @@ class GOLDTrainer(SFTTrainer):
             loss: Scalar tensor with the generalized JSD loss
         """
 
-        # Apply temperature scaling
-        student_logits = student_logits / temperature
-        teacher_logits = teacher_logits / temperature
-
         if logits_are_probs:
             student_log_probs = torch.log(student_logits.clamp_min(1e-8))
             teacher_log_probs = torch.log(teacher_logits.clamp_min(1e-8))
         else:
+            # Apply temperature scaling to logits before computing probabilities
+            student_logits = student_logits / temperature
+            teacher_logits = teacher_logits / temperature
             # Compute log probabilities for student and probabilities for teacher
             student_log_probs = F.log_softmax(student_logits, dim=-1)
             teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
@@ -1341,7 +1340,7 @@ class GOLDTrainer(SFTTrainer):
             if "original_prompt_text" in inputs and "original_completion_text" in inputs:
                 prompt_texts = inputs["original_prompt_text"]
                 completion_texts = inputs["original_completion_text"]
-                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts)]
+                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts, strict=True)]
             else:
                 # Fallback: decode student input_ids (current approach)
                 # WARNING: This may not work perfectly for cross-tokenizer distillation
@@ -1351,7 +1350,9 @@ class GOLDTrainer(SFTTrainer):
                 # Try to split prompt/completion using original prompt length
                 prompt_lengths = inputs["prompts"].shape[1]
                 prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                completion_texts = [full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts)]
+                completion_texts = [
+                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
+                ]
 
             (
                 teacher_input_ids,
@@ -1891,7 +1892,7 @@ class GOLDTrainer(SFTTrainer):
 
     @profiling_decorator
     def training_step(
-        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
         """
         Perform a training step for the General Online Logit Distillation (GOLD) model.
@@ -1944,7 +1945,7 @@ class GOLDTrainer(SFTTrainer):
             self._off_policy_step_equiv += step_equiv
         return loss
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 

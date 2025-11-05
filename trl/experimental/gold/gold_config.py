@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -22,7 +22,7 @@ from ...trainer.sft_config import SFTConfig
 
 @dataclass
 class GOLDConfig(SFTConfig):
-    """s
+    r"""
     Configuration class for [`GOLDTrainer`].
 
     This class includes only the parameters that are specific to GOLD training. For a full list of training arguments,
@@ -143,21 +143,21 @@ class GOLDConfig(SFTConfig):
             "help": "Revision of the student model to use. If not specified, the default revision of the model will be used."
         },
     )
-    teacher_model_name_or_path: Optional[str] = field(
+    teacher_model_name_or_path: str | None = field(
         default=None,
         metadata={
             "help": "Model name or path of the teacher model. If `None`, the teacher model will be the same as the "
             "model being trained."
         },
     )
-    teacher_model_init_kwargs: Optional[dict[str, Any]] = field(
+    teacher_model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
             "teacher model from a string."
         },
     )
-    teacher_tokenizer_name_or_path: Optional[str] = field(
+    teacher_tokenizer_name_or_path: str | None = field(
         default=None,
         metadata={
             "help": "Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same "
@@ -175,7 +175,7 @@ class GOLDConfig(SFTConfig):
             "FT on teacher-generated output)."
         },
     )
-    steps_per_generation: Optional[int] = field(
+    steps_per_generation: int | None = field(
         default=None,
         metadata={
             "help": "Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps."
@@ -209,7 +209,7 @@ class GOLDConfig(SFTConfig):
             )
         },
     )
-    uld_hybrid_matched_weight: Optional[float] = field(
+    uld_hybrid_matched_weight: float | None = field(
         default=None,
         metadata={
             "help": (
@@ -220,7 +220,7 @@ class GOLDConfig(SFTConfig):
             )
         },
     )
-    uld_hybrid_unmatched_weight: Optional[float] = field(
+    uld_hybrid_unmatched_weight: float | None = field(
         default=None,
         metadata={
             "help": (
@@ -300,7 +300,7 @@ class GOLDConfig(SFTConfig):
         default=1,
         metadata={"help": 'Tensor parallel size for the colocated vLLM engine when `vllm_mode="colocate"`.'},
     )
-    vllm_guided_decoding_regex: Optional[str] = field(
+    vllm_guided_decoding_regex: str | None = field(
         default=None,
         metadata={"help": "Regex pattern used for vLLM guided decoding (optional)."},
     )
@@ -331,19 +331,19 @@ class GOLDConfig(SFTConfig):
             "set to `True`."
         },
     )
-    num_completions_to_print: Optional[int] = field(
+    num_completions_to_print: int | None = field(
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_entity: Optional[str] = field(
+    wandb_entity: str | None = field(
         default=None,
         metadata={"help": ("The entity to store runs under.")},
     )
-    wandb_project: Optional[str] = field(
+    wandb_project: str | None = field(
         default=None,
         metadata={"help": ("The project to store runs under.")},
     )
-    wandb_run_group: Optional[str] = field(
+    wandb_run_group: str | None = field(
         default=None,
         metadata={"help": ("The group to store runs under.")},
     )
@@ -357,7 +357,7 @@ class GOLDConfig(SFTConfig):
         default_factory=lambda: [],
         metadata={"help": "The callbacks to run during training."},
     )
-    hub_model_revision: Optional[str] = field(
+    hub_model_revision: str | None = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}
     )
     num_completions_to_print: int = field(default=5, metadata={"help": "Number of completions to print."})
