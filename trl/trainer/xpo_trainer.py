@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import textwrap
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 import jinja2
 import torch
@@ -57,25 +58,26 @@ class XPOTrainer(OnlineDPOTrainer):
     It is implemented as a subclass of [`OnlineDPOTrainer`].
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model (`PreTrainedModelWrapper`):
+        ref_model ([`PreTrainedModelWrapper`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        reward_funcs (`transformers.PreTrainedModel`):
-            The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
-        judge (`BasePairwiseJudge`):
+        reward_funcs ([`~transformers.PreTrainedModel`]):
+            The reward model to score completions with, preferably an
+            [`~transformers.AutoModelForSequenceClassification`].
+        judge ([`BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
-        args (`XPOConfig`):
+        args ([`XPOConfig`]):
             The XPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
@@ -92,14 +94,6 @@ class XPOTrainer(OnlineDPOTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-
-        reward_model:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "xpo"]
@@ -119,32 +113,31 @@ class XPOTrainer(OnlineDPOTrainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_funcs: Optional[nn.Module] = None,
-        judge: Optional[BasePairwiseJudge] = None,
-        args: Optional[XPOConfig] = None,
-        data_collator: Optional[Callable] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
-        peft_config: Optional[dict] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        model: PreTrainedModel | nn.Module = None,
+        ref_model: PreTrainedModel | nn.Module = None,
+        reward_funcs: nn.Module | None = None,
+        judge: BasePairwiseJudge | None = None,
+        args: XPOConfig | None = None,
+        data_collator: Callable | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
+        peft_config: dict | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        # Deprecated parameters
-        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
         super().__init__(
             model=model,
             ref_model=ref_model,
             judge=judge,
             reward_funcs=reward_funcs,
-            reward_model=reward_model,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
@@ -297,7 +290,7 @@ class XPOTrainer(OnlineDPOTrainer):
 
         ranks_of_first_completion = self.judge.judge(
             prompts,
-            list(zip(model_data_completions, ref_data_completions)),
+            list(zip(model_data_completions, ref_data_completions, strict=True)),
         )
         # convert ranks to a True/False mask:
         # when rank == 0, it means the first completion is the best
@@ -460,7 +453,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["beta"].append(self.beta)
 
     def training_step(
-        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
         model.train()
 

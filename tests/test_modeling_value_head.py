@@ -18,7 +18,6 @@ import pytest
 import torch
 import transformers
 from packaging import version
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
@@ -304,7 +303,7 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
             # Check if v head of the model has the same dropout as the config
             assert model.v_head.dropout.p == 0.5
 
-    @parameterized.expand(ALL_CAUSAL_LM_MODELS)
+    @pytest.mark.parametrize("model_name", ALL_CAUSAL_LM_MODELS)
     def test_generate(self, model_name):
         r"""
         Test if `generate` works for every model
@@ -436,7 +435,7 @@ class TestSeq2SeqValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
             # Check if v head of the model has the same dropout as the config
             assert model.v_head.dropout.p == 0.5
 
-    @parameterized.expand(ALL_SEQ2SEQ_MODELS)
+    @pytest.mark.parametrize("model_name", ALL_SEQ2SEQ_MODELS)
     def test_generate(self, model_name):
         r"""
         Test if `generate` works for every model

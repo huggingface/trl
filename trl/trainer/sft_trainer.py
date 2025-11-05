@@ -15,9 +15,10 @@
 import contextlib
 import os
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -54,6 +55,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    get_config_model_id,
     pad,
     remove_none_values,
     selective_log_softmax,
@@ -61,7 +63,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig, PeftModel, PeftType
 
 
 logger = logging.get_logger(__name__)
@@ -76,7 +78,7 @@ FLASH_ATTENTION_VARIANTS = {
 }
 
 
-def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
@@ -151,7 +153,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     pad_token_id: int
     completion_only_loss: bool = True
     padding_free: bool = False
-    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -273,9 +275,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
 
     Args:
-        processor (`ProcessorMixin`):
-            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin` and
-            include a `tokenizer` with a defined `pad_token_id`.
+        processor ([`~transformers.ProcessorMixin`]):
+            The processor used to tokenize text and process images. It must be a subclass of
+            [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         completion_only_loss (`bool`, *optional*, defaults to `False`):
@@ -328,9 +330,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     """
 
     processor: ProcessorMixin
-    max_length: Optional[int] = None
+    max_length: int | None = None
     completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
-    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of: int | None = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
 
@@ -348,11 +350,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
 
         if "messages" in examples[0]:  # conversational case
-            for example in examples:
-                prepare_multimodal_messages(example["messages"], len(example["images"]))
-            messages = [example["messages"] for example in examples]
+            messages = [prepare_multimodal_messages(example["messages"], example["images"]) for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
@@ -388,9 +391,13 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "prompt-completion data yet."
             )
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["completion"] = prepare_multimodal_messages(example["completion"], images=[])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
@@ -418,15 +425,26 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+        if "token_type_ids" in processed_prompts:  # special case for Gemma
+            prompt_token_type_ids = processed_prompts["token_type_ids"]
+            completion_token_type_ids = processed_completions["token_type_ids"]
+            token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
 
         # Flush left to reduce padding
-        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+        if "token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids
+            )
+        else:
+            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
         # Truncate if necessary
         if self.max_length is not None:
             input_ids = input_ids[:, : self.max_length]
             attention_mask = attention_mask[:, : self.max_length]
             completion_mask = completion_mask[:, : self.max_length]
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = token_type_ids[:, : self.max_length]
 
         # Create labels and mask padding tokens
         labels = input_ids.clone()
@@ -439,6 +457,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         output["input_ids"] = input_ids
         output["attention_mask"] = attention_mask
         output["labels"] = labels
+        if "token_type_ids" in processed_prompts:
+            output["token_type_ids"] = token_type_ids
         return output
 
 
@@ -478,7 +498,7 @@ class SFTTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -504,7 +524,7 @@ class SFTTrainer(BaseTrainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -528,7 +548,7 @@ class SFTTrainer(BaseTrainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
         optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
@@ -555,24 +575,24 @@ class SFTTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
-        args: Optional[Union[SFTConfig, TrainingArguments]] = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        compute_loss_func: Optional[Callable] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Callable[[dict], str]] = None,
+        model: str | PreTrainedModel,
+        args: SFTConfig | TrainingArguments | None = None,
+        data_collator: DataCollator | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        compute_loss_func: Callable | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: "PeftConfig | None" = None,
+        formatting_func: Callable[[dict], str] | None = None,
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
@@ -590,11 +610,10 @@ class SFTTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -851,13 +870,13 @@ class SFTTrainer(BaseTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args: SFTConfig,
         packing: bool,
-        formatting_func: Optional[Callable[[dict], str]],
+        formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
         # sampled data.
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
@@ -932,10 +951,13 @@ class SFTTrainer(BaseTrainer):
                         output = {}
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["prompt"], num_images=0)
-                                prepare_multimodal_messages(example["completion"], num_images=0)
+                                prompt = prepare_multimodal_messages(example["prompt"], images=[])
+                                completion = prepare_multimodal_messages(example["completion"], images=[])
+                            else:
+                                prompt = example["prompt"]
+                                completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"],
+                                prompt,
                                 tokenize=True,
                                 add_generation_prompt=True,
                                 tools=example.get("tools"),
@@ -945,7 +967,7 @@ class SFTTrainer(BaseTrainer):
                             # even for single examples, while for LLMs it returns lists of ints.
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"],
+                                prompt + completion,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -983,9 +1005,11 @@ class SFTTrainer(BaseTrainer):
                     else:  # language modeling case
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["messages"], num_images=0)
+                                messages = prepare_multimodal_messages(example["messages"], images=[])
+                            else:
+                                messages = example["messages"]
                             processed = processing_class.apply_chat_template(
-                                example["messages"],
+                                messages,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1061,9 +1085,9 @@ class SFTTrainer(BaseTrainer):
     def compute_loss(
         self,
         model: nn.Module,
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs: bool = False,
-        num_items_in_batch: Optional[torch.Tensor] = None,
+        num_items_in_batch: torch.Tensor | None = None,
     ):
         """
         Compute training loss and additionally compute token accuracies
@@ -1084,13 +1108,15 @@ class SFTTrainer(BaseTrainer):
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 per_token_entropy = entropy_from_logits(outputs.logits)
+                # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
+                # do not correspond to actual input tokens.
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
                 if "attention_mask" in inputs:
                     attention_mask = inputs["attention_mask"]
-                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-                    virtual_attention_mask = torch.ones(
-                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                    )
-                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
                     entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
                 elif "position_ids" in inputs:
                     entropy = torch.mean(per_token_entropy)
@@ -1125,9 +1151,12 @@ class SFTTrainer(BaseTrainer):
                     shift_logits = outputs.logits[..., :-1, :].contiguous()
                     shift_labels = labels[..., 1:].contiguous()
 
-                # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
-                # not correspond to actual input labels.
-                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 # Get predictions
                 predictions = shift_logits.argmax(dim=-1)
@@ -1160,7 +1189,7 @@ class SFTTrainer(BaseTrainer):
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 

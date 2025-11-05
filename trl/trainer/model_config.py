@@ -14,7 +14,6 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -54,9 +53,9 @@ class ModelConfig:
             LoRA alpha.
         lora_dropout (`float`, *optional*, defaults to `0.05`):
             LoRA dropout.
-        lora_target_modules (`Union[str, list[str]]`, *optional*):
+        lora_target_modules (`str | list[str]`, *optional*):
             LoRA target modules.
-        lora_target_parameters (`Union[str, list[str]]`, *optional*):
+        lora_target_parameters (`str | list[str]`, *optional*):
             List of target parameters for LoRA.
         lora_modules_to_save (`list[str]`, *optional*):
             Model layers to unfreeze & train.
@@ -82,7 +81,7 @@ class ModelConfig:
             Whether to use nested quantization.
     """
 
-    model_name_or_path: Optional[str] = field(
+    model_name_or_path: str | None = field(
         default=None,
         metadata={"help": "Model checkpoint for weights initialization."},
     )
@@ -90,7 +89,7 @@ class ModelConfig:
         default="main",
         metadata={"help": "Specific model version to use. It can be a branch name, a tag name, or a commit id."},
     )
-    dtype: Optional[str] = field(
+    dtype: str | None = field(
         default=None,
         metadata={
             "help": "Override the default `torch.dtype` and load the model under this dtype.",
@@ -105,7 +104,7 @@ class ModelConfig:
             "execute code present on the Hub on your local machine."
         },
     )
-    attn_implementation: Optional[str] = field(
+    attn_implementation: str | None = field(
         default=None,
         metadata={
             "help": "Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in "
@@ -128,15 +127,15 @@ class ModelConfig:
         default=0.05,
         metadata={"help": "LoRA dropout."},
     )
-    lora_target_modules: Optional[list[str]] = field(
+    lora_target_modules: list[str] | None = field(
         default=None,
         metadata={"help": "LoRA target modules."},
     )
-    lora_target_parameters: Optional[list[str]] = field(
+    lora_target_parameters: list[str] | None = field(
         default=None,
         metadata={"help": "List of target parameters for LoRA."},
     )
-    lora_modules_to_save: Optional[list[str]] = field(
+    lora_modules_to_save: list[str] | None = field(
         default=None,
         metadata={"help": "Model layers to unfreeze & train."},
     )
@@ -178,7 +177,7 @@ class ModelConfig:
         metadata={"help": "Whether to use nested quantization."},
     )
     # Deprecated params
-    torch_dtype: Optional[str] = field(
+    torch_dtype: str | None = field(
         default=None,
         metadata={
             "help": "Override the default `torch.dtype` and load the model under this dtype.",
@@ -193,7 +192,7 @@ class ModelConfig:
         if self.torch_dtype and not self.dtype:
             warnings.warn(
                 "`torch_dtype` is deprecated and will be removed in version 0.27.0, please use `dtype` instead.",
-                DeprecationWarning,
+                FutureWarning,
             )
             self.dtype = self.torch_dtype
 

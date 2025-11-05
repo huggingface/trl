@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable
+from collections.abc import Callable
 
+import pytest
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
@@ -23,6 +24,7 @@ from trl.models.utils import ChatMlSpecialTokens, clone_chat_template, setup_cha
 from .testing_utils import TrlTestCase
 
 
+@pytest.mark.filterwarnings("ignore::FutureWarning")
 class TestDatasetFormatting(TrlTestCase):
     def setup_method(self):
         self.llama_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.1")
@@ -116,6 +118,7 @@ class TestDatasetFormatting(TrlTestCase):
         assert formatting_func is None
 
 
+@pytest.mark.filterwarnings("ignore::FutureWarning")
 class TestSetupChatFormat(TrlTestCase):
     def setup_method(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

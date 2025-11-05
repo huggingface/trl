@@ -17,10 +17,11 @@ import logging
 import os
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -44,7 +45,7 @@ from ..data_utils import is_conversational
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
-from .utils import disable_dropout_in_model, pad, remove_none_values
+from .utils import disable_dropout_in_model, get_config_model_id, pad, remove_none_values
 
 
 if is_peft_available():
@@ -136,7 +137,7 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
 
     pad_token_id: int
-    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -187,7 +188,7 @@ class RewardTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -211,7 +212,7 @@ class RewardTrainer(BaseTrainer):
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `chosen_input_ids` and
             `rejected_input_ids` fields.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
             Tokenizer used to process the data. If `None`, the tokenizer is loaded from the model's name with
@@ -231,7 +232,7 @@ class RewardTrainer(BaseTrainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
         optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
@@ -258,22 +259,22 @@ class RewardTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
-        args: Optional[RewardConfig] = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[PreTrainedTokenizerBase] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional["PeftConfig"] = None,
+        model: str | PreTrainedModel,
+        args: RewardConfig | None = None,
+        data_collator: DataCollator | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = RewardConfig(f"{model_name}-Reward")
 
@@ -294,7 +295,7 @@ class RewardTrainer(BaseTrainer):
             with suppress_from_pretrained_warning(transformers.modeling_utils.logger):
                 model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1, **model_init_kwargs)
         else:
-            model_id = model.config._name_or_path
+            model_id = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
@@ -435,11 +436,11 @@ class RewardTrainer(BaseTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
+        dataset: Dataset | IterableDataset,
         processing_class: PreTrainedTokenizerBase,
         args: RewardConfig,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
         # sampled data.
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
@@ -488,13 +489,15 @@ class RewardTrainer(BaseTrainer):
                         chosen_input_ids = processing_class.apply_chat_template(
                             example["chosen"],
                             tools=example.get("tools"),
+                            return_dict=True,
                             **example.get("chat_template_kwargs", {}),
-                        )
+                        )["input_ids"]
                         rejected_input_ids = processing_class.apply_chat_template(
                             example["rejected"],
                             tools=example.get("tools"),
+                            return_dict=True,
                             **example.get("chat_template_kwargs", {}),
-                        )
+                        )["input_ids"]
                         output = {"chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids}
                     else:
                         output = {
@@ -527,9 +530,9 @@ class RewardTrainer(BaseTrainer):
     def compute_loss(
         self,
         model: nn.Module,
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs: bool = False,
-        num_items_in_batch: Optional[torch.Tensor] = None,
+        num_items_in_batch: torch.Tensor | None = None,
     ):
         """
         Compute training loss and additionally compute token accuracies
@@ -579,7 +582,7 @@ class RewardTrainer(BaseTrainer):
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 

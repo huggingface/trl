@@ -11,11 +11,15 @@ on:
       - "scripts/**.py"
       - "tests/**.py"
       - "trl/**.py"
-      - "setup.py"
+      - "pyproject.toml"
+      # Exclude if only experimental code/tests
+      - "!trl/experimental/**"
+      - "!tests/experimental/**"
 
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 
 jobs:
   check_code_quality:
@@ -36,12 +40,12 @@ jobs:
     name: Tests
     strategy:
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
       fail-fast: false
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
@@ -93,7 +97,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
@@ -128,7 +132,7 @@ jobs:
           uv pip install -U git+https://github.com/huggingface/accelerate.git
           uv pip install -U git+https://github.com/huggingface/datasets.git
           uv pip install -U git+https://github.com/huggingface/transformers.git
-          
+          uv pip install -U git+https://github.com/huggingface/peft.git
 
       - name: Test with pytest
         run: |
@@ -149,7 +153,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
@@ -201,7 +205,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:

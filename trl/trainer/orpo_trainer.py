@@ -13,12 +13,15 @@
 # limitations under the License.
 
 import inspect
+import os
 import random
 import textwrap
+import warnings
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -79,17 +82,17 @@ class ORPOTrainer(BaseTrainer):
     Initialize ORPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
-            The model to train, preferably an `AutoModelForSequenceClassification`.
-        args (`ORPOConfig`):
+        model ([`~transformers.PreTrainedModel`]):
+            The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
+        args ([`ORPOConfig`]):
             The ORPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
@@ -129,21 +132,30 @@ class ORPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        args: Optional[ORPOConfig] = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        model: PreTrainedModel | nn.Module | str | None = None,
+        args: ORPOConfig | None = None,
+        data_collator: DataCollator | None = None,
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        model_init: Callable[[], PreTrainedModel] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[dict] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: dict | None = None,
+        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
     ):
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
@@ -415,7 +427,7 @@ class ORPOTrainer(BaseTrainer):
             attention_mask=answer_attention_mask,
         )
 
-    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> dict:
+    def tokenize_row(self, feature, model: PreTrainedModel | nn.Module | None = None) -> dict:
         """Tokenize a single row from a ORPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation in case the prompt +
@@ -463,7 +475,8 @@ class ORPOTrainer(BaseTrainer):
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
             num_diff_tokens = sum(
-                a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])
+                a != b
+                for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"], strict=True)
             )
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:
@@ -572,11 +585,11 @@ class ORPOTrainer(BaseTrainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[list, torch.LongTensor]],
+        batch: dict[str, list | torch.LongTensor],
         is_encoder_decoder: bool = False,
         label_pad_token_id: int = -100,
         padding_value: int = 0,
-        device: Optional[torch.device] = None,
+        device: torch.device | None = None,
     ) -> dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
 
@@ -714,7 +727,7 @@ class ORPOTrainer(BaseTrainer):
             return (per_token_logps * loss_mask).sum(-1)
 
     def concatenated_forward(
-        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
+        self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
@@ -797,7 +810,7 @@ class ORPOTrainer(BaseTrainer):
     def get_batch_loss_metrics(
         self,
         model,
-        batch: dict[str, Union[list, torch.LongTensor]],
+        batch: dict[str, list | torch.LongTensor],
         train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the ORPO loss and other metrics for the given batch of inputs for train or test."""
@@ -851,11 +864,11 @@ class ORPOTrainer(BaseTrainer):
 
     def compute_loss(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs=False,
         num_items_in_batch=None,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         compute_loss_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
@@ -898,10 +911,10 @@ class ORPOTrainer(BaseTrainer):
 
     def prediction_step(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         prediction_loss_only: bool,
-        ignore_keys: Optional[list[str]] = None,
+        ignore_keys: list[str] | None = None,
     ):
         if not self.use_dpo_data_collator:
             logger.warning(
@@ -946,8 +959,8 @@ class ORPOTrainer(BaseTrainer):
         self,
         dataloader: DataLoader,
         description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[list[str]] = None,
+        prediction_loss_only: bool | None = None,
+        ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
@@ -973,7 +986,8 @@ class ORPOTrainer(BaseTrainer):
             table = pd.DataFrame(
                 columns=["Prompt", "Policy"],
                 data=[
-                    [prompt, pol[len(prompt) :]] for prompt, pol in zip(random_batch["prompt"], policy_output_decoded)
+                    [prompt, pol[len(prompt) :]]
+                    for prompt, pol in zip(random_batch["prompt"], policy_output_decoded, strict=True)
                 ],
             )
             if "wandb" in self.args.report_to:
@@ -992,7 +1006,7 @@ class ORPOTrainer(BaseTrainer):
 
         return initial_output
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 

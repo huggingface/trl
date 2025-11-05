@@ -4,6 +4,10 @@
 
 [[autodoc]] prepare_multimodal_messages
 
+## prepare_multimodal_messages_vllm
+
+[[autodoc]] prepare_multimodal_messages_vllm
+
 ## is_conversational
 
 [[autodoc]] is_conversational

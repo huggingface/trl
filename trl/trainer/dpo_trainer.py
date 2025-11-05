@@ -17,10 +17,11 @@ import random
 import textwrap
 import warnings
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Literal
 
 import pandas as pd
 import torch
@@ -65,6 +66,7 @@ from .utils import (
     empty_cache,
     flush_left,
     flush_right,
+    get_config_model_id,
     log_table_to_comet_experiment,
     pad,
     pad_to_length,
@@ -144,7 +146,7 @@ class DataCollatorForPreference(DataCollatorMixin):
     pad_token_id: int
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[list[int] | Any | dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
         prompt_input_ids = [torch.tensor(example["prompt_input_ids"]) for example in examples]
         prompt_attention_mask = [torch.ones_like(input_ids) for input_ids in prompt_input_ids]
@@ -177,6 +179,9 @@ class DataCollatorForPreference(DataCollatorMixin):
         if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
             output["ref_chosen_logps"] = ref_chosen_logps
             output["ref_rejected_logps"] = ref_rejected_logps
+        if "token_type_ids" in examples[0]:
+            token_type_ids = [torch.tensor(example["token_type_ids"]) for example in examples]
+            output["token_type_ids"] = pad(token_type_ids, padding_value=0, padding_side="left")
 
         return output
 
@@ -188,7 +193,7 @@ class DPOTrainer(BaseTrainer):
     This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -197,13 +202,13 @@ class DPOTrainer(BaseTrainer):
               using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        ref_model (`PreTrainedModelWrapper`):
+        ref_model ([`PreTrainedModelWrapper`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
         args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        data_collator (`DataCollator`, *optional*):
+        data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`DataCollatorForPreference`].
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -213,7 +218,7 @@ class DPOTrainer(BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -265,25 +270,27 @@ class DPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, nn.Module, PreTrainedModel],
-        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        args: Optional[DPOConfig] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional["PeftConfig"] = None,
+        model: str | nn.Module | PreTrainedModel,
+        ref_model: PreTrainedModel | nn.Module | str | None = None,
+        args: DPOConfig | None = None,
+        data_collator: DataCollator | None = None,  # type: ignore
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
@@ -296,7 +303,7 @@ class DPOTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
+        model_id = get_config_model_id(model.config)
         if isinstance(ref_model, str):
             ref_model = create_model_from_path(ref_model, **args.ref_model_init_kwargs or {})
         else:
@@ -374,15 +381,15 @@ class DPOTrainer(BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Liger kernel
-        if args.use_liger_loss:
+        if args.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "You set `use_liger_loss=True` but the liger kernel is not available. "
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
             if args.loss_type not in ["sigmoid", "apo_zero", "apo_down", "sppo_hard", "nca_pair"]:
                 raise ValueError(
-                    "You set `use_liger_loss=True` but the loss type is not from `[sigmoid, apo_zero, apo_down, sppo_hard, nca_pair`. "
+                    "You set `use_liger_kernel=True` but the loss type is not from `[sigmoid, apo_zero, apo_down, sppo_hard, nca_pair`. "
                     "Please set `loss_type='[sigmoid | apo_zero | apo_down | sppo_hard | nca_pair]'` to use the liger kernel."
                 )
             self.dpo_loss_fn = LigerFusedLinearDPOLoss(
@@ -632,11 +639,11 @@ class DPOTrainer(BaseTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args: DPOConfig,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc nor writer_batch_size
@@ -679,8 +686,8 @@ class DPOTrainer(BaseTrainer):
     def tokenize_row(
         features: dict[str, str],
         processing_class: PreTrainedTokenizerBase,
-        max_prompt_length: Optional[int] = None,
-        max_completion_length: Optional[int] = None,
+        max_prompt_length: int | None = None,
+        max_completion_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> dict[str, list[int]]:
         """
@@ -689,7 +696,7 @@ class DPOTrainer(BaseTrainer):
         Args:
             features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"chosen"`, and `"rejected"`.
-            processing_class (`PreTrainedTokenizerBase`):
+            processing_class ([`~transformers.PreTrainedTokenizerBase`]):
                 Processing class used to process the data.
             max_prompt_length (`int` or `None`):
                 Maximum length of the prompt sequence. If `None`, the prompt sequence is not truncated.
@@ -748,8 +755,8 @@ class DPOTrainer(BaseTrainer):
     def process_row(
         features: dict[str, str],
         processing_class: PreTrainedTokenizerBase,
-        max_prompt_length: Optional[int] = None,
-        max_completion_length: Optional[int] = None,
+        max_prompt_length: int | None = None,
+        max_completion_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> dict[str, list[int]]:
         """
@@ -790,6 +797,8 @@ class DPOTrainer(BaseTrainer):
             output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
         if "image_sizes" in processed_features:
             output["image_sizes"] = processed_features["image_sizes"][0]
+        if "token_type_ids" in processed_features:
+            output["token_type_ids"] = processed_features["token_type_ids"][0]
 
         return output
 
@@ -804,6 +813,7 @@ class DPOTrainer(BaseTrainer):
                 "chosen_input_ids",
                 "rejected_input_ids",
                 "image_sizes",
+                "token_type_ids",
                 "ref_chosen_logps",
                 "ref_rejected_logps",
             ]
@@ -854,7 +864,7 @@ class DPOTrainer(BaseTrainer):
 
         return super().get_train_dataloader()
 
-    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+    def get_eval_dataloader(self, eval_dataset: Dataset | None = None) -> DataLoader:
         """
         Returns the evaluation [`~torch.utils.data.DataLoader`].
 
@@ -934,14 +944,14 @@ class DPOTrainer(BaseTrainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
+        batch: dict[str, list | torch.LongTensor], padding_value: int
     ) -> dict[str, torch.LongTensor]:
         """
         Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt and
         completion sequences.
 
         Args:
-            batch (`dict[str, Union[list, torch.LongTensor]]`):
+            batch (`dict[str, list | torch.LongTensor]`):
                 A batch of input data. The batch must contain the following keys:
 
                 - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input
@@ -991,6 +1001,8 @@ class DPOTrainer(BaseTrainer):
             )
         if "image_sizes" in batch:
             output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+        if "token_type_ids" in batch:
+            output["token_type_ids"] = torch.cat((batch["token_type_ids"], batch["token_type_ids"]))
 
         # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
@@ -1233,7 +1245,7 @@ class DPOTrainer(BaseTrainer):
         return losses, chosen_rewards, rejected_rewards
 
     def _compute_loss_liger(
-        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
+        self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
     ) -> dict[str, torch.Tensor]:
         unwrapped_model = self.accelerator.unwrap_model(model)
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.pad_token_id)
@@ -1465,7 +1477,7 @@ class DPOTrainer(BaseTrainer):
         return output
 
     def concatenated_forward(
-        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]], is_ref_model: bool = False
+        self, model: nn.Module, batch: dict[str, list | torch.LongTensor], is_ref_model: bool = False
     ) -> dict[str, torch.Tensor]:
         """
         Runs the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
@@ -1516,6 +1528,9 @@ class DPOTrainer(BaseTrainer):
             # Concatenate the prompt and completion inputs
             input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
             attention_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
+            if "token_type_ids" in concatenated_batch:
+                prompt_token_type_ids = concatenated_batch["token_type_ids"]
+                token_type_ids = pad_to_length(prompt_token_type_ids, input_ids.shape[1], 0)
             # Mask the prompt but not the completion for the loss
             loss_mask = torch.cat(
                 (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
@@ -1528,7 +1543,12 @@ class DPOTrainer(BaseTrainer):
                     # Flush left to reduce the memory usage
                     # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
                     #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
-                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+                    if "token_type_ids" in concatenated_batch:
+                        attention_mask, input_ids, loss_mask, token_type_ids = flush_left(
+                            attention_mask, input_ids, loss_mask, token_type_ids
+                        )
+                    else:
+                        attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
                     attention_mask = attention_mask[:, : self.max_length]
                     input_ids = input_ids[:, : self.max_length]
                     loss_mask = loss_mask[:, : self.max_length]
@@ -1536,11 +1556,22 @@ class DPOTrainer(BaseTrainer):
                     # Flush right before truncating left, then flush left
                     # [[0, 0, x, x, x, x],  ->  [[0, 0, x, x],
                     #  [0, x, x, x, 0, 0]]       [0, x, x, x]]
-                    attention_mask, input_ids, loss_mask = flush_right(attention_mask, input_ids, loss_mask)
+                    if "token_type_ids" in concatenated_batch:
+                        attention_mask, input_ids, loss_mask, token_type_ids = flush_left(
+                            attention_mask, input_ids, loss_mask, token_type_ids
+                        )
+                        token_type_ids = token_type_ids[:, -self.max_length :]
+                    else:
+                        attention_mask, input_ids, loss_mask = flush_right(attention_mask, input_ids, loss_mask)
                     input_ids = input_ids[:, -self.max_length :]
                     attention_mask = attention_mask[:, -self.max_length :]
                     loss_mask = loss_mask[:, -self.max_length :]
-                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+                    if "token_type_ids" in concatenated_batch:
+                        attention_mask, input_ids, loss_mask, token_type_ids = flush_left(
+                            attention_mask, input_ids, loss_mask, token_type_ids
+                        )
+                    else:
+                        attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
                 else:
                     raise ValueError(
                         f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', "
@@ -1550,7 +1581,15 @@ class DPOTrainer(BaseTrainer):
                 # Flush left to reduce the memory usage
                 # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
                 #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
-                attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+                if "token_type_ids" in concatenated_batch:
+                    attention_mask, input_ids, loss_mask, token_type_ids = flush_left(
+                        attention_mask, input_ids, loss_mask, token_type_ids
+                    )
+                else:
+                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+
+            if "token_type_ids" in concatenated_batch:
+                model_kwargs["token_type_ids"] = token_type_ids
 
             if self.use_logits_to_keep:
                 # Compute logits_to_keep based on loss_mask pattern:
@@ -1687,14 +1726,14 @@ class DPOTrainer(BaseTrainer):
 
     def get_batch_loss_metrics(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        batch: dict[str, Union[list, torch.LongTensor]],
+        model: PreTrainedModel | nn.Module,
+        batch: dict[str, list | torch.LongTensor],
         train_eval: Literal["train", "eval"] = "train",
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
-        if self.args.use_liger_loss:
+        if self.args.use_liger_kernel:
             model_output = self._compute_loss_liger(model, batch)
             losses = model_output["loss"]
             chosen_rewards = model_output["chosen_rewards"]
@@ -1775,11 +1814,11 @@ class DPOTrainer(BaseTrainer):
 
     def compute_loss(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs=False,
         num_items_in_batch=None,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, float]]]:
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
         compute_loss_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
@@ -1846,11 +1885,11 @@ class DPOTrainer(BaseTrainer):
 
     def prediction_step(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         prediction_loss_only: bool,
-        ignore_keys: Optional[list[str]] = None,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
@@ -1889,8 +1928,8 @@ class DPOTrainer(BaseTrainer):
         self,
         dataloader: DataLoader,
         description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[list[str]] = None,
+        prediction_loss_only: bool | None = None,
+        ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
@@ -1918,7 +1957,7 @@ class DPOTrainer(BaseTrainer):
                 data=[
                     [prompt, pol[len(prompt) :], ref[len(prompt) :]]
                     for prompt, pol, ref in zip(
-                        random_batch_dataset["prompt"], policy_output_decoded, ref_output_decoded
+                        random_batch_dataset["prompt"], policy_output_decoded, ref_output_decoded, strict=True
                     )
                 ],
             )
@@ -1941,7 +1980,7 @@ class DPOTrainer(BaseTrainer):
 
         return initial_output
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 

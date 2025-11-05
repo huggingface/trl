@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import logging
-from typing import Callable, Literal, Optional
+import warnings
+from collections.abc import Callable
+from typing import Literal
 
 import datasets
 from datasets import Dataset, Value
@@ -36,12 +38,25 @@ else:
 
 
 def conversations_formatting_function(
-    tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"], tools: Optional[list] = None
+    tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"], tools: list | None = None
 ):
     r"""
     return a callable function that takes in a "messages" dataset and returns a formatted dataset, based on the
     tokenizer apply chat template to the dataset along with the schema of the list of functions in the tools list.
+
+    <Deprecated version="0.24.0">
+
+    `conversations_formatting_function` is deprecated and will be removed in version 0.27. Please use
+    `tokenizer.apply_chat_template()` directly instead.
+
+    </Deprecated>
     """
+    warnings.warn(
+        "`conversations_formatting_function` is deprecated and will be removed in TRL 0.27. "
+        "Please use `tokenizer.apply_chat_template()` directly instead.",
+        FutureWarning,
+        stacklevel=2,
+    )
 
     def format_dataset(examples):
         if isinstance(examples[messages_field][0], list):
@@ -61,7 +76,20 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
     r"""
     return a callable function that takes in an "instructions" dataset and returns a formatted dataset, based on the
     tokenizer apply chat template to the dataset
+
+    <Deprecated version="0.24.0">
+
+    `instructions_formatting_function` is deprecated and will be removed in version 0.27. Please use
+    `tokenizer.apply_chat_template()` directly instead.
+
+    </Deprecated>
     """
+    warnings.warn(
+        "`instructions_formatting_function` is deprecated and will be removed in TRL 0.27. "
+        "Please use `tokenizer.apply_chat_template()` directly instead.",
+        FutureWarning,
+        stacklevel=2,
+    )
 
     def format_dataset(examples):
         if isinstance(examples["prompt"], list):
@@ -84,8 +112,8 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
 
 
 def get_formatting_func_from_dataset(
-    dataset: Dataset, tokenizer: AutoTokenizer, tools: Optional[list] = None
-) -> Optional[Callable]:
+    dataset: Dataset, tokenizer: AutoTokenizer, tools: list | None = None
+) -> Callable | None:
     r"""
     Finds the correct formatting function based on the dataset structure. Currently supported datasets are:
     - `ChatML` with [{"role": str, "content": str}]
@@ -99,7 +127,21 @@ def get_formatting_func_from_dataset(
 
     Returns:
         Callable: Formatting function if the dataset format is supported else None
+
+    <Deprecated version="0.24.0">
+
+    `get_formatting_func_from_dataset` is deprecated and will be removed in version 0.27. Please use
+    `tokenizer.apply_chat_template()` directly instead.
+
+    </Deprecated>
     """
+    warnings.warn(
+        "`get_formatting_func_from_dataset` is deprecated and will be removed in TRL 0.27. "
+        "Please use `tokenizer.apply_chat_template()` directly instead.",
+        FutureWarning,
+        stacklevel=2,
+    )
+
     if isinstance(dataset, Dataset):
         if "messages" in dataset.features:
             if dataset.features["messages"] == FORMAT_MAPPING["chatml"]:

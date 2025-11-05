@@ -170,7 +170,7 @@ $$
 }
 $$
 
-Despite  \\( \textcolor{red}{\pi_{\text{inference}}} \\) and  \\( \textcolor{blue}{\pi_{\text{training}}} \\) sharing the same model parameters  \\( \theta \\), they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy. 
+Despite  \\( \textcolor{red}{\pi_{\text{inference}}} \\) and  \\( \textcolor{blue}{\pi_{\text{training}}} \\) sharing the same model parameters  \\( \theta \\), they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy.
 
 Truncated Importance Sampling (TIS) addresses this issue by adapting the model update via importance-sampling correction. The gradient computation of the aforementioned PPO objective becomes
 
@@ -206,6 +206,31 @@ training_args = GRPOConfig(
 **📜 Paper**: https://huggingface.co/papers/2508.09726
 
 See [Experimental - GFPO](experimental#gfpo).
+
+### Perception-Aware Policy Optimization for Multimodal Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2507.06448
+
+A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adaptation. The TRL implementation is not the official one provided by the authors.
+This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [MikeWangWZHL/PAPO](https://github.com/MikeWangWZHL/PAPO).
+
+```python
+from trl.experimental.papo import PAPOConfig, PAPOTrainer
+
+training_args = PAPOConfig(
+    # PAPO-specific params
+    perception_loss_weight=0.01,  # Weight for perception loss
+    mask_ratio=0.6,  # 40% of image will be masked
+    mask_type="random",  # Use patch masking (recommended)
+    der_loss_weight1=0.02,
+    der_loss_weight2=0.02,
+    # ...other GRPO params...
+)
+trainer = PAPOTrainer(
+    args=training_args,
+    ...
+)
+```
 
 ## Direct Policy Optimization
 
@@ -266,7 +291,7 @@ These parameters only appear in the [published version](https://openreview.net/p
 
 ### Towards Efficient and Exact Optimization of Language Model Alignment
 
-**📜 Paper**: https://huggingface.co/papers/2305.10425
+**📜 Paper**: https://huggingface.co/papers/2402.00856
 
 Efficient exact optimization (EXO) method is proposed to align language models with human preferences, providing a guaranteed and efficient alternative to reinforcement learning and direct preference optimization. To reproduce the paper's setting, use this configuration:
 
@@ -338,7 +363,7 @@ training_args = DPOConfig(
 )
 ```
 
-For the unpaired version, the user should utilize `BCOConfig` and `BCOTrainer`.
+For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
 ### Self-Play Preference Optimization for Language Model Alignment
 
@@ -458,10 +483,7 @@ trainer = SFTTrainer(
 Dynamic Fine-Tuning (DFT) improves the generalization of Large Language Models (LLMs) by dynamically rescaling gradients, outperforming standard Supervised Fine-Tuning (SFT) and showing competitive results in offline reinforcement learning.
 
 $$
-\mathcal{L}_{\text{DFT}}(\theta) 
-= \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ - \sum_{t=1}^{|y|} 
-\textcolor{red}{\text{sg}\big(\pi_\theta(y_t \mid y_{<t}, x)\big)} 
-\; \log \pi_\theta(y_t \mid y_{<t}, x) \right]
+\mathcal{L}_{\text{DFT}}(\theta) = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ - \sum_{t=1}^{|y|} \textcolor{red}{\text{sg}\big(\pi_\theta(y_t \mid y_{<t}, x)\big)} \; \log \pi_\theta(y_t \mid y_{<t}, x) \right]
 $$
 
 where  \\( \text{sg}(\cdot) \\) is the stop-gradient operator. To use DFT with SFT as described in the paper, you can use the `loss_type="dft"` argument:
@@ -582,4 +604,48 @@ def add_margin(example):
     return {"margin": preference_to_margin[example["preference_label"]]}
 
 dataset = dataset.map(add_margin)
+```
+
+## Distillation
+Papers relating to training a student model with the help of a teacher model.
+
+### On-Policy Distillation
+**📰 Blog**: https://thinkingmachines.ai/blog/on-policy-distillation/
+
+On-Policy Distillation involves a student model generating rollouts for each batch of training data. We subsequently obtain the probability distributions for each token of the rollouts from both the student and teacher models. The student model is then optimized to minimize the negative Kullback-Leibler (KL) divergence between its own token distributions and those of the teacher model.
+
+| Method                  | Sampling   | Reward signal |
+|-------------------------|------------|---------------|
+| Supervised finetuning   | off-policy | dense         |
+| Reinforcement learning  | on-policy  | sparse        |
+| On-policy distillation  | on-policy  | dense         |
+
+On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to restore generalization capabilities lost during SFT.
+
+Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
+
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`GKDTrainer`] and [`GKDConfig`]:
+
+```python
+from trl import GKDConfig
+
+config = GKDConfig(
+    lmbda=1.0, # student produces rollouts for all batches
+    beta=1.0, # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model", # specify the teacher model
+
+)
+```
+
+Alternatively, you can use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+
+```python
+from trl.experimental import GOLDConfig
+
+config = GOLDConfig(
+    lmbda=1.0, # student produces rollouts for all batches
+    beta=1.0, # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model", # specify the teacher model
+
+)
 ```

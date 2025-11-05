@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import textwrap
+import warnings
+from collections.abc import Callable
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -49,17 +51,17 @@ class PRMTrainer(BaseTrainer):
     Initialize PRMTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForTokenClassification`.
-        args (`PRMConfig`):
+        args ([`PRMConfig`]):
             The arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            (`DataCollatorForTokenClassification`) will be used which will pad the sequences to the maximum length of
-            the sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+            ([`~transformers.DataCollatorForTokenClassification`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
@@ -99,24 +101,33 @@ class PRMTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        args: Optional[PRMConfig] = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        model: PreTrainedModel | nn.Module | None = None,
+        args: PRMConfig | None = None,
+        data_collator: DataCollator | None = None,
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        model_init: Callable[[], PreTrainedModel] | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
             None,
         ),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[dict] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: dict | None = None,
     ):
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
 
@@ -132,7 +143,7 @@ class PRMTrainer(BaseTrainer):
                 raise ValueError(
                     "A processing_class must be specified when using the default DataCollatorForTokenClassification"
                 )
-            data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
+            data_collator = DataCollatorForTokenClassification(processing_class)
 
         if "input_ids" not in train_dataset.column_names:
             with PartialState().main_process_first():
@@ -210,7 +221,7 @@ class PRMTrainer(BaseTrainer):
         Args:
             features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"completions"`, and `"labels"`.
-            tokenizer (`PreTrainedTokenizerBase`):
+            tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
                 Tokenizer used to process the data.
             step_separator (`str`):
                 Separator between steps in the completion.
@@ -263,7 +274,9 @@ class PRMTrainer(BaseTrainer):
         completions_ids = [completion + separator_ids for completion in completions_ids]
 
         # Create the label
-        labels = [[-100] * (len(completion) - 1) + [label] for completion, label in zip(completions_ids, labels)]
+        labels = [
+            [-100] * (len(completion) - 1) + [label] for completion, label in zip(completions_ids, labels, strict=True)
+        ]
 
         # Join the completions and labels steps
         completion_ids = list(chain(*completions_ids))

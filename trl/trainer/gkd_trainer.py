@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import random
 import textwrap
-from typing import Any, Callable, Optional, Union
+import warnings
+from collections.abc import Callable
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -38,11 +41,7 @@ from ..models import prepare_deepspeed
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import (
-    DataCollatorForChatML,
-    disable_dropout_in_model,
-    empty_cache,
-)
+from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
 
 
 if is_peft_available():
@@ -111,22 +110,31 @@ class GKDTrainer(SFTTrainer):
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        teacher_model: Union[PreTrainedModel, nn.Module, str] = None,
-        args: Optional[GKDConfig] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        model: PreTrainedModel | nn.Module | str | None = None,
+        teacher_model: PreTrainedModel | nn.Module | str = None,
+        args: GKDConfig | None = None,
+        data_collator: DataCollator | None = None,  # type: ignore
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Callable] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: "PeftConfig | None" = None,
+        formatting_func: Callable | None = None,
     ):
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         # Ensure Trainer does not drop non-signature columns used by the collator (e.g., "prompts")
         args.remove_unused_columns = False
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
@@ -300,7 +308,6 @@ class GKDTrainer(SFTTrainer):
             student_outputs = base_student(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
-                output_hidden_states=True,
                 use_cache=False,
             )
 
@@ -316,13 +323,15 @@ class GKDTrainer(SFTTrainer):
                 teacher_outputs = base_teacher(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
-                    output_hidden_states=True,
                     use_cache=False,
                 )
 
             # hidden states (shifted)
-            student_hidden = student_outputs.last_hidden_state[:, :-1].contiguous()
-            teacher_hidden = teacher_outputs.last_hidden_state[:, :-1].contiguous()
+            student_hidden = student_outputs.last_hidden_state[:, :-1]
+            teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
+
+            # Release full outputs to free memory
+            del student_outputs, teacher_outputs
 
             # labels mask and labels (shifted)
             labels_mask = inputs["labels"] != -100
@@ -330,6 +339,9 @@ class GKDTrainer(SFTTrainer):
                 labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
             )
             true_labels = masked_input_ids[:, 1:].contiguous()
+
+            # Release intermediate tensors
+            del labels_mask, masked_input_ids
 
             # heads
             student_head = unwrapped_student.get_output_embeddings()
@@ -345,6 +357,9 @@ class GKDTrainer(SFTTrainer):
                 student_bias=getattr(student_head, "bias", None),
                 teacher_bias=getattr(teacher_head, "bias", None),
             )
+
+            # Release hidden states after loss computation
+            del student_hidden, teacher_hidden, true_labels
         else:
             # compute student output
             student_outputs = model(
@@ -404,7 +419,7 @@ class GKDTrainer(SFTTrainer):
         return generated_tokens, new_attention_mask, new_labels
 
     def training_step(
-        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
         """
         Perform a training step for the Generalized Knowledge Distillation (GKD) model.
