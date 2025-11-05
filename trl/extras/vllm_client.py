@@ -18,7 +18,6 @@ import logging
 import socket
 import time
 from io import BytesIO
-from typing import Optional, Union
 from urllib.parse import urlparse
 
 import torch
@@ -117,7 +116,7 @@ class VLLMClient:
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
         host: str = "0.0.0.0",
         server_port: int = 8000,
         group_port: int = 51216,
@@ -188,7 +187,7 @@ class VLLMClient:
     def generate(
         self,
         prompts: list[str],
-        images: Optional[list] = None,
+        images: list | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -196,9 +195,9 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
-        truncate_prompt_tokens: Optional[int] = None,
-        guided_decoding_regex: Optional[str] = None,
-        generation_kwargs: Optional[dict] = None,
+        truncate_prompt_tokens: int | None = None,
+        guided_decoding_regex: str | None = None,
+        generation_kwargs: dict | None = None,
     ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
@@ -374,7 +373,7 @@ class VLLMClient:
             "logprobs": json_response["logprobs"],
         }
 
-    def init_communicator(self, device: Union[torch.device, str, int] = 0):
+    def init_communicator(self, device: torch.device | str | int = 0):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
 

@@ -21,13 +21,12 @@ import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from accelerate import Accelerator
+from accelerate import Accelerator, logging
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
@@ -46,7 +45,6 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import is_peft_available, is_rich_available
 
-from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .base_trainer import BaseTrainer
@@ -69,11 +67,49 @@ from .utils import (
 )
 
 
+logger = logging.get_logger(__name__)
+
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
 INVALID_LOGPROB = 1.0
+
+
+def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
+    """Compute mean of tensor with a masked values."""
+    if axis is not None:
+        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+    else:
+        return (values * mask).sum() / mask.sum()
+
+
+def masked_var(values: torch.Tensor, mask: torch.Tensor, unbiased: bool = True) -> torch.Tensor:
+    """Compute variance of tensor with masked values."""
+    mean = masked_mean(values, mask)
+    centered_values = values - mean
+    variance = masked_mean(centered_values**2, mask)
+    if unbiased:
+        mask_sum = mask.sum()
+        if mask_sum == 0:
+            raise ValueError(
+                "The sum of the mask is zero, which can happen when `mini_batch_size=1`;"
+                "try increase the `mini_batch_size` or `gradient_accumulation_steps`"
+            )
+        # note that if mask_sum == 1, then there is a division by zero issue
+        # to avoid it you just need to use a larger minibatch_size
+        bessel_correction = mask_sum / (mask_sum - 1)
+        variance = variance * bessel_correction
+    return variance
+
+
+def masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = True) -> torch.Tensor:
+    """Whiten values with masked values."""
+    mean, var = masked_mean(values, mask), masked_var(values, mask)
+    whitened = (values - mean) * torch.rsqrt(var + 1e-8)
+    if not shift_mean:
+        whitened += mean
+    return whitened
 
 
 # taken from https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/ppo/ppo_trainer.py#L29
@@ -147,18 +183,18 @@ class PPOTrainer(BaseTrainer):
     def __init__(
         self,
         args: PPOConfig,
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         model: nn.Module,
-        ref_model: Optional[nn.Module],
+        ref_model: nn.Module | None,
         reward_model: nn.Module,
         train_dataset: Dataset,
         value_model: nn.Module,
-        data_collator: Optional[DataCollatorWithPadding] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
+        data_collator: DataCollatorWithPadding | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
         # less commonly used
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        callbacks: Optional[list[TrainerCallback]] = None,
-        peft_config: Optional["PeftConfig"] = None,
+        callbacks: list[TrainerCallback] | None = None,
+        peft_config: "PeftConfig | None" = None,
     ) -> None:
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -379,7 +415,7 @@ class PPOTrainer(BaseTrainer):
             if self.ref_adapter_name:
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+    def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
 
