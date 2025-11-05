@@ -15,7 +15,7 @@
 import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -124,7 +124,7 @@ class DPOConfig(TrainingArguments):
             Batch size to use when precomputing reference model log probabilities. This can be set higher than the
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
-        tools (`Optional[list[Union[dict, Callable]]]`, *optional*):
+        tools (`list[dict] | None`, *optional*):
             List of tools (callable functions) that will be accessible to the model. If the template does not support
             function calling, this argument will have no effect.
 
@@ -162,13 +162,15 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.25.0">
 
-            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
+            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel`
+            instead.
 
             </Deprecated>
 
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
-            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is `True`.
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
+            `True`.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -252,7 +254,7 @@ class DPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -262,25 +264,25 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the model and reference model
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `DPOTrainer` is provided as a string."
         },
     )
-    ref_model_init_kwargs: Optional[dict[str, Any]] = field(
+    ref_model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument "
             "of the `DPOTrainer` is provided as a string."
         },
     )
-    model_adapter_name: Optional[str] = field(
+    model_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
     )
-    ref_adapter_name: Optional[str] = field(
+    ref_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
     )
@@ -305,11 +307,11 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    pad_token: Optional[str] = field(
+    pad_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
@@ -320,15 +322,15 @@ class DPOConfig(TrainingArguments):
         default=-100,
         metadata={"help": "Padding value to use for labels."},
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={"help": "Maximum length of the prompt."},
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=None,
         metadata={"help": "Maximum length of the completion."},
     )
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
     )
@@ -358,7 +360,7 @@ class DPOConfig(TrainingArguments):
             "probabilities on-the-fly."
         },
     )
-    precompute_ref_batch_size: Optional[int] = field(
+    precompute_ref_batch_size: int | None = field(
         default=None,
         metadata={
             "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
@@ -366,7 +368,7 @@ class DPOConfig(TrainingArguments):
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
-    tools: Optional[list[Union[dict, Callable]]] = field(
+    tools: list[dict] | None = field(
         default=None,
         metadata={
             "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
@@ -404,7 +406,7 @@ class DPOConfig(TrainingArguments):
             "Higher β means less deviation from the reference model."
         },
     )
-    f_divergence_type: Union[FDivergenceType, str] = field(
+    f_divergence_type: FDivergenceType | str = field(
         default=FDivergenceType.REVERSE_KL,
         metadata={
             "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
@@ -433,7 +435,7 @@ class DPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to weight the loss as done in the WPO paper."},
     )
-    rpo_alpha: Optional[float] = field(
+    rpo_alpha: float | None = field(
         default=None,
         metadata={
             "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
@@ -441,7 +443,7 @@ class DPOConfig(TrainingArguments):
             "`rpo_alpha=1.0`."
         },
     )
-    ld_alpha: Optional[float] = field(
+    ld_alpha: float | None = field(
         default=None,
         metadata={
             "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
@@ -456,7 +458,7 @@ class DPOConfig(TrainingArguments):
             "loss. The paper recommends the default value `discopop_tau=0.05`."
         },
     )
-    loss_weights: Optional[list[float]] = field(
+    loss_weights: list[float] | None = field(
         default=None,
         metadata={
             "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
@@ -497,7 +499,7 @@ class DPOConfig(TrainingArguments):
     )
 
     # Deprecated arguments
-    padding_value: Optional[int] = field(
+    padding_value: int | None = field(
         default=None,
         metadata={"help": "Deprecated, use `pad_token` (str) instead."},
     )
