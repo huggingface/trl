@@ -1561,6 +1561,7 @@ class RLOOTrainer(BaseTrainer):
                     if images_raw:
                         # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/334
                         logger.info("Skipping image logging for Trackio")
+                        df = df_base
                         # images = []
                         # for image_list in self._logs["images"]:
                         #     images.append([trackio.Image(image) for image in image_list])
