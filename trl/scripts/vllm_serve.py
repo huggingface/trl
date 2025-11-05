@@ -667,7 +667,7 @@ def main(script_args: ScriptArguments):
                   template.
 
         Returns:
-            `GenerateResponse`:
+            `ChatResponse`:
                 - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
                 - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
