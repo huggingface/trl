@@ -60,8 +60,6 @@
       title: CPO
     - local: dpo_trainer
       title: DPO
-    - local: online_dpo_trainer
-      title: Online DPO
     - local: gkd_trainer
       title: GKD
     - local: grpo_trainer
@@ -109,6 +107,8 @@
     title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
+  - local: online_dpo_trainer
+    title: Online DPO
   - local: gfpo
     title: GFPO
   - local: gold_trainer

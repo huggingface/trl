@@ -14,7 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from trl.trainer.online_dpo_config import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 
 @dataclass

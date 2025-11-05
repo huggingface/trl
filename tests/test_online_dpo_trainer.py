@@ -19,7 +19,7 @@ from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 from .testing_utils import (
     RandomPairwiseJudge,

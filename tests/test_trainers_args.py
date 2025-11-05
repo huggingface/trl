@@ -26,8 +26,6 @@ from trl import (
     KTOTrainer,
     NashMDConfig,
     NashMDTrainer,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
     ORPOConfig,
     ORPOTrainer,
     RewardConfig,
@@ -37,6 +35,7 @@ from trl import (
     XPOConfig,
     XPOTrainer,
 )
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 from .testing_utils import TrlTestCase
 

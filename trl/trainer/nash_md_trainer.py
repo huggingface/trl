@@ -34,11 +34,11 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
+from ..experimental.online_dpo import OnlineDPOTrainer
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
-from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
     empty_cache,

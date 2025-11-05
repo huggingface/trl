@@ -59,8 +59,6 @@ from trl import (
     HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
     OpenAIPairwiseJudge,
     PairRMJudge,
     ScriptArguments,
@@ -69,6 +67,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 
 # Enable logging in a Hugging Face Space
