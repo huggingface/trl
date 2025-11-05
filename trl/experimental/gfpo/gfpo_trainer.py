@@ -281,6 +281,15 @@ class GFPOTrainer(_GRPOTrainer):
             agg_completion_lengths = self.accelerator.gather(completion_lengths)
             num_items_in_batch = agg_completion_lengths.sum()
 
+            if sampling_per_token_logps is not None:
+                    sampling_per_token_logps =sampling_per_token_logps[local_input_indices_to_keep].contiguous()
+            if old_per_token_logps is not None:
+                    old_per_token_logps =old_per_token_logps[local_input_indices_to_keep].contiguous()
+            if ref_per_token_logps is not None:
+                    ref_per_token_logps =ref_per_token_logps[local_input_indices_to_keep].contiguous()
+            if self.use_vllm and self.vllm_importance_sampling_correction:
+                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep].contiguous()
+
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
@@ -290,6 +299,7 @@ class GFPOTrainer(_GRPOTrainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
+
 
         # Log prompt and completion texts
         all_prompts_text = gather_object(prompts_text)
@@ -309,15 +319,10 @@ class GFPOTrainer(_GRPOTrainer):
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
         if images is not None:
-            self._logs["images"].extend(gather_object(images))
+            self._logs["images"].extend(all_images)
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-
-            if self.num_remains_in_group is not None and mode == "train":
-                delta = delta[local_input_indices_to_keep]
-                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep]
-
             delta = delta[completion_mask.bool()]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
