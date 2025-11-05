@@ -574,7 +574,7 @@ accelerate launch \
 > GRPOConfig(max_length=None, ...)
 > ```
 >
-> Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
+> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage
