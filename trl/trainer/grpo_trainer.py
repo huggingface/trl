@@ -1191,9 +1191,8 @@ class GRPOTrainer(BaseTrainer):
                             )
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                                # FIXME: this endpoint doesn't exist in vllm_client
                                 output = self.vllm_client.chat(
-                                    prompts=ordered_set_of_prompts,
+                                    messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
                                 )
@@ -1247,7 +1246,7 @@ class GRPOTrainer(BaseTrainer):
                     "max_tokens": self.max_completion_length,
                     "truncate_prompt_tokens": self.max_prompt_length,
                     "guided_decoding": guided_decoding,
-                    "logprobs": 0,  # only return the logprob of the generated token
+                    "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                 }
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
