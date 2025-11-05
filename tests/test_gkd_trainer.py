@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
-from trl import GKDConfig, GKDTrainer
+from trl.experimental.gkd import GKDConfig, GKDTrainer
 
 from .testing_utils import TrlTestCase, require_liger_kernel
 

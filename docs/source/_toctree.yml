@@ -62,8 +62,6 @@
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
-    - local: gkd_trainer
-      title: GKD
     - local: grpo_trainer
       title: GRPO
     - local: kto_trainer
@@ -111,6 +109,8 @@
     title: BCO
   - local: gfpo
     title: GFPO
+  - local: gkd_trainer
+    title: GKD
   - local: gold_trainer
     title: GOLD
   - local: grpo_with_replay_buffer

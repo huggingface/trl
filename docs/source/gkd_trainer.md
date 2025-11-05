@@ -34,11 +34,9 @@ The basic API is as follows:
 
 ```python
 from datasets import Dataset
-from trl import GKDConfig, GKDTrainer
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from trl.experimental.gkd import GKDConfig, GKDTrainer
 
 NUM_DUMMY_SAMPLES = 100
 
