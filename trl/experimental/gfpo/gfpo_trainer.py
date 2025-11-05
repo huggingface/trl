@@ -19,11 +19,7 @@ from typing import Any
 import torch
 from accelerate.utils import gather_object
 
-from ...data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin, nanstd, pad
 
@@ -91,7 +87,7 @@ class GFPOTrainer(_GRPOTrainer):
         if images is not None:
             prompts = [
                 prepare_multimodal_messages(prompt, image_list)
-                for prompt, image_list in zip(prompts, images, strict=False)
+                for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
         prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
