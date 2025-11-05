@@ -18,12 +18,40 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.utils import is_peft_available
 
 from trl import PPOConfig, PPOTrainer
+from trl.trainer.ppo_trainer import masked_mean, masked_var, masked_whiten
 
 from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig
+
+
+class TestCore(TrlTestCase):
+    """
+    A wrapper class for testing core utils functions
+    """
+
+    def setup_method(self):
+        self.test_input = torch.Tensor([1, 2, 3, 4])
+        self.test_mask = torch.Tensor([0, 1, 1, 0])
+        self.test_input_unmasked = self.test_input[1:3]
+
+    def test_masked_mean(self):
+        assert torch.mean(self.test_input_unmasked) == masked_mean(self.test_input, self.test_mask)
+
+    def test_masked_var(self):
+        assert torch.var(self.test_input_unmasked) == masked_var(self.test_input, self.test_mask)
+
+    def test_masked_whiten(self):
+        def whiten(values: torch.Tensor) -> torch.Tensor:
+            mean, var = torch.mean(values), torch.var(values)
+            return (values - mean) * torch.rsqrt(var + 1e-8)
+
+        whiten_unmasked = whiten(self.test_input_unmasked)
+        whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
+        diffs = (whiten_unmasked - whiten_masked).sum()
+        assert abs(diffs.item()) < 0.00001
 
 
 class TestPPOTrainer(TrlTestCase):
