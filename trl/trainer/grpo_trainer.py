@@ -380,6 +380,7 @@ class GRPOTrainer(BaseTrainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.num_generations_eval = args.num_generations_eval
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -758,9 +759,11 @@ class GRPOTrainer(BaseTrainer):
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         # See _get_train_sampler for an explanation of the sampler.
+        # If None, use num_generations for backward compatibility with previous config files
+        num_gens = self.num_generations_eval or self.num_generations
         return RepeatSampler(
             data_source=eval_dataset,
-            mini_repeat_count=self.num_generations,
+            mini_repeat_count=num_gens,
             seed=self.args.seed,
         )
 
@@ -1160,10 +1163,13 @@ class GRPOTrainer(BaseTrainer):
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
-                    ordered_set_of_prompts = all_prompts[:: self.num_generations]
+                    # Determine num_generations based on mode
+                    mode = "train" if self.model.training else "eval"
+                    num_gens = self.num_generations_eval if mode == "eval" and self.num_generations_eval is not None else self.num_generations
+                    ordered_set_of_prompts = all_prompts[:: num_gens]
 
                     sampling_params = {
-                        "n": self.num_generations,
+                        "n": num_gens,
                         "repetition_penalty": self.repetition_penalty,
                         "temperature": self.temperature,
                         "top_p": self.top_p,
@@ -1210,8 +1216,12 @@ class GRPOTrainer(BaseTrainer):
                 broadcast_object_list(obj_list, from_process=0)
                 all_prompt_ids, all_completion_ids, all_logprobs, all_extra_fields = obj_list[0]
 
+                # Determine repeat count based on mode
+                mode = "train" if self.model.training else "eval"
+                num_gens = self.num_generations_eval if mode == "eval" and self.num_generations_eval is not None else self.num_generations
                 # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_gens)]
+                
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
@@ -1596,17 +1606,21 @@ class GRPOTrainer(BaseTrainer):
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
+        # If None, use num_generations for backward compatibility with previous config files
+        # Determine num_generations based on mode before computing grouped-wise rewards
+        mode = "train" if self.model.training else "eval"
+        num_gens = self.num_generations_eval or self.num_generations if mode == "eval" else self.num_generations
         # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        mean_grouped_rewards = rewards.view(-1, num_gens).mean(dim=1)
 
         # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_gens, dim=0)
         advantages = rewards - mean_grouped_rewards
 
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
-            std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-            std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
+            std_rewards = rewards.view(-1, num_gens).std(dim=1)
+            std_rewards = std_rewards.repeat_interleave(num_gens, dim=0)
         elif self.scale_rewards == "batch":
             # Compute global std
             std_rewards = rewards.std().expand_as(rewards)

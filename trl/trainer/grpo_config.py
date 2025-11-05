@@ -333,6 +333,14 @@ class GRPOConfig(TrainingArguments):
             "* gradient_accumulation_steps) must be evenly divisible by this value."
         },
     )
+    num_generations_eval: int | None = field(
+        default=None,
+        metadata={
+            "help": "Number of generations to sample during evaluation. If `None`, uses the value of "
+            "`num_generations`. This allows using fewer generations during evaluation to save computation. "
+            "Maintains backward compatibility with previous configuration files."
+        },
+    )
     max_completion_length: int | None = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
