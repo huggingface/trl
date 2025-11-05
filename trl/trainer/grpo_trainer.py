@@ -1245,7 +1245,7 @@ class GRPOTrainer(BaseTrainer):
                     "max_tokens": self.max_completion_length,
                     "truncate_prompt_tokens": self.max_prompt_length,
                     "guided_decoding": guided_decoding,
-                    "logprobs": 0,  # only return the logprob of the generated token
+                    "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                 }
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
