@@ -66,8 +66,6 @@
       title: GKD
     - local: grpo_trainer
       title: GRPO
-    - local: kto_trainer
-      title: KTO
     - local: nash_md_trainer
       title: Nash-MD
     - local: orpo_trainer
@@ -117,6 +115,8 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
+  - local: kto_trainer
+    title: KTO
   - local: papo_trainer
     title: PAPO
   - local: openenv
