@@ -89,7 +89,10 @@ class GFPOTrainer(_GRPOTrainer):
         # [{"role": "user", "content": "What color is the sky?"}] to
         # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
         if images is not None:
-            prompts = [prepare_multimodal_messages(prompt, image_list) for prompt, image_list in zip(prompts, images)]
+            prompts = [
+                prepare_multimodal_messages(prompt, image_list)
+                for prompt, image_list in zip(prompts, images, strict=False)
+            ]
 
         prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
             self._generate(prompts)
@@ -292,11 +295,11 @@ class GFPOTrainer(_GRPOTrainer):
             num_items_in_batch = agg_completion_lengths.sum()
 
             if sampling_per_token_logps is not None:
-                    sampling_per_token_logps =sampling_per_token_logps[local_input_indices_to_keep].contiguous()
+                sampling_per_token_logps = sampling_per_token_logps[local_input_indices_to_keep].contiguous()
             if old_per_token_logps is not None:
-                    old_per_token_logps =old_per_token_logps[local_input_indices_to_keep].contiguous()
+                old_per_token_logps = old_per_token_logps[local_input_indices_to_keep].contiguous()
             if ref_per_token_logps is not None:
-                    ref_per_token_logps =ref_per_token_logps[local_input_indices_to_keep].contiguous()
+                ref_per_token_logps = ref_per_token_logps[local_input_indices_to_keep].contiguous()
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep].contiguous()
 
@@ -309,7 +312,6 @@ class GFPOTrainer(_GRPOTrainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
-
 
         # Log prompt and completion texts
         all_prompts_text = gather_object(prompts_text)
