@@ -1574,11 +1574,9 @@ class GRPOTrainer(BaseTrainer):
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(prompts, completions_text):
-                bootstrap = ""
-                if prompt[-1]["role"] == "assistant":
-                    bootstrap = prompt.pop()["content"] # bootstrap should be str
-                    if type(bootstrap) == list:
-                        bootstrap = bootstrap.pop()["text"]
+                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                if isinstance(bootstrap, list):
+                    bootstrap = bootstrap[-1].get("text", "")
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
