@@ -282,7 +282,7 @@ class VLLMClient:
     async def generate_async(
         self,
         prompts: list[str],
-        images: Optional[list] = None,
+        images: list | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -290,9 +290,9 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
-        truncate_prompt_tokens: Optional[int] = None,
-        guided_decoding_regex: Optional[str] = None,
-        generation_kwargs: Optional[dict] = None,
+        truncate_prompt_tokens: int | None = None,
+        guided_decoding_regex: str | None = None,
+        generation_kwargs: dict | None = None,
     ) -> dict:
         """
         Asynchronously generates model completions for the provided prompts.
