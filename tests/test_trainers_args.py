@@ -17,8 +17,6 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import (
-    CPOConfig,
-    CPOTrainer,
     DPOConfig,
     DPOTrainer,
     FDivergenceType,
@@ -37,6 +35,7 @@ from trl import (
     XPOConfig,
     XPOTrainer,
 )
+from trl.experimental.cpo import CPOConfig, CPOTrainer
 
 from .testing_utils import TrlTestCase
 

@@ -24,7 +24,7 @@ Below is the script to train the model:
 ```python
 # train_cpo.py
 from datasets import load_dataset
-from trl import CPOConfig, CPOTrainer
+from trl.experimental.cpo import CPOConfig, CPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
