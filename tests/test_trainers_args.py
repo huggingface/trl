@@ -24,8 +24,6 @@ from trl import (
     FDivergenceType,
     KTOConfig,
     KTOTrainer,
-    NashMDConfig,
-    NashMDTrainer,
     OnlineDPOConfig,
     OnlineDPOTrainer,
     ORPOConfig,
@@ -37,6 +35,7 @@ from trl import (
     XPOConfig,
     XPOTrainer,
 )
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
 from .testing_utils import TrlTestCase
 

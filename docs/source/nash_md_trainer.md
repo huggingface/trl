@@ -28,7 +28,8 @@ Below is the script to train the model:
 ```python
 # train_nash_md.py
 from datasets import load_dataset
-from trl import NashMDConfig, NashMDTrainer, PairRMJudge
+from trl import PairRMJudge
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")

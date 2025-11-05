@@ -64,8 +64,6 @@ from trl import (
     HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
-    NashMDConfig,
-    NashMDTrainer,
     OpenAIPairwiseJudge,
     PairRMJudge,
     ScriptArguments,
@@ -73,6 +71,7 @@ from trl import (
     get_kbit_device_map,
     get_quantization_config,
 )
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
 
 # Enable logging in a Hugging Face Space

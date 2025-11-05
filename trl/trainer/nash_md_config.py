@@ -12,35 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
+import warnings
+from dataclasses import dataclass
 
-from trl.trainer.online_dpo_config import OnlineDPOConfig
+from ..experimental.nash_md import NashMDConfig as ExperimentalNashMDConfig
 
 
 @dataclass
-class NashMDConfig(OnlineDPOConfig):
+class NashMDConfig(ExperimentalNashMDConfig):
     r"""
     Configuration class for the [`NashMDTrainer`].
 
-    Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
+    <Deprecated version="0.25.0">
 
-    Parameters:
-        mixture_coef (`float` or `list[float]`, *optional*, defaults to `0.5`):
-            Logit mixture coefficient for the model and reference model. If a list of floats is provided then the
-            mixture coefficient is selected for each new epoch and the last coefficient is used for the rest of the
-            epochs.
+    This class has been moved to `trl.experimental.nash_md.NashMDConfig` and will be removed in TRL 0.29.0.
+    Please update your imports:
+    ```python
+    from trl.experimental.nash_md import NashMDConfig
+    ```
+
+    For more details, see: https://github.com/huggingface/trl/issues/4223
+
+    </Deprecated>
     """
 
-    mixture_coef: list[float] = field(
-        default_factory=lambda: [0.5],
-        metadata={
-            "help": "Logit mixture coefficient for the model and reference model. If a list of floats is provided "
-            "then the mixture coefficient is selected for each new epoch and the last coefficient is used for the "
-            "rest of the epochs."
-        },
-    )
-
     def __post_init__(self):
+        warnings.warn(
+            "NashMDConfig has been moved to trl.experimental.nash_md.NashMDConfig and will be removed from "
+            "trl.trainer in TRL 0.29.0. Please update your imports to: "
+            "`from trl.experimental.nash_md import NashMDConfig`. "
+            "For more details, see: https://github.com/huggingface/trl/issues/4223",
+            FutureWarning,
+            stacklevel=2,
+        )
         super().__post_init__()
-        if hasattr(self.mixture_coef, "__len__") and len(self.mixture_coef) == 1:
-            self.mixture_coef = self.mixture_coef[0]
