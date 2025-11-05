@@ -14,6 +14,7 @@
 
 import atexit
 import base64
+import copy
 import logging
 import socket
 import time
@@ -191,7 +192,7 @@ class VLLMClient:
         truncate_prompt_tokens: int | None = None,
         guided_decoding_regex: str | None = None,
         generation_kwargs: dict | None = None,
-    ) -> list[list[int]]:
+    ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided prompts.
 
@@ -280,11 +281,54 @@ class VLLMClient:
         guided_decoding_regex: str | None = None,
         generation_kwargs: dict | None = None,
         chat_template_kwargs: dict | None = None,
-    ) -> list[list[int]]:
-        """ """
+    ) -> dict[str, list[list[int]]]:
+        """
+        Generates model completions for the provided chat messages.
+
+        Args:
+            messages (`list[list[dict]]`):
+                List of message lists for which the model will generate completions. Each message is a dictionary with
+                keys like "role" and "content".
+            n (`int`, *optional*, defaults to `1`):
+                Number of completions to generate for each message list.
+            repetition_penalty (`float`, *optional*, defaults to `1.0`):
+                Parameter for repetition penalty. 1.0 means no penalty.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature parameter for sampling. Higher values increase diversity.
+            top_p (`float`, *optional*, defaults to `1.0`):
+                Top-p sampling parameter.`1.0` means no truncation.
+            top_k (`int`, *optional*, defaults to `-1`):
+                Top-k sampling parameter. `-1` means no truncation.
+            min_p (`float`, *optional*, defaults to `0.0`):
+                Minimum probability for sampling.
+            max_tokens (`int`, *optional*, defaults to `16`):
+                Maximum number of tokens to generate for each message list.
+            truncate_prompt_tokens (`int`, *optional*):
+                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
+                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
+                disabled.
+            guided_decoding_regex (`str`, *optional*):
+                Regular expression to guide the decoding process.
+            generation_kwargs (`dict`, *optional*):
+                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
+                will override them.
+            chat_template_kwargs (`dict`, *optional*):
+                Additional keyword arguments to customize the chat template used by the model.
+
+        Returns:
+            `dict` with keys:
+                - `prompt_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the tokenized input messages.
+                - `completion_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the model-generated completions for each message list.
+                - `logprobs` (`list[list[float]]`):
+                    List of lists of log probabilities for each generated token.
+        """
         url = f"{self.base_url}/chat/"
 
         # Convert PIL images to base64 strings
+        messages = copy.deepcopy(messages)  # avoid modifying the original messages
         for message_list in messages:
             for message in message_list:
                 if isinstance(message["content"], list):
