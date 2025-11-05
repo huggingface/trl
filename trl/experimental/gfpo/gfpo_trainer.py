@@ -19,7 +19,11 @@ from typing import Any
 import torch
 from accelerate.utils import gather_object
 
-from ...data_utils import apply_chat_template, is_conversational
+from ..data_utils import (
+    apply_chat_template,
+    is_conversational,
+    prepare_multimodal_messages,
+)
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin, nanstd, pad
 
@@ -81,8 +85,14 @@ class GFPOTrainer(_GRPOTrainer):
         if images is not None and all(img_list == [] for img_list in images):
             images = None
 
-        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list = self._generate(
-            prompts, images
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            prompts = [prepare_multimodal_messages(prompt, image_list) for prompt, image_list in zip(prompts, images)]
+
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
+            self._generate(prompts)
         )
 
         # Convert lists of token IDs to padded tensors
