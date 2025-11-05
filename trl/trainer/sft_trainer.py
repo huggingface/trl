@@ -1080,7 +1080,7 @@ class SFTTrainer(BaseTrainer):
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
+                self._signature_columns = ["input_ids", "labels", "attention_mask", "seq_lengths", "completion_mask", "assistant_masks"]
 
     def compute_loss(
         self,
