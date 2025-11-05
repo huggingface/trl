@@ -19,7 +19,7 @@ from typing import Any
 import torch
 from accelerate.utils import gather_object
 
-from ..data_utils import (
+from ...data_utils import (
     apply_chat_template,
     is_conversational,
     prepare_multimodal_messages,
