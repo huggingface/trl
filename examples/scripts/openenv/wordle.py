@@ -21,7 +21,7 @@ Usage:
         python -m src.envs.textarena_env.server.app
 
     # Start the vLLM server with your model
-    CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+    CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
 
     # Then run this training script:
     CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model-id",
-        default="willcb/Qwen3-1.7B-Wordle",
+        default="Qwen/Qwen3-1.7B",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
     parser.add_argument(
