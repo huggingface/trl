@@ -705,7 +705,9 @@ class TestGRPOTrainer(TrlTestCase):
 
         def reward_func(completions, some_values, **kwargs):
             """Reward function that rewards completions with lengths closer to the values in some_values."""
-            return [float(abs(len(completion) - value)) for completion, value in zip(completions, some_values)]
+            return [
+                float(abs(len(completion) - value)) for completion, value in zip(completions, some_values, strict=True)
+            ]
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -809,6 +811,8 @@ class TestGRPOTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            # Gemma2 has the input word embeddings and lm_head tied, Qwen3 does not
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",
         ],
     )
     def test_training_with_cast_lm_head_to_fp32(self, model_id):

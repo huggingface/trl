@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import pytest
 import torch
 from torch import nn
@@ -112,7 +113,7 @@ class TestActivationOffloading(TrlTestCase):
             grads2 = [p.grad.clone() for p in model.parameters()]
 
         # Gradients should match as NoOpManager should have prevented offloading
-        for g1, g2 in zip(grads1, grads2):
+        for g1, g2 in zip(grads1, grads2, strict=True):
             assert torch.allclose(g1, g2, rtol=1e-4, atol=1e-5)
 
     @require_torch_accelerator
@@ -166,7 +167,7 @@ class TestActivationOffloading(TrlTestCase):
 
         # Check outputs and gradients match
         assert torch.allclose(out1, out2, rtol=1e-5)
-        for g1, g2 in zip(grads1, grads2):
+        for g1, g2 in zip(grads1, grads2, strict=True):
             assert torch.allclose(g1, g2, rtol=1e-5)
 
     @require_torch_accelerator
