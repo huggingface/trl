@@ -580,7 +580,7 @@ def main(script_args: ScriptArguments):
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "guided_decoding": guided_decoding,
-            "logprobs": 0,
+            "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -713,7 +713,7 @@ def main(script_args: ScriptArguments):
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "guided_decoding": guided_decoding,
-            "logprobs": 0,
+            "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
