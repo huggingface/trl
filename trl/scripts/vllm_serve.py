@@ -640,7 +640,7 @@ def main(script_args: ScriptArguments):
         Generates completions for the provided chat messages.
 
         Args:
-            request (`GenerateRequest`):
+            request (`ChatRequest`):
                 - `messages` (list of `dict`): A list of messages (dicts with "role" and "content" keys) for the model
                   to generate completions.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
