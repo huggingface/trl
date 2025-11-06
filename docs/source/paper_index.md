@@ -249,6 +249,10 @@ trainer = PAPOTrainer(
 )
 ```
 
+## Direct Policy Optimization
+
+- Papers relating to the [`DPOTrainer`]
+
 ### Direct Preference Optimization (DPO): Your Language Model is Secretly a Reward Model
 
 **📜 Paper**: https://huggingface.co/papers/2305.18290
