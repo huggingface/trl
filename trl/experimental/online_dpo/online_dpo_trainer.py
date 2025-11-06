@@ -68,7 +68,6 @@ from ...models import (
 )
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.judges import BasePairwiseJudge
-from .online_dpo_config import OnlineDPOConfig
 from ...trainer.utils import (
     SIMPLE_CHAT_TEMPLATE,
     DPODataCollatorWithPadding,
@@ -79,6 +78,7 @@ from ...trainer.utils import (
     pad,
     truncate_right,
 )
+from .online_dpo_config import OnlineDPOConfig
 
 
 if is_peft_available():
@@ -1293,7 +1293,7 @@ class OnlineDPOTrainer(BaseTrainer):
             reward_kwargs = {}
             keys = [key for key in inputs if key not in ["prompt"]]
             for key in keys:
-                if isinstance(inputs[key], (list, tuple)):
+                if isinstance(inputs[key], list | tuple):
                     # Repeat input fields to match number of completions (2 per prompt)
                     reward_kwargs[key] = inputs[key] * 2
                 else:

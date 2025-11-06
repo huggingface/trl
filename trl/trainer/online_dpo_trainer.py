@@ -14,7 +14,6 @@
 
 import warnings
 from collections.abc import Callable
-from typing import Any
 
 from datasets import Dataset, IterableDataset
 from transformers import DataCollator, PreTrainedTokenizerBase, ProcessorMixin, TrainerCallback
