@@ -25,7 +25,7 @@ from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
-
+@pytest.mark.low_priority
 class TestXPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

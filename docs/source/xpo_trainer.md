@@ -156,11 +156,11 @@ While training and evaluating we record the following reward metrics:
 
 ## XPOTrainer
 
-[[autodoc]] XPOTrainer
+[[autodoc]] experimental.xpo.XPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## XPOConfig
 
-[[autodoc]] XPOConfig
+[[autodoc]] experimental.xpo.XPOConfig
