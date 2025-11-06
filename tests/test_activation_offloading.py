@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 from torch import nn
 from transformers import AutoModelForCausalLM
@@ -28,11 +29,16 @@ if is_peft_available():
 
 
 class TestActivationOffloading(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_torch_accelerator
     @require_peft
-    def test_offloading_with_peft_models(self) -> None:
+    def test_offloading_with_peft_models(self, model_id) -> None:
         """Test that activation offloading works with PEFT models."""
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
         peft_config = LoraConfig(
             lora_alpha=16,
@@ -75,9 +81,14 @@ class TestActivationOffloading(TrlTestCase):
                         f"Gradient mismatch for {name_orig}"
                     )
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_torch_accelerator
-    def test_noop_manager_with_offloading(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_noop_manager_with_offloading(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
         inp = torch.randint(0, 100, (2, 10), device=torch_device)
 
@@ -122,10 +133,15 @@ class TestActivationOffloading(TrlTestCase):
         # The test passes if no errors occur, as we're mainly testing
         # that the logic handles both offloaded and non-offloaded tensors
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @require_torch_accelerator
-    def test_real_hf_model(self):
+    def test_real_hf_model(self, model_id):
         """Test with an actual HuggingFace model"""
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
 
         # Create small input

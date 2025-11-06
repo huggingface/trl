@@ -80,7 +80,13 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    def test_training_model_str(self):
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_training_model_str(self, model_id):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -92,7 +98,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
         trainer = OnlineDPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_id,
             reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],

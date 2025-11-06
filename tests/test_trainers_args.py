@@ -42,8 +42,13 @@ from .testing_utils import TrlTestCase
 
 
 class TestTrainerArg(TrlTestCase):
-    def test_cpo(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_cpo(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = CPOConfig(
@@ -83,8 +88,13 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.dataset_num_proc == 4
 
-    def test_dpo(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_dpo(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(
@@ -150,8 +160,13 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.rpo_alpha == 0.5
         assert trainer.args.discopop_tau == 0.1
 
-    def test_kto(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_kto(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
@@ -195,9 +210,14 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.dataset_num_proc == 4
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize("mixtures_coef_list", [False, True])
-    def test_nash_md(self, mixtures_coef_list):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_nash_md(self, mixtures_coef_list, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -217,9 +237,14 @@ class TestTrainerArg(TrlTestCase):
         )
         assert trainer.args.mixture_coef == (0.5 if not mixtures_coef_list else [0.5, 0.6])
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize("beta_list", [False, True])
-    def test_online_dpo(self, beta_list):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_online_dpo(self, beta_list, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -248,8 +273,13 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.beta == (0.6 if not beta_list else [0.6, 0.7])
         assert trainer.args.loss_type == "hinge"
 
-    def test_orpo(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_orpo(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = ORPOConfig(
@@ -275,8 +305,13 @@ class TestTrainerArg(TrlTestCase):
         assert not trainer.args.disable_dropout
         assert trainer.args.label_pad_token_id == -99
 
-    def test_reward(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_reward(self, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -296,8 +331,13 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.dataset_num_proc == 4
         assert trainer.args.center_rewards_coefficient == 0.1
 
-    def test_sft(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
+    def test_sft(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         training_args = SFTConfig(
             self.tmp_dir,
@@ -321,9 +361,14 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.dataset_kwargs["append_concat_token"]
         assert trainer.args.eval_packing
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        ],
+    )
     @pytest.mark.parametrize("alpha_list", [False, True])
-    def test_xpo(self, alpha_list):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_xpo(self, alpha_list, model_id):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
