@@ -62,7 +62,6 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.callbacks import SyncRefModelCallback
-from .rloo_config import RLOOConfig
 from ...trainer.utils import (
     RepeatSampler,
     disable_dropout_in_model,
@@ -81,6 +80,7 @@ from ...trainer.utils import (
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
 )
+from .rloo_config import RLOOConfig
 
 
 if is_peft_available():
