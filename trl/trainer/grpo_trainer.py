@@ -1819,7 +1819,7 @@ class GRPOTrainer(BaseTrainer):
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
         if self.loss_type == "cispo":
-            coef_1 = torch.min(log_importance_weights, 1 + self.epsilon_high, dim=-1).detach()
+            coef_1 = torch.clamp(torch.exp(log_importance_weights), max=self.epsilon_high).detach()
             per_token_loss = coef_1 * advantages.unsqueeze(1) * per_token_logps
 
         else:
