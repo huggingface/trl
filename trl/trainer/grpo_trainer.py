@@ -1816,7 +1816,7 @@ class GRPOTrainer(BaseTrainer):
                 f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' "
                 "and 'sequence'."
             )
-        
+
         coef_1 = torch.exp(log_importance_weights)
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
