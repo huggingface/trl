@@ -610,6 +610,7 @@ class GRPOTrainer(BaseTrainer):
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
+                    quantization=self.args.vllm_quantization,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
