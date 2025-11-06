@@ -16,7 +16,6 @@ import json
 import logging
 import os
 from copy import deepcopy
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -401,7 +400,7 @@ class PreTrainedModelWrapper(nn.Module):
         object to handle corner cases when running scripts in distributed environments.
 
         Returns:
-            current_device (`Union[int, str]`):
+            current_device (`int | str`):
                 The current device.
         """
         state = PartialState()
@@ -599,7 +598,7 @@ class PreTrainedModelWrapper(nn.Module):
 
 
 def create_reference_model(
-    model: PreTrainedModelWrapper, num_shared_layers: Optional[int] = None, pattern: Optional[str] = None
+    model: PreTrainedModelWrapper, num_shared_layers: int | None = None, pattern: str | None = None
 ) -> PreTrainedModelWrapper:
     """
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
