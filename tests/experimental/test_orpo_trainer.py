@@ -19,7 +19,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 
-from .testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_peft
 
 
 class TestORPOTrainer(TrlTestCase):
