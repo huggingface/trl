@@ -1,5 +1,11 @@
 # XPO Trainer
 
+<Tip warning={true}>
+
+XPOTrainer is deprecated and will be removed in TRL 0.29.0. Please use [`experimental.xpo.XPOTrainer`] instead. See [issue #4223](https://github.com/huggingface/trl/issues/4223) for more information.
+
+</Tip>
+
 [![model badge](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
 
 ## Overview

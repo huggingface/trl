@@ -17,7 +17,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
-from trl import XPOConfig, XPOTrainer
+from trl.experimental.xpo import XPOConfig, XPOTrainer
 
 from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
 

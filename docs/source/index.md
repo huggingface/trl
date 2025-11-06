@@ -26,7 +26,6 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 - [`RLOOTrainer`] ⚡️
 - [`OnlineDPOTrainer`] ⚡️
 - [`NashMDTrainer`] ⚡️
-- [`XPOTrainer`] ⚡️
 - [`PPOTrainer`]
 
 ### Reward modeling
@@ -45,6 +44,10 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 - [`experimental.bco.BCOTrainer`] 🧪
 - [`CPOTrainer`]
 - [`KTOTrainer`]
+
+### Experimental
+
+- [`experimental.xpo.XPOTrainer`] 🧪 ⚡️
 
 ### Knowledge distillation
 

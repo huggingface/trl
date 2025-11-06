@@ -12,33 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
+import warnings
 
-from trl.trainer.online_dpo_config import OnlineDPOConfig
+from ..experimental.xpo import XPOConfig as ExperimentalXPOConfig
 
 
-@dataclass
-class XPOConfig(OnlineDPOConfig):
+class XPOConfig(ExperimentalXPOConfig):
     r"""
     Configuration class for the [`XPOTrainer`].
 
-    Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
+    .. warning::
+        This class is deprecated and will be removed in TRL 0.29.0. Please use
+        `trl.experimental.xpo.XPOConfig` instead. See https://github.com/huggingface/trl/issues/4223
+        for more information.
 
-    Parameters:
-        alpha (`float` or `list[float]`, *optional*, defaults to `1e-5`):
-            Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch
-            and the last alpha is used for the rest of the epochs.
+    For full documentation, see [`trl.experimental.xpo.XPOConfig`].
     """
 
-    alpha: list[float] = field(
-        default_factory=lambda: [1e-5],
-        metadata={
-            "help": "Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each "
-            "new epoch and the last alpha is used for the rest of the epochs."
-        },
-    )
-
-    def __post_init__(self):
-        super().__post_init__()
-        if hasattr(self.alpha, "__len__") and len(self.alpha) == 1:
-            self.alpha = self.alpha[0]
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "XPOConfig is deprecated and will be removed in TRL 0.29.0. "
+            "Please use `trl.experimental.xpo.XPOConfig` instead. "
+            "See https://github.com/huggingface/trl/issues/4223 for more information.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
