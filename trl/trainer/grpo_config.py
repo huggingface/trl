@@ -166,6 +166,8 @@ class GRPOConfig(TrainingArguments):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+            When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
+            paper](https://arxiv.org/pdf/2510.13786) and the recommended value is `5.0`.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -201,6 +203,10 @@ class GRPOConfig(TrainingArguments):
               batch. Note that normalization is performed over the local batch only, so results may slightly vary
               depending on the local batch size, despite a constant effective batch size. When using
               `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+            - `"cispo"`: Clips the importance sampling weights instead of the advantage scaled importance weights. The
+              clipped weights are then multiplied with the advantages and policy model's log probs. Individual token
+              losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
+              This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -533,7 +539,9 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
-            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
+            "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the"
+            "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
         },
     )
     importance_sampling_level: str = field(
@@ -582,6 +590,11 @@ class GRPOConfig(TrainingArguments):
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
             "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. "
+            "The clipped weights are then multiplied with the advantages and policy model's log probs. "
+            "Individual token losses are aggregated by normalizing with the number of active tokens in "
+            "the global accumulated batch. This method was introduced in the "
+            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
         },
     )
     mask_truncated_completions: bool = field(
