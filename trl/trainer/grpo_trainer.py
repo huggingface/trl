@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import datasets
+import pandas as pd
 import torch
 import torch.utils.data
 import transformers
@@ -1190,9 +1191,8 @@ class GRPOTrainer(BaseTrainer):
                             )
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                                # FIXME: this endpoint doesn't exist in vllm_client
                                 output = self.vllm_client.chat(
-                                    prompts=ordered_set_of_prompts,
+                                    messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
                                 )
@@ -1246,7 +1246,7 @@ class GRPOTrainer(BaseTrainer):
                     "max_tokens": self.max_completion_length,
                     "truncate_prompt_tokens": self.max_prompt_length,
                     "guided_decoding": guided_decoding,
-                    "logprobs": 0,  # only return the logprob of the generated token
+                    "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                 }
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
@@ -1922,45 +1922,45 @@ class GRPOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
-            logging_backends = []
-            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                logging_backends.append(wandb)
-            if self.args.report_to and "trackio" in self.args.report_to:
-                logging_backends.append(trackio)
+            table = {
+                "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                "prompt": self._logs["prompt"],
+                "completion": self._logs["completion"],
+                **self._logs["rewards"],
+                "advantage": self._logs["advantages"],
+            }
 
-            if logging_backends:
-                import pandas as pd
+            df_base = pd.DataFrame(table)
+            images_raw = self._logs["images"] or []
 
-                table = {
-                    "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
-                    "prompt": self._logs["prompt"],
-                    "completion": self._logs["completion"],
-                    **self._logs["rewards"],
-                    "advantage": self._logs["advantages"],
-                }
-
-                df_base = pd.DataFrame(table)
-                images_raw = self._logs["images"] or []
-
-                for logging_backend in logging_backends:
+            for logging_backend in self.args.report_to:
+                if logging_backend == "wandb":
                     if images_raw:
-                        # Convert images per backend and derive a dataframe that shares base columns
-                        if logging_backend is wandb:
-                            images = []
-                            for image_list in self._logs["images"]:
-                                images.append([wandb.Image(image) for image in image_list])
-                            df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
-                        elif logging_backend is trackio:
-                            # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/327
-                            logger.info("Skipping image logging for Trackio")
-                            df = df_base
+                        images = []
+                        for image_list in self._logs["images"]:
+                            images.append([wandb.Image(image) for image in image_list])
+                        df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
                     else:
                         df = df_base
 
                     if self.wandb_log_unique_prompts:
                         df = df.drop_duplicates(subset=["prompt"])
 
-                    logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
+
+                if logging_backend == "trackio":
+                    if images_raw:
+                        # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/334
+                        logger.info("Skipping image logging for Trackio")
+                        df = df_base
+                        # images = []
+                        # for image_list in self._logs["images"]:
+                        #     images.append([trackio.Image(image) for image in image_list])
+                        # df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
+                    else:
+                        df = df_base
+
+                    trackio.log({"completions": trackio.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

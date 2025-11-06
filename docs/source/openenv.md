@@ -11,7 +11,7 @@ In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel 
 To use OpenEnv with TRL, install the framework:
 
 ```bash
-pip install openenv-core
+pip install git+https://github.com/meta-pytorch/OpenEnv.git
 ```
 
 ## Using `rollout_func` with OpenEnv environments
@@ -65,6 +65,33 @@ By using OpenEnv in this loop, you can:
 * Plug in custom simulators, web APIs, or evaluators as environments.
 * Pass structured reward signals back into RL training seamlessly.
 
+## Running the Environments
+
+You can run OpenEnv environments in three different ways:
+
+1. **Local Docker container** *(recommended)*
+
+   To start a Docker container:
+   * Open the environment on the Hugging Face Hub.
+   * Click the **⋮ (three dots)** menu.
+   * Select **“Run locally.”**
+   * Copy and execute the provided command in your terminal.
+
+   Example:
+   ```bash
+   docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+    ```
+    ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
+2. **Local Python process**: Launch the environment directly using Uvicorn.
+   You can start the server manually as a local process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
+   ```bash
+   python -m uvicorn envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
+   ```
+3. **Hugging Face Spaces**: Connect to a hosted environment running on the Hugging Face Hub.
+   To find the connection URL, open the Space page, click the **⋮ (three dots)** menu, and select **“Embed this Space.”**
+   You can then use that URL to connect directly from your client.
+   Keep in mind that public Spaces may have rate limits or temporarily go offline if inactive.
+
 ## A simple example
 
 The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the Echo environment rewards completions based on their text length, encouraging the model to generate longer outputs. This pattern can be extended to any custom environment that provides structured feedback or task-based rewards:
@@ -75,6 +102,15 @@ from trl import GRPOConfig, GRPOTrainer
 
 # Create HTTP client for Echo Environment
 client = EchoEnv.from_docker_image("echo-env:latest")
+"""
+Alternatively, you can start the environment manually with Docker and connect to it:
+
+# Step 1: Start the Echo environment
+docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+
+# Step 2: Connect the client to the running container
+client = EchoEnv(base_url="http://0.0.0.0:8001")
+"""
 
 def rollout_func(prompts, args, processing_class):
     # 1. Generate completions via vLLM inference server (running on port 8000)
@@ -150,6 +186,21 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 
 # Terminal 2: Run GRPO training with OpenEnv
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
 ```
+
+Alternatively, you can manually start the Echo environment in a Docker container before running the training:
+
+```bash
+# Launch the Echo environment
+docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+```
+
+Then, initialize the client using:
+
+`client = EchoEnv(base_url="http://0.0.0.0:8001")` 
+
+instead of:
+
+`client = EchoEnv.from_docker_image("echo-env:latest")`.
 
 Below is the reward curve from training:
 
@@ -352,22 +403,33 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-### Running the Example
+### Running the Advanced Example
 
 The example requires two GPUs:
 
 ```bash
 # Terminal 1: Start vLLM inference server
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
 
 # Terminal 2: Run GRPO training with OpenEnv
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
+```
+
+Again, you can manually start the TextArena environment in a Docker container before running the training.
+In this case, initialize the client with
+`client = TextArenaEnv(base_url="http://0.0.0.0:8001")`
+instead of
+`client = TextArenaEnv.from_docker_image("registry.hf.space/burtenshaw-textarena:latest")`:
+
+```bash
+# Launch the TextArena environment
+docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
 ```
 
 ### Results
 
 The resulting model improves it's performance on the game, both by reducing the number of repetitions and by increasing the number of correct guesses. However, the the Qwen3-1.7B model we trained is not able to consistently win the game. The following reward curve shows the coverage of the model's guesses and the coverage of correct Y and G letters.
 
-<iframe src="https://burtenshaw-wordle-grpo.hf.space/?project=group-Qwen-Qwen3-17B&metrics=train/rewards/reward_coverage/mean&runs=run-2025-10-26_09-39-49&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>
+<iframe src="https://burtenshaw-wordle-grpo.hf.space?project=group-Qwen-Qwen3-17B&metrics=reward&runs=run-2025-10-26_09-39-49,run-2025-10-26_08-04-49&sidebar=hidden&navbar=hidden" style="width:1600px; height:500px; border:0;"></iframe>
 
 We experimented larger models like `gpt-oss-20b` and found that model was able to consistently win the game. However, this requires a lot of compute to train and the model. Why not try this out yourself?
