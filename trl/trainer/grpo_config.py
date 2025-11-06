@@ -166,7 +166,7 @@ class GRPOConfig(TrainingArguments):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
-            When used with `loss_type="cispo"`, this corresponds to the ε_max param specified in the [ScaleRL
+            When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
             paper](https://arxiv.org/pdf/2510.13786) and the recommended value is `5.0`.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
@@ -540,7 +540,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
-            "When used with `loss_type='cispo`, this corresponds to the ε_max param specified in the"
+            "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the"
             "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
         },
     )
