@@ -31,7 +31,7 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 ### Reward modeling
 
-- [`PRMTrainer`]
+- [`experimental.prm.PRMTrainer`] 🧪
 - [`RewardTrainer`]
 
 </div>
