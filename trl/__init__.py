@@ -99,6 +99,7 @@ _import_structure = {
     ],
     "trainer.callbacks": [
         "BEMACallback",
+        "MergeModelCallback",
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WeaveCallback",
@@ -179,6 +180,7 @@ if TYPE_CHECKING:
     )
     from .trainer.callbacks import (
         BEMACallback,
+        MergeModelCallback,
         RichProgressCallback,
         SyncRefModelCallback,
         WeaveCallback,
