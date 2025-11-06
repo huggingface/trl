@@ -21,7 +21,7 @@ from accelerate import Accelerator
 from huggingface_hub import InferenceClient
 from transformers.utils import is_openai_available
 
-from ..import_utils import is_llm_blender_available
+from ...import_utils import is_llm_blender_available
 
 
 if is_llm_blender_available():
