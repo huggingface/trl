@@ -479,20 +479,37 @@ These parameters only appear in the [published version](https://aclanthology.org
 
 Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC.
 ```python
-# Curate DPO pairs with rejection sampling BEFORE training
-from datasets import Dataset
+from datasets import load_dataset
 from trl import DPOConfig, DPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-def rso_accept(ex):  # replace with your statistic (gap / z-score / judge score)
-    return ex.get("rso_keep", True)
+# 1) Model & tokenizer (keep the example self-contained)
+model = AutoModelForCausalLM.from_pretrained("...") 
+tokenizer = AutoTokenizer.from_pretrained("...")
 
-dpo_pairs = dpo_pairs.filter(rso_accept)
+# 2) Load and (optionally) filter your training data
+train_dataset = load_dataset(...)  # e.g., ("json", data_files="rso_pairs.jsonl")
 
-model = AutoModelForCausalLM.from_pretrained("..."); tok = AutoTokenizer.from_pretrained("...")
-args = DPOConfig(loss_type="hinged", beta=0.1)
-trainer = DPOTrainer(model=model, args=args, tokenizer=tok, train_dataset=dpo_pairs)
+def rso_accept(example):  # replace with your actual filter/score logic
+    return example.get("rso_keep", True)
+
+train_dataset = train_dataset.filter(rso_accept)
+
+# 3) Configure DPO
+training_args = DPOConfig(
+    loss_type="sigmoid",
+    beta=0.1,
+)
+
+# 4) Train
+trainer = DPOTrainer(
+    model=model,
+    args=training_args,
+    tokenizer=tokenizer,
+    train_dataset=train_dataset,
+)
 trainer.train()
+
 ```
 
 ### Nash Learning from Human Feedback
