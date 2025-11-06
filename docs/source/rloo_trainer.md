@@ -2,6 +2,12 @@
 
 [![model badge](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
 
+<Tip warning={true}>
+
+`RLOOTrainer` has been moved to `trl.experimental.rloo.RLOOTrainer` and will be removed from `trl.RLOOTrainer` in TRL 0.29.0. Please update your imports to use the experimental module. See [issue #4223](https://github.com/huggingface/trl/issues/4223) for more information.
+
+</Tip>
+
 ## Overview
 
 TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style

@@ -35,7 +35,7 @@ import torch
 from datasets import load_dataset
 from peft import LoraConfig
 
-from trl import RLOOConfig, RLOOTrainer
+from trl.experimental.rloo import RLOOConfig, RLOOTrainer
 from trl.rewards import accuracy_reward, think_format_reward
 
 
