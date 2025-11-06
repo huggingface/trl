@@ -18,14 +18,9 @@ from typing import Any
 import torch
 from accelerate.utils import gather_object
 
-from trl.data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
-from trl.trainer.grpo_trainer import GRPOTrainer
-from trl.trainer.utils import nanmax, nanmin, nanstd, pad
-
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ...trainer.grpo_trainer import GRPOTrainer
+from ...trainer.utils import nanmax, nanmin, nanstd, pad
 from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
 
 
