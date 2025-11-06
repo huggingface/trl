@@ -1824,10 +1824,9 @@ class GRPOTrainer(BaseTrainer):
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+        if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages.unsqueeze(1) * per_token_logps
-
         else:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
@@ -1880,7 +1879,7 @@ class GRPOTrainer(BaseTrainer):
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
-        if self.loss_type != "cispo":
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
