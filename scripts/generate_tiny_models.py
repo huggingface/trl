@@ -359,7 +359,7 @@ for model_id, model_class in [
         del text_config["layer_types"]
         # "mrope_section" needs 3 elements: for dim, offset in enumerate((1, 2), start=1): mrope_section[dim]
         # See: https://github.com/huggingface/transformers/blob/fe5ca9ddaa07fac2872407e75c7a7661216ac956/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L361
-        text_config["rope_scaling"] = {'mrope_interleaved': True, 'mrope_section': [2, 2, 2], 'rope_type': 'default'}
+        text_config["rope_scaling"] = {"mrope_interleaved": True, "mrope_section": [2, 2, 2], "rope_type": "default"}
         vision_config["depth"] = 2
         vision_config["out_hidden_size"] = 16
 
