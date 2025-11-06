@@ -1345,6 +1345,7 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ],
     )
     @require_vision
@@ -1380,7 +1381,8 @@ class TestSFTTrainer(TrlTestCase):
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or
                 model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or
+                model_id == "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration" and "model.visual.deepstack_merger_list" in n
             ):
             # fmt: on
                 continue
