@@ -522,7 +522,7 @@ from trl import DPOConfig, DPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("..."); tok = AutoTokenizer.from_pretrained("...")
-args = DPOConfig(loss_type="sigmoid", beta=0.1)
+args = DPOConfig()
 trainer = DPOTrainer(model=model, args=args, tokenizer=tok, train_dataset=...)
 trainer.train()
 
@@ -554,8 +554,8 @@ for ex in prompts_ds:
 
 augmented_pairs = dpo_pairs.add_items(new_pairs)
 
-args = DPOConfig(loss_type="sigmoid", beta=0.1)
-trainer = DPOTrainer(model=policy, args=args, tokenizer=tok, train_dataset=augmented_pairs)
+training_args = DPOConfig()
+trainer = DPOTrainer(model=model, args=training_args, tokenizer=tok, train_dataset=...)
 trainer.train()
 ```
 
