@@ -34,7 +34,7 @@ Below is the script to train the model:
 ```python
 # train_orpo.py
 from datasets import load_dataset
-from trl import ORPOConfig, ORPOTrainer
+from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")

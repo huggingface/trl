@@ -70,8 +70,6 @@
       title: KTO
     - local: nash_md_trainer
       title: Nash-MD
-    - local: orpo_trainer
-      title: ORPO
     - local: ppo_trainer
       title: PPO
     - local: prm_trainer
@@ -117,8 +115,10 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
-  - local: papo_trainer
-    title: PAPO
   - local: openenv
     title: OpenEnv Integration
+  - local: orpo_trainer
+    title: ORPO
+  - local: papo_trainer
+    title: PAPO
   title: Experimental
