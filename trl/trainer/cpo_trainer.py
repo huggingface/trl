@@ -15,6 +15,7 @@
 import warnings
 from collections.abc import Callable
 
+import torch
 import torch.nn as nn
 from datasets import Dataset
 from transformers import (
@@ -28,7 +29,8 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
-from ..experimental.cpo import CPOConfig, CPOTrainer as _CPOTrainer
+from ..experimental.cpo import CPOConfig
+from ..experimental.cpo import CPOTrainer as _CPOTrainer
 
 
 class CPOTrainer(_CPOTrainer):
