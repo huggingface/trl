@@ -20,7 +20,7 @@ from ...trainer.online_dpo_config import OnlineDPOConfig
 @dataclass
 class XPOConfig(OnlineDPOConfig):
     r"""
-    Configuration class for the [`XPOTrainer`].
+    Configuration class for the [`experimental.xpo.XPOTrainer`].
 
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 

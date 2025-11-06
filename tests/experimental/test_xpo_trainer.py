@@ -19,11 +19,12 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.xpo import XPOConfig, XPOTrainer
 
-from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
+from ..testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
 
 @pytest.mark.low_priority
 class TestXPOTrainer(TrlTestCase):

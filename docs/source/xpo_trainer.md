@@ -1,11 +1,5 @@
 # XPO Trainer
 
-<Tip warning={true}>
-
-XPOTrainer is deprecated and will be removed in TRL 0.29.0. Please use [`experimental.xpo.XPOTrainer`] instead. See [issue #4223](https://github.com/huggingface/trl/issues/4223) for more information.
-
-</Tip>
-
 [![model badge](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
 
 ## Overview
@@ -17,6 +11,9 @@ The abstract from the paper is the following:
 > Reinforcement learning from human feedback (RLHF) has emerged as a central tool for language model alignment. We consider online exploration in RLHF, which exploits interactive access to human or AI feedback by deliberately encouraging the model to produce diverse, maximally informative responses. By allowing RLHF to confidently stray from the pre-trained model, online exploration offers the possibility of novel, potentially super-human capabilities, but its full potential as a paradigm for language model training has yet to be realized, owing to computational and statistical bottlenecks in directly adapting existing reinforcement learning techniques. We propose a new algorithm for online exploration in RLHF, Exploratory Preference Optimization (XPO), which is simple and practical -- a one-line change to (online) Direct Preference Optimization (DPO; Rafailov et al., 2023) -- yet enjoys the strongest known provable guarantees and promising empirical performance. XPO augments the DPO objective with a novel and principled exploration bonus, empowering the algorithm to explore outside the support of the initial model and human feedback data. In theory, we show that XPO is provably sample-efficient and converges to a near-optimal language model policy under natural exploration conditions, irrespective of whether the initial model has good coverage. Our analysis, which builds on the observation that DPO implicitly performs a form of Q*-approximation (or, Bellman error minimization), combines previously disparate techniques from language modeling and theoretical reinforcement learning in a serendipitous fashion through the perspective of KL-regularized Markov decision processes. Empirically, we find that XPO is more sample-efficient than non-exploratory DPO variants in a preliminary evaluation.
 
 This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif),  [Quentin Gallouédec](https://huggingface.co/qgallouedec) and [Lewis Tunstall](https://huggingface.co/lewtun).
+
+> [!NOTE]
+> XPO is currently experimental. The API may change without notice while the feature is iterated on.
 
 ## Quick start
 
@@ -33,7 +30,8 @@ Below is the script to train the model:
 ```python
 # train_xpo.py
 from datasets import load_dataset
-from trl import PairRMJudge, XPOConfig, XPOTrainer
+from trl import PairRMJudge
+from trl.experimental.xpo import XPOConfig, XPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -68,7 +66,7 @@ The best programming language depends on individual preferences and familiarity 
 
 ## Expected dataset type
 
-XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`XPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`experimental.xpo.XPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -95,7 +93,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
 
 ### Encourage EOS token generation
 
-When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`XPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`XPOConfig`]:
+When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`experimental.xpo.XPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`experimental.xpo.XPOConfig`]:
 
 ```python
 training_args = XPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
@@ -151,8 +149,8 @@ While training and evaluating we record the following reward metrics:
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/model_contain_eos_token`: The amount of times the model's output contains the eos token.
 * `val/ref_contain_eos_token`: The amount of times the reference's output contains the eos token.
-* `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
-* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
+* `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
 
 ## XPOTrainer
 

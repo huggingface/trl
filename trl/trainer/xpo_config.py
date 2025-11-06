@@ -14,27 +14,14 @@
 
 import warnings
 
-from ..experimental.xpo import XPOConfig as ExperimentalXPOConfig
+from ..experimental.xpo import XPOConfig as _XPOConfig
 
 
-class XPOConfig(ExperimentalXPOConfig):
-    r"""
-    Configuration class for the [`XPOTrainer`].
-
-    .. warning::
-        This class is deprecated and will be removed in TRL 0.29.0. Please use
-        `trl.experimental.xpo.XPOConfig` instead. See https://github.com/huggingface/trl/issues/4223
-        for more information.
-
-    For full documentation, see [`trl.experimental.xpo.XPOConfig`].
-    """
-
-    def __init__(self, *args, **kwargs):
+class XPOConfig(_XPOConfig):
+    def __post_init__(self):
         warnings.warn(
-            "XPOConfig is deprecated and will be removed in TRL 0.29.0. "
-            "Please use `trl.experimental.xpo.XPOConfig` instead. "
-            "See https://github.com/huggingface/trl/issues/4223 for more information.",
-            FutureWarning,
-            stacklevel=2,
+            "The `XPOConfig` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.xco import XPOConfig`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
-        super().__init__(*args, **kwargs)
+        super().__post_init__()

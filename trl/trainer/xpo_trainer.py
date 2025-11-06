@@ -14,27 +14,14 @@
 
 import warnings
 
-from ..experimental.xpo import XPOTrainer as ExperimentalXPOTrainer
+from ..experimental.xpo import XPOTrainer as _XPOTrainer
 
 
-class XPOTrainer(ExperimentalXPOTrainer):
-    """
-    Initialize XPOTrainer.
-
-    .. warning::
-        This class is deprecated and will be removed in TRL 0.29.0. Please use
-        `trl.experimental.xpo.XPOTrainer` instead. See https://github.com/huggingface/trl/issues/4223
-        for more information.
-
-    For full documentation, see [`trl.experimental.xpo.XPOTrainer`].
-    """
-
+class XPOTrainer(_XPOTrainer):
     def __init__(self, *args, **kwargs):
         warnings.warn(
-            "XPOTrainer is deprecated and will be removed in TRL 0.29.0. "
-            "Please use `trl.experimental.xpo.XPOTrainer` instead. "
-            "See https://github.com/huggingface/trl/issues/4223 for more information.",
-            FutureWarning,
-            stacklevel=2,
+            "The `XPOTrainer` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.xpo import XPOTrainer`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
         super().__init__(*args, **kwargs)
