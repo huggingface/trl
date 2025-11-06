@@ -17,7 +17,6 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     loss_type="grpo",
-    beta=0.0,                 # GRPO commonly trains without explicit KL in released configs
     epsilon=2e-4,             # clip range (use paper/experiment settings if you mirror them)
     epsilon_high=4e-4,        # upper clip (symmetrical if not specified)
     steps_per_generation=4,   # sample multiple completions per prompt
