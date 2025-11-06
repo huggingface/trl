@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import os
 
 import pandas as pd
 import torch
@@ -226,7 +225,7 @@ class RichProgressCallback(TrainerCallback):
             table.add_column("Value", justify="right")
 
             for metric, val in metrics.items():
-                formatted = f"{val:.3f}" if isinstance(val, (float, int)) else str(val)
+                formatted = f"{val:.3f}" if isinstance(val, float | int) else str(val)
                 table.add_row(metric, formatted)
 
             tables.append(Panel(table, border_style="cyan", padding=(0, 1)))
