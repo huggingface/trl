@@ -1820,7 +1820,7 @@ class GRPOTrainer(BaseTrainer):
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
         if self.loss_type == "cispo":
             coef_1 = torch.clamp(torch.exp(log_importance_weights), max=self.epsilon_high).detach()
-            per_token_loss = coef_1 * advantages.unsqueeze(1) * per_token_logps
+            per_token_loss = -coef_1 * advantages.unsqueeze(1) * per_token_logps
 
         else:
             coef_1 = torch.exp(log_importance_weights)
@@ -1894,7 +1894,7 @@ class GRPOTrainer(BaseTrainer):
             gathered_clip_ratio = self.accelerator.gather(clip_ratio)
             self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         else:
-            is_cispo_clipped = (log_importance_weights > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+            is_cispo_clipped = (torch.exp(log_importance_weights) > self.epsilon_high) & (advantages.unsqueeze(1) > 0)
             cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
             gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
             self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())

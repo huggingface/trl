@@ -238,10 +238,10 @@ trainer = PAPOTrainer(
 
 A systematic study that defines a framework for analyzing and predicting reinforcement learning scaling in large language models, identifies key design choices that affect compute efficiency and propose a best-practice recipe called ScaleRL.
 
-You can parially reproduce the ScaleRL recipe using the `GRPOTrainer` with the following configs:
+You can partially reproduce the ScaleRL recipe using the `GRPOTrainer` with the following configs:
 
 ```python
-from trl import GPROConfig
+from trl import GRPOConfig
 
 config = GRPOConfig(
     loss_type="cispo",
