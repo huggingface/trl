@@ -17,8 +17,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
-from trl import PPOConfig, PPOTrainer
-from trl.trainer.ppo_trainer import masked_mean, masked_var, masked_whiten
+from trl.experimental.ppo import PPOConfig, PPOTrainer, masked_mean, masked_var, masked_whiten
 
 from .testing_utils import TrlTestCase, require_peft
 

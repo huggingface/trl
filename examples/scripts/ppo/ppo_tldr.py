@@ -36,13 +36,12 @@ from transformers import (
 
 from trl import (
     ModelConfig,
-    PPOConfig,
-    PPOTrainer,
     ScriptArguments,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
 # Enable logging in a Hugging Face Space
