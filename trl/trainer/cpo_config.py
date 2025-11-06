@@ -54,6 +54,7 @@ class CPOConfig(TrainingArguments):
                   [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
                 - `"simpo"`: SimPO loss from the [SimPO](https://huggingface.co/papers/2405.14734) paper.
+                - `"simper"`: SimPER loss from the [SimPER](https://arxiv.org/abs/2502.00883) paper.
                 - `"alphapo"`: AlphaPO loss from the [AlphaPO](https://huggingface.co/papers/2501.03884) paper. This
                   automatically sets `loss_type="simpo"` and `cpo_alpha=0.0`.
 
@@ -149,7 +150,7 @@ class CPOConfig(TrainingArguments):
         default="sigmoid",
         metadata={
             "help": "Type of loss to use.",
-            "choices": ["sigmoid", "hinge", "ipo", "simpo", "alphapo"],
+            "choices": ["sigmoid", "hinge", "ipo", "simpo", "simper", "alphapo"],
         },
     )
     disable_dropout: bool = field(
@@ -214,5 +215,9 @@ class CPOConfig(TrainingArguments):
         if self.loss_type == "alphapo":
             self.loss_type = "simpo"
             self.cpo_alpha = 0.0
+
+        # When SimPer loss is used, the perplexity is computed; therefore, no need for duplicate computation of perplexity by setting self.alpha to 0.0
+        if self.loss_type == "simper":
+            self.alpha = 0.0
 
         super().__post_init__()

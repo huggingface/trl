@@ -342,6 +342,19 @@ class CPOTrainer(BaseTrainer):
         # AlphaPO parameter for reward shaping
         self.alpha = args.alpha
 
+        # When SimPer loss is used, the perplexity is computed; therefore, no need for duplicate computation of perplexity by setting self.alpha to 0.0
+        if args.loss_type == "simper":
+            if self.alpha != 0.0:
+                logger.warning(
+                    "When SimPer loss is used, the perplexity is computed; therefore, no need for duplicate computation of perplexity by setting self.alpha to 0.0",
+                )
+            self.alpha = 0.0
+
+            if self.beta != 1.0:
+                logger.warning(
+                    "When SimPer loss is used, the perplexity is computed; therefore, no need for scaling by beta. Setting self.beta to 1.0",
+                )
+            self.beta = 1.0
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
@@ -721,6 +734,14 @@ class CPOTrainer(BaseTrainer):
         elif self.loss_type == "ipo":
             # eqn (17) of the paper where beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
             losses = (logits - 1 / (2 * self.beta)) ** 2
+
+        elif self.loss_type == "simper":
+            # In the paper (https://arxiv.org/abs/2502.00883), SimPER defines rewards as the perplexity, which is the
+            # exponentiation of the log probability.  Thus, we exponentiate the log probabilities to obtain the rewards.
+            chosen_probs = torch.exp(policy_chosen_logps).to(self.accelerator.device)
+            rejected_probs = torch.exp(policy_rejected_logps).to(self.accelerator.device)
+            losses = -chosen_probs * (1 - self.label_smoothing) + rejected_probs * self.label_smoothing
+
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'simpo']"
