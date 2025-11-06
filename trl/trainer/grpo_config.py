@@ -201,6 +201,9 @@ class GRPOConfig(TrainingArguments):
               batch. Note that normalization is performed over the local batch only, so results may slightly vary
               depending on the local batch size, despite a constant effective batch size. When using
               `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+            - `"cispo"`: Clips the importance sampling weights instead of the advantage scaled importance weights. The clipped weights
+              are then multiplied with the advantages and policy model's log probs. Individual token losses are aggregated by
+              normalizing with the number of active tokens in the global accumulated batch. This method was introduced in the MiniMax-M1 paper.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -582,6 +585,9 @@ class GRPOConfig(TrainingArguments):
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
             "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. The clipped weights "
+            "are then multiplied with the advantages and policy model's log probs. Individual token losses are aggregated by "
+            "normalizing with the number of active tokens in the global accumulated batch. This method was introduced in the MiniMax-M1 paper."
         },
     )
     mask_truncated_completions: bool = field(
