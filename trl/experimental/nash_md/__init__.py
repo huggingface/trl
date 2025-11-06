@@ -15,4 +15,5 @@
 from .nash_md_config import NashMDConfig
 from .nash_md_trainer import NashMDTrainer
 
+
 __all__ = ["NashMDConfig", "NashMDTrainer"]
