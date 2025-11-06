@@ -2040,7 +2040,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
-            attn_implementation="kernels-community/flash-attn2",
+            attn_implementation="kernels-community/flash-attn",
             dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,

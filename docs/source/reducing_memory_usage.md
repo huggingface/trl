@@ -161,7 +161,7 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
+training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn"})
 ```
 
 </hfoption>
@@ -170,7 +170,7 @@ training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
+training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn"})
 ```
 
 </hfoption>
