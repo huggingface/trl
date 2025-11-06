@@ -67,30 +67,87 @@ By using OpenEnv in this loop, you can:
 
 ## Running the Environments
 
-You can run OpenEnv environments in three different ways:
+You can run OpenEnv environments in three different ways: 
 
-1. **Local Docker container** *(recommended)*
+- We can load the environment from the Hugging Face Hub and execute as a docker container.
+- We can launch the environment directly using Uvicorn in python, which you need on google colab.
+- We can connect to a hosted environment running on the Hugging Face Hub.
 
-   To start a Docker container:
-   * Open the environment on the Hugging Face Hub.
-   * Click the **⋮ (three dots)** menu.
-   * Select **“Run locally.”**
-   * Copy and execute the provided command in your terminal.
+<hfoptions id="env_mode">
 
-   Example:
-   ```bash
-   docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
-    ```
-    ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
-2. **Local Python process**: Launch the environment directly using Uvicorn.
-   You can start the server manually as a local process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
-   ```bash
-   python -m uvicorn envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
-   ```
-3. **Hugging Face Spaces**: Connect to a hosted environment running on the Hugging Face Hub.
-   To find the connection URL, open the Space page, click the **⋮ (three dots)** menu, and select **“Embed this Space.”**
-   You can then use that URL to connect directly from your client.
-   Keep in mind that public Spaces may have rate limits or temporarily go offline if inactive.
+<hfoption id="docker">
+
+**Load from Hugging Face Hub** *(recommended)*
+
+We can use the `from_hub` method to load the environment from the hub. This method will automatically start a docker container for the environment on your local machine. `openenv/echo-env` is the repo_id of the space on the hub.
+
+```python
+env = EchoEnv.from_hub("openenv/echo-env")
+```
+
+If you want to launch the environment manually, you can use the following command to pull and run the docker container:
+
+```bash
+docker run -d -p 8001:8000 --platform linux/amd64  registry.hf.space/openenv-echo-env:latest
+```
+
+And then you can connect to the environment using the following code:
+
+```python
+env = EchoEnv(base_url="http://0.0.0.0:8001")
+```
+
+Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but you will need to manage the ports for your local machine.
+
+> [!NOTE]
+> You can find the docker container for for any space on the hub.
+>
+> * Open the space page on the hub.
+> * Click the **⋮ (three dots)** menu.
+> * Select **“Run locally.”**
+> * Copy and execute the provided command in your terminal.
+>
+> ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
+
+<hfoption id="space">
+
+**Connect to a remote Hugging Face Space**
+
+You can connect to a hosted environment running on the Hugging Face Hub, by passing the URL of the space to the `from_hub` method.
+
+```python
+env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
+```
+
+> [!NOTE]
+> You can find the connection URL of any space on the hub.
+>
+> * Open the space page on the hub.
+> * Click the **⋮ (three dots)** menu.
+> * Select **“Embed this Space.”**
+> * Copy the connection URL.
+
+</hfoption>
+
+<hfoption id="local">
+
+**Local Python process**
+
+You can start the server manually as a local python process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
+   
+```bash
+python -m uvicorn envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
+```
+
+And then you can connect to the environment using the following code:
+
+```python
+env = EchoEnv(base_url="http://0.0.0.0:8001")
+```
+
+</hfoption>
+
+</hfoptions>
 
 ## A simple example
 
@@ -101,7 +158,8 @@ from envs.echo_env import EchoEnv, EchoAction
 from trl import GRPOConfig, GRPOTrainer
 
 # Create HTTP client for Echo Environment
-client = EchoEnv.from_docker_image("echo-env:latest")
+client = EchoEnv.from_hub("openenv/echo-env")
+
 """
 Alternatively, you can start the environment manually with Docker and connect to it:
 
