@@ -240,7 +240,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         grouped_std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         grouped_std_rewards = grouped_std_rewards.repeat_interleave(self.num_generations, dim=0)
-        
+
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
             std_rewards = grouped_std_rewards.clone()
