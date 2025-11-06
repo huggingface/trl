@@ -136,7 +136,8 @@ env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
 You can start the server manually as a local python process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
    
 ```bash
-python -m uvicorn envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
+hf download openenv/echo_env --repo-type=space --local-dir=echo_env
+python -m uvicorn echo_env.src.envs.echo_env.server.app:app --host 0.0.0.0 --port 8002
 ```
 
 And then you can connect to the environment using the following code:
