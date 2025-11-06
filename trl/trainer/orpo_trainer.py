@@ -16,6 +16,7 @@ import warnings
 from collections.abc import Callable
 from typing import Any
 
+import torch
 import torch.nn as nn
 from datasets import Dataset
 from transformers import (
@@ -29,11 +30,11 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
-from ..experimental.orpo import ORPOTrainer as ExperimentalORPOTrainer
+from ..experimental.orpo import ORPOTrainer as _ORPOTrainer
 from .orpo_config import ORPOConfig
 
 
-class ORPOTrainer(ExperimentalORPOTrainer):
+class ORPOTrainer(_ORPOTrainer):
     """
     Initialize ORPOTrainer.
 

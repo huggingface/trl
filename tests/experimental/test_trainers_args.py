@@ -16,6 +16,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.bco import BCOConfig, BCOTrainer
+from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 
 from ..testing_utils import TrlTestCase, require_sklearn
 
@@ -68,3 +69,30 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.prompt_sample_size == 512
         assert trainer.args.min_density_ratio == 0.2
         assert trainer.args.max_density_ratio == 20.0
+
+    def test_orpo(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = ORPOConfig(
+            self.tmp_dir,
+            max_length=256,
+            max_prompt_length=64,
+            max_completion_length=64,
+            beta=0.5,
+            disable_dropout=False,
+            label_pad_token_id=-99,
+            padding_value=-99,
+            truncation_mode="keep_start",
+            # generate_during_eval=True, # ignore this one, it requires wandb
+            is_encoder_decoder=True,
+            model_init_kwargs={"trust_remote_code": True},
+            dataset_num_proc=4,
+        )
+        trainer = ORPOTrainer(model=model_id, args=training_args, train_dataset=dataset, processing_class=tokenizer)
+        assert trainer.args.max_length == 256
+        assert trainer.args.max_prompt_length == 64
+        assert trainer.args.max_completion_length == 64
+        assert trainer.args.beta == 0.5
+        assert not trainer.args.disable_dropout
+        assert trainer.args.label_pad_token_id == -99
