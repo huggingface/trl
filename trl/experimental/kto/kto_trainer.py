@@ -6,19 +6,15 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law
-
- law or agreed to in writing, software
+# Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
 import inspect
-import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -56,7 +52,6 @@ from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe
 from ...import_utils import is_liger_kernel_available
 from ...models import create_reference_model, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
-from .kto_config import KTOConfig
 from ...trainer.utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
@@ -65,6 +60,7 @@ from ...trainer.utils import (
     peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from .kto_config import KTOConfig
 
 
 if is_liger_kernel_available():

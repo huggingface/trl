@@ -13,13 +13,24 @@
 # limitations under the License.
 
 import warnings
-from typing import TYPE_CHECKING, Any, Literal
+from collections.abc import Callable
 
+import torch
+import torch.nn as nn
+from datasets import Dataset
+from transformers import (
+    BaseImageProcessor,
+    DataCollator,
+    FeatureExtractionMixin,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+)
+from transformers.trainer_utils import EvalLoopOutput
+
+from ..experimental.kto import KTOConfig
 from ..experimental.kto import KTOTrainer as ExperimentalKTOTrainer
-
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
 
 
 class KTOTrainer(ExperimentalKTOTrainer):
@@ -41,19 +52,23 @@ class KTOTrainer(ExperimentalKTOTrainer):
 
     def __init__(
         self,
-        model: "PreTrainedModel | nn.Module | str | None" = None,
-        ref_model: "PreTrainedModel | nn.Module | str | None" = None,
-        args: "KTOConfig | None" = None,
-        train_dataset: "Dataset | None" = None,
-        eval_dataset: "Dataset | dict[str, Dataset] | None" = None,
-        processing_class: "PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin | None" = None,
-        data_collator: "DataCollator | None" = None,
-        model_init: "Callable[[], PreTrainedModel] | None" = None,
-        callbacks: "list[TrainerCallback] | None" = None,
-        optimizers: tuple["torch.optim.Optimizer", "torch.optim.lr_scheduler.LambdaLR"] = (None, None),
-        preprocess_logits_for_metrics: "Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None" = None,
-        peft_config: "dict | None" = None,
-        compute_metrics: "Callable[[EvalLoopOutput], dict] | None" = None,
+        model: PreTrainedModel | nn.Module | str | None = None,
+        ref_model: PreTrainedModel | nn.Module | str | None = None,
+        args: KTOConfig | None = None,
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        data_collator: DataCollator | None = None,
+        model_init: Callable[[], PreTrainedModel] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: dict | None = None,
+        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
     ):
         warnings.warn(
             "KTOTrainer has been moved to trl.experimental.kto.KTOTrainer and will be removed from "
