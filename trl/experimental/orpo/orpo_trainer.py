@@ -48,7 +48,6 @@ from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ...trainer.base_trainer import BaseTrainer
-from .orpo_config import ORPOConfig
 from ...trainer.utils import (
     DPODataCollatorWithPadding,
     add_bos_token_if_needed,
@@ -59,6 +58,7 @@ from ...trainer.utils import (
     peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from .orpo_config import ORPOConfig
 
 
 if is_peft_available():
