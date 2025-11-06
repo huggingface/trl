@@ -15,11 +15,13 @@
 import warnings
 
 from ..experimental.ppo import (
-    PPOTrainer as ExperimentalPPOTrainer,
     PolicyAndValueWrapper,
     masked_mean,
     masked_var,
     masked_whiten,
+)
+from ..experimental.ppo import (
+    PPOTrainer as ExperimentalPPOTrainer,
 )
 
 

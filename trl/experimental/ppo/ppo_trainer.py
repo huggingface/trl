@@ -17,7 +17,6 @@ import math
 import os
 import textwrap
 import time
-import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -48,7 +47,6 @@ from transformers.utils import is_peft_available, is_rich_available
 from ...models import create_reference_model
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
-from .ppo_config import PPOConfig
 from ...trainer.utils import (
     OnlineTrainerState,
     batch_generation,
@@ -65,6 +63,7 @@ from ...trainer.utils import (
     selective_log_softmax,
     truncate_response,
 )
+from .ppo_config import PPOConfig
 
 
 logger = logging.get_logger(__name__)
