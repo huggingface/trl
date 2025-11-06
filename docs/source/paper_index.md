@@ -490,7 +490,7 @@ def rso_accept(ex):  # replace with your statistic (gap / z-score / judge score)
 dpo_pairs = dpo_pairs.filter(rso_accept)
 
 model = AutoModelForCausalLM.from_pretrained("..."); tok = AutoTokenizer.from_pretrained("...")
-args = DPOConfig(loss_type="sigmoid", beta=0.1)
+args = DPOConfig(loss_type="hinged", beta=0.1)
 trainer = DPOTrainer(model=model, args=args, tokenizer=tok, train_dataset=dpo_pairs)
 trainer.train()
 ```
