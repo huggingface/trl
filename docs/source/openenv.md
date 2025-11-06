@@ -2,7 +2,7 @@
 
 ## Overview
 
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework from Meta's PyTorch team for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It offers [Gymnasium-style APIs](https://gymnasium.farama.org) (e.g., `reset()` and `step()`) to interface with environments in a standard manner, and supports running these environments as backend servers (for example via HTTP or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/environment-hub).
+[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework from Meta's PyTorch team for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It offers [Gymnasium-style APIs](https://gymnasium.farama.org) (e.g., `reset()` and `step()`) to interface with environments in a standard manner, and supports running these environments as backend servers (for example, via HTTP or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/environment-hub).
 
 In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel free to explore the links above to dive deeper into OpenEnv itself.
 
@@ -69,8 +69,8 @@ By using OpenEnv in this loop, you can:
 
 You can run OpenEnv environments in three different ways: 
 
-- We can load the environment from the Hugging Face Hub and execute as a docker container.
-- We can launch the environment directly using Uvicorn in python, which you need on google colab.
+- We can load the environment from the Hugging Face Hub and execute it as a Docker container.
+- We can launch the environment directly using Uvicorn in Python, which you need on Google Colab.
 - We can connect to a hosted environment running on the Hugging Face Hub.
 
 <hfoptions id="env_mode">
@@ -79,13 +79,13 @@ You can run OpenEnv environments in three different ways:
 
 **Load from Hugging Face Hub** *(recommended)*
 
-We can use the `from_hub` method to load the environment from the hub. This method will automatically start a docker container for the environment on your local machine. `openenv/echo-env` is the repo_id of the space on the hub.
+We can use the `from_hub` method to load the environment from the hub. This method will automatically start a Docker container for the environment on your local machine. `openenv/echo-env` is the repo_id of the space on the hub.
 
 ```python
 env = EchoEnv.from_hub("openenv/echo-env")
 ```
 
-If you want to launch the environment manually, you can use the following command to pull and run the docker container:
+If you want to launch the environment manually, you can use the following command to pull and run the Docker container:
 
 ```bash
 docker run -d -p 8001:8000 --platform linux/amd64  registry.hf.space/openenv-echo-env:latest
@@ -100,7 +100,7 @@ env = EchoEnv(base_url="http://0.0.0.0:8001")
 Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but you will need to manage the ports for your local machine.
 
 > [!NOTE]
-> You can find the docker container for for any space on the hub.
+> You can find the Docker container for any space on the hub.
 >
 > * Open the space page on the hub.
 > * Click the **⋮ (three dots)** menu.
@@ -113,7 +113,7 @@ Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but yo
 
 **Connect to a remote Hugging Face Space**
 
-You can connect to a hosted environment running on the Hugging Face Hub, by passing the URL of the space to the `from_hub` method.
+You can connect to a hosted environment running on the Hugging Face Hub by passing the URL of the space to the `from_hub` method.
 
 ```python
 env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
@@ -133,7 +133,7 @@ env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
 
 **Local Python process**
 
-You can start the server manually as a local python process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
+You can start the server manually as a local Python process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
    
 ```bash
 python -m uvicorn envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
@@ -283,7 +283,7 @@ We will use the `textarena` environment to train a model to play Wordle. The env
 Wordle is a useful game to train a model on because it requires the model to reason about the word and the feedback provided by the environment. Also, it is a purely language based game that requires no external tools or knowledge. Furthermore, we found that models from 1 billion parameters and up are able to improve on wordle and only require 8 tokens to generate a guess, which makes the game a good benchmark to experiment with Reinforcement Learning environments without significant compute requirements.
 
 > [!NOTE] How does Wordle work?
-> Wordle is a word guessing game where the player has to guess a 5-letter word. The player can make 6 guesses, and for each guess, the environment will provide feedback on the correctness of the guess. The player wins if they guess the word in 6 guesses or less. It challenges the model to generate words that are likely to be correct, and to learn from the feedback provided by the environment. 
+> Wordle is a word guessing game where the player has to guess a 5-letter word. The player can make 6 guesses, and for each guess, the environment will provide feedback on the correctness of the guess. The player wins if they guess the word in 6 guesses or fewer. It challenges the model to generate words that are likely to be correct, and to learn from the feedback provided by the environment. 
 > 
 > For example, if the wordle environment returns the following feedback:
 >
@@ -291,9 +291,9 @@ Wordle is a useful game to train a model on because it requires the model to rea
 > G U E S S
 > X G Y X X
 > ```
-> The model has guessed the word "GUESS" and the environment has provided feedback as the letters X, G, and Y. Referring to colors in the original game blank, green, and yellow. From this feedback, the model should learn that the word is "GUESS" is incorrect. The letter "E" is in the word, but in the wrong position. The letter "U" is correct and in the correct position.
+> The model has guessed the word "GUESS" and the environment has provided feedback as the letters X, G, and Y. Referring to colors in the original game as blank, green, and yellow. From this feedback, the model should learn that the word "GUESS" is incorrect. The letter "E" is in the word, but in the wrong position. The letter "U" is correct and in the correct position.
  
-In the TextArena environment, reward is only given when the model wins the game. The reward is 1.0 if the model wins, and 0.0 otherwise. This is not a very efficient reward signal for the model, so we have added a number of custom reward functions to the script to help the model learn to play the game. The extensible nature of `reward_funcs` and `rollout_func` allows you to add any custom reward function you want to the script.  
+In the TextArena environment, a reward is only given when the model wins the game. The reward is 1.0 if the model wins, and 0.0 otherwise. This is not a very efficient reward signal for the model, so we have added a number of custom reward functions to the script to help the model learn to play the game. The extensible nature of `reward_funcs` and `rollout_func` allows you to add any custom reward function you want to the script.  
 
 ### Rollout Function
 
@@ -486,8 +486,8 @@ docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
 
 ### Results
 
-The resulting model improves it's performance on the game, both by reducing the number of repetitions and by increasing the number of correct guesses. However, the the Qwen3-1.7B model we trained is not able to consistently win the game. The following reward curve shows the coverage of the model's guesses and the coverage of correct Y and G letters.
+The resulting model improves its performance on the game, both by reducing the number of repetitions and by increasing the number of correct guesses. However, the Qwen3-1.7B model we trained is not able to consistently win the game. The following reward curve shows the coverage of the model's guesses and the coverage of correct Y and G letters.
 
 <iframe src="https://burtenshaw-wordle-grpo.hf.space?project=group-Qwen-Qwen3-17B&metrics=reward&runs=run-2025-10-26_09-39-49,run-2025-10-26_08-04-49&sidebar=hidden&navbar=hidden" style="width:1600px; height:500px; border:0;"></iframe>
 
-We experimented larger models like `gpt-oss-20b` and found that model was able to consistently win the game. However, this requires a lot of compute to train and the model. Why not try this out yourself?
+We experimented with larger models like `gpt-oss-20b` and found that the model was able to consistently win the game. However, this requires a lot of compute to train the model. Why not try this out yourself?
