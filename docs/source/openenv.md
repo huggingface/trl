@@ -109,6 +109,7 @@ Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but yo
 >
 > ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
 
+</hfoption>
 <hfoption id="space">
 
 **Connect to a remote Hugging Face Space**
