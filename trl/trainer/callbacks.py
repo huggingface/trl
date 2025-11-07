@@ -37,7 +37,6 @@ from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_mergekit_available, is_weave_available
 from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
 from ..models.utils import unwrap_model_for_generation
-from .judges import BasePairwiseJudge
 from .utils import get_config_model_id, log_table_to_comet_experiment
 
 
@@ -282,7 +281,7 @@ class WinRateCallback(TrainerCallback):
     ```
 
     Args:
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for comparing completions.
         trainer (`Trainer`):
             Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
@@ -303,7 +302,7 @@ class WinRateCallback(TrainerCallback):
 
     def __init__(
         self,
-        judge: BasePairwiseJudge,
+        judge,
         trainer: Trainer,
         generation_config: GenerationConfig | None = None,
         num_prompts: int | None = None,
