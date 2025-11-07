@@ -67,7 +67,6 @@ from ..models import (
     unwrap_model_for_generation,
 )
 from .base_trainer import BaseTrainer
-from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
@@ -123,7 +122,7 @@ class OnlineDPOTrainer(BaseTrainer):
         ref_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `None`):
             The reference model to use for training. If None is specified, the reference model will be created from the
             model.
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -189,7 +188,7 @@ class OnlineDPOTrainer(BaseTrainer):
         model: PreTrainedModel | nn.Module | str,
         ref_model: PreTrainedModel | nn.Module | None = None,
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
-        judge: BasePairwiseJudge | None = None,
+        judge=None,
         args: OnlineDPOConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
