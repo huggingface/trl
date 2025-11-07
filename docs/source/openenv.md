@@ -138,7 +138,7 @@ You can start the server manually as a local Python process. For more details ab
    
 ```bash
 hf download openenv/echo_env --repo-type=space --local-dir=echo_env
-python -m uvicorn echo_env.src.envs.echo_env.server.app:app --host 0.0.0.0 --port 8002
+python -m uvicorn echo_env.src.envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
 ```
 
 And then you can connect to the environment using the following code:
