@@ -463,7 +463,11 @@ class OnlineDPOTrainer(BaseTrainer):
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                     self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                    if hasattr(torch, "xpu") and hasattr(torch.xpu, "current_device"):
+                        vllm_device = torch.xpu.current_device()
+                    else:
+                        vllm_device = torch.cuda.current_device()
+                    self.vllm_client.init_communicator(device=vllm_device)
                 else:
                     self.vllm_client = None
             elif self.vllm_mode == "colocate":
@@ -755,7 +759,7 @@ class OnlineDPOTrainer(BaseTrainer):
                 max_tokens=self.generation_config.max_tokens,
                 guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
                 generation_kwargs=self.args.generation_kwargs,
-            )
+            )["completion_ids"]
             # Flatten: each prompt generates 2 completions
             completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
         else:
