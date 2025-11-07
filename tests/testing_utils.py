@@ -32,7 +32,7 @@ from transformers.utils import (
     is_vision_available,
 )
 
-from trl import BaseBinaryJudge, BasePairwiseJudge
+from trl.experimental.judges import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import (
     is_joblib_available,
     is_liger_kernel_available,
