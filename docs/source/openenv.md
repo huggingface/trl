@@ -25,16 +25,14 @@ A rollout function must have the following signature:
 ```python
 def rollout_func(
     prompts: list[str],
-    args: GRPOConfig,
-    processing_class
+    trainer: GRPOTrainer,
 ) -> dict[str, list]:
     """
     Custom rollout function for generation and reward computation.
 
     Args:
-        prompts: List of prompts to generate from
-        args: GRPOConfig containing sampling parameters (temperature, top_p, etc.)
-        processing_class: Tokenizer/processor for encoding/decoding
+        prompts: List of prompts routed to the current process
+        trainer: Active GRPOTrainer (gives access to tokenizer, config and helper utilities)
 
     Returns:
         Dictionary containing:
@@ -54,7 +52,7 @@ def rollout_func(
 The typical pattern when combining OpenEnv with TRL looks like this:
 
 1. Start or connect to an OpenEnv environment (e.g., an HTTP endpoint or Dockerized env).
-2. Generate completions from your model — for example, via a vLLM inference server (`use_vllm=True`, `vllm_mode="server"`).
+2. Generate completions from your model — either by hitting your inference server (e.g. vLLM in server mode) or via `trainer.generate_rollout_completions` when using colocated vLLM.
 3. Step through the environment using each completion to compute rewards or metrics.
 4. Add environment results (e.g., `env_reward`) to the rollout result dict.
 5. Access those rewards inside your reward function via `**kwargs`.
@@ -172,21 +170,13 @@ docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
 client = EchoEnv(base_url="http://0.0.0.0:8001")
 """
 
-def rollout_func(prompts, args, processing_class):
-    # 1. Generate completions via vLLM inference server (running on port 8000)
-    payload = {
-        "prompts": prompts,
-        "n": args.num_generations,
-        "temperature": args.temperature,
-        "max_tokens": args.max_completion_length,
-    }
-    response = requests.post("http://0.0.0.0:8000/generate/", json=payload)
-    result = response.json()
-
-    completions_text = processing_class.batch_decode(
-        result["completion_ids"],
-        skip_special_tokens=True
-    )
+def rollout_func(prompts: list[str], trainer: GRPOTrainer):
+    # 1. Generate completions using TRL's helper (works for colocated vLLM)
+    outputs = trainer.generate_rollout_completions(prompts)
+    tokenizer = trainer.processing_class
+    completions_text = [
+        tokenizer.decode(out["completion_ids"], skip_special_tokens=True) for out in outputs
+    ]
 
     # 2. Step through the environment to get rewards
     client.reset()
@@ -196,8 +186,12 @@ def rollout_func(prompts, args, processing_class):
         env_rewards.append(env_result.reward)
 
     # 3. Add environment rewards as extra field
-    result["env_reward"] = env_rewards
-    return result
+    return {
+        "prompt_ids": [out["prompt_ids"] for out in outputs],
+        "completion_ids": [out["completion_ids"] for out in outputs],
+        "logprobs": [out["logprobs"] for out in outputs],
+        "env_reward": env_rewards,
+    }
 
 def reward_from_env(completions, **kwargs):
     """Extract environment rewards passed via rollout_func kwargs."""
@@ -232,8 +226,8 @@ That's it! Now that you’ve seen the full example, let’s unpack how the main 
 3. **Extra fields:** The rollout adds `env_reward` to the result dictionary, which is automatically passed to reward functions.  
 4. **Reward function:** Extracts `env_reward` from `kwargs` to apply environment-computed rewards during training.
 
-> [!WARNING]
-> The `rollout_func` is currently only supported when using vLLM in server mode (`use_vllm=True`, `vllm_mode="server"`).
+> [!TIP]
+> The trainer-aware rollout hook now works in both vLLM server and colocate modes. Prefer `trainer.generate_rollout_completions` in colocate mode so you reuse TRL’s sampling configuration automatically.
 
 ### Running the Example
 
@@ -451,11 +445,11 @@ trainer = GRPOTrainer(
     ],
     train_dataset=dataset,
     args=grpo_config,
-    rollout_func=lambda prompts, args, processing_class: rollout_func(
+    rollout_func=lambda prompts, trainer: rollout_func(
         env=env,
         tokenizer=tokenizer,
         prompts=prompts,
-        args=args,
+        trainer=trainer,
         cli_args=cli_args,
         system_prompt=system_prompt,
     ),

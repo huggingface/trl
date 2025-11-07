@@ -47,11 +47,11 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections import defaultdict
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
-import requests
 from datasets import Dataset
 from transformers import AutoTokenizer
 
@@ -86,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-url",
-        default="https://0.0.0.0:8001",  # default="https://burtenshaw-textarena.hf.space"
+        default="http://localhost:8000",  # default="https://burtenshaw-textarena.hf.space"
         help="Base URL for the TextArena Wordle environment.",
     )
     parser.add_argument(
@@ -108,7 +108,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=5,
+        default=6,
         help="Maximum number of turns to play in the Wordle environment per episode.",
     )
     parser.add_argument(
@@ -210,15 +210,10 @@ def parse_args() -> argparse.Namespace:
         help="TrackIO space identifier.",
     )
     parser.add_argument(
-        "--vllm-endpoint",
-        default=os.getenv("VLLM_ENDPOINT", "http://localhost:8000/generate/"),
-        help="Endpoint for the vLLM server.",
-    )
-    parser.add_argument(
-        "--request-timeout",
-        type=int,
-        default=60,
-        help="Timeout (in seconds) for vLLM HTTP requests.",
+        "--vllm-mode",
+        choices=("colocate",),
+        default="colocate",
+        help="vLLM execution mode; only colocate is supported.",
     )
     parser.add_argument(
         "--logging-steps",
@@ -273,54 +268,6 @@ def make_user_prompt(prompt_text: str, messages: Iterable[TextArenaMessage]) -> 
     )
 
 
-def request_vllm_completion(
-    prompt: str,
-    trainer_args: GRPOConfig,
-    endpoint: str,
-    timeout: int,
-    fallback: argparse.Namespace,
-) -> dict[str, list]:
-    payload: dict[str, object] = {
-        "prompts": [prompt],
-        "n": 1,
-        "temperature": getattr(trainer_args, "temperature", fallback.temperature),
-        "max_tokens": getattr(trainer_args, "max_completion_length", fallback.max_new_tokens),
-        "logprobs": True,
-    }
-
-    top_k = getattr(trainer_args, "top_k", fallback.top_k)
-    if top_k is not None:
-        payload["top_k"] = top_k
-
-    top_p = getattr(trainer_args, "top_p", fallback.top_p)
-    if top_p is not None:
-        payload["top_p"] = top_p
-
-    min_p = getattr(trainer_args, "min_p", None)
-    if min_p is not None:
-        payload["min_p"] = min_p
-
-    repetition_penalty = getattr(trainer_args, "repetition_penalty", None)
-    if repetition_penalty is not None:
-        payload["repetition_penalty"] = repetition_penalty
-
-    response = requests.post(endpoint, json=payload, timeout=timeout)
-    response.raise_for_status()
-    data = response.json()
-
-    prompt_ids = data.get("prompt_ids") or data.get("prompt_token_ids") or [[]]
-    completion_ids = data.get("completion_ids") or data.get("completion_token_ids") or [[]]
-    logprobs = data.get("logprobs") or data.get("completion_logprobs") or [[]]
-    texts = data.get("completions") or data.get("completion_texts") or data.get("texts")
-
-    return {
-        "prompt_ids": prompt_ids[0] if prompt_ids else [],
-        "completion_ids": completion_ids[0] if completion_ids else [],
-        "logprobs": [float(lp) for lp in (logprobs[0] if logprobs else [])],
-        "text": (texts[0] if texts else None),
-    }
-
-
 def scale_repetition_score(previous_occurrences: int, max_occurrences: int) -> float:
     """Scale the repetition score based on the number of previous occurrences from 0 to 1"""
     if max_occurrences == 0:
@@ -329,12 +276,12 @@ def scale_repetition_score(previous_occurrences: int, max_occurrences: int) -> f
 
 
 def rollout_once(
+    trainer: GRPOTrainer,
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
-    args: GRPOConfig,
     dataset_prompt: str,
-    cli_args: argparse.Namespace,
     system_prompt: str,
+    max_turns: int,
 ) -> dict[str, list]:
     result = env.reset()
     observation = result.observation
@@ -347,9 +294,9 @@ def rollout_once(
     yellow_scores: list[float] = []
     repetition_scores: list[float] = []
     correct_scores: list[float] = []
-    guess_counts: dict[str, int] = {}
+    guess_counts: defaultdict[str, int] = defaultdict(int)
 
-    for _turn in range(cli_args.max_turns):
+    for _turn in range(max_turns):
         # when the game is over the environment will return a done=True
         if result.done:
             break
@@ -368,19 +315,12 @@ def rollout_once(
             enable_thinking=False,
         )
 
-        # generate the completion from the model using vLLM
-        vllm_result = request_vllm_completion(
-            prompt_text,
-            args,
-            endpoint=cli_args.vllm_endpoint,
-            timeout=cli_args.request_timeout,
-            fallback=cli_args,
-        )
-        prompt_ids.extend(vllm_result["prompt_ids"])
-        completion_ids.extend(vllm_result["completion_ids"])
-        logprobs.extend(vllm_result["logprobs"])
-        completion_text = vllm_result.get("text") or tokenizer.decode(
-            vllm_result["completion_ids"], skip_special_tokens=True
+        rollout_outputs = trainer.generate_rollout_completions([prompt_text])[0]
+        prompt_ids.extend(rollout_outputs["prompt_ids"])
+        completion_ids.extend(rollout_outputs["completion_ids"])
+        logprobs.extend(rollout_outputs["logprobs"])
+        completion_text = rollout_outputs.get("text") or tokenizer.decode(
+            rollout_outputs["completion_ids"], skip_special_tokens=True
         )
         # extract the guess from the completion
         guess = extract_guess(completion_text)
@@ -422,57 +362,6 @@ def rollout_once(
         "green_reward": green_scores[-1] if green_scores else 0.0,
         "yellow_reward": yellow_scores[-1] if yellow_scores else 0.0,
         "repetition_reward": repetition_scores[-1] if repetition_scores else 0.0,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Rollout function
-# ---------------------------------------------------------------------------
-
-
-def rollout_func(
-    env: TextArenaEnv,
-    tokenizer: AutoTokenizer,
-    prompts: list[str],
-    args: GRPOConfig,
-    cli_args: argparse.Namespace,
-    system_prompt: str,
-) -> dict[str, list]:
-    all_prompt_ids: list[list[int]] = []
-    all_completion_ids: list[list[int]] = []
-    all_logprobs: list[list[float]] = []
-    correctness_rewards: list[float] = []
-    green_rewards: list[float] = []
-    yellow_rewards: list[float] = []
-    repetition_rewards: list[float] = []
-    num_generations = args.num_generations or cli_args.num_generations
-
-    for _ in range(num_generations):
-        for prompt_text in prompts:
-            rollout_stats = rollout_once(
-                env=env,
-                tokenizer=tokenizer,
-                args=args,
-                dataset_prompt=prompt_text,
-                cli_args=cli_args,
-                system_prompt=system_prompt,
-            )
-            all_prompt_ids.append(rollout_stats["prompt_ids"])
-            all_completion_ids.append(rollout_stats["completion_ids"])
-            all_logprobs.append(rollout_stats["logprobs"])
-            correctness_rewards.append(rollout_stats["correct_reward"])
-            green_rewards.append(rollout_stats["green_reward"])
-            yellow_rewards.append(rollout_stats["yellow_reward"])
-            repetition_rewards.append(rollout_stats["repetition_reward"])
-
-    return {
-        "prompt_ids": all_prompt_ids,
-        "completion_ids": all_completion_ids,
-        "logprobs": all_logprobs,
-        "correct_reward": correctness_rewards,
-        "green_reward": green_rewards,
-        "yellow_reward": yellow_rewards,
-        "repetition_reward": repetition_rewards,
     }
 
 
@@ -531,8 +420,8 @@ def main() -> None:
     output_dir = Path(cli_args.output_dir or default_output_dir)
 
     grpo_config = GRPOConfig(
-        vllm_mode="server",
         use_vllm=True,
+        vllm_mode=cli_args.vllm_mode,
         output_dir=str(output_dir),
         num_train_epochs=cli_args.num_epochs,
         learning_rate=cli_args.learning_rate,
@@ -546,21 +435,50 @@ def main() -> None:
         save_strategy="steps",
         save_steps=cli_args.save_interval,
         save_total_limit=cli_args.save_total_limit,
+        temperature=cli_args.temperature,
+        top_k=cli_args.top_k,
+        top_p=cli_args.top_p,
     )
 
     grpo_config.run_name = cli_args.run_name or f"run-{timestamp}"
     grpo_config.project = cli_args.project or f"group-{sanitize_name(cli_args.model_id)}"
     grpo_config.trackio_space_id = cli_args.trackio_space_id
 
-    def wrapped_rollout(prompts: list[str], args: GRPOConfig, processing_class) -> dict[str, list]:
-        return rollout_func(
-            env=env,
-            tokenizer=tokenizer,
-            prompts=prompts,
-            args=args,
-            cli_args=cli_args,
-            system_prompt=system_prompt,
-        )
+    def rollout(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+        episode_prompt_ids: list[list[int]] = []
+        episode_completion_ids: list[list[int]] = []
+        episode_logprobs: list[list[float]] = []
+        correctness_rewards: list[float] = []
+        green_rewards: list[float] = []
+        yellow_rewards: list[float] = []
+        repetition_rewards: list[float] = []
+
+        for prompt_text in prompts:
+            episode = rollout_once(
+                trainer=trainer,
+                env=env,
+                tokenizer=tokenizer,
+                dataset_prompt=prompt_text,
+                system_prompt=system_prompt,
+                max_turns=cli_args.max_turns,
+            )
+            episode_prompt_ids.append(episode["prompt_ids"])
+            episode_completion_ids.append(episode["completion_ids"])
+            episode_logprobs.append(episode["logprobs"])
+            correctness_rewards.append(episode["correct_reward"])
+            green_rewards.append(episode["green_reward"])
+            yellow_rewards.append(episode["yellow_reward"])
+            repetition_rewards.append(episode["repetition_reward"])
+
+        return {
+            "prompt_ids": episode_prompt_ids,
+            "completion_ids": episode_completion_ids,
+            "logprobs": episode_logprobs,
+            "correct_reward": correctness_rewards,
+            "green_reward": green_rewards,
+            "yellow_reward": yellow_rewards,
+            "repetition_reward": repetition_rewards,
+        }
 
     trainer = GRPOTrainer(
         model=cli_args.model_id,
@@ -573,7 +491,7 @@ def main() -> None:
         ],
         train_dataset=dataset,
         args=grpo_config,
-        rollout_func=wrapped_rollout,
+        rollout_func=rollout,
     )
 
     print("Starting GRPO training with Wordle environment...")
