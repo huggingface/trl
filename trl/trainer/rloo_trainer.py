@@ -1342,6 +1342,9 @@ class RLOOTrainer(BaseTrainer):
             completions = []
             for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
+                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
+                    bootstrap = bootstrap[0]["text"]
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
