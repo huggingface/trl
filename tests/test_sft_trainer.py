@@ -21,6 +21,7 @@ import torch
 import transformers
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
+from packaging.version import Version
 from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import backend_empty_cache, torch_device
@@ -1345,6 +1346,13 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                ),
+            ),
         ],
     )
     @require_vision
@@ -1380,7 +1388,8 @@ class TestSFTTrainer(TrlTestCase):
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
                 model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or
                 model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
-                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or
+                model_id == "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration" and "model.visual.deepstack_merger_list" in n
             ):
             # fmt: on
                 continue

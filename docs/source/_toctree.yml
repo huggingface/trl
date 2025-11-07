@@ -53,8 +53,6 @@
     title: Community Tutorials
   - local: lora_without_regret
     title: LoRA Without Regret
-  - local: multi_adapter_rl
-    title: Multi Adapter RLHF
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
@@ -84,8 +82,6 @@
       title: RLOO
     - local: sft_trainer
       title: SFT
-    - local: xpo_trainer
-      title: XPO
     title: Trainers
   - local: models
     title: Model Classes
@@ -121,6 +117,8 @@
     title: GSPO-token
   - local: papo_trainer
     title: PAPO
+  - local: xpo_trainer
+    title: XPO
   - local: openenv
     title: OpenEnv Integration
   title: Experimental
