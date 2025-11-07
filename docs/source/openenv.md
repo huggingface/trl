@@ -114,7 +114,7 @@ Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but yo
 
 **Connect to a remote Hugging Face Space**
 
-You can connect to a hosted environment running on the Hugging Face Hub by passing the URL of the space to the `from_hub` method.
+You can connect to a hosted environment running on the Hugging Face Hub by passing the URL of the space to the `base_url` parameter of the environment class.
 
 ```python
 env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
