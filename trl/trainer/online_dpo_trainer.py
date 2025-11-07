@@ -463,7 +463,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                     self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                    if hasattr(torch, "xpu") and hasattr(torch.xpu, "current_device"):
+                    if hasattr(torch, "xpu") and torch.xpu.is_available():
                         vllm_device = torch.xpu.current_device()
                     else:
                         vllm_device = torch.cuda.current_device()
