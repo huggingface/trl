@@ -37,7 +37,7 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
-    "judges": [  # Deprecated - will be removed in v1.2.0, use trl.experimental.judges instead
+    "judges": [
         "AllTrueJudge",
         "BaseBinaryJudge",
         "BaseJudge",
@@ -97,7 +97,7 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
-    from .judges import (  # Deprecated
+    from .judges import (
         AllTrueJudge,
         BaseBinaryJudge,
         BaseJudge,

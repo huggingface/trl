@@ -414,7 +414,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
 class AllTrueJudge(BaseBinaryJudge):
     """
-    Unify the decision of multiple [`BaseBinaryJudge`] instances.
+    Unify the decision of multiple [`experimental.judges.BaseBinaryJudge`] instances.
 
     Returns `1` only if all inner binary judges return `1`. If any judge returns `0`, it returns `0`. If any judge
     returns `-1`, indicating a failure in its process, this judge will also return `-1`.
@@ -422,7 +422,8 @@ class AllTrueJudge(BaseBinaryJudge):
     Implements the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370).
 
     Args:
-        judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
+        judges (`list[BaseBinaryJudge]`):
+            A list of [`experimental.judges.BaseBinaryJudge`] instances whose decisions will be unified.
     """
 
     def __init__(self, judges: list[BaseBinaryJudge]):

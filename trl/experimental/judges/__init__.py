@@ -12,13 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Judges for TRL (Experimental).
-
-This module contains judge implementations for evaluating model outputs.
-This is an experimental feature and may be removed in future versions.
-"""
-
 from .judges import (
     AllTrueJudge,
     BaseBinaryJudge,

@@ -56,7 +56,6 @@ from transformers.utils import (
 )
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
-from ..experimental.judges import BasePairwiseJudge
 from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
@@ -123,7 +122,7 @@ class OnlineDPOTrainer(BaseTrainer):
         ref_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `None`):
             The reference model to use for training. If None is specified, the reference model will be created from the
             model.
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -189,7 +188,7 @@ class OnlineDPOTrainer(BaseTrainer):
         model: PreTrainedModel | nn.Module | str,
         ref_model: PreTrainedModel | nn.Module | None = None,
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
-        judge: BasePairwiseJudge | None = None,
+        judge=None,
         args: OnlineDPOConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,

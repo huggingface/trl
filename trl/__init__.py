@@ -52,15 +52,11 @@ _import_structure = {
         "setup_chat_format",
     ],
     "trainer": [
-        # Deprecated judges (will be removed in v1.2.0) - use trl.experimental.judges instead
         "AllTrueJudge",
         "BaseBinaryJudge",
         "BaseJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
-        "HfPairwiseJudge",
-        "OpenAIPairwiseJudge",
-        "PairRMJudge",
         "BCOConfig",
         "BCOTrainer",
         "CPOConfig",
@@ -73,6 +69,7 @@ _import_structure = {
         "GKDTrainer",
         "GRPOConfig",
         "GRPOTrainer",
+        "HfPairwiseJudge",
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
@@ -81,8 +78,10 @@ _import_structure = {
         "NashMDTrainer",
         "OnlineDPOConfig",
         "OnlineDPOTrainer",
+        "OpenAIPairwiseJudge",
         "ORPOConfig",
         "ORPOTrainer",
+        "PairRMJudge",
         "PPOConfig",
         "PPOTrainer",
         "PRMConfig",
@@ -134,11 +133,11 @@ if TYPE_CHECKING:
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
-        AllTrueJudge,  # Deprecated
-        BaseBinaryJudge,  # Deprecated
-        BaseJudge,  # Deprecated
-        BasePairwiseJudge,  # Deprecated
-        BaseRankJudge,  # Deprecated
+        AllTrueJudge,
+        BaseBinaryJudge,
+        BaseJudge,
+        BasePairwiseJudge,
+        BaseRankJudge,
         BCOConfig,
         BCOTrainer,
         CPOConfig,
@@ -151,7 +150,7 @@ if TYPE_CHECKING:
         GKDTrainer,
         GRPOConfig,
         GRPOTrainer,
-        HfPairwiseJudge,  # Deprecated
+        HfPairwiseJudge,
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
@@ -160,10 +159,10 @@ if TYPE_CHECKING:
         NashMDTrainer,
         OnlineDPOConfig,
         OnlineDPOTrainer,
-        OpenAIPairwiseJudge,  # Deprecated
+        OpenAIPairwiseJudge,
         ORPOConfig,
         ORPOTrainer,
-        PairRMJudge,  # Deprecated
+        PairRMJudge,
         PPOConfig,
         PPOTrainer,
         PRMConfig,
