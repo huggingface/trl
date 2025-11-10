@@ -43,7 +43,7 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 - [`DPOTrainer`]
 - [`ORPOTrainer`]
 - [`experimental.bco.BCOTrainer`] 🧪
-- [`CPOTrainer`]
+- [`experimental.cpo.CPOTrainer`] 🧪
 - [`KTOTrainer`]
 
 ### Knowledge distillation

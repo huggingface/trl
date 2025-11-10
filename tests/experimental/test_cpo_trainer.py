@@ -19,7 +19,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl.experimental.cpo import CPOConfig, CPOTrainer
 
-from .testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_peft
 
 
 class TestCPOTrainer(TrlTestCase):
