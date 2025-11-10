@@ -22,7 +22,7 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.prm import PRMConfig, PRMTrainer
 
-from .testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():

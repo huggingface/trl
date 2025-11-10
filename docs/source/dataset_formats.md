@@ -397,7 +397,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`PPOTrainer`] | Tokenized language modeling |
-| [`PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
+| [`experimental.prm.PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
 | [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
 | [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
