@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl.experimental.bco import BCOConfig, BCOTrainer
+from trl.experimental.xpo import XPOConfig, XPOTrainer
 
 from ..testing_utils import TrlTestCase, require_sklearn
 
@@ -68,3 +70,25 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.prompt_sample_size == 512
         assert trainer.args.min_density_ratio == 0.2
         assert trainer.args.max_density_ratio == 20.0
+
+    @pytest.mark.parametrize("alpha_list", [False, True])
+    def test_xpo(self, alpha_list):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        reward_model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = XPOConfig(
+            self.tmp_dir,
+            alpha=0.5 if not alpha_list else [0.5, 0.6],
+        )
+        trainer = XPOTrainer(
+            args=training_args,
+            processing_class=tokenizer,
+            model=model,
+            ref_model=ref_model,
+            reward_funcs=reward_model,
+            train_dataset=dataset,
+        )
+        assert trainer.args.alpha == (0.5 if not alpha_list else [0.5, 0.6])
