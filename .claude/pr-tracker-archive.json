@@ -1,0 +1,75 @@
+{
+  "archived_at": "2025-11-05T00:10:00Z",
+  "prs": {
+    "issue-4375": {
+      "issue_number": 4375,
+      "issue_url": "https://github.com/huggingface/trl/issues/4375",
+      "pr_number": 4422,
+      "pr_url": "https://github.com/huggingface/trl/pull/4422",
+      "branch": "docs/remove-conversational-conversion-guidance",
+      "repo": "huggingface/trl",
+      "workflow": "direct",
+      "has_write_access": true,
+      "created_at": "2025-11-02T14:30:00Z",
+      "merged_at": "2025-11-03T15:28:46Z",
+      "status": "merged",
+      "description": "Remove outdated conversational dataset conversion guidance"
+    },
+    "issue-4386": {
+      "issue_number": 4386,
+      "issue_url": "https://github.com/huggingface/trl/issues/4386",
+      "pr_number": 4432,
+      "pr_url": "https://github.com/huggingface/trl/pull/4432",
+      "branch": "docs/list-liger-supported-trainers",
+      "repo": "huggingface/trl",
+      "workflow": "direct",
+      "has_write_access": true,
+      "created_at": "2025-11-02T22:30:00Z",
+      "merged_at": "2025-11-03T18:16:03Z",
+      "status": "merged",
+      "description": "List all trainers that support Liger Kernel"
+    },
+    "issue-4404": {
+      "issue_number": 4404,
+      "issue_url": "https://github.com/huggingface/trl/issues/4404",
+      "pr_number": 4437,
+      "pr_url": "https://github.com/huggingface/trl/pull/4437",
+      "branch": "fix/remove-chat-template-non-sft",
+      "repo": "huggingface/trl",
+      "workflow": "direct",
+      "has_write_access": true,
+      "created_at": "2025-11-02T23:30:00Z",
+      "merged_at": "2025-11-03T18:57:51Z",
+      "status": "merged",
+      "description": "Remove chat template setting from non-SFT trainer scripts"
+    },
+    "issue-4399": {
+      "issue_number": 4399,
+      "issue_url": "https://github.com/huggingface/trl/issues/4399",
+      "pr_number": 4435,
+      "pr_url": "https://github.com/huggingface/trl/pull/4435",
+      "branch": "docs/remove-outdated-notebooks",
+      "repo": "huggingface/trl",
+      "workflow": "direct",
+      "has_write_access": true,
+      "created_at": "2025-11-02T23:15:00Z",
+      "merged_at": "2025-11-04T23:52:49Z",
+      "status": "merged",
+      "description": "Remove outdated notebooks (best_of_n, gpt2-sentiment, gpt2-sentiment-control)"
+    },
+    "issue-4397": {
+      "issue_number": 4397,
+      "issue_url": "https://github.com/huggingface/trl/issues/4397",
+      "pr_number": 4436,
+      "pr_url": "https://github.com/huggingface/trl/pull/4436",
+      "branch": "docs/move-multi-adapter-rl",
+      "repo": "huggingface/trl",
+      "workflow": "direct",
+      "has_write_access": true,
+      "created_at": "2025-11-02T23:00:00Z",
+      "merged_at": "2025-11-04T23:57:55Z",
+      "status": "merged",
+      "description": "Move Multi-Adapter RL section to PEFT integration"
+    }
+  }
+}

@@ -19,7 +19,7 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.ppo import PPOConfig, PPOTrainer, masked_mean, masked_var, masked_whiten
 
-from .testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
