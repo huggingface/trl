@@ -26,7 +26,7 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 - [`experimental.rloo.RLOOTrainer`] ⚡️ 🧪
 - [`OnlineDPOTrainer`] ⚡️
 - [`NashMDTrainer`] ⚡️
-- [`XPOTrainer`] ⚡️
+- [`experimental.xpo.XPOTrainer`] 🧪 ⚡️
 - [`PPOTrainer`]
 
 ### Reward modeling

@@ -34,8 +34,6 @@ from trl import (
     RewardTrainer,
     SFTConfig,
     SFTTrainer,
-    XPOConfig,
-    XPOTrainer,
 )
 
 from .testing_utils import TrlTestCase
@@ -320,25 +318,3 @@ class TestTrainerArg(TrlTestCase):
         assert "append_concat_token" in trainer.args.dataset_kwargs
         assert trainer.args.dataset_kwargs["append_concat_token"]
         assert trainer.args.eval_packing
-
-    @pytest.mark.parametrize("alpha_list", [False, True])
-    def test_xpo(self, alpha_list):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
-        reward_model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = XPOConfig(
-            self.tmp_dir,
-            alpha=0.5 if not alpha_list else [0.5, 0.6],
-        )
-        trainer = XPOTrainer(
-            args=training_args,
-            processing_class=tokenizer,
-            model=model,
-            ref_model=ref_model,
-            reward_funcs=reward_model,
-            train_dataset=dataset,
-        )
-        assert trainer.args.alpha == (0.5 if not alpha_list else [0.5, 0.6])
