@@ -22,25 +22,21 @@ from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
     DataCollator,
-    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
 from transformers.trainer_callback import TrainerCallback
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..models import prepare_deepspeed
 from .minillm_config import MiniLLMConfig
 from .grpo_trainer import GRPOTrainer, RolloutFunc, RewardFunc
-from .utils import disable_dropout_in_model, empty_cache
+from .utils import disable_dropout_in_model, empty_cache, get_config_model_id
 
 
 if is_peft_available():
     from peft import PeftConfig
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 def dummy_reward_func(completions: list, **kwargs):
@@ -128,6 +124,12 @@ class MiniLLMTrainer(GRPOTrainer):
         if reward_funcs is None:
             reward_funcs = [dummy_reward_func]
         
+        # Args
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = MiniLLMConfig(f"{model_name}-MiniLLM")
+
         super().__init__(
             model,
             reward_funcs,
@@ -144,17 +146,6 @@ class MiniLLMTrainer(GRPOTrainer):
 
         if data_collator is not None:
             self.data_collator = data_collator
-
-        # Liger fused GKD loss (JSD)
-        # self.use_liger_gkd_loss = False
-        # if args.use_liger_kernel:
-        #     self.liger_jsd_loss = LigerFusedLinearJSDLoss(
-        #         beta=args.beta,
-        #         ignore_index=-100,
-        #         temperature=args.temperature,
-        #         compiled=False,
-        #     )
-        #     self.use_liger_gkd_loss = True
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}

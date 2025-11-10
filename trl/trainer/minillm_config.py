@@ -82,7 +82,7 @@ class MiniLLMConfig(GRPOConfig):
         },
     )
     length_normalization: bool = field(
-        default=False,
+        default=True,
         metadata={
             "help": "Whether to apply length normalization to the rewards."
         },
