@@ -21,7 +21,7 @@ from transformers.utils import is_peft_available, is_vision_available
 
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
-from .testing_utils import (
+from ..testing_utils import (
     RandomPairwiseJudge,
     TrlTestCase,
     require_llm_blender,

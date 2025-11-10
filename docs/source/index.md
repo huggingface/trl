@@ -24,7 +24,7 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 - [`GRPOTrainer`] ⚡️
 - [`RLOOTrainer`] ⚡️
-- [`OnlineDPOTrainer`] ⚡️
+- [`experimental.online_dpo.OnlineDPOTrainer`] 🧪 ⚡️
 - [`NashMDTrainer`] ⚡️
 - [`experimental.xpo.XPOTrainer`] 🧪 ⚡️
 - [`PPOTrainer`]
