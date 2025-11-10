@@ -12,16 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
+from .judges import (
+    AllTrueJudge,
+    BaseBinaryJudge,
+    BaseJudge,
+    BasePairwiseJudge,
+    BaseRankJudge,
+    HfPairwiseJudge,
+    OpenAIPairwiseJudge,
+    PairRMJudge,
+)
 
-from ..experimental.xpo import XPOConfig as _XPOConfig
 
-
-class XPOConfig(_XPOConfig):
-    def __post_init__(self):
-        warnings.warn(
-            "The `XPOConfig` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.xco import XPOConfig`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
-        )
-        super().__post_init__()
+__all__ = [
+    "AllTrueJudge",
+    "BaseBinaryJudge",
+    "BaseJudge",
+    "BasePairwiseJudge",
+    "BaseRankJudge",
+    "HfPairwiseJudge",
+    "OpenAIPairwiseJudge",
+    "PairRMJudge",
+]
