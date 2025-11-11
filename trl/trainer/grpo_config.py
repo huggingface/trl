@@ -148,8 +148,8 @@ class GRPOConfig(TrainingArguments):
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
-            for weight sync and generation.
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
 
         > Parameters that control the training
 
@@ -455,8 +455,7 @@ class GRPOConfig(TrainingArguments):
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={
-            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
-            "and woken for weight sync and generation."
+            "help": "Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but waking the engine adds host–device transfer latency."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(

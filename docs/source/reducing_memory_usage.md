@@ -291,5 +291,7 @@ from trl import RLOOConfig
 training_args = RLOOConfig(..., vllm_enable_sleep_mode=True)
 ```
 
+Offloading the vLLM weights and cache helps keep GPU memory usage low, which can be particularly beneficial when training large models or using limited GPU resources. However, waking the vLLM engine from sleep mode introduces some host–device transfer latency, which may slightly impact training speed.
+
 </hfoption>
 </hfoptions>
