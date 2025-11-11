@@ -66,8 +66,6 @@
       title: GKD
     - local: grpo_trainer
       title: GRPO
-    - local: kto_trainer
-      title: KTO
     - local: nash_md_trainer
       title: Nash-MD
     - local: orpo_trainer
@@ -115,6 +113,8 @@
     title: GSPO-token
   - local: judges
     title: Judges
+  - local: kto_trainer
+    title: KTO
   - local: papo_trainer
     title: PAPO
   - local: xpo_trainer

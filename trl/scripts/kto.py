@@ -73,14 +73,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     DatasetMixtureConfig,
-    KTOConfig,
-    KTOTrainer,
     ModelConfig,
     ScriptArguments,
     TrlParser,
     get_dataset,
     get_peft_config,
 )
+from trl.experimental.kto import KTOConfig, KTOTrainer
 
 
 logger = logging.get_logger(__name__)
