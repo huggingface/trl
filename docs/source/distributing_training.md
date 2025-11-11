@@ -56,6 +56,9 @@ Example, these configurations are equivalent, and should yield the same results:
 
 Sequence Parallelism (also called Context Parallelism) is a parallelization technique that enables training with longer sequences by splitting the sequence dimension across multiple GPUs. Each GPU processes a portion of the sequence, allowing you to train with sequences longer than what would fit on a single GPU's memory.
 
+> [!NOTE]
+> This section describes **Context Parallelism (CP)**, which splits sequences across GPUs to enable longer context training. This is different from the Sequence Parallelism technique used with Tensor Parallelism (TP+SP) to reduce activation memory. With Context Parallelism, `TP=2` and `CP=2` would require 4 GPUs (2×2), whereas `TP+SP=2` only needs 2 GPUs. The techniques discussed here (Ring Attention and ALST/Ulysses) are strictly for context parallelism.
+
 Sequence parallelism is particularly useful when:
 
 - You want to train with very long sequences (>32k tokens)
@@ -68,6 +71,13 @@ TRL supports two sequence parallelism implementations, each with different chara
 
 1. **Ring Attention (FSDP2)** - Uses ring-based communication for memory-efficient processing of extremely long sequences
 2. **ALST/Ulysses (DeepSpeed)** - Uses attention head parallelism for faster training with high-bandwidth interconnects
+
+> [!IMPORTANT]
+> **Sequence Length Terminology:** When using Context Parallelism, the sequence is split across GPUs, introducing two concepts:
+> - **Global sequence length**: The full sequence length before splitting across GPUs
+> - **Micro sequence length**: The sequence length per GPU after splitting (= global_seq_length / cp_size)
+>
+> In TRL, `max_seq_length` (or `max_length`) refers to the **global sequence length**. The framework automatically handles splitting into micro sequences. For example, with `max_seq_length=8192` and `cp_size=4`, each GPU processes 2048 tokens (micro sequence length).
 
 ### Choosing Between Ring Attention and Ulysses
 
