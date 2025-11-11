@@ -275,7 +275,6 @@ class GRPOTrainer(BaseTrainer):
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
-            # print(architecture, model_id, model_init_kwargs)
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
         else:
             model_id = get_config_model_id(model.config)
