@@ -19,7 +19,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 ## Usage tips
 
-The [`GKDTrainer`] is a wrapper around the [`SFTTrainer`] class that takes in a teacher model argument. It needs three parameters to be set via the [`GKDConfig`] namely:
+The [`experimental.gkd.GKDTrainer`] is a wrapper around the [`SFTTrainer`] class that takes in a teacher model argument. It needs three parameters to be set via the [`GKDConfig`] namely:
 
 * `lmbda`:  controls the student data fraction, i.e., the proportion of on-policy student-generated outputs. When `lmbda=0.0`, the loss reduces to supervised JSD where the student is trained with the token-level probabilities of the teacher. When `lmbda=1.0`, the loss reduces to on-policy JSD, where the student generates output sequences and token-specific feedback on these sequences from the teacher. For values in between [0, 1] it is random between the two based on the `lmbda` value for each batch.
 * `seq_kd`:  controls whether to perform Sequence-Level KD (can be viewed as supervised FT on teacher-generated out). When `seq_kd=True` and `lmbda=0.0`, the loss reduces to supervised JSD, where the teacher generates output sequences and the student receives token-specific feedback on these sequences from the teacher. 
@@ -90,7 +90,7 @@ The dataset should be formatted as a list of "messages" where each message is a 
 
 ## GKDTrainer
 
-[[autodoc]] GKDTrainer
+[[autodoc]] experimental.gkd.GKDTrainer
     - train
     - save_model
     - push_to_hub

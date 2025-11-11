@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gkd import GKDConfig, GKDTrainer
 
-from .testing_utils import TrlTestCase, require_liger_kernel
+from ..testing_utils import TrlTestCase, require_liger_kernel
 
 
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
