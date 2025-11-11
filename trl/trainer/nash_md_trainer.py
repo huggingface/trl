@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import textwrap
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 import jinja2
 import torch
@@ -35,7 +36,6 @@ from transformers.utils import is_peft_available
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
-from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import (
@@ -67,7 +67,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         reward_funcs ([`~transformers.PreTrainedModel`]):
             The reward model to score completions with, preferably an
             [`~transformers.AutoModelForSequenceClassification`].
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         args ([`NashMDConfig`]):
             The NashMD config arguments to use for training.
@@ -115,22 +115,24 @@ class NashMDTrainer(OnlineDPOTrainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_funcs: Union[PreTrainedModel, nn.Module, None] = None,
-        judge: Optional[BasePairwiseJudge] = None,
-        args: Optional[NashMDConfig] = None,
-        data_collator: Optional[Callable] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        peft_config: Optional[dict] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        model: PreTrainedModel | nn.Module = None,
+        ref_model: PreTrainedModel | nn.Module = None,
+        reward_funcs: PreTrainedModel | nn.Module | None = None,
+        judge=None,
+        args: NashMDConfig | None = None,
+        data_collator: Callable | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        peft_config: dict | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
         super().__init__(
             model=model,
@@ -306,7 +308,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         probability = self.judge.judge(
             prompts,
-            list(zip(model_data_completions, mixture_data_completions)),
+            list(zip(model_data_completions, mixture_data_completions, strict=True)),
             return_scores=True,
         )
         return torch.tensor(probability, device=model_data["input_ids"].device)
@@ -416,7 +418,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["mixture_coef"].append(self.mixture_coef)
 
     def training_step(
-        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
         model.train()
 

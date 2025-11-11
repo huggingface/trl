@@ -13,12 +13,13 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from accelerate.utils import gather_object
 
-from ...data_utils import apply_chat_template, is_conversational
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin, nanstd, pad
 
@@ -80,8 +81,17 @@ class GFPOTrainer(_GRPOTrainer):
         if images is not None and all(img_list == [] for img_list in images):
             images = None
 
-        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list = self._generate(
-            prompts, images
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            prompts = [
+                prepare_multimodal_messages(prompt, image_list)
+                for prompt, image_list in zip(prompts, images, strict=True)
+            ]
+
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
+            self._generate(prompts)
         )
 
         # Convert lists of token IDs to padded tensors
@@ -194,8 +204,11 @@ class GFPOTrainer(_GRPOTrainer):
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
-            for prompt, completion in zip(prompts, completions_text):
+            for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
+                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
+                    bootstrap = bootstrap[0]["text"]
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
@@ -280,6 +293,15 @@ class GFPOTrainer(_GRPOTrainer):
             agg_completion_lengths = self.accelerator.gather(completion_lengths)
             num_items_in_batch = agg_completion_lengths.sum()
 
+            if sampling_per_token_logps is not None:
+                sampling_per_token_logps = sampling_per_token_logps[local_input_indices_to_keep].contiguous()
+            if old_per_token_logps is not None:
+                old_per_token_logps = old_per_token_logps[local_input_indices_to_keep].contiguous()
+            if ref_per_token_logps is not None:
+                ref_per_token_logps = ref_per_token_logps[local_input_indices_to_keep].contiguous()
+            if self.use_vllm and self.vllm_importance_sampling_correction:
+                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep].contiguous()
+
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
@@ -308,15 +330,10 @@ class GFPOTrainer(_GRPOTrainer):
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
         if images is not None:
-            self._logs["images"].extend(gather_object(images))
+            self._logs["images"].extend(all_images)
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-
-            if self.num_remains_in_group is not None and mode == "train":
-                delta = delta[local_input_indices_to_keep]
-                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep]
-
             delta = delta[completion_mask.bool()]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)

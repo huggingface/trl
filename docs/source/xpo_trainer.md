@@ -12,9 +12,12 @@ The abstract from the paper is the following:
 
 This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif),  [Quentin Gallouédec](https://huggingface.co/qgallouedec) and [Lewis Tunstall](https://huggingface.co/lewtun).
 
+> [!NOTE]
+> XPO is currently experimental. The API may change without notice while the feature is iterated on.
+
 ## Quick start
 
-This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`experimental.judges.PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
   frameborder="0"
@@ -27,7 +30,8 @@ Below is the script to train the model:
 ```python
 # train_xpo.py
 from datasets import load_dataset
-from trl import PairRMJudge, XPOConfig, XPOTrainer
+from trl.experimental.judges import PairRMJudge
+from trl.experimental.xpo import XPOConfig, XPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -62,7 +66,7 @@ The best programming language depends on individual preferences and familiarity 
 
 ## Expected dataset type
 
-XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`XPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`experimental.xpo.XPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -71,7 +75,7 @@ XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`XPOTrai
 Instead of a judge, you can chose to use a reward model -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use. Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
 
 ```diff
-- from trl import PairRMJudge
+- from trl.experimental.judges import PairRMJudge
 + from transformers import AutoModelForSequenceClassification
 
 - judge = PairRMJudge()
@@ -89,7 +93,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
 
 ### Encourage EOS token generation
 
-When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`XPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`XPOConfig`]:
+When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`experimental.xpo.XPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`experimental.xpo.XPOConfig`]:
 
 ```python
 training_args = XPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
@@ -145,16 +149,16 @@ While training and evaluating we record the following reward metrics:
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/model_contain_eos_token`: The amount of times the model's output contains the eos token.
 * `val/ref_contain_eos_token`: The amount of times the reference's output contains the eos token.
-* `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
-* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
+* `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.xpo.XPOConfig`].
 
 ## XPOTrainer
 
-[[autodoc]] XPOTrainer
+[[autodoc]] experimental.xpo.XPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## XPOConfig
 
-[[autodoc]] XPOConfig
+[[autodoc]] experimental.xpo.XPOConfig
