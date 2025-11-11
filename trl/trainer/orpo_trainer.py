@@ -162,7 +162,7 @@ class ORPOTrainer(BaseTrainer):
             raise ValueError("You passed model_kwargs to the ORPOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
                 if isinstance(dtype, str) and dtype != "auto":
