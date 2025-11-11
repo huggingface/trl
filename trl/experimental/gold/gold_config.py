@@ -90,8 +90,8 @@ class GOLDConfig(SFTConfig):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
             every step.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for the student vLLM engine. If set to `True`, the engine will enter sleep
-            mode after each training step to save resources.
+            Enable vLLM sleep mode to offload student weights/cache during the optimizer step. Keeps GPU memory usage
+            low, but waking the engine adds host–device transfer latency.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
@@ -313,7 +313,8 @@ class GOLDConfig(SFTConfig):
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={
-            "help": "Whether to enable sleep mode for the colocated vLLM engine. When `True`, the engine sleeps during the optimizer step and wakes for weight sync and generation."
+            "help": "Enable vLLM sleep mode to offload student weights/cache during the optimizer step. Keeps GPU "
+            "memory usage low, but waking the engine adds host–device transfer latency."
         },
     )
     # Parameters that control the logging
