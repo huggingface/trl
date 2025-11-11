@@ -78,8 +78,6 @@
       title: PRM
     - local: reward_trainer
       title: Reward
-    - local: rloo_trainer
-      title: RLOO
     - local: sft_trainer
       title: SFT
     title: Trainers
@@ -117,6 +115,8 @@
     title: Judges
   - local: papo_trainer
     title: PAPO
+  - local: rloo_trainer
+    title: RLOO
   - local: xpo_trainer
     title: XPO
   - local: openenv

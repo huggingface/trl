@@ -25,9 +25,9 @@ from transformers import (
 )
 from transformers.utils import is_peft_available
 
-from trl import RLOOConfig, RLOOTrainer
+from trl.experimental.rloo import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
+from ..testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
 
 
 if is_peft_available():
