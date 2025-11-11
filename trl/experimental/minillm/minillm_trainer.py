@@ -171,6 +171,7 @@ class MiniLLMTrainer(GRPOTrainer):
         self.temperature = args.temperature
         self.kd_temperature = args.kd_temperature
         self.single_step_decomposition = args.single_step_decomposition
+        self.rkl_advantage = args.rkl_advantage
         self.gamma = args.gamma
         self.length_normalization = args.length_normalization
 
@@ -317,13 +318,14 @@ class MiniLLMTrainer(GRPOTrainer):
 
         mask = (shifted_labels != -100)
 
-        reverse_kl_advantage = self._compute_advantage(
-            student_log_probs_on_labels=student_log_probs_on_labels,
-            teacher_log_probs_on_labels=teacher_log_probs_on_labels,
-            mask=mask,
-        )
+        if self.rkl_advantage:
+            reverse_kl_advantage = self._compute_advantage(
+                student_log_probs_on_labels=student_log_probs_on_labels,
+                teacher_log_probs_on_labels=teacher_log_probs_on_labels,
+                mask=mask,
+            )
 
-        inputs["advantages"] = inputs["advantages"].unsqueeze(1) + reverse_kl_advantage
+            inputs["advantages"] = inputs["advantages"].unsqueeze(1) + reverse_kl_advantage
 
         # compute GRPO loss on verifiable reward
         loss = self._compute_loss(model, inputs)

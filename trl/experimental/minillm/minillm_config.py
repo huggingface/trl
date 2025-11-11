@@ -62,6 +62,12 @@ class MiniLLMConfig(GRPOConfig):
         default=True,
         metadata={"help": "Whether to disable dropouts in `model`."},
     )
+    rkl_advantage: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to add the reverse KL advantage to the reward advantage."
+        },
+    )
     single_step_decomposition: bool = field(
         default=True,
         metadata={
