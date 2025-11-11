@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from transformers import TrainingArguments
-from .grpo_config import GRPOConfig
+from ...trainer.grpo_config import GRPOConfig
 
 
 @dataclass

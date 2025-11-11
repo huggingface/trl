@@ -29,10 +29,10 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
-from ..models import prepare_deepspeed
+from ...models import prepare_deepspeed
 from .minillm_config import MiniLLMConfig
-from .grpo_trainer import GRPOTrainer, RolloutFunc, RewardFunc
-from .utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from ...trainer.grpo_trainer import GRPOTrainer, RolloutFunc, RewardFunc
+from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
 
 
 if is_peft_available():
@@ -49,18 +49,13 @@ class MiniLLMTrainer(GRPOTrainer):
 
     For details on MiniLLM, see the paper: [MiniLLM](https://huggingface.co/papers/2306.08543).
 
-    Difference from GKD:
-    1. Based on GRPOTrainer, easy for integrating with RLVR.
-    2. Long-Range Dependency, same as Tinker.
-    3. Efficient KL implementation.
-
     Args:
         model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
             Model to be trained, or the string identifier of the model to be instantiated from a pretrained model.
         teacher_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
             Teacher model for knowledge distillation, or the string identifier of the model to be instantiated from a
             pretrained model.
-        args ([`GKDConfig`], *optional*):
+        args ([`MiniLLMConfig`], *optional*):
             Training arguments.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Data collator to batch samples from the dataset. It defaults to a [`DataCollatorForChatML`] using the
@@ -151,7 +146,7 @@ class MiniLLMTrainer(GRPOTrainer):
             teacher_model_init_kwargs = {}
         elif not isinstance(teacher_model, str):
             raise ValueError(
-                "You passed teacher_model_init_kwargs to the GKDConfig, but your teacher_model is already instantiated."
+                "You passed teacher_model_init_kwargs to the MiniLLMConfig, but your teacher_model is already instantiated."
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
