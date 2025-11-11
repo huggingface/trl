@@ -392,6 +392,7 @@ class KTOTrainer(BaseTrainer):
                         f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
                 model_init_kwargs["dtype"] = dtype
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -411,6 +412,7 @@ class KTOTrainer(BaseTrainer):
                         f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
                 ref_model_init_kwargs["dtype"] = dtype
+            ref_model_init_kwargs["device_map"] = ref_model_init_kwargs.get("device_map", "auto")
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)

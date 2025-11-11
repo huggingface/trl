@@ -315,6 +315,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string "
                     f"representing a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:

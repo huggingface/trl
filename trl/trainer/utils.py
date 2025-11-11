@@ -1996,6 +1996,7 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    kwargs["device_map"] = kwargs.get("device_map", "auto")
     config = AutoConfig.from_pretrained(model_id)
     architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
