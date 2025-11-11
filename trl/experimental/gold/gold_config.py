@@ -313,7 +313,8 @@ class GOLDConfig(SFTConfig):
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={
-            "help": "Enable vLLM sleep mode to offload student weights/cache during the optimizer step. Keeps GPU memory usage low, but waking the engine adds host–device transfer latency."
+            "help": "Enable vLLM sleep mode to offload student weights/cache during the optimizer step. Keeps GPU "
+            "memory usage low, but waking the engine adds host–device transfer latency."
         },
     )
     # Parameters that control the logging
