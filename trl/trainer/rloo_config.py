@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 
 from transformers import TrainingArguments
@@ -191,9 +192,19 @@ class RLOOConfig(TrainingArguments):
             `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
+        log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
+            logged.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
             are logged.
+
+            <Deprecated version="0.26.0">
+
+            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.x.0. Use
+            `log_unique_prompts` instead.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -520,12 +531,15 @@ class RLOOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_log_unique_prompts: bool | None = field(
+    log_unique_prompts: bool = field(
         default=False,
         metadata={
-            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
-            "all prompts are logged."
+            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are logged."
         },
+    )
+    wandb_log_unique_prompts: bool | None = field(
+        default=False,
+        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
     )
 
     def __post_init__(self):
@@ -576,3 +590,12 @@ class RLOOConfig(TrainingArguments):
                 "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
+
+        if self.wandb_log_unique_prompts is not False:
+            warnings.warn(
+                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.x.0. Please use "
+                "`log_unique_prompts` instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.log_unique_prompts = self.wandb_log_unique_prompts

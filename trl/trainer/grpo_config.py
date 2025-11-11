@@ -258,9 +258,19 @@ class GRPOConfig(TrainingArguments):
             `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
+        log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
+            logged.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
             are logged.
+
+            <Deprecated version="0.26.0">
+
+            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.x.0. Use
+            `log_unique_prompts` instead.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -671,12 +681,15 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_log_unique_prompts: bool | None = field(
+    log_unique_prompts: bool = field(
         default=False,
         metadata={
-            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
-            "all prompts are logged."
+            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are logged."
         },
+    )
+    wandb_log_unique_prompts: bool | None = field(
+        default=False,
+        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
     )
 
     def __post_init__(self):
@@ -741,3 +754,12 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.wandb_log_unique_prompts is not False:
+            warnings.warn(
+                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.x.0. Please use "
+                "`log_unique_prompts` instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.log_unique_prompts = self.wandb_log_unique_prompts
