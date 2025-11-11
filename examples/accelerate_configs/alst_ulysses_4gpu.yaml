@@ -35,3 +35,11 @@ tpu_env: []
 tpu_use_cluster: false
 tpu_use_sudo: false
 use_cpu: false
+parallelism_config:
+  parallelism_config_dp_replicate_size: 1
+  parallelism_config_dp_shard_size: 2  # Enables 2D parallelism with CP
+  parallelism_config_tp_size: 1
+  parallelism_config_cp_size: 2  # Context parallel size
+  parallelism_config_cp_backend: deepspeed
+  parallelism_config_cp_seq_length_is_variable: true
+  parallelism_config_cp_attn_implementation: flash_attention_2
