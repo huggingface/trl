@@ -82,15 +82,11 @@
       title: RLOO
     - local: sft_trainer
       title: SFT
-    - local: xpo_trainer
-      title: XPO
     title: Trainers
   - local: models
     title: Model Classes
   - local: model_utils
     title: Model Utilities
-  - local: judges
-    title: Judges
   - local: callbacks
     title: Callbacks
   - local: data_utils
@@ -117,8 +113,12 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
+  - local: judges
+    title: Judges
   - local: papo_trainer
     title: PAPO
+  - local: xpo_trainer
+    title: XPO
   - local: openenv
     title: OpenEnv Integration
   title: Experimental
