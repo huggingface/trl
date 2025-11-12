@@ -1800,8 +1800,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
+        # In the base GRPO implementation, advantages are expected to have shape (B,). To support subclasses that
+        # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
         if advantages.dim() == 1:
-            advantages = advantages.unsqueeze(1)
+            advantages = advantages
         # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
         # old_per_token_logps == per_token_logps. In this case we can skip its computation
         # (see _generate_and_score_completions) and instead use per_token_logps.detach().

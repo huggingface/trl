@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from transformers import TrainingArguments
+
 from ...trainer.grpo_config import GRPOConfig
 
 
@@ -25,8 +26,8 @@ class MiniLLMConfig(GRPOConfig):
     """
     Configuration class for [`MiniLLMTrainer`].
 
-    This class includes only the parameters that are specific to MiniLLM training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
+    This class includes only the parameters that are specific to MiniLLM training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] and [`GRPOConfig`] documentation.
 
     Args:
         temperature (`float`, *optional*, defaults to `0.9`):
@@ -51,6 +52,7 @@ class MiniLLMConfig(GRPOConfig):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
             teacher-generated output).
     """
+
     teacher_model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
@@ -64,15 +66,11 @@ class MiniLLMConfig(GRPOConfig):
     )
     rkl_advantage: bool = field(
         default=True,
-        metadata={
-            "help": "Whether to add the reverse KL advantage to the reward advantage."
-        },
+        metadata={"help": "Whether to add the reverse KL advantage to the reward advantage."},
     )
     single_step_decomposition: bool = field(
         default=True,
-        metadata={
-            "help": "Whether to use single-step decomposition for the KL divergence computation."
-        },
+        metadata={"help": "Whether to use single-step decomposition for the KL divergence computation."},
     )
     kd_temperature: float = field(
         default=1.0,
@@ -83,15 +81,11 @@ class MiniLLMConfig(GRPOConfig):
     )
     gamma: float = field(
         default=0.0,
-        metadata={
-            "help": "Discount factor for future rewards in reinforcement learning."
-        },
+        metadata={"help": "Discount factor for future rewards in reinforcement learning."},
     )
     length_normalization: bool = field(
         default=True,
-        metadata={
-            "help": "Whether to apply length normalization to the rewards."
-        },
+        metadata={"help": "Whether to apply length normalization to the rewards."},
     )
 
     def __post_init__(self):

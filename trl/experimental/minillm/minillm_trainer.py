@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import textwrap
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -30,9 +29,9 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
-from .minillm_config import MiniLLMConfig
-from ...trainer.grpo_trainer import GRPOTrainer, RolloutFunc, RewardFunc
+from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
 from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from .minillm_config import MiniLLMConfig
 
 
 if is_peft_available():
@@ -90,14 +89,14 @@ class MiniLLMTrainer(GRPOTrainer):
         "id": "2306.08543",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-                    @inproceedings{
-                        gu2024minillm,
-                        title={Mini{LLM}: Knowledge Distillation of Large Language Models},
-                        author={Yuxian Gu and Li Dong and Furu Wei and Minlie Huang},
-                        booktitle={The Twelfth International Conference on Learning Representations},
-                        year={2024},
-                        url={https://openreview.net/forum?id=5h0qf7IBZZ}
-                    }"""),
+            @inproceedings{
+                gu2024minillm,
+                title={{MiniLLM: Knowledge Distillation of Large Language Models}},
+                author={Yuxian Gu and Li Dong and Furu Wei and Minlie Huang},
+                booktitle={The Twelfth International Conference on Learning Representations},
+                year={2024},
+                url={https://openreview.net/forum?id=5h0qf7IBZZ}
+            }"""),
     }
 
     def __init__(
@@ -118,7 +117,7 @@ class MiniLLMTrainer(GRPOTrainer):
     ):
         if reward_funcs is None:
             reward_funcs = [dummy_reward_func]
-        
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -179,12 +178,12 @@ class MiniLLMTrainer(GRPOTrainer):
         self,
         student_log_probs: torch.Tensor,
         teacher_log_probs: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-        reduction: str = "batchmean"
+        mask: torch.Tensor | None = None,
+        reduction: str = "batchmean",
     ):
         """
-        Compute the MiniLLM loss for knowledge distillation using F.kl_div. See Eq. (1)
-        of https://huggingface.co/papers/2306.08543 for the definition.
+        Compute the MiniLLM loss for knowledge distillation using F.kl_div. See Eq. (1) of
+        https://huggingface.co/papers/2306.08543 for the definition.
 
         Args:
             student_logits:
@@ -223,18 +222,16 @@ class MiniLLMTrainer(GRPOTrainer):
             return reg_loss
 
     def _compute_advantage(
-        self, 
+        self,
         student_log_probs_on_labels: torch.Tensor,
         teacher_log_probs_on_labels: torch.Tensor,
-        mask: Optional[torch.Tensor] = None
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute the advantage for Reverse KL Divergence.
+        r"""Compute the advantage for Reverse KL Divergence.
 
-        Mostly following https://github.com/microsoft/LMOps/blob/main/minillm/minillm/losses.py, L37-L49
-        rewards[t] = teacher_log_probs_on_labels[t] - student_log_probs_on_labels[t]
-        if length_normalization:
-            lengths[t] = \sum_{i=t}^{T} \gamma^{i-t}
-            advantages[t] = \sum_{i=t}^{T} \gamma^{i-t} * (R_i) / lengths[t]
+        Mostly following https://github.com/microsoft/LMOps/blob/main/minillm/minillm/losses.py, L37-L49 rewards[t] =
+        teacher_log_probs_on_labels[t] - student_log_probs_on_labels[t] if length_normalization:
+            lengths[t] = \sum_{i=t}^{T} \gamma^{i-t} advantages[t] = \sum_{i=t}^{T} \gamma^{i-t} * (R_i) / lengths[t]
         else:
             advantages[t] = \sum_{i=t}^{T} \gamma^{i-t} * (R_i)
 
@@ -255,9 +252,7 @@ class MiniLLMTrainer(GRPOTrainer):
         student_log_probs_on_labels = student_log_probs_on_labels * mask
         teacher_log_probs_on_labels = teacher_log_probs_on_labels * mask
 
-        rewards = (
-            teacher_log_probs_on_labels - student_log_probs_on_labels
-        )  # (batch_size, sequence_length)
+        rewards = teacher_log_probs_on_labels - student_log_probs_on_labels  # (batch_size, sequence_length)
 
         if self.gamma > 0.0:
             gamma_pow = torch.pow(self.gamma, torch.arange(response_length, device=rewards.device))
@@ -316,7 +311,7 @@ class MiniLLMTrainer(GRPOTrainer):
             teacher_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
         ).squeeze(-1)
 
-        mask = (shifted_labels != -100)
+        mask = shifted_labels != -100
 
         if self.rkl_advantage:
             reverse_kl_advantage = self._compute_advantage(
