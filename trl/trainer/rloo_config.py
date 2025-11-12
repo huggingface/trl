@@ -199,8 +199,6 @@ class RLOOConfig(TrainingArguments):
         > Deprecated arguments
 
         wandb_log_unique_prompts (`bool`, *optional*):
-            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
-            are logged.
 
             <Deprecated version="0.26.0">
 
