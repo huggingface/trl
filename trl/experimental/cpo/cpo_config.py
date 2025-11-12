@@ -21,7 +21,7 @@ from transformers import TrainingArguments
 @dataclass
 class CPOConfig(TrainingArguments):
     r"""
-    Configuration class for the [`CPOTrainer`].
+    Configuration class for the [`experimental.cpo.CPOTrainer`].
 
     This class includes only the parameters that are specific to CPO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may

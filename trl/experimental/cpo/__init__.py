@@ -14,3 +14,6 @@
 
 from .cpo_config import CPOConfig
 from .cpo_trainer import CPOTrainer
+
+
+__all__ = ["CPOConfig", "CPOTrainer"]

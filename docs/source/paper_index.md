@@ -556,7 +556,7 @@ training_args = RLOOConfig(
 
 ## Contrastive Preference Optimization
 
-Papers relating to the [`CPOTrainer`]
+Papers relating to the [`experimental.cpo.CPOTrainer`]
 
 ### AlphaPO -- Reward shape matters for LLM alignment
 
