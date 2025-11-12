@@ -16,7 +16,6 @@ import gc
 import pathlib
 from unittest.mock import MagicMock
 
-import peft
 import pytest
 import torch
 import transformers
@@ -45,6 +44,7 @@ from .testing_utils import (
 
 
 if is_peft_available():
+    import peft
     from peft import (
         LoraConfig,
         PeftModel,
