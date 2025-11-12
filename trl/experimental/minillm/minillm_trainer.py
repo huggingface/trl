@@ -70,7 +70,7 @@ class MiniLLMTrainer(GRPOTrainer):
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         teacher_model (`PreTrainedModel | nn.Module | str`):
             Teacher model used for knowledge distillation. Instantiated similarly to `model`.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
 
