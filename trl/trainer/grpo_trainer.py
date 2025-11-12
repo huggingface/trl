@@ -1185,8 +1185,8 @@ class GRPOTrainer(BaseTrainer):
         """
         Generate completions for custom rollouts when vLLM is running in colocate mode.
 
-        Returns one result per prompt, containing prompt and completion token ids along with per-token log probabilities
-        and the generated text.
+        Returns one result per prompt, containing prompt and completion token ids along with per-token log
+        probabilities and the generated text.
         """
 
         if not prompts:
@@ -1221,7 +1221,9 @@ class GRPOTrainer(BaseTrainer):
         results: list[dict[str, Any]] = []
         for request in vllm_outputs:
             if not request.outputs:
-                results.append({"prompt_ids": request.prompt_token_ids, "completion_ids": [], "logprobs": [], "text": ""})
+                results.append(
+                    {"prompt_ids": request.prompt_token_ids, "completion_ids": [], "logprobs": [], "text": ""}
+                )
                 continue
             sequence = request.outputs[0]
             logprobs = [next(iter(token_logprob.values())).logprob for token_logprob in sequence.logprobs]
@@ -1341,7 +1343,9 @@ class GRPOTrainer(BaseTrainer):
                     rollout_prompts = prompts
                     if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
                         rollout_prompts = [
-                            apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                            apply_chat_template(
+                                {"prompt": prompt}, self.processing_class, **self.chat_template_kwargs
+                            )["prompt"]
                             for prompt in rollout_prompts
                         ]
                     output = self.rollout_func(rollout_prompts, self)
@@ -1389,7 +1393,9 @@ class GRPOTrainer(BaseTrainer):
                         if is_conversational({"prompt": prompts[0]}):
                             all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
                         else:
-                            all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                            all_outputs = self.llm.generate(
+                                all_prompts, sampling_params=sampling_params, use_tqdm=False
+                            )
 
                     all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
                     all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]

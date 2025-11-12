@@ -45,7 +45,6 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections import defaultdict
 from collections.abc import Iterable

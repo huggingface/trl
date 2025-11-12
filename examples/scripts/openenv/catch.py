@@ -157,6 +157,8 @@ Respond **only** with one integer: `0`, `1`, or `2`.
 
 ### Current Observation
 """
+
+
 def reward_from_env(completions, **kwargs):
     rewards = kwargs.get("env_reward", [])
     return [float(r) for r in rewards] if rewards else [0.0] * len(completions)
@@ -220,9 +222,9 @@ def main():
                 episode_completion_ids.extend(rollout_output["completion_ids"])
                 episode_logprobs.extend(rollout_output["logprobs"])
 
-                completion_text = tokenizer.batch_decode(
-                    [rollout_output["completion_ids"]], skip_special_tokens=True
-                )[0]
+                completion_text = tokenizer.batch_decode([rollout_output["completion_ids"]], skip_special_tokens=True)[
+                    0
+                ]
                 numbers = re.findall(r"\b([0-2])\b", completion_text)
                 action_id = int(numbers[0]) if numbers else obs.legal_actions[0]
 

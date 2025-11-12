@@ -119,6 +119,8 @@ def start_env_server(env_host: str, env_port: int):
         raise
 
     return process
+
+
 def reward_from_env(completions, **kwargs):
     """Extract environment rewards for training."""
     env_rewards = kwargs.get("env_reward", [])
@@ -161,9 +163,7 @@ def main():
         outputs = trainer.generate_rollout_completions(prompts)
         tokenizer = trainer.processing_class
 
-        completions_text = [
-            tokenizer.decode(output["completion_ids"], skip_special_tokens=True) for output in outputs
-        ]
+        completions_text = [tokenizer.decode(output["completion_ids"], skip_special_tokens=True) for output in outputs]
 
         env_result = client.reset()
         env_rewards: list[float] = []
