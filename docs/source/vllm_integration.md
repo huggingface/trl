@@ -75,7 +75,7 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl import OnlineDPOTrainer, OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 dataset = load_dataset("trl-lib/tldr", split="train")
 
@@ -366,7 +366,7 @@ training_args = GRPOConfig(
 <hfoption id="OnlineDPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
     ...,
@@ -441,7 +441,7 @@ training_args = GRPOConfig(
 <hfoption id="OnlineDPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
     ...,

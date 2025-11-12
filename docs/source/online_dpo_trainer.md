@@ -28,8 +28,8 @@ Below is the script to train the model:
 ```python
 # train_online_dpo.py
 from datasets import load_dataset
-from trl import OnlineDPOConfig, OnlineDPOTrainer
 from trl.experimental.judges import PairRMJudge
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
