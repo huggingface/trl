@@ -17,14 +17,8 @@ import textwrap
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from datasets import Dataset
-from transformers import (
-    AutoModelForCausalLM,
-    DataCollator,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-    ProcessorMixin,
-)
+from datasets import Dataset, IterableDataset
+from transformers import AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
@@ -44,42 +38,104 @@ def dummy_reward_func(completions: list, **kwargs):
 
 
 class MiniLLMTrainer(GRPOTrainer):
-    """Trainer for MiniLLM: Knowledge Distillation of Language Models.
+    """
+    Trainer for the Knowledge Distillation of Language Models (MiniLLM) method. This algorithm was initially proposed
+    in the paper [Knowledge Distillation of Large Language Models](https://huggingface.co/papers/2306.08543).
 
-    For details on MiniLLM, see the paper: [MiniLLM](https://huggingface.co/papers/2306.08543).
+    Example:
+
+    ```python
+    from datasets import load_dataset
+    from trl.experimental.minillm import MiniLLMTrainer
+
+    dataset = load_dataset("trl-lib/tldr", split="train")
+
+    trainer = MiniLLMTrainer(
+        model="Qwen/Qwen3-0.6B",
+        teacher_model="Qwen/Qwen3-1.7B",
+        train_dataset=dataset,
+    )
+    trainer.train()
+    ```
 
     Args:
-        model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
-            Model to be trained, or the string identifier of the model to be instantiated from a pretrained model.
-        teacher_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
-            Teacher model for knowledge distillation, or the string identifier of the model to be instantiated from a
-            pretrained model.
-        args ([`MiniLLMConfig`], *optional*):
-            Training arguments.
-        data_collator ([`~transformers.DataCollator`], *optional*):
-            Data collator to batch samples from the dataset. It defaults to a [`DataCollatorForChatML`] using the
-            `processing_class`.
-        train_dataset ([`~datasets.Dataset`], *optional*):
-            Dataset for training.
-        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
-            Dataset for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
-           Class to process the data.
-        compute_metrics (`Callable`, *optional*):
-            Function to compute metrics at evaluation. Must take in an [`~transformers.EvalPrediction`] and return a
-            dictionary string to float.
-        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
-            Callbacks to use during training.
-        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
-            Tuple containing the optimizer and the learning rate scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable`, *optional*):
-            Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
-            return the logits to be used for metrics computation.
+        model (`str | PreTrainedModel`):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+        teacher_model (`PreTrainedModel | nn.Module | str`):
+            Teacher model used for knowledge distillation. Instantiated similarly to `model`.
+        reward_funcs (`RewardFunc | list[RewardFunc]`):
+            Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
+            functions with the prompts and completions and sum the rewards. Can be either:
+
+            - A single reward function, such as:
+                - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
+                path to a *directory* containing model weights saved using
+                [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+                using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the
+                keyword arguments in `args.model_init_kwargs`.
+                - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
+                - A custom reward function: The function is provided with the prompts and the generated completions,
+                  plus any additional columns in the dataset. It should return a list of rewards. Custom reward
+                  functions can also return `None` when the reward is not applicable to those samples. This is useful
+                  for multi-task training where different reward functions apply to different types of samples. When a
+                  reward function returns `None` for a sample, that reward function is excluded from the reward
+                  calculation for that sample. For more details, see [Using a custom reward
+                  function](#using-a-custom-reward-function).
+
+                  The trainer's state is also passed to the reward function. The trainer's state is an instance of
+                  [`~transformers.TrainerState`] and can be accessed by accessing the `trainer_state` argument to the
+                  reward function's signature.
+            - A list of reward functions, where each item can independently be any of the above types. Mixing different
+            types within the list (e.g., a string model ID and a custom reward function) is allowed.
+        args ([`experimental.minillm.MiniLLMConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+            Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
+            ignored. The format of the samples can be either:
+
+            - [Standard](dataset_formats#standard): Each sample contains plain text.
+            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
+              and content).
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+            Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
+        reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
+            Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
+
+            - A single processing class: Used when `reward_funcs` contains only one reward function.
+            - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
+            If set to `None`, or if an element of the list corresponding to a [`~transformers.PreTrainedModel`] is
+            `None`, the tokenizer for the model is automatically loaded using
+            [`~transformers.AutoTokenizer.from_pretrained`]. For elements in `reward_funcs` that are custom reward
+            functions (not [`~transformers.PreTrainedModel`]), the corresponding entries in `reward_processing_classes`
+            are ignored.
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+
+            If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
+            method.
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
+            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
-            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
-            wrapped with the specified PEFT adapter.
-        formatting_func (`Callable`, *optional*):
-            Function to format the dataset. Must take in an example and return an example.
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        rollout_func (`RolloutFunc`, *optional*):
+            Function to use for generating completions. It must take prompts, args, and processing_class as parameters
+            and return a dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields that
+            are forwarded to the reward functions. This feature is experimental and may change or be removed at any
+            time without prior notice.
     """
 
     _tag_names = ["trl", "minillm"]
@@ -101,19 +157,18 @@ class MiniLLMTrainer(GRPOTrainer):
 
     def __init__(
         self,
-        model: PreTrainedModel | nn.Module | str | None = None,
-        teacher_model: PreTrainedModel | nn.Module | str = None,
+        model: str | PreTrainedModel,
+        teacher_model: PreTrainedModel | nn.Module | str,
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: MiniLLMConfig | None = None,
-        data_collator: DataCollator | None = None,
-        train_dataset: Dataset | None = None,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
         rollout_func: RolloutFunc | None = None,
-        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
     ):
         if reward_funcs is None:
             reward_funcs = [dummy_reward_func]
@@ -137,9 +192,6 @@ class MiniLLMTrainer(GRPOTrainer):
             peft_config=peft_config,
             rollout_func=rollout_func,
         )
-
-        if data_collator is not None:
-            self.data_collator = data_collator
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
@@ -229,12 +281,20 @@ class MiniLLMTrainer(GRPOTrainer):
     ) -> torch.Tensor:
         r"""Compute the advantage for Reverse KL Divergence.
 
-        Mostly following https://github.com/microsoft/LMOps/blob/main/minillm/minillm/losses.py, L37-L49 rewards[t] =
-        teacher_log_probs_on_labels[t] - student_log_probs_on_labels[t] if length_normalization:
-            lengths[t] = \sum_{i=t}^{T} \gamma^{i-t} advantages[t] = \sum_{i=t}^{T} \gamma^{i-t} * (R_i) / lengths[t]
-        else:
-            advantages[t] = \sum_{i=t}^{T} \gamma^{i-t} * (R_i)
+        Mostly following [this
+        implementation](https://github.com/microsoft/LMOps/blob/e210d2c026b9958617887762400778ace81172e6/minillm/minillm/losses.py#L37-L49).
 
+        $$ \text{rewards}_t = \text{teacher\_log\_probs\_on\_labels}_t - \text{student\_log\_probs\_on\_labels}_t $$
+
+        If length normalization is enabled:
+
+        $$ \text{lengths}_t = \sum_{i=t}^{T} \gamma^{i-t} $$
+
+        $$ \text{advantages}_t = \frac{\sum_{i=t}^{T} \gamma^{i-t} R_i}{\text{lengths}_t} $$
+
+        Otherwise:
+
+        $$ \text{advantages}_t = \sum_{i=t}^{T} \gamma^{i-t} R_i $$
 
         Args:
             student_log_probs_on_labels: Log probabilities of the student model on the labels.
@@ -276,21 +336,15 @@ class MiniLLMTrainer(GRPOTrainer):
         labels = input_ids.clone()
         labels[attention_mask == 0] = -100
 
-        # compute student output
-        student_outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-        )
+        # Compute student output
+        student_outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
 
-        # compute teacher output in eval mode
+        # Compute teacher output in eval mode
         self.teacher_model.eval()
         with torch.no_grad():
-            teacher_outputs = self.teacher_model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
+            teacher_outputs = self.teacher_model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
 
-        # slice the logits for the generated tokens using the inputs["prompts"] lengths
+        # Slice the logits for the generated tokens using the inputs["prompts"] lengths
         prompt_lengths = inputs["prompt_ids"].shape[1]
         student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
         teacher_logits = teacher_outputs.logits[:, prompt_lengths - 1 : -1, :]
@@ -322,10 +376,10 @@ class MiniLLMTrainer(GRPOTrainer):
 
             inputs["advantages"] = inputs["advantages"].unsqueeze(1) + reverse_kl_advantage
 
-        # compute GRPO loss on verifiable reward
+        # Compute GRPO loss on verifiable reward
         loss = self._compute_loss(model, inputs)
 
-        # compute loss
+        # Compute loss
         if self.single_step_decomposition:
             single_step_decomposition_loss = self._single_step_decomposition_loss(
                 student_log_probs=student_log_probs,
@@ -335,7 +389,7 @@ class MiniLLMTrainer(GRPOTrainer):
 
             loss += single_step_decomposition_loss
 
-        # empty cache
+        # Empty cache
         empty_cache()
 
         # Return loss
