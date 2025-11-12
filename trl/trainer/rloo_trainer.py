@@ -449,7 +449,7 @@ class RLOOTrainer(BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
-        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -1564,7 +1564,7 @@ class RLOOTrainer(BaseTrainer):
                 else:
                     df = df_base
 
-                if self.wandb_log_unique_prompts:
+                if self.log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
 
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
