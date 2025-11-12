@@ -672,48 +672,16 @@ config = GOLDConfig(
 )
 ```
 
+### Knowledge Distillation of Large Language Models
 
-### MiniLLM
 **📜 Paper**: https://huggingface.co/papers/2306.08543
 
-MiniLLM is the first on-policy knowledge distillation method, which minimizes the sequence-level reverse KLD between the teacher and the student model and is optimized by reinforcement learning. 
+MiniLLM is the first on-policy knowledge distillation method, which minimizes the sequence-level reverse KLD between the teacher and the student model and is optimized by reinforcement learning.
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-$$
-\begin{align}
-L_{\text{MiniLLM}}&=\alpha_1\mathbb{E}_{x\sim \pi_{\theta}}\sum_{t'=t}^{|x|}\frac{\gamma^{t'-t}}{\sum_{t'}\gamma^{t'-t}}\left[\log \frac{\pi_{\theta}(x_{t'+1}|x_{1..t'})}{\pi_{\text{teacher}}(x_{t'+1}|x_{1..t'})}\right] \\
-&+ \alpha_2\mathbb{E}_{x\sim \pi_{\theta}} \text{KL}\left[\pi_\theta(\cdot|x_{1..t})||\pi_{\text{teacher}}(\cdot | x_{1..t})\right].
-\end{align}
-$$
+Alternatively, you can use the [`trl.experimental.MiniLLMTrainer`] and [`trl.experimental.MiniLLMConfig`] to perform MiniLLM distillation as follows:
 
-+ When $\alpha_1=1$, $\alpha_2=0$, $\gamma=0$, which corresponds to
-  ```python
-  config = MiniLLMConfig(
-      rkl_advantage=True,
-      single_step_decomposition=False,
-      gamma=False
-  )
-  ```
-  $L_{\text{MiniLLM}}$ becomes the on-policy KD implemented in [tinker](https://github.com/thinking-machines-lab/tinker-cookbook/blob/5d08be6d130596b7bedd02197861c41fa81ea436/tinker_cookbook/distillation/train_on_policy.py#L88):
-  
-$$
-L_{\text{tinker}}=\mathbb{E}_{x\sim \pi_{\theta}}\left[\log \frac{\pi_{\theta}(x_{t'+1}|x_{1..t'})}{\pi_{\text{teacher}}(x_{t'+1}|x_{1..t'})}\right].
-$$
-+ When $\alpha_1=0$, $\alpha_2=1$, which corresponds to
-  ```python
-  config = MiniLLMConfig(
-      rkl_advantage=False,
-      single_step_decomposition=True
-  )
-  ```
-  $L_{\text{MiniLLM}}$ becomes the reverse KLD version of the GKD loss as in the [On-Policy Distillation section](#on-policy-distillation):
-  
-$$
-L_{\text{GKD-RKL}}=\mathbb{E}_{x\sim \pi_{\theta}} \text{KL}\left[\pi_\theta(\cdot|x_{1..t})||\pi_{\text{teacher}}(\cdot | x_{1..t})\right].
-$$
-
-You can use the following code to start a MiniLLM training in TRL:
 ```python
 from datasets import load_dataset
 from trl.experimental.minillm import MiniLLMTrainer
@@ -727,3 +695,5 @@ trainer = MiniLLMTrainer(
 )
 trainer.train()
 ```
+
+For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
