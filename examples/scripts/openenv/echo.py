@@ -159,7 +159,7 @@ def main():
         gradient_accumulation_steps=4,
     )
 
-    def rollout(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         outputs = trainer.generate_rollout_completions(prompts)
         tokenizer = trainer.processing_class
 
@@ -183,7 +183,7 @@ def main():
         reward_funcs=reward_from_env,
         args=training_args,
         train_dataset=dataset,
-        rollout_func=rollout,
+        rollout_func=rollout_func,
         callbacks=[RichProgressCallback()],
     )
 

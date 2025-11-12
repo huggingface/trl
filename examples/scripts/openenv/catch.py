@@ -196,7 +196,7 @@ def main():
         gradient_accumulation_steps=4,
     )
 
-    def rollout(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         """Generate completions via colocated vLLM and compute environment rewards."""
         env_rewards: list[float] = []
         all_prompt_ids: list[list[int]] = []
@@ -249,7 +249,7 @@ def main():
         reward_funcs=reward_from_env,
         args=training_args,
         train_dataset=dataset,
-        rollout_func=rollout,
+        rollout_func=rollout_func,
         callbacks=[RichProgressCallback()],
     )
 

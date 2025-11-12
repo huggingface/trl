@@ -443,7 +443,7 @@ def main() -> None:
     grpo_config.project = cli_args.project or f"group-{sanitize_name(cli_args.model_id)}"
     grpo_config.trackio_space_id = cli_args.trackio_space_id
 
-    def rollout(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
@@ -490,7 +490,7 @@ def main() -> None:
         ],
         train_dataset=dataset,
         args=grpo_config,
-        rollout_func=rollout,
+        rollout_func=rollout_func,
     )
 
     print("Starting GRPO training with Wordle environment...")
