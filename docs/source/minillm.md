@@ -1,6 +1,6 @@
 # MiniLLM Trainer
 
-[![All_models-MiniLLM-blue](https://img.shields.io/badge/All_models-MiniLLM-blue)](https://huggingface.co/models?other=miinillm,trl)
+[![All_models-MiniLLM-blue](https://img.shields.io/badge/All_models-MiniLLM-blue)](https://huggingface.co/models?other=minillm,trl)
 
 ## Overview
 
