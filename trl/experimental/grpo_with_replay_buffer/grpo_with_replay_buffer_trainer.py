@@ -18,14 +18,9 @@ from typing import Any
 import torch
 from accelerate.utils import gather_object
 
-from trl.data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages,
-)
-from trl.trainer.grpo_trainer import GRPOTrainer
-from trl.trainer.utils import nanmax, nanmin, nanstd, pad
-
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ...trainer.grpo_trainer import GRPOTrainer
+from ...trainer.utils import nanmax, nanmin, nanstd, pad
 from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
 
 
@@ -210,6 +205,9 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             completions = []
             for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
+                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
+                    bootstrap = bootstrap[0]["text"]
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
@@ -238,10 +236,12 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
 
+        grouped_std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        grouped_std_rewards = grouped_std_rewards.repeat_interleave(self.num_generations, dim=0)
+
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
-            std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-            std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
+            std_rewards = grouped_std_rewards.clone()
         elif self.scale_rewards == "batch":
             # Compute global std
             std_rewards = rewards.std().expand_as(rewards)
@@ -261,7 +261,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
-        std_rewards = std_rewards[process_slice]
+        grouped_std_rewards = grouped_std_rewards[process_slice]
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -316,7 +316,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             )
         outputs_after_sampling_buffer = self.update_with_replay_buffer(
             advantages,
-            std_rewards,
+            grouped_std_rewards,
             prompt_ids,
             prompt_mask,
             completion_ids,

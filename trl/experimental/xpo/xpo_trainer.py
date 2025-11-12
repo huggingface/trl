@@ -33,27 +33,27 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available
 
-from ..data_utils import is_conversational, maybe_apply_chat_template
-from ..models.modeling_base import GeometricMixtureWrapper
-from ..models.utils import unwrap_model_for_generation
-from .nash_md_config import NashMDConfig
-from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import (
+from ...data_utils import is_conversational, maybe_apply_chat_template
+from ...models.utils import unwrap_model_for_generation
+from ...trainer.judges import BasePairwiseJudge
+from ...trainer.online_dpo_trainer import OnlineDPOTrainer
+from ...trainer.utils import (
     SIMPLE_CHAT_TEMPLATE,
     empty_cache,
     get_reward,
     selective_log_softmax,
     truncate_right,
 )
+from .xpo_config import XPOConfig
 
 
 if is_peft_available():
     from peft import PeftModel
 
 
-class NashMDTrainer(OnlineDPOTrainer):
+class XPOTrainer(OnlineDPOTrainer):
     """
-    Trainer for the Nash-MD method.
+    Trainer for Exploratory Preference Optimization (XPO).
 
     It is implemented as a subclass of [`OnlineDPOTrainer`].
 
@@ -69,8 +69,8 @@ class NashMDTrainer(OnlineDPOTrainer):
             [`~transformers.AutoModelForSequenceClassification`].
         judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
-        args ([`NashMDConfig`]):
-            The NashMD config arguments to use for training.
+        args ([`experimental.xpo.XPOConfig`]):
+            The XPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
             ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
@@ -96,20 +96,18 @@ class NashMDTrainer(OnlineDPOTrainer):
             The function to use to preprocess the logits before computing the metrics.
     """
 
-    _tag_names = ["trl", "nash-md"]
-    _name = "Nash-MD"
+    _tag_names = ["trl", "xpo"]
+    _name = "XPO"
     _paper = {
-        "title": "Nash Learning from Human Feedback",
-        "id": "2312.00886",
+        "title": "Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
+        "id": "2405.21046",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-            @inproceedings{munos2024nash,
-                title        = {{Nash Learning from Human Feedback}},
-                author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
+            @article{jung2024binary,
+                title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
+                author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
                 year         = 2024,
-                booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
-                publisher    = {OpenReview.net},
-                url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
+                eprint       = {arXiv:2405.21046}
             }"""),
     }
 
@@ -117,9 +115,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         model: PreTrainedModel | nn.Module = None,
         ref_model: PreTrainedModel | nn.Module = None,
-        reward_funcs: PreTrainedModel | nn.Module | None = None,
-        judge=None,
-        args: NashMDConfig | None = None,
+        reward_funcs: nn.Module | None = None,
+        judge: BasePairwiseJudge | None = None,
+        args: XPOConfig | None = None,
         data_collator: Callable | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
@@ -128,6 +126,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         | FeatureExtractionMixin
         | ProcessorMixin
         | None = None,
+        reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         peft_config: dict | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -137,14 +136,14 @@ class NashMDTrainer(OnlineDPOTrainer):
         super().__init__(
             model=model,
             ref_model=ref_model,
-            reward_funcs=reward_funcs,
             judge=judge,
+            reward_funcs=reward_funcs,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_classes=processing_class,
+            reward_processing_classes=reward_processing_classes,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -152,89 +151,73 @@ class NashMDTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        self._mixture_coef = self.args.mixture_coef
+        self._alpha = self.args.alpha
 
-        # Overwrite the stats dictionary to include NashMD specific statistics
+        # Overwrite the stats dictionary to include XPO specific statistics
         self.stats = {
-            # Remove "non_score_reward", "rlhf_reward", "scores_margin"
-            # Add "mixture_coef"
-            "loss/kl": [],
+            # Remove "non_score_reward", "rlhf_reward", "scores"
+            # Add "loss/dpo", "loss/xpo"
+            "loss/dpo": [],
+            "loss/xpo": [],
+            "objective/kl": [],
             "objective/entropy": [],
-            "loss/score": [],
-            "rewards/probabilities": [],
+            "rewards/chosen": [],
+            "rewards/rejected": [],
             "rewards/accuracies": [],
             "rewards/margins": [],
             "logps/chosen": [],
             "logps/rejected": [],
+            # Replace "contain_eos_token" by "model_contain_eos_token" and "ref_contain_eos_token"
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
+            "alpha": [],
             "beta": [],
-            "mixture_coef": [],
         }
         if self.reward_funcs is not None:
             if len(self.reward_funcs) != 1:
-                raise ValueError("NashMDTrainer only supports one reward function/model.")
+                raise ValueError("XPOTrainer only supports one reward function/model.")
             self.reward_funcs = self.reward_funcs[0]
-            self.stats["rewards/chosen"] = []
-            self.stats["rewards/rejected"] = []
+            self.stats["objective/model_scores"] = []
+            self.stats["objective/ref_scores"] = []
+            self.stats["objective/scores_margin"] = []
 
     @property
-    def mixture_coef(self):
-        if isinstance(self._mixture_coef, list):
+    def alpha(self):
+        if isinstance(self._alpha, list):
             epoch = self.state.epoch
-            return self._mixture_coef[epoch] if epoch < len(self._mixture_coef) else self._mixture_coef[-1]
+            return self._alpha[epoch] if epoch < len(self._alpha) else self._alpha[-1]
         else:
-            return self._mixture_coef
+            return self._alpha
 
-    def _generate_completions(self, model, prompts):
-        # Generate completions from the policy model.
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_for_gen_ctx:
-            model_output = unwrapped_policy_for_gen_ctx.generate(
+    def _generate_completions(self, prompts, model):
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_model_for_gen:
+            model_output = unwrapped_policy_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
                 generation_config=self.generation_config,
             )
 
-        # Get the DDP/FSDP unwrapped version of the main model.
-        # This will be the policy model for GeometricMixtureWrapper (PEFT adapters active if PEFT is used).
-        policy_model_for_gmw = self.accelerator.unwrap_model(model)
-
-        # Determine the correct reference model for GeometricMixtureWrapper.
-        # This also needs to be DDP/FSDP unwrapped.
-        ref_model_for_gmw: torch.nn.Module
+        actual_model_for_ref_generation: torch.nn.Module
         if self.ref_model is None:
-            # No explicit ref_model is provided.
-            # Use the base of the main `model` if it's a PEFT model.
-            # policy_model_for_gmw is already DDP-unwrapped.
-            if is_peft_available() and isinstance(policy_model_for_gmw, PeftModel):
-                ref_model_for_gmw = policy_model_for_gmw.get_base_model()
+            unwrapped_main_model_for_ref_logic = self.accelerator.unwrap_model(model)
+
+            if is_peft_available() and isinstance(unwrapped_main_model_for_ref_logic, PeftModel):
+                actual_model_for_ref_generation = unwrapped_main_model_for_ref_logic.get_base_model()
             else:
-                # Not a PEFT model (or PEFT not available), or already a base model.
-                # Use the DDP-unwrapped policy model itself as the reference.
-                ref_model_for_gmw = policy_model_for_gmw
+                actual_model_for_ref_generation = unwrapped_main_model_for_ref_logic
         else:
-            # An explicit ref_model is provided. Unwrap it for DDP/FSDP.
-            ref_model_for_gmw = self.accelerator.unwrap_model(self.ref_model)
+            actual_model_for_ref_generation = self.accelerator.unwrap_model(self.ref_model)
 
-        # Both models given to GeometricMixtureWrapper (policy_model_for_gmw and ref_model_for_gmw) are DDP-unwrapped.
-        with torch.no_grad():  # Ensure no_grad context for mixture model generation
-            mixture_model = GeometricMixtureWrapper(
-                model=policy_model_for_gmw,
-                ref_model=ref_model_for_gmw,
-                generation_config=self.generation_config,
-                mixture_coef=self.mixture_coef,
-                device=self.accelerator.device,
-            )
-
-            mixture_output = mixture_model.generate(
+        with unwrap_model_for_generation(actual_model_for_ref_generation, self.accelerator) as final_ref_model_for_gen:
+            ref_output = final_ref_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
                 generation_config=self.generation_config,
             )
 
-        return model_output, mixture_output
+        return model_output, ref_output
 
-    def _process_completions(self, model_output, mixture_output, prompts):
+    def _process_completions(self, model_output, ref_output, prompts):
         context_length = prompts["input_ids"].shape[1]
 
         # Process model completions
@@ -249,47 +232,48 @@ class NashMDTrainer(OnlineDPOTrainer):
         }
 
         # Process reference model completions
-        mixture_completion_ids = mixture_output[:, context_length:]
-        mixture_completion_ids, mixture_completion_mask = truncate_right(
-            mixture_completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
+        ref_completion_ids = ref_output[:, context_length:]
+        ref_completion_ids, ref_completion_mask = truncate_right(
+            ref_completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
-        mixture_data = {
-            "input_ids": torch.cat((prompts["input_ids"], mixture_completion_ids), dim=1),
-            "attention_mask": torch.cat((prompts["attention_mask"], mixture_completion_mask), dim=1),
+        ref_data = {
+            "input_ids": torch.cat((prompts["input_ids"], ref_completion_ids), dim=1),
+            "attention_mask": torch.cat((prompts["attention_mask"], ref_completion_mask), dim=1),
             "raw": prompts["raw"],
         }
 
-        return model_data, mixture_data
+        return model_data, ref_data
 
-    def _compute_rewards(self, model_data, mixture_data, context_length):
+    def _compute_rewards(self, model_data, ref_data, context_length):
         with torch.no_grad():
             _, model_scores, _ = get_reward(
                 self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
-            _, mixture_scores, _ = get_reward(
-                self.reward_funcs, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
+            _, ref_scores, _ = get_reward(
+                self.reward_funcs, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
 
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:
             model_contain_eos = torch.any(model_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
-            mixture_contain_eos = torch.any(mixture_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
+            ref_contain_eos = torch.any(ref_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
-            mixture_scores[~mixture_contain_eos] -= self.args.missing_eos_penalty
+            ref_scores[~ref_contain_eos] -= self.args.missing_eos_penalty
 
-        return model_scores, mixture_scores
+        return model_scores, ref_scores
 
-    def _compute_judge(self, model_data, mixture_data, context_length):
+    def _compute_judge(self, model_data, ref_data, context_length):
         prompts = model_data["raw"]
         model_data_completions = self.processing_class.batch_decode(
             model_data["input_ids"][:, context_length:], skip_special_tokens=True
         )
         model_data_completions = [completion.strip() for completion in model_data_completions]
 
-        mixture_data_completions = self.processing_class.batch_decode(
-            mixture_data["input_ids"][:, context_length:], skip_special_tokens=True
+        ref_data_completions = self.processing_class.batch_decode(
+            ref_data["input_ids"][:, context_length:], skip_special_tokens=True
         )
-        mixture_data_completions = [completion.strip() for completion in mixture_data_completions]
+        ref_data_completions = [completion.strip() for completion in ref_data_completions]
+
         if is_conversational({"prompt": prompts[0]}):
             model_data_completions = [
                 [{"role": "assistant", "content": completion}] for completion in model_data_completions
@@ -299,123 +283,174 @@ class NashMDTrainer(OnlineDPOTrainer):
             prompts = [template.render(messages=message) for message in prompts]
             model_data_completions = [template.render(messages=completion) for completion in model_data_completions]
 
-            mixture_data_completions = [
-                [{"role": "assistant", "content": completion}] for completion in mixture_data_completions
+            ref_data_completions = [
+                [{"role": "assistant", "content": completion}] for completion in ref_data_completions
             ]
-            mixture_data_completions = [
-                template.render(messages=completion) for completion in mixture_data_completions
-            ]
+            ref_data_completions = [template.render(messages=completion) for completion in ref_data_completions]
 
-        probability = self.judge.judge(
+        ranks_of_first_completion = self.judge.judge(
             prompts,
-            list(zip(model_data_completions, mixture_data_completions, strict=True)),
-            return_scores=True,
+            list(zip(model_data_completions, ref_data_completions, strict=True)),
         )
-        return torch.tensor(probability, device=model_data["input_ids"].device)
+        # convert ranks to a True/False mask:
+        # when rank == 0, it means the first completion is the best
+        # when rank == 1, it means the second completion is the best
+        return torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=model_data["input_ids"].device)
 
-    def _compute_logprobs(self, model, model_data, context_length):
+    def _compute_logprobs(self, model, model_data, ref_data, context_length):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
             logits = output.logits[:, context_length - 1 : -1]
             token_logprobs = selective_log_softmax(logits, data["input_ids"][:, context_length:])
             return token_logprobs
 
-        # Compute logprobs for model completions under the model
+        # Compute logprobs for model completions
         model_logprobs_model_data = compute_logprobs_for_data(model, model_data)
+        # Compute logprobs for model on reference completions (for XPO loss)
+        model_logprobs_ref_data = compute_logprobs_for_data(model, ref_data)
 
-        # Compute logprobs of model completions under the reference model
+        # Compute logprobs for reference model completions
         with torch.no_grad():
             if self.ref_model is None:
                 with model.disable_adapter():
                     ref_logprobs_model_data = compute_logprobs_for_data(model, model_data)
+                    ref_logprobs_ref_data = compute_logprobs_for_data(model, ref_data)
             else:
                 ref_logprobs_model_data = compute_logprobs_for_data(self.ref_model, model_data)
+                ref_logprobs_ref_data = compute_logprobs_for_data(self.ref_model, ref_data)
 
         # Mask padding tokens
         model_padding_mask = model_data["attention_mask"][:, context_length:] == 0
+        ref_padding_mask = ref_data["attention_mask"][:, context_length:] == 0
         model_logprobs_model_data = model_logprobs_model_data.masked_fill(model_padding_mask, 0.0)
+        model_logprobs_ref_data = model_logprobs_ref_data.masked_fill(ref_padding_mask, 0.0)
+        ref_logprobs_ref_data = ref_logprobs_ref_data.masked_fill(ref_padding_mask, 0.0)
         ref_logprobs_model_data = ref_logprobs_model_data.masked_fill(model_padding_mask, 0.0)
 
-        return (model_logprobs_model_data, ref_logprobs_model_data)
+        return model_logprobs_model_data, model_logprobs_ref_data, ref_logprobs_ref_data, ref_logprobs_model_data
 
     def _compute_losses(
         self,
         model_logprobs_model_data,
+        model_logprobs_ref_data,
+        ref_logprobs_ref_data,
         ref_logprobs_model_data,
-        probability,
+        chosen_mask,
     ):
-        # reinforce score where 0.5 is a control variate
-        score = (probability - 0.5) * model_logprobs_model_data.sum(1)
+        # Compute log probs
+        model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
+        model_logprobs_ref_data_sum = model_logprobs_ref_data.sum(1)
+        ref_logprobs_ref_data_sum = ref_logprobs_ref_data.sum(1)
+        ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
 
-        # kl divergence via reinforce
-        with torch.no_grad():
-            log_ratio = model_logprobs_model_data - ref_logprobs_model_data
-            kl_div_log = log_ratio.sum(1)
-        kl_div_loss = (log_ratio * model_logprobs_model_data).sum(1)
+        chosen_model_logprobs = torch.where(chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        chosen_ref_logprobs = torch.where(chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        chosen_log_ratios = chosen_model_logprobs - chosen_ref_logprobs
 
-        # final loss
-        loss = self.beta * kl_div_loss - score
+        rejected_model_logprobs = torch.where(~chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        rejected_ref_logprobs = torch.where(~chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        rejected_log_ratios = rejected_model_logprobs - rejected_ref_logprobs
 
-        return loss.mean(), score, kl_div_log
+        # Compute logits as the difference between chosen and rejected log ratios
+        logits = chosen_log_ratios - rejected_log_ratios
+
+        if self.args.loss_type == "sigmoid":
+            dpo_losses = -F.logsigmoid(self.beta * logits)
+        elif self.args.loss_type == "ipo":
+            dpo_losses = (logits - 1 / (2 * self.beta)) ** 2
+        else:
+            raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
+
+        # Compute XPO specific loss
+        xpo_losses = self.alpha * model_logprobs_ref_data_sum
+
+        # Total loss
+        loss = (dpo_losses + xpo_losses).mean()
+
+        return loss, dpo_losses, xpo_losses
 
     def _log_statistics(
         self,
         model_data,
-        mixture_data,
+        ref_data,
         model_logprobs_model_data,
+        model_logprobs_ref_data,
+        ref_logprobs_ref_data,
         ref_logprobs_model_data,
-        probability,
-        score,
-        kl_div,
+        chosen_mask,
+        dpo_losses,
+        xpo_losses,
         context_length,
         model_scores=None,
-        mixture_scores=None,
+        ref_scores=None,
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
             return self.accelerator.gather_for_metrics(tensor).mean().item()
 
-        # Log score
-        self.stats["loss/score"].append(gather_mean(score))
-        # Log KL divergence
-        self.stats["loss/kl"].append(gather_mean(kl_div))
+        # Log losses
+        self.stats["loss/dpo"].append(gather_mean(dpo_losses))
+        self.stats["loss/xpo"].append(gather_mean(xpo_losses))
+
+        # Log scores
+        if self.reward_funcs is not None:
+            self.stats["objective/model_scores"].append(gather_mean(model_scores))
+            self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
+            self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
 
         # Log logprobs
         model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
+        model_logprobs_ref_data_sum = model_logprobs_ref_data.sum(1)
+        ref_logprobs_ref_data_sum = ref_logprobs_ref_data.sum(1)
         ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
 
-        self.stats["logps/chosen"].append(gather_mean(model_logprobs_model_data_sum))
-        self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
+        chosen_model_logprobs = torch.where(chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        chosen_ref_logprobs = torch.where(chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        chosen_log_ratios = chosen_model_logprobs - chosen_ref_logprobs
+
+        rejected_model_logprobs = torch.where(~chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        rejected_ref_logprobs = torch.where(~chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        rejected_log_ratios = rejected_model_logprobs - rejected_ref_logprobs
+
+        self.stats["logps/chosen"].append(gather_mean(chosen_model_logprobs.mean() + chosen_ref_logprobs.mean()))
+        self.stats["logps/rejected"].append(gather_mean(rejected_model_logprobs.mean() + rejected_ref_logprobs.mean()))
 
         # Log rewards
-        if self.reward_funcs is not None:
-            self.stats["rewards/chosen"].append(gather_mean(model_scores))
-            self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
+        # Compute various statistics
+        chosen_rewards = chosen_log_ratios * self.beta
+        rejected_rewards = rejected_log_ratios * self.beta
+        self.stats["rewards/chosen"].append(gather_mean(chosen_rewards.mean()))
+        self.stats["rewards/rejected"].append(gather_mean(rejected_rewards.mean()))
 
-        # Log probabilities
-        self.stats["rewards/probabilities"].append(gather_mean(probability))
+        # Calculate KL divergence for model and ref data
+        kl_model_data = model_logprobs_model_data - ref_logprobs_model_data
+        kl_ref_data = model_logprobs_ref_data - ref_logprobs_ref_data
+        mean_kl = (kl_model_data.sum(1) + kl_ref_data.sum(1)).mean() / 2
+        self.stats["objective/kl"].append(gather_mean(mean_kl))
 
-        # Calculate entropy for model data
+        # Calculate entropy for model and ref data
         entropy_model_data = -model_logprobs_model_data.sum(1)
-        self.stats["objective/entropy"].append(gather_mean(entropy_model_data))
+        entropy_ref_data = -model_logprobs_ref_data.sum(1)
+        mean_entropy = (entropy_model_data.mean() + entropy_ref_data.mean()) / 2
+        self.stats["objective/entropy"].append(gather_mean(mean_entropy))
 
         # Calculate margins
-        margin = model_logprobs_model_data_sum - ref_logprobs_model_data_sum
-        self.stats["rewards/margins"].append(gather_mean(margin))
+        margin = chosen_rewards - rejected_rewards
+        self.stats["rewards/margins"].append(gather_mean(margin.mean()))
 
         # Calculate accuracy
         accuracy = (margin > 0).float()
-        self.stats["rewards/accuracies"].append(gather_mean(accuracy))
+        self.stats["rewards/accuracies"].append(gather_mean(accuracy.mean()))
 
         # Log EOS token statistics
         model_eos = (model_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id).any(dim=1)
-        mixture_eos = (mixture_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id).any(dim=1)
+        ref_eos = (ref_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id).any(dim=1)
         self.stats["val/model_contain_eos_token"].append(gather_mean(model_eos.float()))
-        self.stats["val/ref_contain_eos_token"].append(gather_mean(mixture_eos.float()))
+        self.stats["val/ref_contain_eos_token"].append(gather_mean(ref_eos.float()))
 
-        # Log beta and mixture coef
+        # Log alpha and beta
+        self.stats["alpha"].append(self.alpha)
         self.stats["beta"].append(self.beta)
-        self.stats["mixture_coef"].append(self.mixture_coef)
 
     def training_step(
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
@@ -441,38 +476,47 @@ class NashMDTrainer(OnlineDPOTrainer):
         del inputs
 
         # Sample completions from both the model and the reference model
-        model_output, mixture_output = self._generate_completions(model, prompts)
+        model_output, ref_output = self._generate_completions(prompts, model)
 
         # Process model completions
-        model_data, mixture_data = self._process_completions(model_output, mixture_output, prompts)
+        model_data, ref_data = self._process_completions(model_output, ref_output, prompts)
 
         # Compute rewards
         if self.reward_funcs is not None:
-            model_scores, mixture_scores = self._compute_rewards(model_data, mixture_data, context_length)
-            # probability of the model data vs the mixture data
-            probability = F.sigmoid(model_scores - mixture_scores)
+            model_scores, ref_scores = self._compute_rewards(model_data, ref_data, context_length)
+            chosen_mask = model_scores >= ref_scores
         else:
-            model_scores, mixture_scores = None, None
-            probability = self._compute_judge(model_data, mixture_data, context_length)
+            model_scores, ref_scores = None, None
+            chosen_mask = self._compute_judge(model_data, ref_data, context_length)
 
         # Compute logprobs
-        model_logprobs_model_data, ref_logprobs_model_data = self._compute_logprobs(model, model_data, context_length)
+        model_logprobs_model_data, model_logprobs_ref_data, ref_logprobs_ref_data, ref_logprobs_model_data = (
+            self._compute_logprobs(model, model_data, ref_data, context_length)
+        )
 
         # Compute loss
-        loss, score, kl_div = self._compute_losses(model_logprobs_model_data, ref_logprobs_model_data, probability)
+        loss, dpo_losses, xpo_losses = self._compute_losses(
+            model_logprobs_model_data,
+            model_logprobs_ref_data,
+            ref_logprobs_ref_data,
+            ref_logprobs_model_data,
+            chosen_mask,
+        )
 
         # Log everything
         self._log_statistics(
             model_data,
-            mixture_data,
+            ref_data,
             model_logprobs_model_data.detach(),
+            model_logprobs_ref_data.detach(),
+            ref_logprobs_ref_data,
             ref_logprobs_model_data,
-            probability,
-            score.detach(),
-            kl_div.detach(),
+            chosen_mask,
+            dpo_losses.detach(),
+            xpo_losses.detach(),
             context_length,
             model_scores,
-            mixture_scores,
+            ref_scores,
         )
 
         if (

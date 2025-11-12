@@ -61,18 +61,16 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
-    HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
     NashMDConfig,
     NashMDTrainer,
-    OpenAIPairwiseJudge,
-    PairRMJudge,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_quantization_config,
 )
+from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
 
 
 # Enable logging in a Hugging Face Space
