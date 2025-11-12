@@ -91,7 +91,7 @@ def is_flash_attn_available():
     try:
         from kernels import get_kernel
 
-        get_kernel("kernels-community/flash-attn")
+        get_kernel("kernels-community/flash-attn2")
     except Exception:
         kernels_available = False
 
