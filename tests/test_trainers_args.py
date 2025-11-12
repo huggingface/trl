@@ -123,8 +123,8 @@ class TestTrainerArg(TrlTestCase):
             # generate_during_eval=True, # ignore this one, it requires wandb
             is_encoder_decoder=True,
             precompute_ref_log_probs=True,
-            model_init_kwargs={"trust_remote_code": True},
-            ref_model_init_kwargs={"trust_remote_code": True},
+            model_init_kwargs={"trust_remote_code": True, "device_map": "auto", "dtype": "auto"},
+            ref_model_init_kwargs={"trust_remote_code": True, "device_map": "auto", "dtype": "auto"},
             dataset_num_proc=4,
         )
         trainer = KTOTrainer(
