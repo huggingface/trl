@@ -264,7 +264,7 @@ class GRPOConfig(TrainingArguments):
 
         > Deprecated arguments
 
-       wandb_log_unique_prompts (`bool`, *optional*):
+        wandb_log_unique_prompts (`bool`, *optional*):
 
             <Deprecated version="0.26.0">
 
@@ -760,8 +760,8 @@ class GRPOConfig(TrainingArguments):
 
         if self.wandb_log_unique_prompts is not None:
             warnings.warn(
-                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.x.0. Please use "
-                "`log_unique_prompts` instead.",
+                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.x.0. Please "
+                "use `log_unique_prompts` instead.",
                 FutureWarning,
                 stacklevel=2,
             )
