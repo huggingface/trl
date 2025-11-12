@@ -44,6 +44,7 @@ from .testing_utils import (
 
 
 if is_peft_available():
+    import peft
     from peft import (
         LoraConfig,
         PeftModel,
@@ -537,6 +538,11 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
+            if parse_version(peft.__version__) <= Version("0.17.1"):
+                pytest.xfail(
+                    "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
+                    "https://github.com/huggingface/peft/issues/2821"
+                )
             peft_config = PrefixTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
                 num_virtual_tokens=4,
