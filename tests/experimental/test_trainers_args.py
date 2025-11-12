@@ -64,8 +64,8 @@ class TestTrainerArg(TrlTestCase):
         # self.assertEqual(trainer.args.generate_during_eval, True)
         assert trainer.args.is_encoder_decoder
         assert trainer.args.precompute_ref_log_probs
-        assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
-        assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
+        assert trainer.args.model_init_kwargs == {"trust_remote_code": True, "device_map": "auto", "dtype": "auto"}
+        assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True, "device_map": "auto", "dtype": "auto"}
         assert trainer.args.dataset_num_proc == 4
         assert trainer.args.prompt_sample_size == 512
         assert trainer.args.min_density_ratio == 0.2
