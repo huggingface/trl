@@ -1140,7 +1140,7 @@ class GRPOTrainer(BaseTrainer):
         overrides: dict[str, Any] | None = None,
         *,
         logprobs: bool = True,
-    ) -> SamplingParams:
+    ) -> "SamplingParams":
         if self.guided_decoding_regex:
             guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
         else:
