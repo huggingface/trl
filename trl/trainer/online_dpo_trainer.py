@@ -484,6 +484,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
+                    "quantization": self.args.vllm_quantization,
                 }
 
                 # vLLM requires the environment variables to be set for distributed training.

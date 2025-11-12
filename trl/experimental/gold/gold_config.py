@@ -304,6 +304,10 @@ class GOLDConfig(SFTConfig):
         default=None,
         metadata={"help": "Regex pattern used for vLLM guided decoding (optional)."},
     )
+    vllm_quantization: str | None = field(
+        default=None,
+        metadata={"help": "Quantization method to use for vLLM. If `None` (default), no quantization is applied."},
+    )
     vllm_sync_frequency: int = field(
         default=1,
         metadata={

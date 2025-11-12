@@ -952,6 +952,7 @@ class GOLDTrainer(SFTTrainer):
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     enable_sleep_mode=self.vllm_enable_sleep_mode,
+                    quantization=self.args.vllm_quantization, # 29519MiB /  81920MiB --> 
                 )
 
                 if self.vllm_enable_sleep_mode:
