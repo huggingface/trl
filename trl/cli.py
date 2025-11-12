@@ -13,11 +13,11 @@
 # limitations under the License.
 
 import importlib.resources as resources
+import logging
 import os
 import sys
 
 import torch
-from accelerate import logging
 from accelerate.commands.launch import launch_command, launch_command_parser
 
 from .scripts.dpo import make_parser as make_dpo_parser
@@ -32,7 +32,7 @@ from .scripts.vllm_serve import main as vllm_serve_main
 from .scripts.vllm_serve import make_parser as make_vllm_serve_parser
 
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def main():
