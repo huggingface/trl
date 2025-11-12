@@ -78,7 +78,7 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.truncation_mode == "keep_start"
         # self.assertEqual(trainer.args.generate_during_eval, True)
         assert trainer.args.is_encoder_decoder
-        assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
+        assert trainer.args.model_init_kwargs == {"trust_remote_code": True, "device_map": "auto", "dtype": "auto"}
         assert trainer.args.dataset_num_proc == 4
 
     def test_dpo(self):
@@ -189,8 +189,8 @@ class TestTrainerArg(TrlTestCase):
         # self.assertEqual(trainer.args.generate_during_eval, True)
         assert trainer.args.is_encoder_decoder
         assert trainer.args.precompute_ref_log_probs
-        assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
-        assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
+        assert trainer.args.model_init_kwargs == {"trust_remote_code": True, "device_map": "auto", "dtype": "auto"}
+        assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True, "device_map": "auto", "dtype": "auto"}
         assert trainer.args.dataset_num_proc == 4
 
     @pytest.mark.parametrize("mixtures_coef_list", [False, True])
