@@ -261,13 +261,16 @@ class GRPOConfig(TrainingArguments):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+
+        > Deprecated arguments
+
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
             are logged.
 
             <Deprecated version="0.26.0">
 
-            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.x.0. Use
+            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.27.0. Use
             `log_unique_prompts` instead.
 
             </Deprecated>
@@ -687,6 +690,8 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are logged."
         },
     )
+
+    # Deprecated arguments
     wandb_log_unique_prompts: bool | None = field(
         default=False,
         metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
