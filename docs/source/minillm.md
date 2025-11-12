@@ -57,11 +57,11 @@ $$
 
 ## MiniLLMTrainer
 
-[[autodoc]] MiniLLMTrainer
+[[autodoc]] experimental.minillm.MiniLLMTrainer
     - train
     - save_model
     - push_to_hub
 
 ## MiniLLMConfig
 
-[[autodoc]] MiniLLMConfig
+[[autodoc]] experimental.minillm.MiniLLMConfig
