@@ -1920,6 +1920,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
+        # In the base GRPO implementation, advantages are expected to have shape (B,). To support subclasses that
+        # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(1)
         # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
         # old_per_token_logps == per_token_logps. In this case we can skip its computation
         # (see _generate_and_score_completions) and instead use per_token_logps.detach().
@@ -1946,15 +1950,15 @@ class GRPOTrainer(BaseTrainer):
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
-            per_token_loss = -clamped_ratios * advantages.unsqueeze(1) * per_token_logps
+            per_token_loss = -clamped_ratios * advantages * per_token_logps
         elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
             if self.args.delta is not None:
                 coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
-            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+            per_token_loss1 = coef_1 * advantages
+            per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
@@ -2003,8 +2007,8 @@ class GRPOTrainer(BaseTrainer):
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
             # Compute the clipped probability ratios
-            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
-            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
 
             low_clip = masked_batch_mean(is_low_clipped.float())
@@ -2020,7 +2024,7 @@ class GRPOTrainer(BaseTrainer):
             gathered_clip_ratio = self.accelerator.gather(clip_ratio)
             self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         elif self.loss_type == "cispo":
-            is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+            is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages > 0)
             cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
             gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
             self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
@@ -2059,6 +2063,12 @@ class GRPOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
+            logging_backends = []
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
+
             table = {
                 "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
@@ -2070,34 +2080,23 @@ class GRPOTrainer(BaseTrainer):
             df_base = pd.DataFrame(table)
             images_raw = self._logs["images"] or []
 
-            for logging_backend in self.args.report_to:
-                if logging_backend == "wandb":
-                    if images_raw:
-                        images = []
-                        for image_list in self._logs["images"]:
-                            images.append([wandb.Image(image) for image in image_list])
-                        df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
-                    else:
-                        df = df_base
+            for logging_backend in logging_backends:
+                if images_raw:
+                    images = []
+                    for image_list in self._logs["images"]:
+                        images.append([logging_backend.Image(image) for image in image_list])
+                    df = pd.concat(
+                        [df_base, pd.Series(images, name="image")],
+                        axis=1,
+                        copy=False,
+                    )
+                else:
+                    df = df_base
 
-                    if self.wandb_log_unique_prompts:
-                        df = df.drop_duplicates(subset=["prompt"])
+                if self.wandb_log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
 
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
-
-                if logging_backend == "trackio":
-                    if images_raw:
-                        # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/334
-                        logger.info("Skipping image logging for Trackio")
-                        df = df_base
-                        # images = []
-                        # for image_list in self._logs["images"]:
-                        #     images.append([trackio.Image(image) for image in image_list])
-                        # df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
-                    else:
-                        df = df_base
-
-                    trackio.log({"completions": trackio.Table(dataframe=df)})
+                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
