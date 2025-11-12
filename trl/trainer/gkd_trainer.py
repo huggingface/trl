@@ -187,6 +187,7 @@ class GKDTrainer(SFTTrainer):
                 if teacher_model_init_kwargs["dtype"] in ["auto", None]
                 else getattr(torch, teacher_model_init_kwargs["dtype"])
             )
+        teacher_model_init_kwargs["device_map"] = teacher_model_init_kwargs.get("device_map", "auto")
 
         if isinstance(teacher_model, str):
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)

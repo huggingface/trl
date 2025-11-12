@@ -115,6 +115,8 @@
     title: GSPO-token
   - local: judges
     title: Judges
+  - local: minillm
+    title: MiniLLM
   - local: papo_trainer
     title: PAPO
   - local: xpo_trainer

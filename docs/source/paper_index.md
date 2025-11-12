@@ -671,3 +671,29 @@ config = GOLDConfig(
 
 )
 ```
+
+### Knowledge Distillation of Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2306.08543
+
+MiniLLM is the first on-policy knowledge distillation method, which minimizes the sequence-level reverse KLD between the teacher and the student model and is optimized by reinforcement learning.
+
+It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
+
+Alternatively, you can use the [`experimental.MiniLLMTrainer`] and [`experimental.MiniLLMConfig`] to perform MiniLLM distillation as follows:
+
+```python
+from datasets import load_dataset
+from trl.experimental.minillm import MiniLLMTrainer
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+trainer = MiniLLMTrainer(
+    model="Qwen/Qwen3-0.6B",
+    teacher_model="Qwen/Qwen3-1.7B",
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
