@@ -264,9 +264,7 @@ class GRPOConfig(TrainingArguments):
 
         > Deprecated arguments
 
-        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
-            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
-            are logged.
+       wandb_log_unique_prompts (`bool`, *optional*):
 
             <Deprecated version="0.26.0">
 
@@ -693,7 +691,7 @@ class GRPOConfig(TrainingArguments):
 
     # Deprecated arguments
     wandb_log_unique_prompts: bool | None = field(
-        default=False,
+        default=None,
         metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
     )
 
@@ -760,7 +758,7 @@ class GRPOConfig(TrainingArguments):
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
 
-        if self.wandb_log_unique_prompts is not False:
+        if self.wandb_log_unique_prompts is not None:
             warnings.warn(
                 "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.x.0. Please use "
                 "`log_unique_prompts` instead.",

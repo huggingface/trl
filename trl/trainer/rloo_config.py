@@ -198,7 +198,7 @@ class RLOOConfig(TrainingArguments):
 
         > Deprecated arguments
 
-        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
+        wandb_log_unique_prompts (`bool`, *optional*):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
             are logged.
 
@@ -543,7 +543,7 @@ class RLOOConfig(TrainingArguments):
 
     # Deprecated arguments
     wandb_log_unique_prompts: bool | None = field(
-        default=False,
+        default=None,
         metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
     )
 
@@ -596,7 +596,7 @@ class RLOOConfig(TrainingArguments):
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
-        if self.wandb_log_unique_prompts is not False:
+        if self.wandb_log_unique_prompts is not None:
             warnings.warn(
                 "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.x.0. Please use "
                 "`log_unique_prompts` instead.",
