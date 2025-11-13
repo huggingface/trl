@@ -11,7 +11,7 @@ This document will guide you through the process of using vLLM with TRL for fast
 > - [`GRPOTrainer`]
 > - [`OnlineDPOTrainer`]
 > - [`NashMDTrainer`]
-> - [`XPOTrainer`]
+> - [`experimental.xpo.XPOTrainer`]
 > - [`RLOOTrainer`]
 
 ## 🚀 How can I use vLLM with TRL to speed up training?
@@ -135,7 +135,7 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl import XPOTrainer, XPOConfig
+from trl.experimental.xpo import XPOTrainer, XPOConfig
 
 dataset = load_dataset("trl-lib/tldr", split="train")
 
@@ -392,7 +392,7 @@ training_args = NashMDConfig(
 <hfoption id="XPO">
 
 ```python
-from trl import XPOConfig
+from trl.experimental.xpo import XPOConfig
 
 training_args = XPOConfig(
     ...,
@@ -467,7 +467,7 @@ training_args = NashMDConfig(
 <hfoption id="XPO">
 
 ```python
-from trl import XPOConfig
+from trl.experimental.xpo import XPOConfig
 
 training_args = XPOConfig(
     ...,

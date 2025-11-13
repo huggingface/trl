@@ -53,19 +53,13 @@
     title: Community Tutorials
   - local: lora_without_regret
     title: LoRA Without Regret
-  - local: multi_adapter_rl
-    title: Multi Adapter RLHF
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: cpo_trainer
-      title: CPO
     - local: dpo_trainer
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
-    - local: gkd_trainer
-      title: GKD
     - local: grpo_trainer
       title: GRPO
     - local: kto_trainer
@@ -84,15 +78,11 @@
       title: RLOO
     - local: sft_trainer
       title: SFT
-    - local: xpo_trainer
-      title: XPO
     title: Trainers
   - local: models
     title: Model Classes
   - local: model_utils
     title: Model Utilities
-  - local: judges
-    title: Judges
   - local: callbacks
     title: Callbacks
   - local: data_utils
@@ -111,16 +101,26 @@
     title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
+  - local: cpo_trainer
+    title: CPO
   - local: gfpo
     title: GFPO
+  - local: gkd_trainer
+    title: GKD
   - local: gold_trainer
     title: GOLD
   - local: grpo_with_replay_buffer
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
+  - local: judges
+    title: Judges
+  - local: minillm
+    title: MiniLLM
   - local: papo_trainer
     title: PAPO
+  - local: xpo_trainer
+    title: XPO
   - local: openenv
     title: OpenEnv Integration
   title: Experimental

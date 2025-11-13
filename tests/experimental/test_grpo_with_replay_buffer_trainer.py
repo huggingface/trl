@@ -250,8 +250,9 @@ class TestUpdateWithReplayBuffer:
 
 
 @pytest.mark.low_priority
+@pytest.mark.parametrize("scale_rewards", ["batch", "group"])
 class TestGRPOWithReplayBufferTrainer(TrlTestCase):
-    def test_training_with_replay_buffer(self):
+    def test_training_with_replay_buffer(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         # Guarantee that some rewards have 0 std
@@ -269,6 +270,7 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             replay_buffer_size=8,
             report_to="none",
+            scale_rewards=scale_rewards,
         )
         trainer = GRPOWithReplayBufferTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
