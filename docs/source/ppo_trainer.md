@@ -1,5 +1,11 @@
 # PPO Trainer
 
+<Tip warning={true}>
+
+**Deprecation Notice**: PPOTrainer and PPOConfig have been moved to `trl.experimental.ppo` and will be removed from `trl.trainer` in TRL 0.29.0. Please update your imports to use `from trl.experimental.ppo import PPOConfig, PPOTrainer` instead. See [issue #4466](https://github.com/huggingface/trl/issues/4466) for more information.
+
+</Tip>
+
 [![model badge](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo,trl)
 
 TRL supports training LLMs with [Proximal Policy Optimization (PPO)](https://huggingface.co/papers/1707.06347).
@@ -228,11 +234,11 @@ python -m openrlbenchmark.rlops_multi_metrics \
 
 ## PPOTrainer
 
-[[autodoc]] PPOTrainer
+[[autodoc]] experimental.ppo.PPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## PPOConfig
 
-[[autodoc]] PPOConfig
+[[autodoc]] experimental.ppo.PPOConfig
