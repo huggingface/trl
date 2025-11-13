@@ -64,8 +64,6 @@
       title: GRPO
     - local: kto_trainer
       title: KTO
-    - local: nash_md_trainer
-      title: Nash-MD
     - local: orpo_trainer
       title: ORPO
     - local: ppo_trainer
@@ -117,6 +115,8 @@
     title: Judges
   - local: minillm
     title: MiniLLM
+  - local: nash_md_trainer
+    title: Nash-MD
   - local: papo_trainer
     title: PAPO
   - local: xpo_trainer
