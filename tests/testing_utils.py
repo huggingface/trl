@@ -85,6 +85,18 @@ require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
 )
 
 
+def is_ampere_or_newer(device_index=0):
+    if not torch.cuda.is_available():
+        return False
+
+    major, minor = torch.cuda.get_device_capability(device_index)
+    # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
+    return (major, minor) >= (8, 0)
+
+
+require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
+
+
 class RandomBinaryJudge(BaseBinaryJudge):
     """
     Random binary judge, for testing purposes.

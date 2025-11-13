@@ -33,6 +33,7 @@ from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 from .testing_utils import (
     TrlTestCase,
     ignore_warnings,
+    require_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
@@ -871,6 +872,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_kernels
+    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
     def test_train_padding_free(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")

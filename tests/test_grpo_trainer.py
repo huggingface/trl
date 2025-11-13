@@ -41,6 +41,7 @@ from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
+    require_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
@@ -1988,6 +1989,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         ],
     )
     @require_kernels
+    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
     @require_bitsandbytes
     @require_peft
     def test_vlm_training(self, model_name):
