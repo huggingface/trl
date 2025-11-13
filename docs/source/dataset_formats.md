@@ -388,12 +388,12 @@ Choosing the right dataset type depends on the task you are working on and the s
 | Trainer | Expected dataset type |
 | --- | --- |
 | [`experimental.bco.BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
-| [`CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`experimental.cpo.CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`DPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
-| [`GKDTrainer`] | [Prompt-completion](#prompt-completion) |
+| [`experimental.gkd.GKDTrainer`] | [Prompt-completion](#prompt-completion) |
 | [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
-| [`NashMDTrainer`] | [Prompt-only](#prompt-only) |
+| [`experimental.nash_md.NashMDTrainer`] | [Prompt-only](#prompt-only) |
 | [`OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.ppo.PPOTrainer`] | Tokenized language modeling |

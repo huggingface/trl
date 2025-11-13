@@ -256,7 +256,7 @@ class RLOOTrainer(BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass  # dtype is already a torch.dtype or "auto" or None
             elif isinstance(dtype, str):  # it's a str, but not "auto"
@@ -267,7 +267,7 @@ class RLOOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
-            # Disable caching if gradient checkpointing is enabled (not supported)
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
@@ -449,7 +449,7 @@ class RLOOTrainer(BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
-        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -1534,6 +1534,12 @@ class RLOOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
+            logging_backends = []
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
+
             table = {
                 "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
@@ -1545,34 +1551,23 @@ class RLOOTrainer(BaseTrainer):
             df_base = pd.DataFrame(table)
             images_raw = self._logs["images"] or []
 
-            for logging_backend in self.args.report_to:
-                if logging_backend == "wandb":
-                    if images_raw:
-                        images = []
-                        for image_list in self._logs["images"]:
-                            images.append([wandb.Image(image) for image in image_list])
-                        df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
-                    else:
-                        df = df_base
+            for logging_backend in logging_backends:
+                if images_raw:
+                    images = []
+                    for image_list in self._logs["images"]:
+                        images.append([logging_backend.Image(image) for image in image_list])
+                    df = pd.concat(
+                        [df_base, pd.Series(images, name="image")],
+                        axis=1,
+                        copy=False,
+                    )
+                else:
+                    df = df_base
 
-                    if self.wandb_log_unique_prompts:
-                        df = df.drop_duplicates(subset=["prompt"])
+                if self.log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
 
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
-
-                if logging_backend == "trackio":
-                    if images_raw:
-                        # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/334
-                        logger.info("Skipping image logging for Trackio")
-                        df = df_base
-                        # images = []
-                        # for image_list in self._logs["images"]:
-                        #     images.append([trackio.Image(image) for image in image_list])
-                        # df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
-                    else:
-                        df = df_base
-
-                    trackio.log({"completions": trackio.Table(dataframe=df)})
+                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
