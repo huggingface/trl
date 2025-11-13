@@ -56,14 +56,10 @@
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: cpo_trainer
-      title: CPO
     - local: dpo_trainer
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
-    - local: gkd_trainer
-      title: GKD
     - local: grpo_trainer
       title: GRPO
     - local: kto_trainer
@@ -105,8 +101,12 @@
     title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
+  - local: cpo_trainer
+    title: CPO
   - local: gfpo
     title: GFPO
+  - local: gkd_trainer
+    title: GKD
   - local: gold_trainer
     title: GOLD
   - local: grpo_with_replay_buffer
@@ -115,6 +115,8 @@
     title: GSPO-token
   - local: judges
     title: Judges
+  - local: minillm
+    title: MiniLLM
   - local: papo_trainer
     title: PAPO
   - local: xpo_trainer

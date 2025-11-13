@@ -261,7 +261,7 @@ class GRPOTrainer(BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass  # dtype is already a torch.dtype or "auto" or None
             elif isinstance(dtype, str):  # it's a str, but not "auto"
@@ -272,7 +272,7 @@ class GRPOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
-            # Disable caching if gradient checkpointing is enabled (not supported)
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
@@ -532,7 +532,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
-        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -1800,6 +1800,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
+        # In the base GRPO implementation, advantages are expected to have shape (B,). To support subclasses that
+        # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
+        if advantages.dim() == 1:
+            advantages = advantages.unsqueeze(1)
         # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
         # old_per_token_logps == per_token_logps. In this case we can skip its computation
         # (see _generate_and_score_completions) and instead use per_token_logps.detach().
@@ -1826,15 +1830,15 @@ class GRPOTrainer(BaseTrainer):
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
-            per_token_loss = -clamped_ratios * advantages.unsqueeze(1) * per_token_logps
+            per_token_loss = -clamped_ratios * advantages * per_token_logps
         elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
             if self.args.delta is not None:
                 coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
-            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+            per_token_loss1 = coef_1 * advantages
+            per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
@@ -1883,8 +1887,8 @@ class GRPOTrainer(BaseTrainer):
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
             # Compute the clipped probability ratios
-            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
-            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
 
             low_clip = masked_batch_mean(is_low_clipped.float())
@@ -1900,7 +1904,7 @@ class GRPOTrainer(BaseTrainer):
             gathered_clip_ratio = self.accelerator.gather(clip_ratio)
             self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         elif self.loss_type == "cispo":
-            is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+            is_cispo_clipped = (coef_1 > self.epsilon_high) & (advantages > 0)
             cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
             gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
             self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
@@ -1969,7 +1973,7 @@ class GRPOTrainer(BaseTrainer):
                 else:
                     df = df_base
 
-                if self.wandb_log_unique_prompts:
+                if self.log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
 
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
