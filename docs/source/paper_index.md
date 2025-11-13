@@ -556,7 +556,7 @@ training_args = RLOOConfig(
 
 ## Contrastive Preference Optimization
 
-Papers relating to the [`CPOTrainer`]
+Papers relating to the [`experimental.cpo.CPOTrainer`]
 
 ### AlphaPO -- Reward shape matters for LLM alignment
 
@@ -565,7 +565,7 @@ Papers relating to the [`CPOTrainer`]
 AlphaPO is a new Direct Alignment Algorithms (DAAs) method that leverages an alpha-parameter to help change the shape of the reward function beyond the standard log reward. AlphaPO helps maintain fine-grained control over likelihood displacement and over-optimization. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl import CPOConfig
+from trl.experimental.cpo import CPOConfig
 
 # Mistral-Instruct from Table 3 of the paper
 training_args = CPOConfig(

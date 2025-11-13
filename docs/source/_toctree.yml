@@ -56,8 +56,6 @@
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: cpo_trainer
-      title: CPO
     - local: dpo_trainer
       title: DPO
     - local: online_dpo_trainer
@@ -105,6 +103,8 @@
     title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
+  - local: cpo_trainer
+    title: CPO
   - local: gfpo
     title: GFPO
   - local: gold_trainer

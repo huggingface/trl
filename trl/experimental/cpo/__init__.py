@@ -12,18 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-from dataclasses import dataclass
-
-from ..experimental.cpo import CPOTrainer as _CPOTrainer
+from .cpo_config import CPOConfig
+from .cpo_trainer import CPOTrainer
 
 
-@dataclass
-class CPOTrainer(_CPOTrainer):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "The `CPOTrainer` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.cpo import CPOTrainer`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
-        )
-        super().__init__(*args, **kwargs)
+__all__ = ["CPOConfig", "CPOTrainer"]
