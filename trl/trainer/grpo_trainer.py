@@ -1047,10 +1047,10 @@ class GRPOTrainer(BaseTrainer):
             self.llm.reset_prefix_cache()
 
     def training_step(self, model, inputs, num_items_in_batch):
-        time_before = time.time()
+        time_before = time.perf_counter()
         output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
-        time_after = time.time()
+        time_after = time.perf_counter()
         self._current_train_step_time += time_after - time_before
         if self._step % self.current_gradient_accumulation_steps == 0:
             self._metrics["train"]["step_time"].append(self._current_train_step_time)
