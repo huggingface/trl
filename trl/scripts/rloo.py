@@ -26,7 +26,6 @@ import importlib
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
 
 from accelerate import logging
 from datasets import load_dataset
@@ -75,14 +74,14 @@ class RLOOScriptArguments(ScriptArguments):
                 - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
     """
 
-    reward_model_name_or_path: Optional[str] = field(
+    reward_model_name_or_path: str | None = field(
         default=None,
         metadata={
             "help": "Reward model id of a pretrained model hosted inside a model repo on huggingface.co or "
             "local path to a directory containing model weights saved using `PreTrainedModel.save_pretrained`."
         },
     )
-    reward_funcs: Optional[list[str]] = field(
+    reward_funcs: list[str] | None = field(
         default=None,
         metadata={
             "help": "Reward functions to use. Supported values are: `accuracy_reward`, `think_format_reward`, "
@@ -155,7 +154,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None):
     dataclass_types = (RLOOScriptArguments, RLOOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("rloo", help="Run the RLOO training script", dataclass_types=dataclass_types)

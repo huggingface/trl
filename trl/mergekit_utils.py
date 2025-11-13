@@ -15,7 +15,7 @@
 import torch
 from huggingface_hub import HfApi
 
-from trl.import_utils import is_mergekit_available
+from .import_utils import is_mergekit_available
 
 
 if is_mergekit_available():

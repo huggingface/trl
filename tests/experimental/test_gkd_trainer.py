@@ -20,9 +20,9 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
-from trl import GKDConfig, GKDTrainer
+from trl.experimental.gkd import GKDConfig, GKDTrainer
 
-from .testing_utils import TrlTestCase, require_liger_kernel
+from ..testing_utils import TrlTestCase, require_liger_kernel
 
 
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
@@ -68,7 +68,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         generated_texts = self.tokenizer.batch_decode(new_input_ids, skip_special_tokens=True)
 
         # Check if the generated texts start with the original prompts
-        for prompt, generated_text in zip(prompts, generated_texts):
+        for prompt, generated_text in zip(prompts, generated_texts, strict=True):
             assert generated_text.startswith(prompt), (
                 f"Generated text '{generated_text}' does not start with prompt '{prompt}'"
             )

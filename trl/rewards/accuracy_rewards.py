@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
-
-from trl.import_utils import is_math_verify_available
+from ..import_utils import is_math_verify_available
 
 
 if is_math_verify_available():
@@ -22,7 +20,7 @@ if is_math_verify_available():
     from math_verify import LatexExtractionConfig, parse, verify
 
 
-def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:
+def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[float | None]:
     r"""
     Reward function that checks if the completion is the same as the ground truth.
         - If both gold and prediction are parseable → use math verification.
@@ -55,7 +53,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
 
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
-    for content, sol in zip(contents, solution):
+    for content, sol in zip(contents, solution, strict=True):
         gold_parsed = parse(
             sol,
             extraction_mode="first_match",

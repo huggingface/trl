@@ -63,7 +63,8 @@ import os
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import CPOConfig, CPOTrainer, ModelConfig, ScriptArguments, get_peft_config
+from trl import ModelConfig, ScriptArguments, get_peft_config
+from trl.experimental.cpo import CPOConfig, CPOTrainer
 
 
 # Enable logging in a Hugging Face Space

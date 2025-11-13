@@ -41,8 +41,9 @@ from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
+    require_ampere_or_newer,
     require_bitsandbytes,
-    require_flash_attn,
+    require_kernels,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
@@ -167,7 +168,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo"])
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo"])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -615,7 +616,9 @@ class TestGRPOTrainer(TrlTestCase):
 
         def reward_func(completions, some_values, **kwargs):
             """Reward function that rewards completions with lengths closer to the values in some_values."""
-            return [float(abs(len(completion) - value)) for completion, value in zip(completions, some_values)]
+            return [
+                float(abs(len(completion) - value)) for completion, value in zip(completions, some_values, strict=True)
+            ]
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -703,7 +706,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_training_with_cast_lm_head_to_fp32(self):
+    @pytest.mark.parametrize(
+        "model_name",
+        ["trl-internal-testing/tiny-Qwen3ForCausalLM", "trl-internal-testing/tiny-Gemma2ForCausalLM"],
+        # Gemma2 has the input word embeddings and lm_head tied, Qwen3 does not
+    )
+    def test_training_with_cast_lm_head_to_fp32(self, model_name):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -715,7 +723,7 @@ class TestGRPOTrainer(TrlTestCase):
             cast_lm_head_to_fp32=True,
         )
         trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=model_name,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -1980,7 +1988,8 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
         ],
     )
-    @require_flash_attn
+    @require_kernels
+    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
     @require_bitsandbytes
     @require_peft
     def test_vlm_training(self, model_name):
@@ -2033,7 +2042,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
-            attn_implementation="flash_attention_2",
+            attn_implementation="kernels-community/flash-attn2",
             dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
