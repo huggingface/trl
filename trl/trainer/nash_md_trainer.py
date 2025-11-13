@@ -13,85 +13,17 @@
 # limitations under the License.
 
 import warnings
-from collections.abc import Callable
+from dataclasses import dataclass
 
-import torch
-import torch.nn as nn
-from datasets import Dataset, IterableDataset
-from transformers import (
-    BaseImageProcessor,
-    FeatureExtractionMixin,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-    ProcessorMixin,
-    TrainerCallback,
-)
-from transformers.trainer_utils import EvalPrediction
-
-from ..experimental.nash_md import NashMDTrainer as ExperimentalNashMDTrainer
-from .judges import BasePairwiseJudge
-from .nash_md_config import NashMDConfig
+from ..experimental.nash_md import NashMDTrainer as _NashMDTrainer
 
 
-class NashMDTrainer(ExperimentalNashMDTrainer):
-    """
-    Trainer for the Nash-MD method.
-
-    <Deprecated version="0.25.0">
-
-    This class has been moved to `trl.experimental.nash_md.NashMDTrainer` and will be removed in TRL 0.29.0.
-    Please update your imports:
-    ```python
-    from trl.experimental.nash_md import NashMDTrainer
-    ```
-
-    For more details, see: https://github.com/huggingface/trl/issues/4223
-
-    </Deprecated>
-    """
-
-    def __init__(
-        self,
-        model: PreTrainedModel | nn.Module = None,
-        ref_model: PreTrainedModel | nn.Module = None,
-        reward_funcs: PreTrainedModel | nn.Module | None = None,
-        judge: BasePairwiseJudge | None = None,
-        args: NashMDConfig | None = None,
-        data_collator: Callable | None = None,
-        train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
-        processing_class: PreTrainedTokenizerBase
-        | BaseImageProcessor
-        | FeatureExtractionMixin
-        | ProcessorMixin
-        | None = None,
-        peft_config: dict | None = None,
-        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
-        callbacks: list[TrainerCallback] | None = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-    ) -> None:
+@dataclass
+class NashMDTrainer(_NashMDTrainer):
+    def __init__(self, *args, **kwargs):
         warnings.warn(
-            "NashMDTrainer has been moved to trl.experimental.nash_md.NashMDTrainer and will be removed from "
-            "trl.trainer in TRL 0.29.0. Please update your imports to: "
-            "`from trl.experimental.nash_md import NashMDTrainer`. "
-            "For more details, see: https://github.com/huggingface/trl/issues/4223",
-            FutureWarning,
-            stacklevel=2,
+            "The `NashMDTrainer` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.nash_md import NashMDTrainer`. The current import path will be removed and no "
+            "longer supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
-        super().__init__(
-            model=model,
-            ref_model=ref_model,
-            reward_funcs=reward_funcs,
-            judge=judge,
-            args=args,
-            data_collator=data_collator,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            processing_class=processing_class,
-            peft_config=peft_config,
-            compute_metrics=compute_metrics,
-            callbacks=callbacks,
-            optimizers=optimizers,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-        )
+        super().__init__(*args, **kwargs)

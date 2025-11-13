@@ -38,13 +38,7 @@ from ...models.modeling_base import GeometricMixtureWrapper
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
 from ...trainer.online_dpo_trainer import OnlineDPOTrainer
-from ...trainer.utils import (
-    SIMPLE_CHAT_TEMPLATE,
-    empty_cache,
-    get_reward,
-    selective_log_softmax,
-    truncate_right,
-)
+from ...trainer.utils import SIMPLE_CHAT_TEMPLATE, empty_cache, get_reward, selective_log_softmax, truncate_right
 from .nash_md_config import NashMDConfig
 
 
@@ -70,7 +64,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             [`~transformers.AutoModelForSequenceClassification`].
         judge ([`BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
-        args ([`NashMDConfig`]):
+        args ([`experimental.nash_md.NashMDConfig`]):
             The NashMD config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator

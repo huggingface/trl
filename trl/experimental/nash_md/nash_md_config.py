@@ -20,7 +20,7 @@ from ...trainer.online_dpo_config import OnlineDPOConfig
 @dataclass
 class NashMDConfig(OnlineDPOConfig):
     r"""
-    Configuration class for the [`NashMDTrainer`].
+    Configuration class for the [`experimental.nash_md.NashMDTrainer`].
 
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 

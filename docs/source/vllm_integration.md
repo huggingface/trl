@@ -10,9 +10,9 @@ This document will guide you through the process of using vLLM with TRL for fast
 >
 > - [`GRPOTrainer`]
 > - [`OnlineDPOTrainer`]
-> - [`NashMDTrainer`]
-> - [`experimental.xpo.XPOTrainer`]
 > - [`RLOOTrainer`]
+> - [`experimental.nash_md.NashMDTrainer`]
+> - [`experimental.xpo.XPOTrainer`]
 
 ## 🚀 How can I use vLLM with TRL to speed up training?
 
