@@ -277,7 +277,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         def cleanup_vllm_communicator(trainer):
             """Clean up vLLM communicator to avoid conflicts between test runs"""
             try:
-                if hasattr(trainer, 'vllm_client') and trainer.vllm_client is not None:
+                if hasattr(trainer, "vllm_client") and trainer.vllm_client is not None:
                     trainer.vllm_client.close_communicator()
             except Exception:
                 pass  # Continue if cleanup fails

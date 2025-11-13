@@ -498,6 +498,7 @@ class VLLMClient:
         if self.communicator is not None:
             self.communicator = None
 
+
 # Example usage
 if __name__ == "__main__":
     from vllm import SamplingParams
