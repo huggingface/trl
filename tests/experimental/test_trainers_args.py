@@ -17,6 +17,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl.experimental.bco import BCOConfig, BCOTrainer
+from trl.experimental.cpo import CPOConfig, CPOTrainer
 from trl.experimental.xpo import XPOConfig, XPOTrainer
 
 from ..testing_utils import TrlTestCase, require_sklearn
@@ -64,12 +65,53 @@ class TestTrainerArg(TrlTestCase):
         # self.assertEqual(trainer.args.generate_during_eval, True)
         assert trainer.args.is_encoder_decoder
         assert trainer.args.precompute_ref_log_probs
-        assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
-        assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
+        assert trainer.args.model_init_kwargs == {"trust_remote_code": True, "device_map": "auto", "dtype": "auto"}
+        assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True, "device_map": "auto", "dtype": "auto"}
         assert trainer.args.dataset_num_proc == 4
         assert trainer.args.prompt_sample_size == 512
         assert trainer.args.min_density_ratio == 0.2
         assert trainer.args.max_density_ratio == 20.0
+
+    def test_cpo(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = CPOConfig(
+            self.tmp_dir,
+            max_length=256,
+            max_prompt_length=64,
+            max_completion_length=64,
+            beta=0.5,
+            label_smoothing=0.5,
+            loss_type="hinge",
+            disable_dropout=False,
+            cpo_alpha=0.5,
+            simpo_gamma=0.2,
+            label_pad_token_id=-99,
+            padding_value=-99,
+            truncation_mode="keep_start",
+            # generate_during_eval=True, # ignore this one, it requires wandb
+            is_encoder_decoder=True,
+            model_init_kwargs={"trust_remote_code": True},
+            dataset_num_proc=4,
+        )
+        trainer = CPOTrainer(model=model_id, args=training_args, train_dataset=dataset, processing_class=tokenizer)
+        assert trainer.args.max_length == 256
+        assert trainer.args.max_prompt_length == 64
+        assert trainer.args.max_completion_length == 64
+        assert trainer.args.beta == 0.5
+        assert trainer.args.label_smoothing == 0.5
+        assert trainer.args.loss_type == "hinge"
+        assert not trainer.args.disable_dropout
+        assert trainer.args.cpo_alpha == 0.5
+        assert trainer.args.simpo_gamma == 0.2
+        assert trainer.args.label_pad_token_id == -99
+        assert trainer.args.padding_value == -99
+        assert trainer.args.truncation_mode == "keep_start"
+        # self.assertEqual(trainer.args.generate_during_eval, True)
+        assert trainer.args.is_encoder_decoder
+        assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
+        assert trainer.args.dataset_num_proc == 4
 
     @pytest.mark.parametrize("alpha_list", [False, True])
     def test_xpo(self, alpha_list):
