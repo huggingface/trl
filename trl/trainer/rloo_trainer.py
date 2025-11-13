@@ -15,6 +15,7 @@
 import inspect
 import os
 import textwrap
+import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -22,7 +23,6 @@ from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from typing import Any
-import time
 
 import datasets
 import pandas as pd
