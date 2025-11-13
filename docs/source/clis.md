@@ -59,7 +59,8 @@ trl reward \
 ```bash
 trl grpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name trl-lib/ultrafeedback-prompt
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward
 ```
 
 </hfoption>
@@ -68,7 +69,8 @@ trl grpo \
 ```bash
 trl rloo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name AI-MO/NuminaMath-TIR
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward
 ```
 
 </hfoption>
@@ -138,7 +140,9 @@ trl reward --config reward_config.yaml
 ```yaml
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
-dataset_name: trl-lib/ultrafeedback-prompt
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+ - accuracy_reward
 ```
 
 Launch with:
@@ -153,7 +157,9 @@ trl grpo --config grpo_config.yaml
 ```yaml
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
-dataset_name: AI-MO/NuminaMath-TIR
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
 ```
 
 Launch with:
@@ -270,7 +276,8 @@ trl reward --config reward_config.yaml
 ```bash
 trl grpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name trl-lib/ultrafeedback-prompt \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
   --num_processes 4
 ```
 
@@ -280,7 +287,9 @@ trl grpo \
 ```yaml
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
-dataset_name: trl-lib/ultrafeedback-prompt
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+ - accuracy_reward
 num_processes: 4
 ```
 
@@ -296,7 +305,8 @@ trl grpo --config grpo_config.yaml
 ```bash
 trl rloo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name AI-MO/NuminaMath-TIR \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
   --num_processes 4
 ```
 
@@ -306,7 +316,9 @@ trl rloo \
 ```yaml
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
-dataset_name: AI-MO/NuminaMath-TIR
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
 num_processes: 4
 ```
 
@@ -454,7 +466,8 @@ trl reward --config reward_config.yaml
 ```bash
 trl grpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name trl-lib/ultrafeedback-prompt \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -464,7 +477,9 @@ trl grpo \
 ```yaml
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
-dataset_name: trl-lib/ultrafeedback-prompt
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+ - accuracy_reward
 accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -480,7 +495,8 @@ trl grpo --config grpo_config.yaml
 ```bash
 trl rloo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name AI-MO/NuminaMath-TIR \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -490,7 +506,9 @@ trl rloo \
 ```yaml
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
-dataset_name: AI-MO/NuminaMath-TIR
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
 accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -591,8 +609,10 @@ trl reward --config reward_config.yaml
 # grpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 datasets:
-  - path: trl-lib/ultrafeedback-prompt
-  - path: BAAI/Infinity-Preference
+  - path: HuggingFaceH4/Polaris-Dataset-53K
+  - path: trl-lib/DeepMath-103K
+reward_funcs:
+ - accuracy_reward
 ```
 
 Launch with:
@@ -608,8 +628,10 @@ trl grpo --config grpo_config.yaml
 # rloo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 datasets:
-  - path: AI-MO/NuminaMath-TIR
-  - path: deepmind/math_dataset
+  - path: HuggingFaceH4/Polaris-Dataset-53K
+  - path: trl-lib/DeepMath-103K
+reward_funcs:
+  - accuracy_reward
 ```
 
 Launch with:
