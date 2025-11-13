@@ -12,18 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-from dataclasses import dataclass
-
-from ..experimental.gkd import GKDConfig as _GKDConfig
+from .gkd_config import GKDConfig
+from .gkd_trainer import GKDTrainer
 
 
-@dataclass
-class GKDConfig(_GKDConfig):
-    def __post_init__(self):
-        warnings.warn(
-            "The `GKDConfig` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.gkd import GKDConfig`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
-        )
-        super().__post_init__()
+__all__ = ["GKDConfig", "GKDTrainer"]
