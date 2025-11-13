@@ -61,7 +61,7 @@ class GKDTrainer(SFTTrainer):
         teacher_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
             Teacher model for knowledge distillation, or the string identifier of the model to be instantiated from a
             pretrained model.
-        args ([`GKDConfig`], *optional*):
+        args ([`experimental.gkd.GKDConfig`], *optional*):
             Training arguments.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Data collator to batch samples from the dataset. It defaults to a [`DataCollatorForChatML`] using the

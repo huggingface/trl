@@ -646,12 +646,12 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`GKDTrainer`] and [`GKDConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.gkd.GKDTrainer`] and [`experimental.gkd.GKDConfig`]:
 
 ```python
-from trl import GKDConfig
+from trl.experimental.gkd import GKDConfig
 
-config = GKDConfig(
+training_args = GKDConfig(
     lmbda=1.0, # student produces rollouts for all batches
     beta=1.0, # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model", # specify the teacher model

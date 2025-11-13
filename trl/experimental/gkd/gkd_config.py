@@ -23,7 +23,7 @@ from ...trainer.sft_config import SFTConfig
 @dataclass
 class GKDConfig(SFTConfig):
     """
-    Configuration class for [`GKDTrainer`].
+    Configuration class for [`experimental.gkd.GKDTrainer`].
 
     This class includes only the parameters that are specific to GKD training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
