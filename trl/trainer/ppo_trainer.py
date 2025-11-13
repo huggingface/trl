@@ -13,40 +13,17 @@
 # limitations under the License.
 
 import warnings
+from dataclasses import dataclass
 
-from ..experimental.ppo import (
-    PolicyAndValueWrapper,
-    masked_mean,
-    masked_var,
-    masked_whiten,
-)
-from ..experimental.ppo import (
-    PPOTrainer as ExperimentalPPOTrainer,
-)
+from ..experimental.ppo import PPOTrainer as _PPOTrainer
 
 
-class PPOTrainer(ExperimentalPPOTrainer):
-    r"""
-    The PPOTrainer uses Proximal Policy Optimization to optimise language models.
-
-    .. warning::
-        This class is deprecated and will be removed in TRL 0.29.0. Please use
-        `trl.experimental.ppo.PPOTrainer` instead. See https://github.com/huggingface/trl/issues/4466
-        for more information.
-
-    For full documentation, see [`trl.experimental.ppo.PPOTrainer`].
-    """
-
+@dataclass
+class PPOTrainer(_PPOTrainer):
     def __init__(self, *args, **kwargs):
         warnings.warn(
-            "PPOTrainer is deprecated and will be removed in TRL 0.29.0. "
-            "Please use `trl.experimental.ppo.PPOTrainer` instead. "
-            "See https://github.com/huggingface/trl/issues/4466 for more information.",
-            FutureWarning,
-            stacklevel=2,
+            "The `PPOTrainer` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.ppo import PPOTrainer`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
         super().__init__(*args, **kwargs)
-
-
-# Re-export helper functions for backward compatibility
-__all__ = ["PPOTrainer", "PolicyAndValueWrapper", "masked_mean", "masked_var", "masked_whiten"]

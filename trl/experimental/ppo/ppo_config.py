@@ -22,7 +22,7 @@ from ...trainer.utils import OnPolicyConfig
 @dataclass
 class PPOConfig(OnPolicyConfig):
     r"""
-    Configuration class for the [`PPOTrainer`].
+    Configuration class for the [`experimental.ppo.PPOTrainer`].
 
     This class includes only the parameters that are specific to PPO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] and [`OnPolicyConfig`] documentation. Note that default

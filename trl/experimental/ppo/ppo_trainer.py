@@ -134,7 +134,7 @@ class PPOTrainer(BaseTrainer):
     Algorithms](https://huggingface.co/papers/1707.06347).
 
     Args:
-        args ([`PPOConfig`]):
+        args ([`experimental.ppo.PPOConfig`]):
             Training arguments.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
             Class to process the data.

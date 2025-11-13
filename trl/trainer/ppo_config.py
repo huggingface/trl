@@ -13,28 +13,17 @@
 # limitations under the License.
 
 import warnings
+from dataclasses import dataclass
 
-from ..experimental.ppo import PPOConfig as ExperimentalPPOConfig
+from ..experimental.ppo import PPOConfig as _PPOConfig
 
 
-class PPOConfig(ExperimentalPPOConfig):
-    r"""
-    Configuration class for the [`PPOTrainer`].
-
-    .. warning::
-        This class is deprecated and will be removed in TRL 0.29.0. Please use
-        `trl.experimental.ppo.PPOConfig` instead. See https://github.com/huggingface/trl/issues/4466
-        for more information.
-
-    For full documentation, see [`trl.experimental.ppo.PPOConfig`].
-    """
-
-    def __init__(self, *args, **kwargs):
+@dataclass
+class PPOConfig(_PPOConfig):
+    def __post_init__(self):
         warnings.warn(
-            "PPOConfig is deprecated and will be removed in TRL 0.29.0. "
-            "Please use `trl.experimental.ppo.PPOConfig` instead. "
-            "See https://github.com/huggingface/trl/issues/4466 for more information.",
-            FutureWarning,
-            stacklevel=2,
+            "The `PPOConfig` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.ppo import PPOConfig`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
-        super().__init__(*args, **kwargs)
+        super().__post_init__()

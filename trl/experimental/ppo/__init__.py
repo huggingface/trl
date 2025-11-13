@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from .ppo_config import PPOConfig
-from .ppo_trainer import PolicyAndValueWrapper, PPOTrainer, masked_mean, masked_var, masked_whiten
+from .ppo_trainer import PPOTrainer
 
 
-__all__ = ["PPOConfig", "PPOTrainer", "PolicyAndValueWrapper", "masked_mean", "masked_var", "masked_whiten"]
+__all__ = ["PPOConfig", "PPOTrainer"]
