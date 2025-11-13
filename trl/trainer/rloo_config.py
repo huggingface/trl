@@ -98,6 +98,8 @@ class RLOOConfig(TrainingArguments):
             parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
+        skip_special_tokens (`bool`, *optional*, defaults to `True`):
+            Whether to skip special tokens when decoding completions. This affects both reward computation and logging.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -376,6 +378,13 @@ class RLOOConfig(TrainingArguments):
     cache_implementation: str | None = field(
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+    )
+    skip_special_tokens: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to skip special tokens when decoding completions. This affects both reward computation "
+            "and logging."
+        },
     )
 
     # Parameters that control generation acceleration powered by vLLM

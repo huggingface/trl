@@ -451,6 +451,7 @@ class RLOOTrainer(BaseTrainer):
         self.log_completions = args.log_completions
         self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
+        self.skip_special_tokens = args.skip_special_tokens
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
             "images": deque(maxlen=args.generation_batch_size),
@@ -1336,8 +1337,8 @@ class RLOOTrainer(BaseTrainer):
                 ref_per_token_logps = None
 
         # Decode
-        prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=self.skip_special_tokens)
+        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=self.skip_special_tokens)
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(prompts, completions_text, strict=True):
