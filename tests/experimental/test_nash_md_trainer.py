@@ -17,9 +17,9 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
-from trl import NashMDConfig, NashMDTrainer
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
-from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
+from ..testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
 
 
 if is_peft_available():

@@ -63,14 +63,13 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from trl import (
     LogCompletionsCallback,
     ModelConfig,
-    NashMDConfig,
-    NashMDTrainer,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_quantization_config,
 )
 from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
 
 # Enable logging in a Hugging Face Space

@@ -18,6 +18,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl.experimental.bco import BCOConfig, BCOTrainer
 from trl.experimental.cpo import CPOConfig, CPOTrainer
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from trl.experimental.xpo import XPOConfig, XPOTrainer
 
 from ..testing_utils import TrlTestCase, require_sklearn
@@ -112,6 +113,28 @@ class TestTrainerArg(TrlTestCase):
         assert trainer.args.is_encoder_decoder
         assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.dataset_num_proc == 4
+
+    @pytest.mark.parametrize("mixtures_coef_list", [False, True])
+    def test_nash_md(self, mixtures_coef_list):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        reward_model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = NashMDConfig(
+            self.tmp_dir,
+            mixture_coef=0.5 if not mixtures_coef_list else [0.5, 0.6],
+        )
+        trainer = NashMDTrainer(
+            args=training_args,
+            processing_class=tokenizer,
+            model=model,
+            ref_model=ref_model,
+            reward_funcs=reward_model,
+            train_dataset=dataset,
+        )
+        assert trainer.args.mixture_coef == (0.5 if not mixtures_coef_list else [0.5, 0.6])
 
     @pytest.mark.parametrize("alpha_list", [False, True])
     def test_xpo(self, alpha_list):
