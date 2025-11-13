@@ -176,6 +176,10 @@ class ModelConfig:
         default=False,
         metadata={"help": "Whether to use nested quantization."},
     )
+    bnb_4bit_quant_storage: str | None = field(
+        default=None,
+        metadata={"help": "Quantization storage dtype"},
+    )
     # Deprecated params
     torch_dtype: str | None = field(
         default=None,
