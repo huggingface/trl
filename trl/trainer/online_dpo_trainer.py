@@ -304,7 +304,7 @@ class OnlineDPOTrainer(BaseTrainer):
             model_id = model
 
             # Handle dtype in model_init_kwargs
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass
             elif isinstance(dtype, str):
@@ -315,6 +315,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string "
                     f"representing a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:
@@ -462,7 +463,11 @@ class OnlineDPOTrainer(BaseTrainer):
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                     self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
+
+                    # Determine device type (supports cuda, xpu, etc.)
+                    accelerator_type = torch.accelerator.current_accelerator().type
+                    current_device = getattr(torch, accelerator_type).current_device()
+                    self.vllm_client.init_communicator(device=current_device)
                 else:
                     self.vllm_client = None
             elif self.vllm_mode == "colocate":
@@ -755,7 +760,7 @@ class OnlineDPOTrainer(BaseTrainer):
                 max_tokens=self.generation_config.max_tokens,
                 guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
                 generation_kwargs=self.args.generation_kwargs,
-            )
+            )["completion_ids"]
             # Flatten: each prompt generates 2 completions
             completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
         else:
