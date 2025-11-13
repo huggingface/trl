@@ -67,7 +67,7 @@ class XPOTrainer(OnlineDPOTrainer):
         reward_funcs ([`~transformers.PreTrainedModel`]):
             The reward model to score completions with, preferably an
             [`~transformers.AutoModelForSequenceClassification`].
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         args ([`experimental.xpo.XPOConfig`]):
             The XPO config arguments to use for training.

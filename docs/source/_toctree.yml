@@ -56,8 +56,6 @@
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: cpo_trainer
-      title: CPO
     - local: dpo_trainer
       title: DPO
     - local: online_dpo_trainer
@@ -87,8 +85,6 @@
     title: Model Classes
   - local: model_utils
     title: Model Utilities
-  - local: judges
-    title: Judges
   - local: callbacks
     title: Callbacks
   - local: data_utils
@@ -107,6 +103,8 @@
     title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
+  - local: cpo_trainer
+    title: CPO
   - local: gfpo
     title: GFPO
   - local: gold_trainer
@@ -115,6 +113,10 @@
     title: GRPO With Replay Buffer
   - local: gspo_token
     title: GSPO-token
+  - local: judges
+    title: Judges
+  - local: minillm
+    title: MiniLLM
   - local: papo_trainer
     title: PAPO
   - local: xpo_trainer

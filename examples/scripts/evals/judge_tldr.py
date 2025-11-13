@@ -24,7 +24,7 @@ from datasets import load_dataset
 from transformers import HfArgumentParser
 from vllm import LLM, SamplingParams
 
-from trl import HfPairwiseJudge, OpenAIPairwiseJudge
+from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge
 
 
 """
