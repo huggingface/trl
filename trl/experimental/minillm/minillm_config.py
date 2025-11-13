@@ -30,27 +30,22 @@ class MiniLLMConfig(GRPOConfig):
     arguments, please refer to the [`~transformers.TrainingArguments`] and [`GRPOConfig`] documentation.
 
     Args:
-        temperature (`float`, *optional*, defaults to `0.9`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
-        lmbda (`float`, *optional*, defaults to `0.5`):
-            Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy
-            student-generated outputs).
-        beta (`float`, *optional*, defaults to `0.5`):
-            Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
-            beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
-        max_new_tokens (`int`, *optional*, defaults to `128`):
-            Maximum number of tokens to generate per completion.
-        teacher_model_name_or_path (`str`, *optional*):
-            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
-            trained.
         teacher_model_init_kwargs (`dict[str, Any]]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
-        seq_kd (`bool`, *optional*, defaults to `False`):
-            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
-            teacher-generated output).
+        rkl_advantage (`bool`, *optional*, defaults to `True`):
+            Whether to add the reverse KL advantage to the reward advantage.
+        single_step_decomposition (`bool`, *optional*, defaults to `True`):
+            Whether to use single-step decomposition for the KL divergence computation.
+        kd_temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature for knowledge distillation. Higher temperatures produce softer probability distributions over
+            classes.
+        gamma (`float`, *optional*, defaults to `0.0`):
+            Discount factor for future rewards in reinforcement learning.
+        length_normalization (`bool`, *optional*, defaults to `True`):
+            Whether to apply length normalization to the rewards.
     """
 
     teacher_model_init_kwargs: dict[str, Any] | None = field(
