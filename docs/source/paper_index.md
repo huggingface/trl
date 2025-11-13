@@ -142,7 +142,7 @@ training_args = GRPOConfig(
     top_p=0.99,
     top_k=100,
     temperature=0.99,
-    num_completions=8, # = num_return_sequences in the paper
+    num_generations=8, # = num_return_sequences in the paper
     num_iterations=1,  # = ppo_epochs in the paper
     per_device_train_batch_size=4,
     gradient_accumulation_steps=32,
@@ -246,7 +246,7 @@ from trl import GRPOConfig
 config = GRPOConfig(
     loss_type="cispo",
     epsilon_high=5.0,
-    num_completions=16,
+    num_generations=16,
     scale_rewards="batch",
     cast_lm_head_to_fp32=True
 )
