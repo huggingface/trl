@@ -12,18 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-from dataclasses import dataclass
-
-from ..experimental.ppo import PPOConfig as _PPOConfig
+from .ppo_config import PPOConfig
+from .ppo_trainer import PPOTrainer
 
 
-@dataclass
-class PPOConfig(_PPOConfig):
-    def __post_init__(self):
-        warnings.warn(
-            "The `PPOConfig` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.ppo import PPOConfig`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
-        )
-        super().__post_init__()
+__all__ = ["PPOConfig", "PPOTrainer"]
