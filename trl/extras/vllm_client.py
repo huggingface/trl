@@ -496,7 +496,6 @@ class VLLMClient:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         if self.communicator is not None:
-            del self.communicator
             self.communicator = None
 
 # Example usage
