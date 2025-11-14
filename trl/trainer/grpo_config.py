@@ -489,10 +489,6 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
-    vllm_quantization: str | None = field(
-        default=None,
-        metadata={"help": "Quantization method to use for vLLM. If `None` (default), no quantization is applied."},
-    )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_base_url: str | None = field(
