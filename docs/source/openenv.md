@@ -68,7 +68,12 @@ By using OpenEnv in this loop, you can:
 TRL supports two vLLM execution modes for generation:
 
 - **`colocate` mode** (default): vLLM runs in the same process as training. Requires 1 GPU. Use `trainer.generate_rollout_completions()` for generation.
-- **`server` mode**: vLLM runs as a separate server process. Requires 2 GPUs (one for vLLM server, one for training). You can still use `trainer.generate_rollout_completions()` which will communicate with the server via `vllm_server_url`.
+- **`server` mode**: vLLM runs as a separate server process. Requires at least 2 GPUs (one for vLLM server, one for training), but is highly scalable:
+  - You can allocate multiple GPUs to the vLLM server for tensor parallelism (faster inference)
+  - You can run multiple training processes that share the same vLLM server
+  - You can use different GPU types for inference vs training (e.g., A100 for vLLM, H100 for training)
+  - The vLLM server can serve multiple experiments simultaneously
+  - Use `trainer.generate_rollout_completions()` which will communicate with the server via `vllm_server_url`
 
 Configure the mode via `GRPOConfig`:
 
@@ -80,13 +85,16 @@ args = GRPOConfig(
     # ... other args
 )
 
-# Server mode (2 GPUs)
+# Server mode (2+ GPUs, scalable)
 args = GRPOConfig(
     use_vllm=True,
     vllm_mode="server",
     vllm_server_url="http://localhost:8000",
     # ... other args
 )
+
+# Example: Start vLLM server with multiple GPUs for tensor parallelism
+# CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen3-1.7B --tensor-parallel-size 4
 ```
 
 ## Running the Environments
@@ -275,7 +283,7 @@ This runs vLLM in the same process as training, requiring only a single GPU.
 
 <hfoption id="server">
 
-**Server mode (2 GPUs)**
+**Server mode (2+ GPUs, scalable)**
 
 ```bash
 # Terminal 1: Start vLLM inference server
@@ -285,12 +293,14 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 
-This runs vLLM as a separate server process, useful when you want to share the inference server across multiple training jobs.
+This runs vLLM as a separate server process, useful when you want to:
+- Share the inference server across multiple training jobs
+- Use multiple GPUs for the vLLM server (via `--tensor-parallel-size`)
+- Scale up training to many GPUs while sharing a single inference endpoint
 
 </hfoption>
 
 </hfoptions>
-```
 
 Alternatively, you can manually start the Echo environment in a Docker container before running the training:
 
@@ -523,7 +533,7 @@ This runs vLLM in the same process as training, requiring only a single GPU.
 
 <hfoption id="server">
 
-**Server mode (2 GPUs)**
+**Server mode (2+ GPUs, scalable)**
 
 ```bash
 # Terminal 1: Start vLLM inference server
@@ -533,7 +543,10 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --p
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 
-This runs vLLM as a separate server process, useful when you want to share the inference server across multiple training jobs.
+This runs vLLM as a separate server process, useful when you want to:
+- Share the inference server across multiple training jobs
+- Use multiple GPUs for the vLLM server (via `--tensor-parallel-size`)
+- Scale up training to many GPUs while sharing a single inference endpoint
 
 </hfoption>
 
