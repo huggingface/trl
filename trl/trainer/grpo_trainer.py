@@ -603,7 +603,7 @@ class GRPOTrainer(BaseTrainer):
                 vllm_quantization = None
                 if is_bitsandbytes_available():
                     for _, module in model.named_modules():
-                        if isinstance(module, bnb.nn.Linear4bit):
+                        if isinstance(module, (bnb.nn.Linear4bit, bnb.nn. Linear8bitLt)):
                             vllm_quantization = "bitsandbytes"
                             break
                 self.llm = LLM(
