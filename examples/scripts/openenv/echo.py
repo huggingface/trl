@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Simple script to run GRPO training with OpenEnv's Echo environment and a vLLM server. The reward function encourages
+Simple script to run GRPO training with OpenEnv's Echo environment and vLLM. The reward function encourages
 longer completions.
 
 Setup:
@@ -22,23 +22,28 @@ Setup:
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 ```
 
-Usage (2 GPUs required):
+Usage:
 
 # Start the docker container for the Echo environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
 ```sh
 docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
 ```
 
-# Spin up server
+# Option 1: Colocated vLLM (1 GPU required)
+```sh
+python examples/scripts/openenv/echo.py --vllm-mode colocate
+```
 
+# Option 2: Separate vLLM server (2 GPUs required)
+
+# Spin up vLLM server
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 ```
 
 # Run training
-
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 """
 
@@ -83,9 +88,15 @@ def parse_args():
     )
     parser.add_argument(
         "--vllm-mode",
-        choices=["colocate"],
+        choices=["colocate", "server"],
         default="colocate",
-        help="vLLM execution mode; only colocate is supported.",
+        help="vLLM execution mode: 'colocate' or 'server'.",
+    )
+    parser.add_argument(
+        "--vllm-server-url",
+        type=str,
+        default="http://localhost:8000",
+        help="URL for the vLLM server (only used when --vllm-mode=server).",
     )
 
     return parser.parse_args()
@@ -152,6 +163,7 @@ def main():
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Rollout",
         use_vllm=True,
         vllm_mode=args.vllm_mode,
+        vllm_server_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         logging_steps=1,
         report_to="trackio",
         num_train_epochs=1,

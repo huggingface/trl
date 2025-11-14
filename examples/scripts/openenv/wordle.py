@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Simple script to run GRPO training with OpenEnv's Wordle environment and a vLLM server.
+Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
 Setup:
 
@@ -21,7 +21,7 @@ Setup:
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 ```
 
-Usage (2 GPUs required):
+Usage:
 
 # Start the docker container for the Wordle environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
 ```sh
@@ -29,16 +29,21 @@ docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
 # or TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 python -m src.envs.textarena_env.server.app
 ```
 
-# Spin up vLLM server
+# Option 1: Colocated vLLM (1 GPU required)
+```sh
+python examples/scripts/openenv/wordle.py --vllm-mode colocate
+```
 
+# Option 2: Separate vLLM server (2 GPUs required)
+
+# Spin up vLLM server
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
 ```
 
 # Run training
-
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 """
 
@@ -85,8 +90,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-url",
-        default="http://localhost:8000",  # default="https://burtenshaw-textarena.hf.space"
-        help="Base URL for the TextArena Wordle environment.",
+        default="https://burtenshaw-textarena.hf.space",
+        help="URL for the TextArena Wordle environment.",
     )
     parser.add_argument(
         "--system-prompt-path",
@@ -210,9 +215,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--vllm-mode",
-        choices=("colocate",),
+        choices=("colocate", "server"),
         default="colocate",
-        help="vLLM execution mode; only colocate is supported.",
+        help="vLLM execution mode: 'colocate' or 'server'.",
+    )
+    parser.add_argument(
+        "--vllm-server-url",
+        type=str,
+        default="http://localhost:8000",
+        help="URL for the vLLM server (only used when --vllm-mode=server).",
     )
     parser.add_argument(
         "--logging-steps",
@@ -421,6 +432,7 @@ def main() -> None:
     grpo_config = GRPOConfig(
         use_vllm=True,
         vllm_mode=cli_args.vllm_mode,
+        vllm_server_url=cli_args.vllm_server_url if cli_args.vllm_mode == "server" else None,
         output_dir=str(output_dir),
         num_train_epochs=cli_args.num_epochs,
         learning_rate=cli_args.learning_rate,
