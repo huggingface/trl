@@ -12,35 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
+import warnings
+from dataclasses import dataclass
 
-from .online_dpo_config import OnlineDPOConfig
+from ..experimental.nash_md import NashMDConfig as _NashMDConfig
 
 
 @dataclass
-class NashMDConfig(OnlineDPOConfig):
-    r"""
-    Configuration class for the [`NashMDTrainer`].
-
-    Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
-
-    Parameters:
-        mixture_coef (`float` or `list[float]`, *optional*, defaults to `0.5`):
-            Logit mixture coefficient for the model and reference model. If a list of floats is provided then the
-            mixture coefficient is selected for each new epoch and the last coefficient is used for the rest of the
-            epochs.
-    """
-
-    mixture_coef: list[float] = field(
-        default_factory=lambda: [0.5],
-        metadata={
-            "help": "Logit mixture coefficient for the model and reference model. If a list of floats is provided "
-            "then the mixture coefficient is selected for each new epoch and the last coefficient is used for the "
-            "rest of the epochs."
-        },
-    )
-
+class NashMDConfig(_NashMDConfig):
     def __post_init__(self):
+        warnings.warn(
+            "The `NashMDConfig` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.nash_md import NashMDConfig`. The current import path will be removed and no "
+            "longer supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
+        )
         super().__post_init__()
-        if hasattr(self.mixture_coef, "__len__") and len(self.mixture_coef) == 1:
-            self.mixture_coef = self.mixture_coef[0]
