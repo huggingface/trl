@@ -49,10 +49,11 @@ class ScriptArguments:
 
 def process_example(example):
     solution = example["final_answer"]
-    if not solution in ["True", "False", "Yes", "No"]:
+    if solution not in ["True", "False", "Yes", "No"]:
         solution = f"${solution}$"
     prompt = [{"role": "user", "content": example["question"]}]
     return {"prompt": prompt, "solution": solution}
+
 
 model_card = ModelCard("""
 ---
