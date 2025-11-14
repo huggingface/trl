@@ -1662,7 +1662,7 @@ class GOLDTrainer(SFTTrainer):
         # prompts_text = [p.replace(target_system_prompt, system_prompt) for p in prompts_text]
         # Add system prompt to prompts
 
-        max_completion_length = generation_config.max_completion_length
+        max_completion_length = generation_config.max_new_tokens
         temperature = generation_config.temperature
         # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
         top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
@@ -1684,7 +1684,7 @@ class GOLDTrainer(SFTTrainer):
                     min_p=min_p,
                     max_tokens=max_completion_length,
                     guided_decoding_regex=self.vllm_guided_decoding_regex,
-                )
+                )["completion_ids"]
             else:
                 completion_ids = [None] * len(all_prompts_text)
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
