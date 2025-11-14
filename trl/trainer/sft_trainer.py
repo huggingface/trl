@@ -72,9 +72,9 @@ logger = logging.get_logger(__name__)
 FLASH_ATTENTION_VARIANTS = {
     "flash_attention_2",
     "flash_attention_3",
-    "kernels-community/flash-attn",
-    "kernels-community/vllm-flash-attn3",
+    "kernels-community/flash-attn2",
     "kernels-community/flash-attn3",
+    "kernels-community/vllm-flash-attn3",
 }
 
 

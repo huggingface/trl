@@ -393,10 +393,10 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`experimental.gkd.GKDTrainer`] | [Prompt-completion](#prompt-completion) |
 | [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
-| [`NashMDTrainer`] | [Prompt-only](#prompt-only) |
+| [`experimental.nash_md.NashMDTrainer`] | [Prompt-only](#prompt-only) |
 | [`OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
-| [`PPOTrainer`] | Tokenized language modeling |
+| [`experimental.ppo.PPOTrainer`] | Tokenized language modeling |
 | [`PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
 | [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
