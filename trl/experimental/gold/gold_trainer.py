@@ -17,8 +17,9 @@ import random
 import textwrap
 import warnings
 from collections import defaultdict, deque
+from collections.abc import Callable
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
@@ -28,7 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -82,6 +83,9 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 def print_prompt_completions_sample_uld(
@@ -734,19 +738,21 @@ class GOLDTrainer(SFTTrainer):
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        teacher_model: Union[PreTrainedModel, nn.Module, str] = None,
-        args: Optional[GOLDConfig] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
+        model: PreTrainedModel | nn.Module | str | None = None,
+        teacher_model: PreTrainedModel | nn.Module | str = None,
+        args: GOLDConfig | None = None,
+        data_collator: DataCollator | None = None,  # type: ignore
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
@@ -938,6 +944,15 @@ class GOLDTrainer(SFTTrainer):
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
                 ensure_master_addr_port()
 
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+
                 self.vllm_engine = LLM(
                     model=student_model_name_or_path,
                     revision=self.model_revision,
@@ -949,6 +964,7 @@ class GOLDTrainer(SFTTrainer):
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     enable_sleep_mode=self.vllm_enable_sleep_mode,
+                    quantization=vllm_quantization,
                 )
 
                 if self.vllm_enable_sleep_mode:
@@ -986,13 +1002,13 @@ class GOLDTrainer(SFTTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args,
         packing: bool,
-        formatting_func: Optional[Callable[[dict], str]],
+        formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         """
         Override dataset preparation to preserve original text for cross-tokenizer distillation and ensure
         attention_mask is always added for DataCollatorForChatML compatibility.
@@ -1015,13 +1031,13 @@ class GOLDTrainer(SFTTrainer):
 
     def _prepare_dataset_with_original_text(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args,
         packing: bool,
-        formatting_func: Optional[Callable[[dict], str]],
+        formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         """
         Prepare dataset while preserving original text for cross-tokenizer distillation.
         """
@@ -1337,7 +1353,7 @@ class GOLDTrainer(SFTTrainer):
             if "original_prompt_text" in inputs and "original_completion_text" in inputs:
                 prompt_texts = inputs["original_prompt_text"]
                 completion_texts = inputs["original_completion_text"]
-                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts)]
+                full_texts = [p + c for p, c in zip(prompt_texts, completion_texts, strict=True)]
             else:
                 # Fallback: decode student input_ids (current approach)
                 # WARNING: This may not work perfectly for cross-tokenizer distillation
@@ -1347,7 +1363,9 @@ class GOLDTrainer(SFTTrainer):
                 # Try to split prompt/completion using original prompt length
                 prompt_lengths = inputs["prompts"].shape[1]
                 prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                completion_texts = [full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts)]
+                completion_texts = [
+                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
+                ]
 
             (
                 teacher_input_ids,
@@ -1644,7 +1662,7 @@ class GOLDTrainer(SFTTrainer):
         # prompts_text = [p.replace(target_system_prompt, system_prompt) for p in prompts_text]
         # Add system prompt to prompts
 
-        max_completion_length = generation_config.max_completion_length
+        max_completion_length = generation_config.max_new_tokens
         temperature = generation_config.temperature
         # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
         top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
@@ -1666,7 +1684,7 @@ class GOLDTrainer(SFTTrainer):
                     min_p=min_p,
                     max_tokens=max_completion_length,
                     guided_decoding_regex=self.vllm_guided_decoding_regex,
-                )
+                )["completion_ids"]
             else:
                 completion_ids = [None] * len(all_prompts_text)
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
@@ -1887,7 +1905,7 @@ class GOLDTrainer(SFTTrainer):
 
     @profiling_decorator
     def training_step(
-        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
         """
         Perform a training step for the General Online Logit Distillation (GOLD) model.
@@ -1940,7 +1958,7 @@ class GOLDTrainer(SFTTrainer):
             self._off_policy_step_equiv += step_equiv
         return loss
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 

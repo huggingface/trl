@@ -135,6 +135,7 @@ In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid
 While training and evaluating, we record the following reward metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `step_time`: The average time (in seconds) taken per training step (including generation).
 - `completions/mean_length`: The average length of generated completions.
 - `completions/min_length`: The minimum length of generated completions.
 - `completions/max_length`: The maximum length of generated completions.
@@ -545,8 +546,14 @@ accelerate launch \
 
 ### Configuration Tips
 
-> [!WARNING]
-> VLM training may fail if image tokens are truncated. We highly recommend disabling truncation by setting `max_prompt_length` to `None`.
+> [!TIP]
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`RLOOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> RLOOConfig(max_prompt_length=None, ...)
+> ```
+>
+> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage

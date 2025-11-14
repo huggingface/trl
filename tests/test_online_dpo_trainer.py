@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-
 import pytest
 import transformers
 from datasets import Dataset, features, load_dataset
@@ -276,6 +274,14 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @require_vllm
     @pytest.mark.slow
     def test_training_with_vllm(self, config_name):
+        def cleanup_vllm_communicator(trainer):
+            """Clean up vLLM communicator to avoid conflicts between test runs"""
+            try:
+                if hasattr(trainer, "vllm_client") and trainer.vllm_client is not None:
+                    trainer.vllm_client.close_communicator()
+            except Exception:
+                pass  # Continue if cleanup fails
+
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -297,10 +303,14 @@ class TestOnlineDPOTrainer(TrlTestCase):
             processing_class=tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
-        trainer.train()
 
-        # Check if training loss is available
-        assert "train_loss" in trainer.state.log_history[-1]
+        # Ensure cleanup of vLLM communicator after the test
+        try:
+            trainer.train()
+            # Check if training loss is available
+            assert "train_loss" in trainer.state.log_history[-1]
+        finally:
+            cleanup_vllm_communicator(trainer)
 
     @require_vllm
     def test_training_with_vllm_colocate(self):
@@ -426,11 +436,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
 
-    @pytest.mark.xfail(
-        sys.version_info[:2] == (3, 9) and Version(transformers.__version__) < Version("4.57.2"),
-        reason="Blocked by upstream bug in transformers#41747 (tracked in trl#4308): fix merged, awaiting release >= 4.57.2",
-        strict=True,
-    )
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):

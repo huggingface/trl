@@ -142,7 +142,7 @@ training_args = GRPOConfig(
     top_p=0.99,
     top_k=100,
     temperature=0.99,
-    num_completions=8, # = num_return_sequences in the paper
+    num_generations=8, # = num_return_sequences in the paper
     num_iterations=1,  # = ppo_epochs in the paper
     per_device_train_batch_size=4,
     gradient_accumulation_steps=32,
@@ -231,6 +231,28 @@ trainer = PAPOTrainer(
     ...
 )
 ```
+
+### The Art of Scaling Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2510.13786
+
+A systematic study that defines a framework for analyzing and predicting reinforcement learning scaling in large language models, identifies key design choices that affect compute efficiency and propose a best-practice recipe called ScaleRL.
+
+You can partially reproduce the ScaleRL recipe using the [`GRPOTrainer`] with the following configs:
+
+```python
+from trl import GRPOConfig
+
+config = GRPOConfig(
+    loss_type="cispo",
+    epsilon_high=5.0,
+    num_generations=16,
+    scale_rewards="batch",
+    cast_lm_head_to_fp32=True
+)
+```
+
+
 
 ## Direct Policy Optimization
 
@@ -534,7 +556,7 @@ training_args = RLOOConfig(
 
 ## Contrastive Preference Optimization
 
-Papers relating to the [`CPOTrainer`]
+Papers relating to the [`experimental.cpo.CPOTrainer`]
 
 ### AlphaPO -- Reward shape matters for LLM alignment
 
@@ -543,7 +565,7 @@ Papers relating to the [`CPOTrainer`]
 AlphaPO is a new Direct Alignment Algorithms (DAAs) method that leverages an alpha-parameter to help change the shape of the reward function beyond the standard log reward. AlphaPO helps maintain fine-grained control over likelihood displacement and over-optimization. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl import CPOConfig
+from trl.experimental.cpo import CPOConfig
 
 # Mistral-Instruct from Table 3 of the paper
 training_args = CPOConfig(
@@ -605,3 +627,73 @@ def add_margin(example):
 
 dataset = dataset.map(add_margin)
 ```
+
+## Distillation
+Papers relating to training a student model with the help of a teacher model.
+
+### On-Policy Distillation
+**📰 Blog**: https://thinkingmachines.ai/blog/on-policy-distillation/
+
+On-Policy Distillation involves a student model generating rollouts for each batch of training data. We subsequently obtain the probability distributions for each token of the rollouts from both the student and teacher models. The student model is then optimized to minimize the negative Kullback-Leibler (KL) divergence between its own token distributions and those of the teacher model.
+
+| Method                  | Sampling   | Reward signal |
+|-------------------------|------------|---------------|
+| Supervised finetuning   | off-policy | dense         |
+| Reinforcement learning  | on-policy  | sparse        |
+| On-policy distillation  | on-policy  | dense         |
+
+On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to restore generalization capabilities lost during SFT.
+
+Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
+
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.gkd.GKDTrainer`] and [`experimental.gkd.GKDConfig`]:
+
+```python
+from trl.experimental.gkd import GKDConfig
+
+training_args = GKDConfig(
+    lmbda=1.0, # student produces rollouts for all batches
+    beta=1.0, # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model", # specify the teacher model
+
+)
+```
+
+Alternatively, you can use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+
+```python
+from trl.experimental import GOLDConfig
+
+config = GOLDConfig(
+    lmbda=1.0, # student produces rollouts for all batches
+    beta=1.0, # to ensure reverse-kl as the loss function
+    teacher_model_name_or_path="teacher-model", # specify the teacher model
+
+)
+```
+
+### Knowledge Distillation of Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2306.08543
+
+MiniLLM is the first on-policy knowledge distillation method, which minimizes the sequence-level reverse KLD between the teacher and the student model and is optimized by reinforcement learning.
+
+It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
+
+Alternatively, you can use the [`experimental.MiniLLMTrainer`] and [`experimental.MiniLLMConfig`] to perform MiniLLM distillation as follows:
+
+```python
+from datasets import load_dataset
+from trl.experimental.minillm import MiniLLMTrainer
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+trainer = MiniLLMTrainer(
+    model="Qwen/Qwen3-0.6B",
+    teacher_model="Qwen/Qwen3-1.7B",
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+For more details, see the [MiniLLM Trainer documentation](minillm) documentation.

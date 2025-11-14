@@ -114,6 +114,95 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
 
 Finally, make sure that the rewards are computed on correct device as well, for that you can use `ppo_trainer.model.current_device`.
 
+## Multi-Adapter RL Training
+
+You can use a single base model with multiple PEFT adapters for the entire PPO algorithm - including retrieving reference logits, computing active logits, and calculating rewards. This approach is useful for memory-efficient RL training.
+
+> [!WARNING]
+> This feature is experimental and convergence has not been extensively tested. We encourage the community to share feedback and report any issues.
+
+### Requirements
+
+Install PEFT and optionally bitsandbytes for 8-bit models:
+
+```bash
+pip install peft bitsandbytes
+```
+
+### Training Workflow
+
+The multi-adapter approach requires three stages:
+
+1. **Supervised Fine-Tuning (SFT)**: Train a base model on your target domain (e.g., IMDB dataset) using `SFTTrainer`
+2. **Reward Model Training**: Train a reward model adapter using PEFT and `RewardTrainer` (see [reward modeling example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py))
+3. **PPO Training**: Fine-tune new adapters using PPO with the reward adapter
+
+> [!IMPORTANT]
+> Use the same base model (architecture and weights) for stages 2 & 3.
+
+### Basic Usage
+
+After training your reward adapter and pushing it to the Hub:
+
+```python
+from peft import LoraConfig
+from trl import AutoModelForCausalLMWithValueHead
+from trl.experimental.ppo import PPOTrainer
+
+model_name = "huggyllama/llama-7b"
+rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
+
+# Configure PPO adapter
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+# Load model with reward adapter
+model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    model_name,
+    peft_config=lora_config,
+    reward_adapter=rm_adapter_id,
+)
+
+trainer = PPOTrainer(model=model, ...)
+```
+
+In your training loop, compute rewards using:
+
+```python
+rewards = trainer.model.compute_reward_score(**inputs)
+```
+
+### Advanced Features
+
+#### Multiple Policy Adapters
+
+You can train multiple adapters on the same base model for different policies. Control which adapter to activate using the `ppo_adapter_name` argument:
+
+```python
+adapter_name_policy_1 = "policy_1"
+rewards = trainer.model.compute_reward_score(**inputs, ppo_adapter_name=adapter_name_policy_1)
+```
+
+#### Quantized Base Models
+
+For memory-efficient training, load the base model in 8-bit or 4-bit while keeping adapters in float32:
+
+```python
+from transformers import BitsAndBytesConfig
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    model_name,
+    peft_config=lora_config,
+    reward_adapter=rm_adapter_id,
+    quantization_config=BitsAndBytesConfig(load_in_8bit=True),
+)
+```
+
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
 
 The `trl` library also supports naive pipeline parallelism (NPP) for large models (>60B models). This is a simple way to parallelize the model across multiple GPUs.

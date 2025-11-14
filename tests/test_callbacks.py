@@ -22,7 +22,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
 from trl import (
-    BasePairwiseJudge,
     BEMACallback,
     DPOConfig,
     DPOTrainer,
@@ -30,6 +29,7 @@ from trl import (
     MergeModelCallback,
     WinRateCallback,
 )
+from trl.experimental.judges import BasePairwiseJudge
 from trl.mergekit_utils import MergeConfig
 
 from .testing_utils import TrlTestCase, require_comet, require_mergekit, require_peft, require_wandb
@@ -115,7 +115,7 @@ class TestWinRateCallback(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates, strict=True):
             assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
     def test_without_ref_model(self):
@@ -141,7 +141,7 @@ class TestWinRateCallback(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates, strict=True):
             assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
     def test_soft_judge(self):
@@ -184,7 +184,7 @@ class TestWinRateCallback(TrlTestCase):
             for h in trainer.state.log_history
             if "eval_avg_win_prob" in h
         ]
-        for history_row, expected_row in zip(winrate_history, expected_soft_winrates):
+        for history_row, expected_row in zip(winrate_history, expected_soft_winrates, strict=True):
             assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
     @require_peft
@@ -218,7 +218,7 @@ class TestWinRateCallback(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates, strict=True):
             assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
 

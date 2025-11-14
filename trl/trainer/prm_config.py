@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from transformers import TrainingArguments
 
@@ -66,7 +65,7 @@ class PRMConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -74,16 +73,26 @@ class PRMConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) used for truncation."},
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={"help": "Maximum length of the prompt used for truncation."},
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=None,
         metadata={
             "help": "Maximum length of the completion used for truncation. The completion is the concatenation of the "
@@ -102,7 +111,7 @@ class PRMConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to train only on the last step."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )

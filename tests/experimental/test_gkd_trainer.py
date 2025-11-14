@@ -20,19 +20,19 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
-from trl import GKDConfig, GKDTrainer
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl.experimental.gkd import GKDConfig, GKDTrainer
 
-from .testing_utils import TrlTestCase, require_liger_kernel
+from ..testing_utils import TrlTestCase, require_liger_kernel
 
 
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
     @classmethod
     def setup_class(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        cls.device = "cuda" if torch.cuda.is_available() else "cpu"
         cls.tokenizer = AutoTokenizer.from_pretrained(model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.model = AutoModelForCausalLM.from_pretrained(model_id)
+        cls.model = AutoModelForCausalLM.from_pretrained(model_id).to(cls.device)
         cls.generation_config = GenerationConfig(
             max_new_tokens=20,
             num_return_sequences=1,
@@ -45,8 +45,8 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)
 
         inputs = {
-            "prompts": tokenized_prompts["input_ids"],
-            "prompt_attention_mask": tokenized_prompts["attention_mask"],
+            "prompts": tokenized_prompts["input_ids"].to(self.device),
+            "prompt_attention_mask": tokenized_prompts["attention_mask"].to(self.device),
         }
 
         # Set temperature to 0 for deterministic output
@@ -68,7 +68,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         generated_texts = self.tokenizer.batch_decode(new_input_ids, skip_special_tokens=True)
 
         # Check if the generated texts start with the original prompts
-        for prompt, generated_text in zip(prompts, generated_texts):
+        for prompt, generated_text in zip(prompts, generated_texts, strict=True):
             assert generated_text.startswith(prompt), (
                 f"Generated text '{generated_text}' does not start with prompt '{prompt}'"
             )
@@ -92,8 +92,8 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)
 
         inputs = {
-            "prompts": tokenized_prompts["input_ids"],
-            "attention_mask": tokenized_prompts["attention_mask"],
+            "prompts": tokenized_prompts["input_ids"].to(self.device),
+            "attention_mask": tokenized_prompts["attention_mask"].to(self.device),
         }
 
         outputs = GKDTrainer.generate_on_policy_outputs(
@@ -204,10 +204,6 @@ class TestGKDTrainer(TrlTestCase):
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # Ensure the tokenizer has a chat template
-        if not hasattr(self.tokenizer, "chat_template") or self.tokenizer.chat_template is None:
-            self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def test_gkd_trainer(self):
         training_args = GKDConfig(

@@ -23,7 +23,7 @@ from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from itertools import accumulate
-from typing import Any, Literal, Optional, TypeVar, Union
+from typing import Any, Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -230,7 +230,7 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = None) -> None:
+def ensure_master_addr_port(addr: str | None = None, port: int | None = None) -> None:
     """
     Ensure `MASTER_ADDR`/`MASTER_PORT` are set safely.
 
@@ -264,7 +264,7 @@ class RewardDataCollatorWithPadding:
     Args:
         tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used for encoding the data.
-        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
+        padding (`bool | str | PaddingStrategy`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
         pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
@@ -273,8 +273,8 @@ class RewardDataCollatorWithPadding:
     """
 
     tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str] = True
-    pad_to_multiple_of: Optional[int] = None
+    padding: bool | str = True
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def __init__(self, *args, **kwargs) -> None:
@@ -346,7 +346,7 @@ def pad(
     tensors: list[torch.Tensor],
     padding_value: int = 0,
     padding_side: str = "right",
-    pad_to_multiple_of: Optional[int] = None,
+    pad_to_multiple_of: int | None = None,
 ) -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
@@ -424,7 +424,7 @@ class DPODataCollatorWithPadding:
 
     pad_token_id: int = 0
     label_pad_token_id: int = -100
-    is_encoder_decoder: Optional[bool] = False
+    is_encoder_decoder: bool | None = False
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         # first, pad everything to the same length
@@ -581,7 +581,12 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
 
         # Flatten the predictions and labels to remove the ignored tokens.
         predictions = np.array(
-            [p for prediction, label in zip(predictions, labels) for (p, lbl) in zip(prediction, label) if lbl != -100]
+            [
+                p
+                for prediction, label in zip(predictions, labels, strict=True)
+                for (p, lbl) in zip(prediction, label, strict=True)
+                if lbl != -100
+            ]
         )
         labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
 
@@ -612,7 +617,7 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
     return {"accuracy": accuracy}
 
 
-def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float], dim: int = -1) -> torch.Tensor:
+def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float, dim: int = -1) -> torch.Tensor:
     if tensor.size(dim) >= length:
         return tensor
     else:
@@ -650,14 +655,14 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
+def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=model_args.dtype,  # For consistency with model weights, we use the same value as `dtype`
             bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_args.dtype,
+            bnb_4bit_quant_storage=model_args.bnb_4bit_quant_storage,
         )
     elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -669,14 +674,14 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
     return quantization_config
 
 
-def get_kbit_device_map() -> Optional[dict[str, int]]:
+def get_kbit_device_map() -> dict[str, int] | None:
     if torch.cuda.is_available() or is_torch_xpu_available():
         return {"": PartialState().local_process_index}
     else:
         return None
 
 
-def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
+def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     if model_args.use_peft is False:
         return None
 
@@ -737,9 +742,6 @@ def print_rich_table(df: pd.DataFrame) -> None:
         table.add_row(*row.astype(str).tolist())
     console.print(table)
 
-
-SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
-# SIMPLE_SFT_CHAT_TEMPLATE simply ends things with an EOS token, this helps the SFT model learn to end the completions with EOS tokens
 
 SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
@@ -837,7 +839,7 @@ class OnPolicyConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -845,12 +847,22 @@ class OnPolicyConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
-    run_name: Optional[str] = field(
+    run_name: str | None = field(
         default=None,
         metadata={"help": "Name of the run."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
@@ -858,7 +870,7 @@ class OnPolicyConfig(TrainingArguments):
         default=1,
         metadata={"help": "Number of minibatches to split a batch into."},
     )
-    total_episodes: Optional[int] = field(
+    total_episodes: int | None = field(
         default=None,
         metadata={"help": "Total number of episodes in the dataset."},
     )
@@ -876,14 +888,14 @@ class OnPolicyConfig(TrainingArguments):
         default=53,
         metadata={"help": "Length of the response."},
     )
-    stop_token: Optional[Literal["eos"]] = field(
+    stop_token: Literal["eos"] | None = field(
         default=None,
         metadata={
             "help": "Specifies the stop token to use for text generation. This parameter is mutually exclusive with "
             "`stop_token_id`."
         },
     )
-    stop_token_id: Optional[int] = field(
+    stop_token_id: int | None = field(
         default=None,
         metadata={
             "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
@@ -894,7 +906,7 @@ class OnPolicyConfig(TrainingArguments):
         default=0.7,
         metadata={"help": "Sampling temperature."},
     )
-    missing_eos_penalty: Optional[float] = field(
+    missing_eos_penalty: float | None = field(
         default=None,
         metadata={
             "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
@@ -906,34 +918,34 @@ class OnPolicyConfig(TrainingArguments):
         default="EleutherAI/pythia-160m",
         metadata={"help": "Path to the SFT model."},
     )
-    world_size: Optional[int] = field(
+    world_size: int | None = field(
         default=None,
         metadata={"help": "Number of processes (GPUs) to use for the training."},
     )
-    num_total_batches: Optional[int] = field(
+    num_total_batches: int | None = field(
         default=None,
         metadata={"help": "Number of total batches to train."},
     )
-    micro_batch_size: Optional[int] = field(
+    micro_batch_size: int | None = field(
         default=None,
         metadata={"help": "Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)."},
     )
-    local_batch_size: Optional[int] = field(
+    local_batch_size: int | None = field(
         default=None,
         metadata={"help": "Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)."},
     )
-    batch_size: Optional[int] = field(
+    batch_size: int | None = field(
         default=None,
         metadata={
             "help": "Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * "
             "`gradient_accumulation_steps`)."
         },
     )
-    local_mini_batch_size: Optional[int] = field(
+    local_mini_batch_size: int | None = field(
         default=None,
         metadata={"help": "Mini batch size per GPU."},
     )
-    mini_batch_size: Optional[int] = field(
+    mini_batch_size: int | None = field(
         default=None,
         metadata={"help": "Mini batch size across GPUs."},
     )
@@ -1207,7 +1219,7 @@ def batch_generation(
 
 
 def add_bos_token_if_needed(
-    bos_token_id: Optional[int],
+    bos_token_id: int | None,
     prompt_len_input_ids: int,
     prompt_tokens: dict[str, list[int]],
     chosen_prompt_len_input_ids: int,
@@ -1288,18 +1300,18 @@ def empty_cache() -> None:
 
 
 def generate_model_card(
-    base_model: Optional[str],
+    base_model: str | None,
     model_name: str,
     hub_model_id: str,
-    dataset_name: Optional[str],
+    dataset_name: str | None,
     tags: list[str],
-    wandb_url: Optional[str],
+    wandb_url: str | None,
     trainer_name: str,
-    trainer_citation: Optional[str] = None,
-    template_file: Optional[str] = None,
-    paper_title: Optional[str] = None,
-    paper_id: Optional[str] = None,
-    comet_url: Optional[str] = None,
+    trainer_citation: str | None = None,
+    template_file: str | None = None,
+    paper_title: str | None = None,
+    paper_id: str | None = None,
+    comet_url: str | None = None,
 ) -> ModelCard:
     """
     Generate a [`~huggingface_hub.ModelCard`] from a template.
@@ -1365,7 +1377,7 @@ def generate_model_card(
     return card
 
 
-def get_comet_experiment_url() -> Optional[str]:
+def get_comet_experiment_url() -> str | None:
     """
     If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
     """
@@ -1396,7 +1408,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
         experiment.log_table(tabular_data=table, filename=name)
 
 
-def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the left.
 
@@ -1461,7 +1473,7 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor
     return flushed_mask, *flushed_tensors
 
 
-def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
     """
@@ -1518,7 +1530,7 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
     else:
         # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
-        for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
+        for row_logits, row_labels in zip(logits, index, strict=True):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
             row_per_token_logps = row_logps.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
             per_token_logps.append(row_per_token_logps)
@@ -1733,7 +1745,7 @@ class RepeatSampler(Sampler):
         batch_size: int = 1,
         repeat_count: int = 1,
         shuffle: bool = True,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ):
         self.data_source = data_source
         self.mini_repeat_count = mini_repeat_count
@@ -1793,8 +1805,8 @@ def nanstd(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def split_tensor_dict(
-    tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
-) -> list[dict[str, Optional[torch.Tensor]]]:
+    tensor_dict: dict[str, torch.Tensor | None], num_chunks: int
+) -> list[dict[str, torch.Tensor | None]]:
     """
     Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
 
@@ -1827,7 +1839,7 @@ def split_tensor_dict(
     return chunks
 
 
-def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
+def shuffle_sequence_dict(seq_dict: dict[str, Sequence | None]) -> dict[str, Sequence | None]:
     """
     Shuffles all sequence-like values in a dictionary along the first dimension in unison.
 
@@ -1847,7 +1859,7 @@ def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, 
     batch_size = len(next(v for v in seq_dict.values() if v is not None))
     permutation = torch.randperm(batch_size)
 
-    def permute(v: Optional[Sequence]) -> Optional[Sequence]:
+    def permute(v: Sequence | None) -> Sequence | None:
         if v is None:
             return None
         if isinstance(v, torch.Tensor) and v.ndim == 0:
@@ -1894,7 +1906,7 @@ def identity(x):
     return x
 
 
-def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
+def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
     and batch["num_images"] while keeping other entries unchanged.
@@ -1915,7 +1927,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Unio
     return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
 
 
-def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
+def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
     """
     Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]` back into a single
     tensor along the first dimension.
@@ -1984,7 +1996,7 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
-    dtype = kwargs.get("dtype")
+    dtype = kwargs.get("dtype", "auto")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
     elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
@@ -1994,6 +2006,7 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    kwargs["device_map"] = kwargs.get("device_map", "auto")
     config = AutoConfig.from_pretrained(model_id)
     architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
