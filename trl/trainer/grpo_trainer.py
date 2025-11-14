@@ -13,12 +13,10 @@
 # limitations under the License.
 
 import inspect
-import json
 import os
-import re
 import textwrap
-import traceback
 import time
+import traceback
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -74,6 +72,7 @@ from .utils import (
     disable_dropout_in_model,
     ensure_master_addr_port,
     entropy_from_logits,
+    extract_tool_calls,
     get_config_model_id,
     identity,
     nanmax,
@@ -118,24 +117,6 @@ RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
 # fields. Any extra fields (per-completion) are forwarded to the reward functions.
 RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
-
-
-def extract_tool_calls(text: str) -> list[dict[str, Any]]:
-    """
-    Extract JSON objects from <tool_call>...</tool_call> blocks in `text` and return them in the format: `[{"type":
-    "function", "function": {...}}, ...]`
-    """
-    # Find every block between <tool_call> and </tool_call>
-    blocks = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, flags=re.DOTALL)
-
-    result = []
-    for block in blocks:
-        try:
-            parsed = json.loads(block)
-        except json.JSONDecodeError:
-            continue
-        result.append({"type": "function", "function": parsed})
-    return result or None
 
 
 class GRPOTrainer(BaseTrainer):
@@ -238,6 +219,13 @@ class GRPOTrainer(BaseTrainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        tools (list of `Callable`, *optional*):
+            A list of callable tool functions that the model can invoke during generation. Each tool should be a
+            standard Python function with properly type-hinted arguments and return values, and a Google-style
+            docstring describing its purpose, arguments, and return value. For more details, see:
+            https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
+            type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
+            use and that it has been fine-tuned for tool calling.
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
@@ -273,11 +261,9 @@ class GRPOTrainer(BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
-        tools=None,
+        tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
     ):
-        self.tools = tools or []
-        self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -404,6 +390,10 @@ class GRPOTrainer(BaseTrainer):
                 stacklevel=2,
             )
         self.rollout_func = rollout_func
+
+        # Tools
+        self.tools = tools or []
+        self._tool_dict = {tool.__name__: tool for tool in self.tools}
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
@@ -620,7 +610,7 @@ class GRPOTrainer(BaseTrainer):
                 ensure_master_addr_port()
 
                 if self.max_prompt_length is not None and self.max_completion_length is not None:
-                    max_model_len = self.max_prompt_length + self.max_completion_length + 512
+                    max_model_len = self.max_prompt_length + self.max_completion_length
                 else:
                     max_model_len = None
 
@@ -1424,7 +1414,6 @@ class GRPOTrainer(BaseTrainer):
                     tools=self.tools,
                     return_dict=True,
                     **self.chat_template_kwargs,
-
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1464,6 +1453,9 @@ class GRPOTrainer(BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+
+        # Tool execution loop: check for tool calls and execute them, then regenerate completions with tool results
+        # appended to the prompt
         completion_contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         # parsed_completions = []
         # for content in completion_contents:
@@ -1479,7 +1471,9 @@ class GRPOTrainer(BaseTrainer):
 
         while idxs_with_tool:
             prompts_for_generation = [prompts[i] for i in idxs_with_tool]
-            for idx, tool_call_list, prompt_for_generation in zip(idxs_with_tool, tool_calls, prompts_for_generation):
+            for idx, tool_call_list, prompt_for_generation in zip(
+                idxs_with_tool, tool_calls, prompts_for_generation, strict=True
+            ):
                 prompt_for_generation.append({"role": "assistant", "content": completion_contents[idx]})
                 for tool_call in tool_call_list:
                     if tool_call["type"] == "function":
@@ -1507,7 +1501,7 @@ class GRPOTrainer(BaseTrainer):
                 if excess_length > 0:
                     post_tool_ids[i] = post_tool_ids[i][:-excess_length]
 
-            for idx, pct, post_tool in zip(idxs_with_tool, prompt_completion_tool_ids, post_tool_ids):
+            for idx, pct, post_tool in zip(idxs_with_tool, prompt_completion_tool_ids, post_tool_ids, strict=True):
                 completion_ids[idx] = pct[len(prompt_ids[idx]) :] + post_tool
 
             cc = self.processing_class.batch_decode(post_tool_ids, skip_special_tokens=True)
@@ -1521,9 +1515,9 @@ class GRPOTrainer(BaseTrainer):
             # tool_calls = [completion.get("tool_calls") if completion is not None else None for completion in parsed_completions]
             tool_calls = [extract_tool_calls(content) for content in cc]
             completion_contents = [None] * len(completion_contents)
-            for i, content in zip(idxs_with_tool, cc):
+            for i, content in zip(idxs_with_tool, cc, strict=True):
                 completion_contents[i] = content
-            idxs_with_tool = [idx for idx, tc in zip(idxs_with_tool, tool_calls) if tc]
+            idxs_with_tool = [idx for idx, tc in zip(idxs_with_tool, tool_calls, strict=True) if tc]
             tool_calls = [tc for tc in tool_calls if tc]
 
         # Get completion length per sequence, used for logging
@@ -1622,8 +1616,9 @@ class GRPOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs)["prompt"]
-
+                apply_chat_template(
+                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
+                )["prompt"]
                 for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")

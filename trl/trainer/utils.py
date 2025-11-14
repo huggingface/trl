@@ -17,6 +17,7 @@ import importlib.resources as pkg_resources
 import json
 import os
 import random
+import re
 import socket
 import warnings
 from collections.abc import Mapping, Sequence, Sized
@@ -2027,3 +2028,21 @@ def get_config_model_id(config: PretrainedConfig) -> str:
     """
     # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing: Qwen2-VL and Qwen2.5-VL. See GH-4323
     return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")
+
+
+def extract_tool_calls(text: str) -> list[dict[str, Any]]:
+    """
+    Extract JSON objects from <tool_call>...</tool_call> blocks in `text` and return them in the format: `[{"type":
+    "function", "function": {...}}, ...]`
+    """
+    # Find every block between <tool_call> and </tool_call>
+    blocks = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, flags=re.DOTALL)
+
+    result = []
+    for block in blocks:
+        try:
+            parsed = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        result.append({"type": "function", "function": parsed})
+    return result or None
