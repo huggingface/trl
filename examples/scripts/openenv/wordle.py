@@ -60,6 +60,7 @@ from datasets import Dataset
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.experimental.openenv import generate_rollout_completions
 
 
 # Ensure src/ is on the path
@@ -67,11 +68,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from envs.textarena_env import TextArenaAction, TextArenaEnv
 from envs.textarena_env.models import TextArenaMessage
-from envs.textarena_env.rewards import (
-    extract_feedback_counts,
-    extract_guess,
-    extract_wordle_feedback,
-)
+from envs.textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
 
 
 def parse_args() -> argparse.Namespace:
@@ -325,7 +322,7 @@ def rollout_once(
             enable_thinking=False,
         )
 
-        rollout_outputs = trainer.generate_rollout_completions([prompt_text])[0]
+        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
         prompt_ids.extend(rollout_outputs["prompt_ids"])
         completion_ids.extend(rollout_outputs["completion_ids"])
         logprobs.extend(rollout_outputs["logprobs"])

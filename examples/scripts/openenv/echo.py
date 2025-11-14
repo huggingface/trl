@@ -61,6 +61,7 @@ from envs.echo_env import EchoEnv
 from envs.echo_env.models import EchoAction
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
+from trl.experimental.openenv import generate_rollout_completions
 
 
 def parse_args():
@@ -172,7 +173,7 @@ def main():
     )
 
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
-        outputs = trainer.generate_rollout_completions(prompts)
+        outputs = generate_rollout_completions(trainer, prompts)
         tokenizer = trainer.processing_class
 
         completions_text = [tokenizer.decode(output["completion_ids"], skip_special_tokens=True) for output in outputs]

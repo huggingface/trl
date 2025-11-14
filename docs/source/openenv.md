@@ -52,7 +52,7 @@ def rollout_func(
 The typical pattern when combining OpenEnv with TRL looks like this:
 
 1. Start or connect to an OpenEnv environment (e.g., an HTTP endpoint or Dockerized env).
-2. Generate completions from your model — either via `trainer.generate_rollout_completions` when using colocated vLLM, or by hitting your inference server when using vLLM in server mode.
+2. Generate completions from your model — either via `trl.experimental.openenv.generate_rollout_completions` when using colocated vLLM, or by hitting your inference server when using vLLM in server mode.
 3. Step through the environment using each completion to compute rewards or metrics.
 4. Add environment results (e.g., `env_reward`) to the rollout result dict.
 5. Access those rewards inside your reward function via `**kwargs`.
@@ -67,13 +67,13 @@ By using OpenEnv in this loop, you can:
 
 TRL supports two vLLM execution modes for generation:
 
-- **`colocate` mode** (default): vLLM runs in the same process as training. Requires 1 GPU. Use `trainer.generate_rollout_completions()` for generation.
+- **`colocate` mode** (default): vLLM runs in the same process as training. Requires 1 GPU. Use `trl.experimental.openenv.generate_rollout_completions` for generation.
 - **`server` mode**: vLLM runs as a separate server process. Requires at least 2 GPUs (one for vLLM server, one for training), but is highly scalable:
   - You can allocate multiple GPUs to the vLLM server for tensor parallelism (faster inference)
   - You can run multiple training processes that share the same vLLM server
   - You can use different GPU types for inference vs training (e.g., A100 for vLLM, H100 for training)
   - The vLLM server can serve multiple experiments simultaneously
-  - Use `trainer.generate_rollout_completions()` which will communicate with the server via `vllm_server_url`
+  - Use `trl.experimental.openenv.generate_rollout_completions` which will communicate with the server via `vllm_server_url`
 
 Configure the mode via `GRPOConfig`:
 
@@ -190,6 +190,7 @@ The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/open
 ```python
 from envs.echo_env import EchoEnv, EchoAction
 from trl import GRPOConfig, GRPOTrainer
+from trl.experimental.openenv import generate_rollout_completions
 
 # Create HTTP client for Echo Environment
 client = EchoEnv.from_hub("openenv/echo-env")
@@ -206,7 +207,7 @@ client = EchoEnv(base_url="http://0.0.0.0:8001")
 
 def rollout_func(prompts: list[str], trainer: GRPOTrainer):
     # 1. Generate completions using TRL's helper (works for colocated vLLM)
-    outputs = trainer.generate_rollout_completions(prompts)
+    outputs = generate_rollout_completions(trainer, prompts)
     tokenizer = trainer.processing_class
     completions_text = [
         tokenizer.decode(out["completion_ids"], skip_special_tokens=True) for out in outputs
@@ -261,7 +262,7 @@ That's it! Now that you've seen the full example, let's unpack how the main piec
 4. **Reward function:** Extracts `env_reward` from `kwargs` to apply environment-computed rewards during training.
 
 > [!TIP]
-> The trainer-aware rollout hook works in both vLLM server and colocate modes. Use `trainer.generate_rollout_completions()` so you reuse TRL's sampling configuration automatically.
+> The trainer-aware rollout hook works in both vLLM server and colocate modes. Use `trl.experimental.openenv.generate_rollout_completions` so you reuse TRL's sampling configuration automatically.
 
 ### Running the Example
 
@@ -398,7 +399,7 @@ def rollout_once(
         )
 
         # Generate completion using trainer (works for both colocate and server modes)
-        rollout_outputs = trainer.generate_rollout_completions([prompt_text])[0]
+        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
         prompt_ids.extend(rollout_outputs["prompt_ids"])
         completion_ids.extend(rollout_outputs["completion_ids"])
         logprobs.extend(rollout_outputs["logprobs"])

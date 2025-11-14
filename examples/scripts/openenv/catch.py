@@ -62,6 +62,7 @@ from envs.openspiel_env import OpenSpielEnv
 from envs.openspiel_env.models import OpenSpielAction
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback, apply_chat_template
+from trl.experimental.openenv import generate_rollout_completions
 
 
 def parse_args():
@@ -228,7 +229,7 @@ def main():
             while not obs.done:
                 episode_msg = {"prompt": [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]}
                 episode_prompt = apply_chat_template(episode_msg, tokenizer)
-                rollout_output = trainer.generate_rollout_completions([episode_prompt["prompt"]])[0]
+                rollout_output = generate_rollout_completions(trainer, [episode_prompt["prompt"]])[0]
 
                 episode_prompt_ids.extend(rollout_output["prompt_ids"])
                 episode_completion_ids.extend(rollout_output["completion_ids"])
