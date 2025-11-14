@@ -45,6 +45,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    is_bitsandbytes_available,
     is_trackio_available,
     is_wandb_available,
 )
@@ -101,6 +102,8 @@ if is_wandb_available():
 if is_trackio_available():
     import trackio
 
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 logger = logging.get_logger(__name__)
 
@@ -596,6 +599,13 @@ class GRPOTrainer(BaseTrainer):
                     max_model_len = self.max_prompt_length + self.max_completion_length
                 else:
                     max_model_len = None
+
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -613,7 +623,7 @@ class GRPOTrainer(BaseTrainer):
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
-                    quantization=self.args.vllm_quantization,
+                    quantization=vllm_quantization,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
