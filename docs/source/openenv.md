@@ -227,7 +227,7 @@ That's it! Now that you’ve seen the full example, let’s unpack how the main 
 4. **Reward function:** Extracts `env_reward` from `kwargs` to apply environment-computed rewards during training.
 
 > [!TIP]
-> The trainer-aware rollout hook now works in both vLLM server and colocate modes. Prefer `trainer.generate_rollout_completions` in colocate mode so you reuse TRL’s sampling configuration automatically.
+> The trainer-aware rollout hook works in both vLLM server and colocate modes. Prefer `trainer.generate_rollout_completions` in colocate mode so you reuse TRL’s sampling configuration automatically.
 
 ### Running the Example
 
