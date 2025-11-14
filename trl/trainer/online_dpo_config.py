@@ -307,10 +307,6 @@ class OnlineDPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
-    vllm_quantization: str | None = field(
-        default=None,
-        metadata={"help": "Quantization method to use for vLLM. If `None` (default), no quantization is applied."},
-    )
     vllm_gpu_memory_utilization: float | None = field(
         default=0.55,
         metadata={

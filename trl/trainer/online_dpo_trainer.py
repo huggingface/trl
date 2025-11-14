@@ -45,6 +45,7 @@ from transformers import (
     ProcessorMixin,
     Trainer,
     TrainerCallback,
+    is_bitsandbytes_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction, seed_worker
@@ -97,6 +98,8 @@ if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
 
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 logger = logging.get_logger(__name__)
 
@@ -477,6 +480,14 @@ class OnlineDPOTrainer(BaseTrainer):
                 # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
                 # space for them.
                 # Configure vLLM parameters
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 vllm_kwargs = {
                     "model": model.name_or_path,
                     "tensor_parallel_size": self.vllm_tensor_parallel_size,
@@ -489,7 +500,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
-                    "quantization": self.args.vllm_quantization,
+                    "quantization": vllm_quantization,
                 }
 
                 # vLLM requires the environment variables to be set for distributed training.

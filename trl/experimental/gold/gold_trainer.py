@@ -29,7 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -83,6 +83,9 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 def print_prompt_completions_sample_uld(
@@ -941,6 +944,15 @@ class GOLDTrainer(SFTTrainer):
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
                 ensure_master_addr_port()
 
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+
                 self.vllm_engine = LLM(
                     model=student_model_name_or_path,
                     revision=self.model_revision,
@@ -952,7 +964,7 @@ class GOLDTrainer(SFTTrainer):
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     enable_sleep_mode=self.vllm_enable_sleep_mode,
-                    quantization=self.args.vllm_quantization,
+                    quantization=vllm_quantization,
                 )
 
                 if self.vllm_enable_sleep_mode:
