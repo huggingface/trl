@@ -603,9 +603,11 @@ class GRPOTrainer(BaseTrainer):
                 vllm_quantization = None
                 if is_bitsandbytes_available():
                     for _, module in model.named_modules():
-                        if isinstance(module, (bnb.nn.Linear4bit, bnb.nn. Linear8bitLt)):
+                        if isinstance(module, bnb.nn.Linear4bit):
                             vllm_quantization = "bitsandbytes"
                             break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
