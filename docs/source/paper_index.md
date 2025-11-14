@@ -142,7 +142,7 @@ training_args = GRPOConfig(
     top_p=0.99,
     top_k=100,
     temperature=0.99,
-    num_completions=8, # = num_return_sequences in the paper
+    num_generations=8, # = num_return_sequences in the paper
     num_iterations=1,  # = ppo_epochs in the paper
     per_device_train_batch_size=4,
     gradient_accumulation_steps=32,
@@ -246,7 +246,7 @@ from trl import GRPOConfig
 config = GRPOConfig(
     loss_type="cispo",
     epsilon_high=5.0,
-    num_completions=16,
+    num_generations=16,
     scale_rewards="batch",
     cast_lm_head_to_fp32=True
 )
@@ -556,7 +556,7 @@ training_args = RLOOConfig(
 
 ## Contrastive Preference Optimization
 
-Papers relating to the [`CPOTrainer`]
+Papers relating to the [`experimental.cpo.CPOTrainer`]
 
 ### AlphaPO -- Reward shape matters for LLM alignment
 
@@ -565,7 +565,7 @@ Papers relating to the [`CPOTrainer`]
 AlphaPO is a new Direct Alignment Algorithms (DAAs) method that leverages an alpha-parameter to help change the shape of the reward function beyond the standard log reward. AlphaPO helps maintain fine-grained control over likelihood displacement and over-optimization. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl import CPOConfig
+from trl.experimental.cpo import CPOConfig
 
 # Mistral-Instruct from Table 3 of the paper
 training_args = CPOConfig(
@@ -646,12 +646,12 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`GKDTrainer`] and [`GKDConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.gkd.GKDTrainer`] and [`experimental.gkd.GKDConfig`]:
 
 ```python
-from trl import GKDConfig
+from trl.experimental.gkd import GKDConfig
 
-config = GKDConfig(
+training_args = GKDConfig(
     lmbda=1.0, # student produces rollouts for all batches
     beta=1.0, # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model", # specify the teacher model

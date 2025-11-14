@@ -149,6 +149,7 @@ This constant is recommended to be the maximum completion length. To use this fo
 While training and evaluating, we record the following reward metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `step_time`: The average time (in seconds) taken per training step (including generation).
 - `completions/mean_length`: The average length of generated completions.
 - `completions/min_length`: The minimum length of generated completions.
 - `completions/max_length`: The maximum length of generated completions.

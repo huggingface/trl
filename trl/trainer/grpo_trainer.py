@@ -15,6 +15,7 @@
 import inspect
 import os
 import textwrap
+import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -261,7 +262,7 @@ class GRPOTrainer(BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass  # dtype is already a torch.dtype or "auto" or None
             elif isinstance(dtype, str):  # it's a str, but not "auto"
@@ -272,7 +273,7 @@ class GRPOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
-            # Disable caching if gradient checkpointing is enabled (not supported)
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
@@ -531,8 +532,9 @@ class GRPOTrainer(BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+        self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
-        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -1044,6 +1046,17 @@ class GRPOTrainer(BaseTrainer):
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
+        return output
+
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
@@ -1070,7 +1083,6 @@ class GRPOTrainer(BaseTrainer):
                 generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
                 self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
-            self._step += 1
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
             # local generation batch == local eval batch
@@ -2099,7 +2111,7 @@ class GRPOTrainer(BaseTrainer):
                 else:
                     df = df_base
 
-                if self.wandb_log_unique_prompts:
+                if self.log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
 
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})

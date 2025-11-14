@@ -165,7 +165,7 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 <hfoption id="GKD">
 
 ```python
-from trl import GKDConfig
+from trl.experimental.gkd import GKDConfig
 
 training_args = GKDConfig(..., use_liger_kernel=True)
 ```
@@ -188,7 +188,7 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
 ```
 
 </hfoption>
@@ -197,7 +197,7 @@ training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
 ```
 
 </hfoption>
@@ -274,7 +274,7 @@ training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
 <hfoption id="PPO">
 
 ```python
-from trl import PPOConfig
+from trl.experimental.ppo import PPOConfig
 
 training_args = PPOConfig(..., ds3_gather_for_generation=False)
 ```

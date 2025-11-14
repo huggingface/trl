@@ -24,7 +24,6 @@ import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
-    is_flash_attn_2_available,
     is_kernels_available,
     is_peft_available,
     is_rich_available,
@@ -45,6 +44,7 @@ from trl.import_utils import (
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
+require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_llm_blender = pytest.mark.skipif(not is_llm_blender_available(), reason="test requires llm-blender")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
@@ -85,21 +85,16 @@ require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
 )
 
 
-def is_flash_attn_available():
-    flash_attn_available = is_flash_attn_2_available()
-    kernels_available = is_kernels_available()
-    try:
-        from kernels import get_kernel
+def is_ampere_or_newer(device_index=0):
+    if not torch.cuda.is_available():
+        return False
 
-        get_kernel("kernels-community/flash-attn")
-    except Exception:
-        kernels_available = False
-
-    return kernels_available or flash_attn_available
+    major, minor = torch.cuda.get_device_capability(device_index)
+    # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
+    return (major, minor) >= (8, 0)
 
 
-# Function ported from transformers.testing_utils
-require_flash_attn = pytest.mark.skipif(not is_flash_attn_available(), reason="test requires Flash Attention")
+require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
