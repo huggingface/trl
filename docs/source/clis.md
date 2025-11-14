@@ -26,7 +26,7 @@ Currently supported commands are:
 
 You can launch training directly from the CLI by specifying required arguments like the model and dataset:
 
-<hfoptions id="command_line">
+<hfoptions id="trainer">
 <hfoption id="SFT">
 
 ```bash
@@ -89,7 +89,7 @@ trl kto \
 
 To keep your CLI commands clean and reproducible, you can define all training arguments in a YAML configuration file:
 
-<hfoptions id="config_file">
+<hfoptions id="trainer">
 <hfoption id="SFT">
 
 ```yaml
@@ -192,8 +192,8 @@ TRL CLI natively supports [🤗 Accelerate](https://huggingface.co/docs/accelera
 
 You can pass any `accelerate launch` arguments directly to `trl`, such as `--num_processes`. For more information see [Using accelerate launch](https://huggingface.co/docs/accelerate/en/basic_tutorials/launch#using-accelerate-launch).
 
-<hfoptions id="launch_args">
-<hfoption id="SFT inline">
+<hfoptions id="trainer">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -202,8 +202,7 @@ trl sft \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="SFT w/ config file">
+or, with a config file:
 
 ```yaml
 # sft_config.yaml
@@ -219,7 +218,7 @@ trl sft --config sft_config.yaml
 ```
 
 </hfoption>
-<hfoption id="DPO inline">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
@@ -228,8 +227,7 @@ trl dpo \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="DPO w/ config file">
+or, with a config file:
 
 ```yaml
 # dpo_config.yaml
@@ -245,7 +243,7 @@ trl dpo --config dpo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="Reward inline">
+<hfoption id="Reward">
 
 ```bash
 trl reward \
@@ -254,8 +252,7 @@ trl reward \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="Reward w/ config file">
+or, with a config file:
 
 ```yaml
 # reward_config.yaml
@@ -271,7 +268,7 @@ trl reward --config reward_config.yaml
 ```
 
 </hfoption>
-<hfoption id="GRPO inline">
+<hfoption id="GRPO">
 
 ```bash
 trl grpo \
@@ -281,8 +278,7 @@ trl grpo \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="GRPO w/ config file">
+or, with a config file:
 
 ```yaml
 # grpo_config.yaml
@@ -300,7 +296,7 @@ trl grpo --config grpo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="RLOO inline">
+<hfoption id="RLOO">
 
 ```bash
 trl rloo \
@@ -310,8 +306,7 @@ trl rloo \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="RLOO w/ config file">
+or, with a config file:
 
 ```yaml
 # rloo_config.yaml
@@ -329,7 +324,7 @@ trl rloo --config rloo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="KTO inline">
+<hfoption id="KTO">
 
 ```bash
 trl kto \
@@ -338,8 +333,7 @@ trl kto \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="KTO w/ config file">
+or, with a config file:
 
 ```yaml
 # kto_config.yaml
@@ -382,8 +376,8 @@ To use one of these, just pass the name to `--accelerate_config`. TRL will autom
 
 #### Example Usage
 
-<hfoptions id="accelerate_config">
-<hfoption id="SFT inline">
+<hfoptions id="trainer">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -392,8 +386,7 @@ trl sft \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="SFT w/ config file">
+or, with a config file:
 
 ```yaml
 # sft_config.yaml
@@ -409,7 +402,7 @@ trl sft --config sft_config.yaml
 ```
 
 </hfoption>
-<hfoption id="DPO inline">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
@@ -418,8 +411,7 @@ trl dpo \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="DPO w/ config file">
+or with a config file:
 
 ```yaml
 # dpo_config.yaml
@@ -435,7 +427,7 @@ trl dpo --config dpo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="Reward inline">
+<hfoption id="Reward">
 
 ```bash
 trl reward \
@@ -444,8 +436,7 @@ trl reward \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="Reward w/ config file">
+or, with a config file:
 
 ```yaml
 # reward_config.yaml
@@ -461,7 +452,7 @@ trl reward --config reward_config.yaml
 ```
 
 </hfoption>
-<hfoption id="GRPO inline">
+<hfoption id="GRPO">
 
 ```bash
 trl grpo \
@@ -471,8 +462,7 @@ trl grpo \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="GRPO w/ config file">
+or, with a config file:
 
 ```yaml
 # grpo_config.yaml
@@ -490,7 +480,7 @@ trl grpo --config grpo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="RLOO inline">
+<hfoption id="RLOO">
 
 ```bash
 trl rloo \
@@ -500,8 +490,7 @@ trl rloo \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="RLOO w/ config file">
+or, with a config file:
 
 ```yaml
 # rloo_config.yaml
@@ -519,7 +508,7 @@ trl rloo --config rloo_config.yaml
 ```
 
 </hfoption>
-<hfoption id="KTO inline">
+<hfoption id="KTO">
 
 ```bash
 trl kto \
@@ -528,8 +517,7 @@ trl kto \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="KTO w/ config file">
+or, with a config file:
 
 ```yaml
 # kto_config.yaml
@@ -551,7 +539,7 @@ trl kto --config kto_config.yaml
 
 You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
 
-<hfoptions id="dataset_mixtures">
+<hfoptions id="trainer">
 <hfoption id="SFT">
 
 ```yaml
