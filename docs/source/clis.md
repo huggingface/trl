@@ -142,7 +142,7 @@ trl reward --config reward_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: HuggingFaceH4/Polaris-Dataset-53K
 reward_funcs:
- - accuracy_reward
+  - accuracy_reward
 ```
 
 Launch with:
@@ -285,7 +285,7 @@ or, with a config file:
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: HuggingFaceH4/Polaris-Dataset-53K
 reward_funcs:
- - accuracy_reward
+  - accuracy_reward
 num_processes: 4
 ```
 
@@ -411,7 +411,7 @@ trl dpo \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-or with a config file:
+or, with a config file:
 
 ```yaml
 # dpo_config.yaml
@@ -469,7 +469,7 @@ or, with a config file:
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: HuggingFaceH4/Polaris-Dataset-53K
 reward_funcs:
- - accuracy_reward
+  - accuracy_reward
 accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
 ```
 
@@ -600,7 +600,7 @@ datasets:
   - path: HuggingFaceH4/Polaris-Dataset-53K
   - path: trl-lib/DeepMath-103K
 reward_funcs:
- - accuracy_reward
+  - accuracy_reward
 ```
 
 Launch with:
