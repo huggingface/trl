@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import inspect
 import os
 import textwrap
@@ -22,6 +23,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
+from itertools import takewhile
 from pathlib import Path
 from typing import Any
 
@@ -69,10 +71,10 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
+    add_response_schema,
     disable_dropout_in_model,
     ensure_master_addr_port,
     entropy_from_logits,
-    extract_tool_calls,
     get_config_model_id,
     identity,
     nanmax,
@@ -394,6 +396,11 @@ class GRPOTrainer(BaseTrainer):
         # Tools
         self.tools = tools or []
         self._tool_dict = {tool.__name__: tool for tool in self.tools}
+        # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
+        # While waiting for broader adoption, we provide this utility function to manually set the response schema for
+        # known chat templates.
+        if tools and not processing_class.response_schema:
+            processing_class = add_response_schema(processing_class)
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
@@ -1452,29 +1459,31 @@ class GRPOTrainer(BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
+        # Copy the prompts to avoid modifying the original list
+        prompts = copy.deepcopy(prompts)
+
         prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
 
         # Tool execution loop: check for tool calls and execute them, then regenerate completions with tool results
         # appended to the prompt
-        completion_contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        # parsed_completions = []
-        # for content in completion_contents:
-        #     try:
-        #         parsed_completions.append(self.processing_class.parse_response(content))
-        #     except Exception as e:
-        #         logger.warning(f"Failed to parse model output: {content}\nError: {e}")
-        #         parsed_completions.append(None)
-        # tool_calls = [completion.get("tool_calls") if completion is not None else None for completion in parsed_completions]
-        tool_calls = [extract_tool_calls(content) for content in completion_contents]
+        completions = self.processing_class.parse_response(completion_ids)
+        # Hotfix: when there is a tool call, the content wrongly includes the EOS token, so we remove it here
+        for completion in completions:
+            completion["content"] = completion["content"].removesuffix(self.processing_class.eos_token)
+        completions = [[completion] for completion in completions]  # format as list of messages
+
+        # Check for tool calls
+        tool_calls = [completion[-1].get("tool_calls") for completion in completions]
         idxs_with_tool = [i for i, t in enumerate(tool_calls) if t]  # find indices that actually have a tool call
         tool_calls = [tool_calls[i] for i in idxs_with_tool]
 
         while idxs_with_tool:
-            prompts_for_generation = [prompts[i] for i in idxs_with_tool]
+            prompts_for_generation = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
             for idx, tool_call_list, prompt_for_generation in zip(
                 idxs_with_tool, tool_calls, prompts_for_generation, strict=True
             ):
-                prompt_for_generation.append({"role": "assistant", "content": completion_contents[idx]})
+                # Call the tools, and build the new prompt for generation
+                prompt_for_generation.append(completions[idx][-1])
                 for tool_call in tool_call_list:
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
@@ -1488,6 +1497,7 @@ class GRPOTrainer(BaseTrainer):
                     tool_call["result"] = result
                     tool_message = {"role": "tool", "name": function["name"], "content": str(result)}
                     prompt_for_generation.append(tool_message)
+                    completions[idx].append(tool_message)
 
             prompt_completion_tool_ids, post_tool_ids, _, _ = self._generate_single_turn(prompts_for_generation)
 
@@ -1501,22 +1511,28 @@ class GRPOTrainer(BaseTrainer):
                 if excess_length > 0:
                     post_tool_ids[i] = post_tool_ids[i][:-excess_length]
 
+            # Qwen3 inserts <think>\n\n</think> tokens only for the latest user message which can cause discrepancies
+            # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
+            # common prefix between the two. In most cases, this is a no-op.
+            for idx, pct in zip(idxs_with_tool, prompt_completion_tool_ids, strict=True):
+                prompt_ids[idx] = [
+                    tok for tok, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_ids[idx], pct, strict=False))
+                ]
+
+            # Update completion_ids with the new completions after tool execution
             for idx, pct, post_tool in zip(idxs_with_tool, prompt_completion_tool_ids, post_tool_ids, strict=True):
                 completion_ids[idx] = pct[len(prompt_ids[idx]) :] + post_tool
 
-            cc = self.processing_class.batch_decode(post_tool_ids, skip_special_tokens=True)
-            # parsed_completions = []
-            # for content in cc:
-            #     try:
-            #         parsed_completions.append(self.processing_class.parse_response(content))
-            #     except Exception as e:
-            #         logger.warning(f"Failed to parse model output: {content}\nError: {e}")
-            #         parsed_completions.append(None)
-            # tool_calls = [completion.get("tool_calls") if completion is not None else None for completion in parsed_completions]
-            tool_calls = [extract_tool_calls(content) for content in cc]
-            completion_contents = [None] * len(completion_contents)
-            for i, content in zip(idxs_with_tool, cc, strict=True):
-                completion_contents[i] = content
+            post_tool_completions = self.processing_class.parse_response(post_tool_ids)
+            for completion in post_tool_completions:
+                completion["content"] = completion["content"].removesuffix(self.processing_class.eos_token)
+
+            # Add post-tool completions to the existing completions
+            for idx in range(len(idxs_with_tool)):
+                completions[idxs_with_tool[idx]].append(post_tool_completions[idx])
+
+            # Check for further tool calls
+            tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
             idxs_with_tool = [idx for idx, tc in zip(idxs_with_tool, tool_calls, strict=True) if tc]
             tool_calls = [tc for tc in tool_calls if tc]
 
@@ -1550,7 +1566,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, total_completion_tokens, logprobs, extra_fields
+        return prompt_ids, completion_ids, total_completion_tokens, logprobs, extra_fields, completions
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
@@ -1579,9 +1595,14 @@ class GRPOTrainer(BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
-        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
-            self._generate(prompts)
-        )
+        (
+            prompt_ids_list,
+            completion_ids_list,
+            num_items_in_batch,
+            sampling_per_token_logps_list,
+            extra_fields,
+            completions,
+        ) = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -1694,16 +1715,6 @@ class GRPOTrainer(BaseTrainer):
         # Decode
         prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        if is_conversational(inputs[0]):
-            completions = []
-            for prompt, completion in zip(prompts, completions_text, strict=True):
-                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
-                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
-                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
-                    bootstrap = bootstrap[0]["text"]
-                completions.append([{"role": "assistant", "content": bootstrap + completion}])
-        else:
-            completions = completions_text
 
         # Merge extra_fields from rollout_func into inputs for reward functions
         if extra_fields:

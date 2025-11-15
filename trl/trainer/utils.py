@@ -17,7 +17,6 @@ import importlib.resources as pkg_resources
 import json
 import os
 import random
-import re
 import socket
 import warnings
 from collections.abc import Mapping, Sequence, Sized
@@ -39,12 +38,15 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
+    AutoTokenizer,
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
     PretrainedConfig,
     PreTrainedModel,
+    PreTrainedTokenizer,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     TrainerState,
     TrainingArguments,
     is_comet_available,
@@ -2030,19 +2032,194 @@ def get_config_model_id(config: PretrainedConfig) -> str:
     return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")
 
 
-def extract_tool_calls(text: str) -> list[dict[str, Any]]:
-    """
-    Extract JSON objects from <tool_call>...</tool_call> blocks in `text` and return them in the format: `[{"type":
-    "function", "function": {...}}, ...]`
-    """
-    # Find every block between <tool_call> and </tool_call>
-    blocks = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, flags=re.DOTALL)
+# These schemas are copy-pasted from https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
+cohere_schema = {
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string", "x-regex": r"<\|START_RESPONSE\|>(.*?)(?:<\|END_RESPONSE\|>|$)"},
+        "thinking": {"type": "string", "x-regex": r"<\|START_THINKING\|>(.*?)(?:<\|END_THINKING\|>|$)"},
+        "tool_calls": {
+            "x-regex": r"<\|START_ACTION\|>(.*?)(?:<\|END_ACTION\|>|$)",
+            "x-parser": "json",
+            "x-parser-args": {
+                "transform": "[*].{type: 'function', function: {name: tool_name, arguments: parameters}}"
+            },
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
 
-    result = []
-    for block in blocks:
-        try:
-            parsed = json.loads(block)
-        except json.JSONDecodeError:
-            continue
-        result.append({"type": "function", "function": parsed})
-    return result or None
+ernie_schema = {
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string", "x-regex": "<response>\n(.*?)\n?</response>"},
+        "thinking": {"type": "string", "x-regex": r"(?:^|<think>\s*)(.*?)\s*<\/think>"},
+        "tool_calls": {
+            "x-regex-iterator": "<tool_call>(.*?)</tool_call>",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+gpt_oss_schema = {
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string", "x-regex": r"<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|$)"},
+        "thinking": {"type": "string", "x-regex": r"<\|channel\|>analysis<\|message\|>(.*?)<\|end\|>"},
+        "tool_calls": {
+            "x-regex-iterator": r"<\|channel\|>commentary (to=functions\..*?<\|message\|>.*?)(?:<\|call\|>|$)",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "x-regex": r"^to=functions\.(\w+)"},
+                            "arguments": {
+                                "type": "object",
+                                "x-regex": r"<\|message\|>(.*)",
+                                "x-parser": "json",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+smollm_schema = {
+    "x-regex": r"(?:<think>\n?(?P<thinking>.+?)\n?</think>)?\s*(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?P<content>.+?)?\s*(?:<\|im_end\|>|$)",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "thinking": {"type": "string"},
+        "tool_calls": {
+            "x-parser": "json",
+            "x-parser-args": {"transform": "[{type: 'function', function: @}]"},
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+qwen3_schema = {
+    "x-regex": r"^(?:(?:<think>)?\s*(?P<thinking>.+?)\s*</think>)?\s*(?:<tool_call>(?P<tool_calls>.*?)\s*</tool_call>)?\s*(?P<content>.+?)?\s*$",
+    "type": "object",
+    "properties": {
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "thinking": {"type": "string"},
+        "tool_calls": {
+            "x-regex-iterator": r"^(.*)$",  # We have already extracted tool calls and there can only be one, so just make it a list
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"const": "function"},
+                    "function": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "x-regex": r"<function=(\w+)>"},
+                            "arguments": {
+                                "type": "object",
+                                "x-regex-key-value": r"<parameter=(?P<key>\w+)>\n(?P<value>.*?)\n</parameter>",
+                                "additionalProperties": {
+                                    "x-parser": "json",
+                                    "x-parser-args": {"allow_non_json": True},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+TokenizerOrProcessor = TypeVar("TokenizerOrProcessor", PreTrainedTokenizer, ProcessorMixin)
+
+
+def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor:
+    """
+    Adds the appropriate response schema to the given tokenizer or processor based on its chat template.
+
+    At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
+    waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
+    templates.
+
+    Args:
+        processor (`TokenizerOrProcessor`):
+            Tokenizer or processor to which the response schema will be added.
+
+    Returns:
+        `TokenizerOrProcessor`:
+            Tokenizer or processor with the added response schema.
+    """
+    qwen3_chat_template = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B").chat_template
+    if processor.chat_template == qwen3_chat_template:
+        # The qwen3 response schema seems to be smollm_schema, and not the qwen3_schema. See
+        # https://github.com/huggingface/transformers/issues/42220
+        processor.response_schema = smollm_schema
+        return processor
+    raise ValueError(
+        "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
+        "tokenizer or processor."
+    )
