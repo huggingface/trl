@@ -45,6 +45,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    is_bitsandbytes_available,
     is_trackio_available,
     is_wandb_available,
 )
@@ -96,6 +97,9 @@ if is_wandb_available():
 
 if is_trackio_available():
     import trackio
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 logger = logging.get_logger(__name__)
@@ -513,6 +517,14 @@ class RLOOTrainer(BaseTrainer):
                     max_model_len = self.max_prompt_length + self.max_completion_length
                 else:
                     max_model_len = None
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -528,6 +540,7 @@ class RLOOTrainer(BaseTrainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
+                    quantization=vllm_quantization,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
