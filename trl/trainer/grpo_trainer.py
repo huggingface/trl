@@ -1470,23 +1470,32 @@ class GRPOTrainer(BaseTrainer):
 
         prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
 
+        if is_conversational({"prompt": prompts[0]}):
+            if (
+                version.parse(transformers.__version__) >= version.parse("5.0.0.dev0")  # parse_response added in v5
+                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
+                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+            ):
+                completions = self.processing_class.parse_response(completion_ids)
+                # Hotfix: when there is a tool call, the content wrongly includes the EOS token, so we remove it here
+                for completion in completions:
+                    completion["content"] = completion["content"].removesuffix(self.processing_class.eos_token)
+                completions = [[completion] for completion in completions]  # format as list of messages
+            else:
+                contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+                completions = [[{"role": "assistant", "content": content}] for content in contents]
+        else:
+            completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+
         # Tool execution loop: check for tool calls and execute them, then regenerate completions with tool results
         # appended to the prompt
-        if version.parse(transformers.__version__) >= version.parse("5.0.0.dev0"):
-            completions = self.processing_class.parse_response(completion_ids)
+        if self.tools:
+            # Check for tool calls
+            tool_calls = [completion[0].get("tool_calls") for completion in completions]
+            idxs_with_tool = [i for i, t in enumerate(tool_calls) if t]  # find indices that actually have a tool call
+            tool_calls = [tool_calls[i] for i in idxs_with_tool]
         else:
-            contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-            completions = [{"role": "assistant", "content": content} for content in contents]
-
-        # Hotfix: when there is a tool call, the content wrongly includes the EOS token, so we remove it here
-        for completion in completions:
-            completion["content"] = completion["content"].removesuffix(self.processing_class.eos_token)
-        completions = [[completion] for completion in completions]  # format as list of messages
-
-        # Check for tool calls
-        tool_calls = [completion[-1].get("tool_calls") for completion in completions]
-        idxs_with_tool = [i for i, t in enumerate(tool_calls) if t]  # find indices that actually have a tool call
-        tool_calls = [tool_calls[i] for i in idxs_with_tool]
+            idxs_with_tool = []
 
         while idxs_with_tool:
             prompts_for_generation = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
