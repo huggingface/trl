@@ -1223,7 +1223,7 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": -1 if self.top_k is None else self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "truncate_prompt_tokens": self.max_prompt_length,
+                        # "truncate_prompt_tokens": self.max_prompt_length,
                         "guided_decoding_regex": self.guided_decoding_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
@@ -1309,7 +1309,7 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": -1 if self.top_k is None else self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "truncate_prompt_tokens": self.max_prompt_length,
+                        # "truncate_prompt_tokens": self.max_prompt_length,
                         "guided_decoding": guided_decoding,
                         "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                     }
@@ -1366,7 +1366,7 @@ class GRPOTrainer(BaseTrainer):
 
         elif self.use_transformers_paged:
             processor_kwargs = {
-                "max_length": self.max_prompt_length,
+                # "max_length": self.max_prompt_length,
                 "truncation": True,
                 "add_special_tokens": False,
             }
@@ -1414,7 +1414,7 @@ class GRPOTrainer(BaseTrainer):
                 "return_tensors": "pt",
                 "padding": True,
                 "padding_side": "left",
-                "max_length": self.max_prompt_length,
+                # "max_length": self.max_prompt_length,
                 "truncation": True,
                 "add_special_tokens": False,
             }
