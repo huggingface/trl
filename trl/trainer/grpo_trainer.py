@@ -35,6 +35,7 @@ import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -394,6 +395,11 @@ class GRPOTrainer(BaseTrainer):
         self.rollout_func = rollout_func
 
         # Tools
+        if tools and not version.parse(transformers.__version__) >= version.parse("5.0.0.dev0"):
+            raise ImportError(
+                "Using tools with GRPOTrainer requires transformers version 5.0.0.dev0 or higher. Please upgrade "
+                "transformers to use this feature."
+            )
         self.tools = tools or []
         self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
@@ -1466,7 +1472,12 @@ class GRPOTrainer(BaseTrainer):
 
         # Tool execution loop: check for tool calls and execute them, then regenerate completions with tool results
         # appended to the prompt
-        completions = self.processing_class.parse_response(completion_ids)
+        if version.parse(transformers.__version__) >= version.parse("5.0.0.dev0"):
+            completions = self.processing_class.parse_response(completion_ids)
+        else:
+            contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+            completions = [{"role": "assistant", "content": content} for content in contents]
+
         # Hotfix: when there is a tool call, the content wrongly includes the EOS token, so we remove it here
         for completion in completions:
             completion["content"] = completion["content"].removesuffix(self.processing_class.eos_token)
