@@ -246,6 +246,35 @@ class GRPOConfig(TrainingArguments):
             Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
             (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
             and training backends. TIS is proposed as a remedy for this issue.
+
+        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"token_truncate"`):
+            Controls how importance sampling (IS) is applied to correct for the mismatch between vLLM
+            completion logprobs and recomputed training logprobs when using a separate generation backend.
+            IS reweights the policy gradient to account for off-policy effects. The mode is defined by two orthogonal choices:
+
+            * Constraint: how to handle importance ratios above `vllm_importance_sampling_cap` (C):
+                 - truncation: clip ratios from above, ρ ← min(ρ, C), as in
+                [Your Efficient RL Framework Secretly Brings You Off-Policy RL Training](https://fengyao.notion.site/off-policy-rl)
+                - masking: set ratios above C to zero, so those contributions do not affect the gradient, as in
+                [When Speed Kills Stability: Demystifying RL Collapse from the Training-Inference Mismatch](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)
+
+            * Granularity: the level at which ratios are computed:
+                - token: per-token ratios ρ_t
+                - sequence: a single ratio ρ_seq per sequence, applied to all tokens
+
+            Supported options are:
+                - `"none"`:
+                    Disable importance sampling.
+                - `"token_truncate"`:
+                    Token-level truncated IS (default). Per-token ratios are clipped from above at C.
+                - `"token_mask"`:
+                    Token-level masked IS. Per-token ratios above C are set to zero.
+                - `"sequence_truncate"`:
+                    Sequence-level truncated IS. A single sequence ratio is clipped from above at C and
+                    applied to all tokens in the sequence.
+                - `"sequence_mask"`:
+                    Sequence-level masked IS. Sequences with ratios above C are masked out.
+
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
             Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
             sampling ratio, improving training stability.
@@ -672,6 +701,18 @@ class GRPOConfig(TrainingArguments):
             "proposed as a remedy for this issue."
         },
     )
+
+    vllm_importance_sampling_correction: str = field(
+        default="sequence_mask",
+        metadata={
+            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
+            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
+            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
+            "effects due to subtle implementation differences between generation and training backends. TIS is "
+            "proposed as a remedy for this issue."
+        },
+    )
+
     vllm_importance_sampling_cap: float = field(
         default=2.0,
         metadata={

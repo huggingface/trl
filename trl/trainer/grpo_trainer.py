@@ -1577,10 +1577,28 @@ class GRPOTrainer(BaseTrainer):
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
-                importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
-                importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
-                )
+                token_diff = old_per_token_logps - sampling_per_token_logps
+
+                if self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]:
+                    # sequence level importance sampling
+                    importance_sampling_ratio = token_diff.sum(dim=-1)
+
+                ### from here the importance_sampling_ratio shape depends on the method, for sequence it is ... and for token it is ...
+
+                importance_sampling_ratio = torch.exp(importance_sampling_ratio)
+
+                if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
+                    importance_sampling_ratio = torch.clamp(
+                        importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    )
+                elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    importance_sampling_ratio = importance_sampling_ratio.masked_fill(
+                        importance_sampling_ratio > self.vllm_importance_sampling_cap, 0.0
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown vllm importance sampling level: {self.vllm_importance_sampling_mode}. Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', and 'sequence_mask'."
+                    )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
