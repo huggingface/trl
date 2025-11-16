@@ -397,6 +397,7 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
+        self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
@@ -1577,11 +1578,11 @@ class GRPOTrainer(BaseTrainer):
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
-                token_diff = old_per_token_logps - sampling_per_token_logps
+                token_logps_diff = old_per_token_logps - sampling_per_token_logps
+                token_logps_diff *= completion_mask
 
                 if self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]:
-                    # sequence level importance sampling
-                    importance_sampling_ratio = token_diff.sum(dim=-1)
+                    importance_sampling_ratio = token_logps_diff.sum(dim=-1, keepdim=True)
 
                 ### from here the importance_sampling_ratio shape depends on the method, for sequence it is ... and for token it is ...
 
@@ -1720,7 +1721,7 @@ class GRPOTrainer(BaseTrainer):
                 self.accelerator.gather(max_delta).max().item()
             )
 
-            flat_is_ratio = importance_sampling_ratio[completion_mask.bool()]
+            flat_is_ratio = token_logps_diff[completion_mask.bool()]
             min_importance_sampling_ratio = (
                 torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
             )
