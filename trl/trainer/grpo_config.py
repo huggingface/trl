@@ -241,17 +241,15 @@ class GRPOConfig(TrainingArguments):
             </Deprecated>
 
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
-            Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
-            logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
-            Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
-            (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
-            and training backends. TIS is proposed as a remedy for this issue.
+            Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM
+            completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied
+            regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines
+            how the IS ratios are computed and constrained.
 
-        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"token_truncate"`):
-            Controls how importance sampling (IS) is applied to correct for the mismatch between vLLM
-            completion logprobs and recomputed training logprobs when using a separate generation backend.
-            IS reweights the policy gradient to account for off-policy effects. The mode is defined by two orthogonal choices:
+        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
+            Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`.
 
+            The mode is defined along two orthogonal dimensions:
             * Constraint: how to handle importance ratios above `vllm_importance_sampling_cap` (C):
                  - truncation: clip ratios from above, ρ ← min(ρ, C), as in
                 [Your Efficient RL Framework Secretly Brings You Off-Policy RL Training](https://fengyao.notion.site/off-policy-rl)
@@ -263,8 +261,6 @@ class GRPOConfig(TrainingArguments):
                 - sequence: a single ratio ρ_seq per sequence, applied to all tokens
 
             Supported options are:
-                - `"none"`:
-                    Disable importance sampling.
                 - `"token_truncate"`:
                     Token-level truncated IS (default). Per-token ratios are clipped from above at C.
                 - `"token_mask"`:
@@ -276,8 +272,9 @@ class GRPOConfig(TrainingArguments):
                     Sequence-level masked IS. Sequences with ratios above C are masked out.
 
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
-            Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
-            sampling ratio, improving training stability.
+            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
+            importance ratios are clipped from above at C. For `*_mask` modes, ratios larger than C
+            are set to zero.
 
         > Parameters that control the logging
 
@@ -694,30 +691,38 @@ class GRPOConfig(TrainingArguments):
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
-            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
-            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
-            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
-            "effects due to subtle implementation differences between generation and training backends. TIS is "
-            "proposed as a remedy for this issue."
+            "help": (
+                "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
+                "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
+                "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
+                "IS ratios are computed and constrained."
+            )
         },
     )
 
-    vllm_importance_sampling_correction: str = field(
+    vllm_importance_sampling_mode: str = field(
         default="sequence_mask",
         metadata={
-            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
-            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
-            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
-            "effects due to subtle implementation differences between generation and training backends. TIS is "
-            "proposed as a remedy for this issue."
+            "help": (
+                "Specifies how Importance Sampling (IS) is performed when "
+                "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
+                "dimensions: (1) constraint, which determines how to handle ratios above "
+                "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
+                "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+                "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
+                "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
+                "'sequence_mask'."
+            )
         },
     )
 
     vllm_importance_sampling_cap: float = field(
         default=2.0,
         metadata={
-            "help": "Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the "
-            "importance sampling ratio, improving training stability."
+            "help": (
+                "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+                "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+            )
         },
     )
 
