@@ -38,7 +38,7 @@ Alternatively, you can pass a PEFT config directly in your Python code:
 
 ```python
 from peft import LoraConfig
-from trl import SFTConfig, SFTTrainer
+from trl import SFTTrainer
 
 # Configure LoRA
 peft_config = LoraConfig(
@@ -536,7 +536,7 @@ bnb_config = BitsAndBytesConfig(
 For slightly higher precision with reduced memory savings, you can use 8-bit quantization:
 
 ```python
-from transformers import BitsAndBytesConfig
+from transformers import BitsAndBytesConfig, AutoModelForCausalLM
 
 bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
