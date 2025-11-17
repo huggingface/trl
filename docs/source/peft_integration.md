@@ -69,7 +69,7 @@ TRL provides three different methods to configure PEFT, each suited for differen
 
 ### 1. Using CLI Flags (Simplest)
 
-The easiest way to enable PEFT is using the `--use_peft` flag with the command-line interface. This method is ideal for quick experiments and standard configurations:
+The easiest way to enable PEFT is to use the `--use_peft` flag with the command-line interface. This method is ideal for quick experiments and standard configurations:
 
 ```bash
 python trl/scripts/sft.py \
