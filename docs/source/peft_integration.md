@@ -58,7 +58,6 @@ training_args = SFTConfig(
 # Create trainer with PEFT
 trainer = SFTTrainer(
     model=model,
-    args=training_args,
     train_dataset=dataset,
     peft_config=peft_config,
 )
