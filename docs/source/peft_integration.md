@@ -83,6 +83,7 @@ python trl/scripts/sft.py \
 ```
 
 **Pros**: Quick setup, no code required
+
 **Cons**: Limited to LoRA, fewer customization options
 
 ### 2. Passing peft_config to Trainer (Recommended)
