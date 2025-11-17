@@ -22,7 +22,7 @@ pip install bitsandbytes
 
 ## Quick Start
 
-All TRL trainers support PEFT through the `peft_config` argument. The simplest way to enable PEFT is using the command-line interface with the `--use_peft` flag:
+All TRL trainers support PEFT through the `peft_config` argument. The simplest way to enable PEFT is by using the command-line interface with the `--use_peft` flag:
 
 ```bash
 python trl/scripts/sft.py \
