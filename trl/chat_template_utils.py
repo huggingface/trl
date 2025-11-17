@@ -371,7 +371,7 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
 
     qwen3_chat_template = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B").chat_template
     if tokenizer.chat_template == qwen3_chat_template:
-        chat_template_for_training = qwen3_training_chat_template
+        tokenizer._training_chat_template = qwen3_training_chat_template
     else:
         raise ValueError(
             "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "
@@ -380,7 +380,7 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
 
     @functools.wraps(original_method)
     def wrapper(self, *args, **kwargs):
-        tokenizer.chat_template = chat_template_for_training
+        tokenizer.chat_template = tokenizer._training_chat_template
         try:
             result = original_method(self, *args, **kwargs)
         finally:
@@ -389,3 +389,38 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
 
     tokenizer.apply_chat_template = wrapper
     return tokenizer
+
+
+def parse_response(tokenizer: PreTrainedTokenizer, ids: list[list[int]]) -> list[dict]:
+    """
+    Parse token sequences into structured response dictionaries with fallback handling.
+
+    Attempts to parse each sequence using `tokenizer.parse_response()`. If parsing fails  (e.g., due to malformed tool
+    calls like `<tool_call>{"type":"function"</tool_call>`), falls back to decoding as plain text.
+
+    Also removes incorrectly appended EOS tokens from tool call content when present.
+
+    Args:
+        tokenizer (`PreTrainedTokenizer`):
+            Tokenizer with a `parse_response()` method.
+        ids (`list[list[int]]`):
+            List of token sequences.
+
+    Returns:
+        `list[dict]`:
+            List of response dictionaries.
+    """
+
+    outputs = []
+    for seq in ids:
+        try:
+            parsed = tokenizer.parse_response(seq)
+            # Hotfix: remove incorrectly appended EOS token from tool calls
+            # See https://github.com/huggingface/transformers/issues/42249
+            parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
+        except Exception:
+            # Fallback: decode as plain text if parsing fails. This happens if the model outputs malformed tool calls.
+            content = tokenizer.decode(seq, skip_special_tokens=True)
+            parsed = {"role": "assistant", "content": content}
+        outputs.append(parsed)
+    return outputs

@@ -281,6 +281,7 @@ class VLLMClient:
         guided_decoding_regex: str | None = None,
         generation_kwargs: dict | None = None,
         chat_template_kwargs: dict | None = None,
+        tools: list | None = None,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided chat messages.
@@ -315,6 +316,8 @@ class VLLMClient:
                 will override them.
             chat_template_kwargs (`dict`, *optional*):
                 Additional keyword arguments to customize the chat template used by the model.
+            tools (`list`, *optional*):
+                List of tool functions available for tool calling during chat generation.
 
         Returns:
             `dict` with keys:
@@ -325,6 +328,9 @@ class VLLMClient:
                 - `logprobs` (`list[list[float]]`):
                     List of lists of log probabilities for each generated token.
         """
+        if tools is not None:
+            raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
+
         url = f"{self.base_url}/chat/"
 
         # Convert PIL images to base64 strings

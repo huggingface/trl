@@ -24,7 +24,6 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
-from itertools import takewhile
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +56,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
+from ..chat_template_utils import add_response_schema, parse_response, patch_chat_template_for_training
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -73,7 +73,6 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
-    add_response_schema,
     disable_dropout_in_model,
     ensure_master_addr_port,
     entropy_from_logits,
@@ -121,20 +120,6 @@ RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
 # fields. Any extra fields (per-completion) are forwarded to the reward functions.
 RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
-
-
-def parse_response(processing_class, ids):
-    outputs = []
-    for seq in ids:
-        try:
-            parsed = processing_class.parse_response(seq)
-            # Hotfix: when there is a tool call, the content wrongly includes the EOS token, so we remove it here
-            parsed["content"] = parsed["content"].removesuffix(processing_class.eos_token)
-        except Exception:
-            content = processing_class.decode(seq, skip_special_tokens=True)
-            parsed = {"role": "assistant", "content": content}
-        outputs.append(parsed)
-    return outputs
 
 
 class GRPOTrainer(BaseTrainer):
@@ -424,6 +409,7 @@ class GRPOTrainer(BaseTrainer):
         # known chat templates.
         if tools and not processing_class.response_schema:
             processing_class = add_response_schema(processing_class)
+            processing_class = patch_chat_template_for_training(processing_class)
 
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
@@ -663,6 +649,7 @@ class GRPOTrainer(BaseTrainer):
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
                     quantization=vllm_quantization,
+                    enforce_eager=True,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
@@ -1199,6 +1186,7 @@ class GRPOTrainer(BaseTrainer):
 
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
+        # all_prompts = copy.deepcopy(all_prompts)  # to avoid modifying the input list
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1214,6 +1202,16 @@ class GRPOTrainer(BaseTrainer):
 
             if is_conversational({"prompt": prompts[0]}):
                 prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
+
+            # In vLLM, tool call arguments must be JSON strings.
+            # See https://github.com/vllm-project/vllm/pull/28820
+            for prompt in prompts:  # iterate over each conversation
+                for message in prompt:  # iterate over each message
+                    if "tool_calls" in message:  # check if message has tool calls
+                        for call in message["tool_calls"]:
+                            args = call["function"]["arguments"]
+                            if isinstance(args, dict):  # only convert dict → JSON string
+                                call["function"]["arguments"] = json.dumps(args)
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
@@ -1253,6 +1251,7 @@ class GRPOTrainer(BaseTrainer):
                                     messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
+                                    tools=self.tools,
                                 )
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
@@ -1340,20 +1339,13 @@ class GRPOTrainer(BaseTrainer):
 
                     with profiling_context(self, "vLLM.generate"):
                         if is_conversational({"prompt": prompts[0]}):
-                            all_prompts = copy.deepcopy(all_prompts)
-                            for conv in all_prompts:  # iterate over each conversation
-                                for msg in conv:  # iterate over each message
-                                    if "tool_calls" in msg:  # check if message has tool calls
-                                        for call in msg["tool_calls"]:
-                                            args = call["function"]["arguments"]
-                                            if isinstance(args, dict):  # only convert dict → JSON string
-                                                call["function"]["arguments"] = json.dumps(args)
                             all_outputs = self.llm.chat(
                                 all_prompts,
                                 sampling_params=sampling_params,
                                 use_tqdm=False,
                                 chat_template_kwargs=self.chat_template_kwargs,
                                 tools=self.tools,
+                                chat_template=self.processing_class._training_chat_template,
                             )
                         else:
                             all_outputs = self.llm.generate(
@@ -1486,7 +1478,6 @@ class GRPOTrainer(BaseTrainer):
         prompts = copy.deepcopy(prompts)
 
         prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
-        completion_mask = [[1] * len(ids) for ids in completion_ids]
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
@@ -1508,8 +1499,10 @@ class GRPOTrainer(BaseTrainer):
             tool_calls = [completion[0].get("tool_calls") for completion in completions]
             idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
             tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
+            tool_mask = [[0] * len(ids) for ids in completion_ids]
         else:
             idxs_with_tool = []
+            tool_mask = None
 
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         while idxs_with_tool:
@@ -1547,10 +1540,12 @@ class GRPOTrainer(BaseTrainer):
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
-                prompt_ids[idx_with_tool] = [
-                    tok
-                    for tok, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_ids[idx_with_tool], pct, strict=False))
-                ]
+                # prompt_ids[idx_with_tool] = [
+                #     tok
+                #     for tok, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_ids[idx_with_tool], pct, strict=False))
+                # ]
+                # sanity check
+                assert prompt_ids[idx_with_tool] == pct[: len(prompt_ids[idx_with_tool])]
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for idx in range(len(idxs_with_tool)):
@@ -1568,7 +1563,7 @@ class GRPOTrainer(BaseTrainer):
                         # If still exceeding max length, truncate completion_tool_ids as well
                         prompt_completion_tool_ids[idx] = completion_tool_ids[:-excess_length]
 
-            # Update completion_mask: the tool result should be 0 and the post-tool 1
+            # Update tool_mask: the tool result should be 1 and the post-tool 0
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
@@ -1576,7 +1571,7 @@ class GRPOTrainer(BaseTrainer):
                 completion_length = len(completion_ids[idx_with_tool])
                 post_tool_length = len(post_tool_ids[idx])
                 tool_length = prompt_completion_tool_length - prompt_length - completion_length
-                completion_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+                tool_mask[idx_with_tool] += [1] * tool_length + [0] * post_tool_length
                 if logprobs is not None:
                     logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
 
@@ -1633,11 +1628,11 @@ class GRPOTrainer(BaseTrainer):
         return (
             prompt_ids,
             completion_ids,
-            completion_mask,
+            tool_mask,
+            completions,
             total_completion_tokens,
             logprobs,
             extra_fields,
-            completions,
         )
 
     def _generate_and_score_completions(
@@ -1670,11 +1665,11 @@ class GRPOTrainer(BaseTrainer):
         (
             prompt_ids_list,
             completion_ids_list,
-            completion_mask_list,
+            tool_mask_list,
+            completions,
             num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
-            completions,
         ) = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
@@ -1683,7 +1678,7 @@ class GRPOTrainer(BaseTrainer):
         prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
         prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
-        completion_mask = [torch.tensor(ids, device=device) for ids in completion_mask_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
         if sampling_per_token_logps_list is not None:
@@ -1691,6 +1686,9 @@ class GRPOTrainer(BaseTrainer):
             sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
         else:
             sampling_per_token_logps = None
+        if self.tools:
+            tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
+            tool_mask = pad(tool_mask, padding_value=0, padding_side="right")
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1859,7 +1857,8 @@ class GRPOTrainer(BaseTrainer):
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            delta = delta[completion_mask.bool()]
+            mask = completion_mask.bool() if self.tools is None else (completion_mask * (1 - tool_mask)).bool()
+            delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
@@ -1869,7 +1868,7 @@ class GRPOTrainer(BaseTrainer):
                 self.accelerator.gather(max_delta).max().item()
             )
 
-            flat_is_ratio = importance_sampling_ratio[completion_mask.bool()]
+            flat_is_ratio = importance_sampling_ratio[mask]
             min_importance_sampling_ratio = (
                 torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
             )
@@ -1915,6 +1914,8 @@ class GRPOTrainer(BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
+        if self.tools is not None:
+            output["tool_mask"] = tool_mask
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -2059,31 +2060,32 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
+        mask = completion_mask if self.tools is None else completion_mask * (1 - inputs["tool_mask"])
         if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type in ["cispo", "dapo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * completion_mask).sum() / normalizer
+            loss = (per_token_loss * mask).sum() / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        completion_token_count = completion_mask.sum().clamp(min=1.0)
+        completion_token_count = mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
             if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
                 return x.mean()
             else:
-                return (x * completion_mask).sum() / completion_token_count
+                return (x * mask).sum() / completion_token_count
 
         if self.beta != 0.0:
             mean_kl = masked_batch_mean(per_token_kl)
