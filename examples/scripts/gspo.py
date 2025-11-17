@@ -36,7 +36,6 @@ accelerate launch \
     --output_dir gspo-Qwen3-0.6B \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
-    --max_prompt_length 2048 \
     --max_completion_length 1024 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \

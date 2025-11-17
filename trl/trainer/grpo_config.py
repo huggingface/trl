@@ -50,8 +50,6 @@ class GRPOConfig(TrainingArguments):
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
@@ -345,12 +343,6 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
             "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
-        },
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
         },
     )
     num_generations: int | None = field(

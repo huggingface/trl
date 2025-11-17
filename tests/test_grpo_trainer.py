@@ -1325,7 +1325,6 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1567,7 +1566,6 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            max_prompt_length=18,
             report_to="none",
             use_vllm=True,
             vllm_mode="server",
@@ -1609,7 +1607,6 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2059,7 +2056,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             gradient_accumulation_steps=2,  # Maintain effective batch size
             num_generations=2,
             max_completion_length=8,  # Much shorter completions
-            max_prompt_length=None,  # Don't limit prompt length for VLM
             bf16=True,  # Use bfloat16 precision
             max_steps=1,  # Only do 1 training step to save time and memory
             report_to="none",

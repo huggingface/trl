@@ -291,7 +291,6 @@ hf jobs uv run \
     --warmup_ratio 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
-    --max_prompt_length 1024 \
     --max_completion_length 4096 \
     --num_generations 16 \
     --generation_batch_size 16 \
@@ -326,7 +325,6 @@ uv run "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/
     --warmup_ratio 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
-    --max_prompt_length 1024 \
     --max_completion_length 4096 \
     --num_generations 16 \
     --generation_batch_size 16 \
