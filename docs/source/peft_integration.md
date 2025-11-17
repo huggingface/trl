@@ -147,6 +147,7 @@ trainer = SFTTrainer(
 ```
 
 **Pros**: Maximum control, useful for custom model architectures or complex setups
+
 **Cons**: More verbose, requires understanding of PEFT internals
 
 ## Learning Rate Considerations
