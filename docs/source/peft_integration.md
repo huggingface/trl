@@ -112,6 +112,7 @@ trainer = SFTTrainer(
 ```
 
 **Pros**: Full control, supports all PEFT methods (LoRA, Prompt Tuning, etc.)
+
 **Cons**: Requires Python code
 
 ### 3. Applying PEFT to Model Directly (Advanced)
