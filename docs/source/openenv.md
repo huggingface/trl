@@ -25,16 +25,14 @@ A rollout function must have the following signature:
 ```python
 def rollout_func(
     prompts: list[str],
-    args: GRPOConfig,
-    processing_class
+    trainer: GRPOTrainer,
 ) -> dict[str, list]:
     """
     Custom rollout function for generation and reward computation.
 
     Args:
-        prompts: List of prompts to generate from
-        args: GRPOConfig containing sampling parameters (temperature, top_p, etc.)
-        processing_class: Tokenizer/processor for encoding/decoding
+        prompts: List of prompts routed to the current process
+        trainer: Active GRPOTrainer (gives access to tokenizer, config and helper utilities)
 
     Returns:
         Dictionary containing:
@@ -54,7 +52,7 @@ def rollout_func(
 The typical pattern when combining OpenEnv with TRL looks like this:
 
 1. Start or connect to an OpenEnv environment (e.g., an HTTP endpoint or Dockerized env).
-2. Generate completions from your model — for example, via a vLLM inference server (`use_vllm=True`, `vllm_mode="server"`).
+2. Generate completions from your model — either via `trl.experimental.openenv.generate_rollout_completions` when using colocated vLLM, or by hitting your inference server when using vLLM in server mode.
 3. Step through the environment using each completion to compute rewards or metrics.
 4. Add environment results (e.g., `env_reward`) to the rollout result dict.
 5. Access those rewards inside your reward function via `**kwargs`.
@@ -64,6 +62,40 @@ By using OpenEnv in this loop, you can:
 * Train with realistic or interactive feedback (not just static reward functions).
 * Plug in custom simulators, web APIs, or evaluators as environments.
 * Pass structured reward signals back into RL training seamlessly.
+
+### vLLM Modes
+
+TRL supports two vLLM execution modes for generation:
+
+- **`colocate` mode** (default): vLLM runs in the same process as training. Requires 1 GPU. Use `trl.experimental.openenv.generate_rollout_completions` for generation.
+- **`server` mode**: vLLM runs as a separate server process. Requires at least 2 GPUs (one for vLLM server, one for training), but is highly scalable:
+  - You can allocate multiple GPUs to the vLLM server for tensor parallelism (faster inference)
+  - You can run multiple training processes that share the same vLLM server
+  - You can use different GPU types for inference vs training (e.g., A100 for vLLM, H100 for training)
+  - The vLLM server can serve multiple experiments simultaneously
+  - Use `trl.experimental.openenv.generate_rollout_completions` which will communicate with the server via `vllm_server_url`
+
+Configure the mode via `GRPOConfig`:
+
+```python
+# Colocate mode (1 GPU)
+args = GRPOConfig(
+    use_vllm=True,
+    vllm_mode="colocate",
+    # ... other args
+)
+
+# Server mode (2+ GPUs, scalable)
+args = GRPOConfig(
+    use_vllm=True,
+    vllm_mode="server",
+    vllm_server_url="http://localhost:8000",
+    # ... other args
+)
+
+# Example: Start vLLM server with multiple GPUs for tensor parallelism
+# CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen3-1.7B --tensor-parallel-size 4
+```
 
 ## Running the Environments
 
@@ -158,6 +190,7 @@ The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/open
 ```python
 from envs.echo_env import EchoEnv, EchoAction
 from trl import GRPOConfig, GRPOTrainer
+from trl.experimental.openenv import generate_rollout_completions
 
 # Create HTTP client for Echo Environment
 client = EchoEnv.from_hub("openenv/echo-env")
@@ -172,21 +205,13 @@ docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
 client = EchoEnv(base_url="http://0.0.0.0:8001")
 """
 
-def rollout_func(prompts, args, processing_class):
-    # 1. Generate completions via vLLM inference server (running on port 8000)
-    payload = {
-        "prompts": prompts,
-        "n": args.num_generations,
-        "temperature": args.temperature,
-        "max_tokens": args.max_completion_length,
-    }
-    response = requests.post("http://0.0.0.0:8000/generate/", json=payload)
-    result = response.json()
-
-    completions_text = processing_class.batch_decode(
-        result["completion_ids"],
-        skip_special_tokens=True
-    )
+def rollout_func(prompts: list[str], trainer: GRPOTrainer):
+    # 1. Generate completions using TRL's helper (works for colocated vLLM)
+    outputs = generate_rollout_completions(trainer, prompts)
+    tokenizer = trainer.processing_class
+    completions_text = [
+        tokenizer.decode(out["completion_ids"], skip_special_tokens=True) for out in outputs
+    ]
 
     # 2. Step through the environment to get rewards
     client.reset()
@@ -196,8 +221,12 @@ def rollout_func(prompts, args, processing_class):
         env_rewards.append(env_result.reward)
 
     # 3. Add environment rewards as extra field
-    result["env_reward"] = env_rewards
-    return result
+    return {
+        "prompt_ids": [out["prompt_ids"] for out in outputs],
+        "completion_ids": [out["completion_ids"] for out in outputs],
+        "logprobs": [out["logprobs"] for out in outputs],
+        "env_reward": env_rewards,
+    }
 
 def reward_from_env(completions, **kwargs):
     """Extract environment rewards passed via rollout_func kwargs."""
@@ -213,8 +242,8 @@ trainer = GRPOTrainer(
     train_dataset=dataset,
     rollout_func=rollout_func,  # Use custom rollout
     args=GRPOConfig(
-        vllm_mode="server",
         use_vllm=True,
+        vllm_mode="colocate",  # Use colocate mode (default)
         num_train_epochs=1,
         num_generations=8,
         max_completion_length=2048,
@@ -225,27 +254,54 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-That's it! Now that you’ve seen the full example, let’s unpack how the main pieces fit together.
+That's it! Now that you've seen the full example, let's unpack how the main pieces fit together.
 
-1. **Environment Client:** `EchoEnv` implements an HTTP interface to interact with the environment server.  
-2. **Custom rollout:** The `rollout_func` generates completions and steps through the environment to collect rewards.  
-3. **Extra fields:** The rollout adds `env_reward` to the result dictionary, which is automatically passed to reward functions.  
+1. **Environment Client:** `EchoEnv` implements an HTTP interface to interact with the environment server.
+2. **Custom rollout:** The `rollout_func` generates completions and steps through the environment to collect rewards.
+3. **Extra fields:** The rollout adds `env_reward` to the result dictionary, which is automatically passed to reward functions.
 4. **Reward function:** Extracts `env_reward` from `kwargs` to apply environment-computed rewards during training.
 
-> [!WARNING]
-> The `rollout_func` is currently only supported when using vLLM in server mode (`use_vllm=True`, `vllm_mode="server"`).
+> [!TIP]
+> The trainer-aware rollout hook works in both vLLM server and colocate modes. Use `trl.experimental.openenv.generate_rollout_completions` so you reuse TRL's sampling configuration automatically.
 
 ### Running the Example
 
-The example requires two GPUs:
+You can run the example in either colocate mode (1 GPU) or server mode (2 GPUs):
+
+<hfoptions id="vllm_mode">
+
+<hfoption id="colocate">
+
+**Colocate mode (1 GPU, recommended)**
+
+```bash
+python examples/scripts/openenv/echo.py --vllm-mode colocate
+```
+
+This runs vLLM in the same process as training, requiring only a single GPU.
+
+</hfoption>
+
+<hfoption id="server">
+
+**Server mode (2+ GPUs, scalable)**
 
 ```bash
 # Terminal 1: Start vLLM inference server
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 
 # Terminal 2: Run GRPO training with OpenEnv
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
+
+This runs vLLM as a separate server process, useful when you want to:
+- Share the inference server across multiple training jobs
+- Use multiple GPUs for the vLLM server (via `--tensor-parallel-size`)
+- Scale up training to many GPUs while sharing a single inference endpoint
+
+</hfoption>
+
+</hfoptions>
 
 Alternatively, you can manually start the Echo environment in a Docker container before running the training:
 
@@ -303,12 +359,12 @@ The rollout function runs one full Wordle episode, prompting the model for a gue
 
 ```python
 def rollout_once(
+    trainer: GRPOTrainer,
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
-    args: GRPOConfig,
     dataset_prompt: str,
-    cli_args: argparse.Namespace,
     system_prompt: str,
+    max_turns: int,
 ) -> dict[str, list]:
     result = env.reset()
     observation = result.observation
@@ -323,7 +379,7 @@ def rollout_once(
     correct_scores: list[float] = []
     guess_counts: dict[str, int] = {}
 
-    for _turn in range(cli_args.max_turns):
+    for _turn in range(max_turns):
         # when the game is over the environment will return a done=True
         if result.done:
             break
@@ -342,20 +398,15 @@ def rollout_once(
             enable_thinking=False,
         )
 
-        # generate the completion from the model using vLLM
-        vllm_result = request_vllm_completion(
-            prompt_text,
-            args,
-            endpoint=cli_args.vllm_endpoint,
-            timeout=cli_args.request_timeout,
-            fallback=cli_args,
+        # Generate completion using trainer (works for both colocate and server modes)
+        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
+        prompt_ids.extend(rollout_outputs["prompt_ids"])
+        completion_ids.extend(rollout_outputs["completion_ids"])
+        logprobs.extend(rollout_outputs["logprobs"])
+        completion_text = rollout_outputs.get("text") or tokenizer.decode(
+            rollout_outputs["completion_ids"], skip_special_tokens=True
         )
-        prompt_ids.extend(vllm_result["prompt_ids"])
-        completion_ids.extend(vllm_result["completion_ids"])
-        logprobs.extend(vllm_result["logprobs"])
-        completion_text = vllm_result.get("text") or tokenizer.decode(
-            vllm_result["completion_ids"], skip_special_tokens=True
-        )
+
         # extract the guess from the completion
         guess = extract_guess(completion_text)
 
@@ -367,9 +418,9 @@ def rollout_once(
         feedback = extract_wordle_feedback(observation)
 
         # Update guess counts
-        previous_occurrences = guess_counts[guess]
+        previous_occurrences = guess_counts.get(guess, 0)
         repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
-        guess_counts[guess] += 1
+        guess_counts[guess] = previous_occurrences + 1
 
         # calculate custom reward signals from the feedback
         if not feedback:
@@ -451,11 +502,11 @@ trainer = GRPOTrainer(
     ],
     train_dataset=dataset,
     args=grpo_config,
-    rollout_func=lambda prompts, args, processing_class: rollout_func(
+    rollout_func=lambda prompts, trainer: rollout_func(
         env=env,
         tokenizer=tokenizer,
         prompts=prompts,
-        args=args,
+        trainer=trainer,
         cli_args=cli_args,
         system_prompt=system_prompt,
     ),
@@ -465,26 +516,51 @@ trainer.train()
 
 ### Running the Advanced Example
 
-The example requires two GPUs:
+You can run the Wordle example in either colocate mode (1 GPU) or server mode (2 GPUs):
+
+<hfoptions id="wordle_vllm_mode">
+
+<hfoption id="colocate">
+
+**Colocate mode (1 GPU, recommended)**
+
+```bash
+python examples/scripts/openenv/wordle.py --vllm-mode colocate
+```
+
+This runs vLLM in the same process as training, requiring only a single GPU.
+
+</hfoption>
+
+<hfoption id="server">
+
+**Server mode (2+ GPUs, scalable)**
 
 ```bash
 # Terminal 1: Start vLLM inference server
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
 
 # Terminal 2: Run GRPO training with OpenEnv
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 
-Again, you can manually start the TextArena environment in a Docker container before running the training.
-In this case, initialize the client with
-`client = TextArenaEnv(base_url="http://0.0.0.0:8001")`
-instead of
-`client = TextArenaEnv.from_docker_image("registry.hf.space/burtenshaw-textarena:latest")`:
+This runs vLLM as a separate server process, useful when you want to:
+- Share the inference server across multiple training jobs
+- Use multiple GPUs for the vLLM server (via `--tensor-parallel-size`)
+- Scale up training to many GPUs while sharing a single inference endpoint
+
+</hfoption>
+
+</hfoptions>
+
+You can also manually start the TextArena environment in a Docker container before running the training:
 
 ```bash
 # Launch the TextArena environment
 docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
 ```
+
+Then connect to it using `--env-url http://localhost:8001`.
 
 ### Results
 

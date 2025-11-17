@@ -66,8 +66,6 @@
       title: KTO
     - local: orpo_trainer
       title: ORPO
-    - local: ppo_trainer
-      title: PPO
     - local: prm_trainer
       title: PRM
     - local: reward_trainer
@@ -119,6 +117,8 @@
     title: Nash-MD
   - local: papo_trainer
     title: PAPO
+  - local: ppo_trainer
+    title: PPO
   - local: xpo_trainer
     title: XPO
   - local: openenv

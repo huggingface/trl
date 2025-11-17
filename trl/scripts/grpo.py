@@ -27,6 +27,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 
+import torch
 from accelerate import logging
 from datasets import load_dataset
 
@@ -38,7 +39,9 @@ from trl import (
     ScriptArguments,
     TrlParser,
     get_dataset,
+    get_kbit_device_map,
     get_peft_config,
+    get_quantization_config,
 )
 from trl.rewards import accuracy_reward, get_soft_overlong_punishment, think_format_reward
 
@@ -112,6 +115,21 @@ def main(script_args, training_args, model_args, dataset_args):
                     f"Could not load reward function '{func_name}'. Expected one of "
                     f"{list(reward_funcs_registry.keys())} or a valid import path."
                 )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
+        dtype=dtype,
+    )
+    quantization_config = get_quantization_config(model_args)
+
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
+    training_args.model_init_kwargs = model_kwargs
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
