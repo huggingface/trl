@@ -15,6 +15,7 @@
 import inspect
 import os
 import textwrap
+import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -44,6 +45,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    is_bitsandbytes_available,
     is_trackio_available,
     is_wandb_available,
 )
@@ -99,6 +101,8 @@ if is_wandb_available():
 if is_trackio_available():
     import trackio
 
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 logger = logging.get_logger(__name__)
 
@@ -106,10 +110,10 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 
-# What we call a rollout function is a callable that takes prompts (list), args (GRPOConfig), and processing_class as
-# parameters and returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and
-# "logprobs" fields. Any extra fields (per-completion) are forwarded to the reward functions.
-RolloutFunc = Callable[[list[str], Any, Any], dict[str, Any]]
+# What we call a rollout function is a callable that takes prompts (list) and the trainer instance as parameters and
+# returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
+# fields. Any extra fields (per-completion) are forwarded to the reward functions.
+RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
 
 
 class GRPOTrainer(BaseTrainer):
@@ -213,10 +217,10 @@ class GRPOTrainer(BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         rollout_func (`RolloutFunc`, *optional*):
-            Function to use for generating completions. It must take prompts, args, and processing_class as parameters
-            and return a dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields that
-            are forwarded to the reward functions. This feature is experimental and may change or be removed at any
-            time without prior notice.
+            Function to use for generating completions. It receives the list of prompts allocated to the current
+            process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
+            `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
+            and may change or be removed at any time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -517,6 +521,7 @@ class GRPOTrainer(BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+        self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
         self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
@@ -580,6 +585,15 @@ class GRPOTrainer(BaseTrainer):
                     max_model_len = self.max_prompt_length + self.max_completion_length
                 else:
                     max_model_len = None
+
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -597,6 +611,7 @@ class GRPOTrainer(BaseTrainer):
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
+                    quantization=vllm_quantization,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
@@ -985,6 +1000,17 @@ class GRPOTrainer(BaseTrainer):
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
+        return output
+
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
@@ -1011,7 +1037,6 @@ class GRPOTrainer(BaseTrainer):
                 generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
                 self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
-            self._step += 1
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
             # local generation batch == local eval batch
@@ -1118,18 +1143,15 @@ class GRPOTrainer(BaseTrainer):
                     }
                     with profiling_context(self, "vLLM.generate"):
                         if self.rollout_func is not None:
-                            if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                                ordered_set_of_prompts = [
+                            rollout_prompts = ordered_set_of_prompts
+                            if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
+                                rollout_prompts = [
                                     apply_chat_template(
                                         {"prompt": p}, self.processing_class, **self.chat_template_kwargs
                                     )["prompt"]
-                                    for p in ordered_set_of_prompts
+                                    for p in rollout_prompts
                                 ]
-                            output = self.rollout_func(
-                                ordered_set_of_prompts,
-                                self.args,
-                                self.processing_class,
-                            )
+                            output = self.rollout_func(rollout_prompts, self)
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 output = self.vllm_client.chat(
@@ -1172,71 +1194,89 @@ class GRPOTrainer(BaseTrainer):
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
-                if self.guided_decoding_regex:
-                    guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
+                if self.rollout_func is not None:
+                    rollout_prompts = prompts
+                    if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
+                        rollout_prompts = [
+                            apply_chat_template(
+                                {"prompt": prompt}, self.processing_class, **self.chat_template_kwargs
+                            )["prompt"]
+                            for prompt in rollout_prompts
+                        ]
+                    output = self.rollout_func(rollout_prompts, self)
+                    required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+                    extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+                    prompt_ids = output["prompt_ids"]
+                    completion_ids = output["completion_ids"]
+                    logprobs = output["logprobs"]
                 else:
-                    guided_decoding = None
-
-                generation_kwargs = {
-                    "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
-                    "repetition_penalty": self.repetition_penalty,
-                    "temperature": self.temperature,
-                    "top_p": self.top_p,
-                    "top_k": -1 if self.top_k is None else self.top_k,
-                    "min_p": 0.0 if self.min_p is None else self.min_p,
-                    "max_tokens": self.max_completion_length,
-                    "truncate_prompt_tokens": self.max_prompt_length,
-                    "guided_decoding": guided_decoding,
-                    "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
-                }
-                if self.args.generation_kwargs is not None:
-                    generation_kwargs.update(self.args.generation_kwargs)
-                sampling_params = SamplingParams(**generation_kwargs)
-
-                if self.vllm_tensor_parallel_size > 1:
-                    # Gather prompts from all ranks in the TP group and flatten.
-                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
-                    orig_size = len(prompts)
-                    gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
-                    torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
-                    all_prompts = [p for sublist in gathered_prompts for p in sublist]
-                else:
-                    all_prompts = prompts
-
-                if self.args.vllm_enable_sleep_mode:
-                    self.llm.wake_up(tags=["kv_cache"])
-
-                with profiling_context(self, "vLLM.generate"):
-                    if is_conversational({"prompt": prompts[0]}):
-                        all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                    if self.guided_decoding_regex:
+                        guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
                     else:
-                        all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                        guided_decoding = None
 
-                all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
-                all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-                all_logprobs = [
-                    [next(iter(lp.values())).logprob for lp in output.logprobs]
-                    for outputs in all_outputs
-                    for output in outputs.outputs
-                ]
+                    generation_kwargs = {
+                        "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
+                        "repetition_penalty": self.repetition_penalty,
+                        "temperature": self.temperature,
+                        "top_p": self.top_p,
+                        "top_k": -1 if self.top_k is None else self.top_k,
+                        "min_p": 0.0 if self.min_p is None else self.min_p,
+                        "max_tokens": self.max_completion_length,
+                        "truncate_prompt_tokens": self.max_prompt_length,
+                        "guided_decoding": guided_decoding,
+                        "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
+                    }
+                    if self.args.generation_kwargs is not None:
+                        generation_kwargs.update(self.args.generation_kwargs)
+                    sampling_params = SamplingParams(**generation_kwargs)
 
-                if self.vllm_tensor_parallel_size > 1:
-                    # Slice completions for this rank within its TP group.
-                    # Each rank generates all outputs — we keep only our share.
-                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
-                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
-                    prompt_ids = all_prompt_ids[tp_slice]
-                    completion_ids = all_completion_ids[tp_slice]
-                    logprobs = all_logprobs[tp_slice]
-                else:
-                    prompt_ids = all_prompt_ids
-                    completion_ids = all_completion_ids
-                    logprobs = all_logprobs
+                    if self.vllm_tensor_parallel_size > 1:
+                        # Gather prompts from all ranks in the TP group and flatten.
+                        # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                        orig_size = len(prompts)
+                        gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                        torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
+                        all_prompts = [p for sublist in gathered_prompts for p in sublist]
+                    else:
+                        all_prompts = prompts
 
-                extra_fields = {}  # No extra fields for colocate mode
+                    if self.args.vllm_enable_sleep_mode:
+                        self.llm.wake_up(tags=["kv_cache"])
 
-                if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=2)
+                    with profiling_context(self, "vLLM.generate"):
+                        if is_conversational({"prompt": prompts[0]}):
+                            all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                        else:
+                            all_outputs = self.llm.generate(
+                                all_prompts, sampling_params=sampling_params, use_tqdm=False
+                            )
+
+                    all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
+                    all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+                    all_logprobs = [
+                        [next(iter(lp.values())).logprob for lp in output.logprobs]
+                        for outputs in all_outputs
+                        for output in outputs.outputs
+                    ]
+
+                    if self.vllm_tensor_parallel_size > 1:
+                        # Slice completions for this rank within its TP group.
+                        # Each rank generates all outputs — we keep only our share.
+                        local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                        tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                        prompt_ids = all_prompt_ids[tp_slice]
+                        completion_ids = all_completion_ids[tp_slice]
+                        logprobs = all_logprobs[tp_slice]
+                    else:
+                        prompt_ids = all_prompt_ids
+                        completion_ids = all_completion_ids
+                        logprobs = all_logprobs
+
+                    extra_fields = {}  # No extra fields for colocate mode
+
+                    if self.args.vllm_enable_sleep_mode:
+                        self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
             processor_kwargs = {

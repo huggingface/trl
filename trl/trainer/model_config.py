@@ -43,8 +43,8 @@ class ModelConfig:
             be set to `True` for repositories you trust and in which you have read the code, as it will execute code
             present on the Hub on your local machine.
         attn_implementation (`str`, *optional*):
-            Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in which case
-            you must install this manually by running `pip install flash-attn --no-build-isolation`.
+            Which attention implementation to use. More information in the [Kernels Hub Integrations
+            Guide](kernels_hub).
         use_peft (`bool`, *optional*, defaults to `False`):
             Whether to use PEFT for training.
         lora_r (`int`, *optional*, defaults to `16`):
@@ -175,6 +175,10 @@ class ModelConfig:
     use_bnb_nested_quant: bool = field(
         default=False,
         metadata={"help": "Whether to use nested quantization."},
+    )
+    bnb_4bit_quant_storage: str | None = field(
+        default=None,
+        metadata={"help": "Quantization storage dtype"},
     )
     # Deprecated params
     torch_dtype: str | None = field(

@@ -28,8 +28,8 @@ Below is the script to train the model:
 ```python
 # train_nash_md.py
 from datasets import load_dataset
-from trl import NashMDConfig, NashMDTrainer
 from trl.experimental.judges import PairRMJudge
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -64,7 +64,7 @@ The best programming language depends on personal preference, the complexity of 
 
 ## Expected dataset type
 
-Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`experimental.nash_md.NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -91,7 +91,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
 
 ### Encourage EOS token generation
 
-We may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`NashMDConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`NashMDConfig`]:
+We may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`experimental.nash_md.NashMDConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`experimental.nash_md.NashMDConfig`]:
 
 ```python
 training_args = NashMDConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
@@ -144,16 +144,16 @@ While training and evaluating, we record the following reward metrics:
 * `logps/rejected`: The mean log probabilities of the reference completions.
 * `val/model_contain_eos_token`: The amount of times the model's output contains the eos token.
 * `val/ref_contain_eos_token`: The amount of times the mixture's output contains the eos token.
-* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`NashMDConfig`].
-* `mixture_coef`: Logit mixture coefficient for the model and reference model. Typically fixed, but can be made dynamic by passing a list to [`NashMDConfig`].
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.nash_md.NashMDConfig`].
+* `mixture_coef`: Logit mixture coefficient for the model and reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.nash_md.NashMDConfig`].
 
 ## NashMDTrainer
 
-[[autodoc]] NashMDTrainer
+[[autodoc]] experimental.nash_md.NashMDTrainer
     - train
     - save_model
     - push_to_hub
 
 ## NashMDConfig
 
-[[autodoc]] NashMDConfig
+[[autodoc]] experimental.nash_md.NashMDConfig

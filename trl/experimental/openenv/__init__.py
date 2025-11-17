@@ -12,18 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-from dataclasses import dataclass
-
-from ..experimental.nash_md import NashMDConfig as _NashMDConfig
+from .utils import generate_rollout_completions
 
 
-@dataclass
-class NashMDConfig(_NashMDConfig):
-    def __post_init__(self):
-        warnings.warn(
-            "The `NashMDConfig` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.nash_md import NashMDConfig`. The current import path will be removed and no "
-            "longer supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
-        )
-        super().__post_init__()
+__all__ = ["generate_rollout_completions"]
