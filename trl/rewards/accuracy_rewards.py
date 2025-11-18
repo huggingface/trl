@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from trl.import_utils import is_math_verify_available
+from ..import_utils import is_math_verify_available
 
 
 if is_math_verify_available():
@@ -54,23 +54,14 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
     for content, sol in zip(contents, solution, strict=True):
-        gold_parsed = parse(
-            sol,
-            extraction_mode="first_match",
-        )
+        gold_parsed = parse(sol)
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
             answer_parsed = parse(
                 content,
                 extraction_config=[
                     LatexExtractionConfig(
-                        normalization_config=NormalizationConfig(
-                            nits=False,
-                            malformed_operators=False,
-                            basic_latex=True,
-                            boxed="all",
-                            units=True,
-                        ),
+                        normalization_config=NormalizationConfig(units=True),
                         # Ensures that boxed is tried first
                         boxed_match_priority=0,
                         try_extract_without_anchor=False,
@@ -79,10 +70,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
                 extraction_mode="first_match",
             )
             # Compute binary rewards if verifiable, `None` otherwise to skip this example
-            try:
-                reward = float(verify(gold_parsed, answer_parsed))
-            except Exception:
-                reward = None
+            reward = float(verify(gold_parsed, answer_parsed))
         else:
             # If the gold solution is not parseable, we assign `None` to skip this example
             reward = float(content.strip().lower() == sol.strip().lower())

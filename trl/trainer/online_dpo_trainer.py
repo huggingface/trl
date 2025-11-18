@@ -45,6 +45,7 @@ from transformers import (
     ProcessorMixin,
     Trainer,
     TrainerCallback,
+    is_bitsandbytes_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction, seed_worker
@@ -67,7 +68,6 @@ from ..models import (
     unwrap_model_for_generation,
 )
 from .base_trainer import BaseTrainer
-from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
@@ -98,6 +98,8 @@ if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
 
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 logger = logging.get_logger(__name__)
 
@@ -123,7 +125,7 @@ class OnlineDPOTrainer(BaseTrainer):
         ref_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `None`):
             The reference model to use for training. If None is specified, the reference model will be created from the
             model.
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -189,7 +191,7 @@ class OnlineDPOTrainer(BaseTrainer):
         model: PreTrainedModel | nn.Module | str,
         ref_model: PreTrainedModel | nn.Module | None = None,
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
-        judge: BasePairwiseJudge | None = None,
+        judge=None,
         args: OnlineDPOConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -305,7 +307,7 @@ class OnlineDPOTrainer(BaseTrainer):
             model_id = model
 
             # Handle dtype in model_init_kwargs
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass
             elif isinstance(dtype, str):
@@ -316,6 +318,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string "
                     f"representing a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:
@@ -463,7 +466,11 @@ class OnlineDPOTrainer(BaseTrainer):
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                     self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
+
+                    # Determine device type (supports cuda, xpu, etc.)
+                    accelerator_type = torch.accelerator.current_accelerator().type
+                    current_device = getattr(torch, accelerator_type).current_device()
+                    self.vllm_client.init_communicator(device=current_device)
                 else:
                     self.vllm_client = None
             elif self.vllm_mode == "colocate":
@@ -473,6 +480,14 @@ class OnlineDPOTrainer(BaseTrainer):
                 # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
                 # space for them.
                 # Configure vLLM parameters
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 vllm_kwargs = {
                     "model": model.name_or_path,
                     "tensor_parallel_size": self.vllm_tensor_parallel_size,
@@ -485,6 +500,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
+                    "quantization": vllm_quantization,
                 }
 
                 # vLLM requires the environment variables to be set for distributed training.
@@ -755,7 +771,7 @@ class OnlineDPOTrainer(BaseTrainer):
                 max_tokens=self.generation_config.max_tokens,
                 guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
                 generation_kwargs=self.args.generation_kwargs,
-            )
+            )["completion_ids"]
             # Flatten: each prompt generates 2 completions
             completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
         else:

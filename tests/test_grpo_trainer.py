@@ -41,8 +41,9 @@ from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
+    require_ampere_or_newer,
     require_bitsandbytes,
-    require_flash_attn,
+    require_kernels,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
@@ -167,7 +168,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo"])
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo"])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1987,7 +1988,8 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
         ],
     )
-    @require_flash_attn
+    @require_kernels
+    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
     @require_bitsandbytes
     @require_peft
     def test_vlm_training(self, model_name):
@@ -2040,7 +2042,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
-            attn_implementation="flash_attention_2",
+            attn_implementation="kernels-community/flash-attn2",
             dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
