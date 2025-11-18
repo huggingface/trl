@@ -14,10 +14,10 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [UltraFeedback prompts dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -28,21 +28,14 @@ Below is the script to train the model.
 ```python
 # train_grpo.py
 from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-# Dummy reward function for demonstration purposes
-def reward_num_unique_letters(completions, **kwargs):
-    """Reward function that rewards completions with more unique letters."""
-    completion_contents = [completion[0]["content"] for completion in completions]
-    return [float(len(set(content))) for content in completion_contents]
-
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_num_unique_letters,
-    args=training_args,
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 trainer.train()
@@ -290,29 +283,27 @@ import argparse
 
 from datasets import load_dataset
 from trl import GRPOTrainer, GRPOConfig
+from trl.rewards import accuracy_reward
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
     args = parser.parse_args()
 
-    # Example dataset from TLDR
-    dataset = load_dataset("trl-lib/tldr", split="train")
-
-    # Dummy reward function: count the number of unique characters in the completions
-    def reward_num_unique_chars(completions, **kwargs):
-        return [len(set(c)) for c in completions]
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
     training_args = GRPOConfig(
-        output_dir="Qwen2.5-72B-GRPO",
         per_device_train_batch_size=4,
-        bf16=True,
-        gradient_checkpointing=True,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 
-    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer = GRPOTrainer(
+        model="Qwen/Qwen2.5-72B",
+        args=training_args,
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset
+    )
     trainer.train()
 
 if __name__=="__main__":
