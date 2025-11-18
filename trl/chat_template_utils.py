@@ -145,7 +145,6 @@ smollm_schema = {
     },
 }
 
-
 qwen3_schema = {
     "x-regex": r"^(?:<think>\n?(?P<thinking>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
@@ -288,7 +287,7 @@ def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor
             Tokenizer or processor with the added response schema.
     """
     if processor.chat_template == qwen3_chat_template:
-        # The qwen3 response schema seems to be smollm_schema, and not the qwen3_schema. See
+        # The Qwen3 response schema seems to be smollm_schema, and not the qwen3_schema. See
         # https://github.com/huggingface/transformers/issues/42220
         processor.response_schema = qwen3_schema
         return processor
@@ -328,6 +327,7 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     text3 = tokenizer.apply_chat_template(messages3, tokenize=False)
 
     return text2.startswith(text1) and text3.startswith(text2)
+
 
 # Modifications:
 # - {%- if '</think>' in content %}
