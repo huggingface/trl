@@ -18,7 +18,6 @@ import json
 import os
 import textwrap
 import time
-import traceback
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
