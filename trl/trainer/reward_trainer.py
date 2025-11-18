@@ -282,7 +282,7 @@ class RewardTrainer(BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass  # dtype is already a torch.dtype or "auto" or None
             elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
@@ -292,6 +292,7 @@ class RewardTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `RewardConfig`. Expected either 'auto' or a string representing "
                     f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             with suppress_from_pretrained_warning(transformers.modeling_utils.logger):
                 model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1, **model_init_kwargs)
         else:

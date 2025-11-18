@@ -382,7 +382,7 @@ class KTOTrainer(BaseTrainer):
             raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
                 if isinstance(dtype, str) and dtype != "auto":
@@ -392,6 +392,7 @@ class KTOTrainer(BaseTrainer):
                         f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
                 model_init_kwargs["dtype"] = dtype
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -401,7 +402,7 @@ class KTOTrainer(BaseTrainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            dtype = ref_model_init_kwargs.get("dtype")
+            dtype = ref_model_init_kwargs.get("dtype", "auto")
             if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
                 if isinstance(dtype, str) and dtype != "auto":
@@ -411,6 +412,7 @@ class KTOTrainer(BaseTrainer):
                         f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
                 ref_model_init_kwargs["dtype"] = dtype
+            ref_model_init_kwargs["device_map"] = ref_model_init_kwargs.get("device_map", "auto")
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
