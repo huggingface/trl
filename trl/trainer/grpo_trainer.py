@@ -1521,7 +1521,7 @@ class GRPOTrainer(BaseTrainer):
                             result = self._tool_dict[function["name"]](**function["arguments"])
                         except Exception as e:
                             # Store the full traceback as a string in the result
-                            result = {"error": str(e), "traceback": traceback.format_exc()}
+                            result = {"error": str(e)}
                             # keep track of how many times each tool failed
                             tool_failure_count += 1
                     else:
@@ -1551,9 +1551,7 @@ class GRPOTrainer(BaseTrainer):
                 prompt_completion_tools
             )
 
-            # Qwen3 inserts <think>\n\n</think> tokens only for the latest user message which can cause discrepancies
-            # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
-            # common prefix between the two. In most cases, this is a no-op.
+            # Sanity check: from experience, this is useful to catch bugs in the chat template
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
