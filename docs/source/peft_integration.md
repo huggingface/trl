@@ -407,15 +407,6 @@ rewards = trainer.model.compute_reward_score(**inputs)
 
 **Advanced Features**
 
-**Multiple Policy Adapters**
-
-You can train multiple adapters on the same base model for different policies. Control which adapter to activate using the `ppo_adapter_name` argument:
-
-```python
-adapter_name_policy_1 = "policy_1"
-rewards = trainer.model.compute_reward_score(**inputs, ppo_adapter_name=adapter_name_policy_1)
-```
-
 **Quantized Base Models**
 
 For memory-efficient training, load the base model in 8-bit or 4-bit while keeping adapters in float32:
