@@ -15,7 +15,7 @@
 import functools
 from typing import TypeVar
 
-from transformers import AutoTokenizer, PreTrainedTokenizer, ProcessorMixin
+from transformers import PreTrainedTokenizer, ProcessorMixin
 
 
 # These schemas are copy-pasted from https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
@@ -145,15 +145,17 @@ smollm_schema = {
     },
 }
 
+
 qwen3_schema = {
-    "x-regex": r"^(?:(?:<think>)?\s*(?P<thinking>.+?)\s*</think>)?\s*(?:<tool_call>(?P<tool_calls>.*?)\s*</tool_call>)?\s*(?P<content>.+?)?\s*$",
+    "x-regex": r"^(?:<think>\n?(?P<thinking>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
         "content": {"type": "string"},
         "thinking": {"type": "string"},
         "tool_calls": {
-            "x-regex-iterator": r"^(.*)$",  # We have already extracted tool calls and there can only be one, so just make it a list
+            "x-parser": "json",
+            "x-parser-args": {"transform": "[{type: 'function', function: @}]"},
             "type": "array",
             "items": {
                 "type": "object",
@@ -162,14 +164,10 @@ qwen3_schema = {
                     "function": {
                         "type": "object",
                         "properties": {
-                            "name": {"type": "string", "x-regex": r"<function=(\w+)>"},
+                            "name": {"type": "string"},
                             "arguments": {
                                 "type": "object",
-                                "x-regex-key-value": r"<parameter=(?P<key>\w+)>\n(?P<value>.*?)\n</parameter>",
-                                "additionalProperties": {
-                                    "x-parser": "json",
-                                    "x-parser-args": {"allow_non_json": True},
-                                },
+                                "additionalProperties": {},
                             },
                         },
                     },
@@ -179,70 +177,7 @@ qwen3_schema = {
     },
 }
 
-
-TokenizerOrProcessor = TypeVar("TokenizerOrProcessor", PreTrainedTokenizer, ProcessorMixin)
-
-
-def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor:
-    """
-    Adds the appropriate response schema to the given tokenizer or processor based on its chat template.
-
-    At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
-    waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
-    templates.
-
-    Args:
-        processor (`TokenizerOrProcessor`):
-            Tokenizer or processor to which the response schema will be added.
-
-    Returns:
-        `TokenizerOrProcessor`:
-            Tokenizer or processor with the added response schema.
-    """
-    qwen3_chat_template = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B").chat_template
-    if processor.chat_template == qwen3_chat_template:
-        # The qwen3 response schema seems to be smollm_schema, and not the qwen3_schema. See
-        # https://github.com/huggingface/transformers/issues/42220
-        processor.response_schema = smollm_schema
-        return processor
-    raise ValueError(
-        "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
-        "tokenizer or processor."
-    )
-
-
-def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
-    """
-    Check whether the chat template preserves prefixes when applied.
-
-    Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer instance to check.
-
-    Returns:
-        `bool`:
-            `True` if the chat template preserves prefixes, `False` otherwise.
-    """
-    messages1 = [
-        {"role": "user", "content": "What color is the sky?"},
-    ]
-    messages2 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-    ]
-    messages3 = [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-        {"role": "user", "content": "And at night?"},
-    ]
-
-    text1 = tokenizer.apply_chat_template(messages1, tokenize=False, add_generation_prompt=True)
-    text2 = tokenizer.apply_chat_template(messages2, tokenize=False)
-    text3 = tokenizer.apply_chat_template(messages3, tokenize=False)
-
-    return text2.startswith(text1) and text3.startswith(text2)
-
-
+# docstyle-ignore
 qwen3_chat_template = r"""{%- if tools %}
     {{- '<|im_start|>system\n' }}
     {%- if messages[0].role == 'system' %}
@@ -333,6 +268,69 @@ qwen3_chat_template = r"""{%- if tools %}
     {%- endif %}
 {%- endif %}"""
 
+TokenizerOrProcessor = TypeVar("TokenizerOrProcessor", PreTrainedTokenizer, ProcessorMixin)
+
+
+def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor:
+    """
+    Adds the appropriate response schema to the given tokenizer or processor based on its chat template.
+
+    At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
+    waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
+    templates.
+
+    Args:
+        processor (`TokenizerOrProcessor`):
+            Tokenizer or processor to which the response schema will be added.
+
+    Returns:
+        `TokenizerOrProcessor`:
+            Tokenizer or processor with the added response schema.
+    """
+    if processor.chat_template == qwen3_chat_template:
+        # The qwen3 response schema seems to be smollm_schema, and not the qwen3_schema. See
+        # https://github.com/huggingface/transformers/issues/42220
+        processor.response_schema = qwen3_schema
+        return processor
+    raise ValueError(
+        "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
+        "tokenizer or processor."
+    )
+
+
+def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
+    """
+    Check whether the chat template preserves prefixes when applied.
+
+    Args:
+        tokenizer (`PreTrainedTokenizer`):
+            Tokenizer instance to check.
+
+    Returns:
+        `bool`:
+            `True` if the chat template preserves prefixes, `False` otherwise.
+    """
+    messages1 = [
+        {"role": "user", "content": "What color is the sky?"},
+    ]
+    messages2 = [
+        {"role": "user", "content": "What color is the sky?"},
+        {"role": "assistant", "content": "It is blue."},
+    ]
+    messages3 = [
+        {"role": "user", "content": "What color is the sky?"},
+        {"role": "assistant", "content": "It is blue."},
+        {"role": "user", "content": "And at night?"},
+    ]
+
+    text1 = tokenizer.apply_chat_template(messages1, tokenize=False, add_generation_prompt=True)
+    text2 = tokenizer.apply_chat_template(messages2, tokenize=False)
+    text3 = tokenizer.apply_chat_template(messages3, tokenize=False)
+
+    return text2.startswith(text1) and text3.startswith(text2)
+
+
+# docstyle-ignore
 qwen3_training_chat_template = r"""{%- if tools %}
     {{- '<|im_start|>system\n' }}
     {%- if messages[0].role == 'system' %}
@@ -420,7 +418,7 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
     """
     Wrap `tokenizer.apply_chat_template()` to use a training-compatible chat template if needed.
 
-    During training, we need a *prefix-preserving* template where each message strictly appends  to previous ones. For
+    During training, we need a *prefix-preserving* template where each message strictly appends to previous ones. For
     example:
 
     ```python
@@ -431,8 +429,8 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
     assert text1.startswith(text0)
     ```
 
-    Tokenizers typically use inference-ready templates that may differ from the template used  in training. The
-    inference template may not satisfy the prefix-preservation requirement.  For example, Qwen3 and OpenAI GPT OSS drop
+    Tokenizers typically use inference-ready templates that may differ from the template used in training. The
+    inference template may not satisfy the prefix-preservation requirement. For example, Qwen3 and OpenAI GPT OSS drop
     thinking blocks from non-final turns.
 
     This function first checks if the template is prefix-preserving. If it is, no patching is needed. If not, it
@@ -467,10 +465,10 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
         )
 
     @functools.wraps(original_method)
-    def wrapper(self, *args, **kwargs):
+    def wrapper(*args, **kwargs):
         tokenizer.chat_template = tokenizer._training_chat_template
         try:
-            result = original_method(self, *args, **kwargs)
+            result = original_method(*args, **kwargs)
         finally:
             tokenizer.chat_template = original_chat_template
         return result
@@ -483,7 +481,7 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[list[int]]) -> list
     """
     Parse token sequences into structured response dictionaries with fallback handling.
 
-    Attempts to parse each sequence using `tokenizer.parse_response()`. If parsing fails  (e.g., due to malformed tool
+    Attempts to parse each sequence using `tokenizer.parse_response()`. If parsing fails (e.g., due to malformed tool
     calls like `<tool_call>{"type":"function"</tool_call>`), falls back to decoding as plain text.
 
     Also removes incorrectly appended EOS tokens from tool call content when present.

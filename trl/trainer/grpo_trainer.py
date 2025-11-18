@@ -1186,7 +1186,6 @@ class GRPOTrainer(BaseTrainer):
 
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
-        # all_prompts = copy.deepcopy(all_prompts)  # to avoid modifying the input list
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1345,7 +1344,7 @@ class GRPOTrainer(BaseTrainer):
                                 use_tqdm=False,
                                 chat_template_kwargs=self.chat_template_kwargs,
                                 tools=self.tools,
-                                chat_template=self.processing_class._training_chat_template,
+                                chat_template=self.processing_class._training_chat_template if self.tools else None,
                             )
                         else:
                             all_outputs = self.llm.generate(
@@ -1500,6 +1499,8 @@ class GRPOTrainer(BaseTrainer):
             idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
             tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
             tool_mask = [[0] * len(ids) for ids in completion_ids]
+            tool_call_count = 0
+            tool_failure_count = 0
         else:
             idxs_with_tool = []
             tool_mask = None
@@ -1508,6 +1509,10 @@ class GRPOTrainer(BaseTrainer):
         while idxs_with_tool:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
+            # Tokenize the current prompt. We will use this to filter out overlong samples later.
+            kwargs = dict(tools=self.tools, add_generation_prompt=True, tokenize=True, **self.chat_template_kwargs)
+            p_ids = self.processing_class.apply_chat_template(prompt_completion_tools, **kwargs)["input_ids"]
+
             # Call the tools, and build the new prompt for generation
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
@@ -1515,6 +1520,7 @@ class GRPOTrainer(BaseTrainer):
                 prompt_completion_tool = prompt_completion_tools[idx]
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
                 for tool_call in tool_call_list:
+                    tool_call_count += 1
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
                         try:
@@ -1522,12 +1528,29 @@ class GRPOTrainer(BaseTrainer):
                         except Exception as e:
                             # Store the full traceback as a string in the result
                             result = {"error": str(e), "traceback": traceback.format_exc()}
+                            # keep track of how many times each tool failed
+                            tool_failure_count += 1
                     else:
                         result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
                     tool_call["result"] = result
                     tool_message = {"role": "tool", "name": function["name"], "content": str(result)}
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
+
+            # Tokenize and filter samples whose length exceeds max allowed length. This is important, because if vLLM
+            # is called with an input longer than its max model length, it will error out.
+            pct_ids = self.processing_class.apply_chat_template(prompt_completion_tools, **kwargs)["input_ids"]
+            overlong = [len(pct) - len(p) >= self.max_completion_length for p, pct in zip(p_ids, pct_ids, strict=True)]
+            if logprobs is not None:
+                for idx in range(len(idxs_with_tool)):
+                    if overlong[idx]:
+                        num_tokens = len(pct_ids[idx]) - len(p_ids[idx])
+                        logprobs[idxs_with_tool[idx]] += [0.0] * num_tokens
+                        tool_mask[idxs_with_tool[idx]] += [0] * num_tokens
+            idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
+            prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
+            if not idxs_with_tool:
+                break  # all overlong, exit tool loop
 
             # Generate new completions after tool execution
             prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _ = self._generate_single_turn(
@@ -1540,11 +1563,6 @@ class GRPOTrainer(BaseTrainer):
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
-                # prompt_ids[idx_with_tool] = [
-                #     tok
-                #     for tok, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_ids[idx_with_tool], pct, strict=False))
-                # ]
-                # sanity check
                 assert prompt_ids[idx_with_tool] == pct[: len(prompt_ids[idx_with_tool])]
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
@@ -1561,7 +1579,7 @@ class GRPOTrainer(BaseTrainer):
                     excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
                     if excess_length > 0:
                         # If still exceeding max length, truncate completion_tool_ids as well
-                        prompt_completion_tool_ids[idx] = completion_tool_ids[:-excess_length]
+                        prompt_completion_tool_ids[idx] = prompt_completion_tool_ids[idx][:-excess_length]
 
             # Update tool_mask: the tool result should be 1 and the post-tool 0
             for idx in range(len(idxs_with_tool)):
@@ -1588,12 +1606,22 @@ class GRPOTrainer(BaseTrainer):
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
-                completions[idx_with_tool].append(post_tool_completions[idx])
+                if (
+                    post_tool_completions[idx]["content"] or "tool_calls" in post_tool_completions[idx]
+                ):  # when the post-tool if completly truncated, content is empty
+                    completions[idx_with_tool].append(post_tool_completions[idx])
 
             # Check for further tool calls
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+
+            if [len(ids) for ids in completion_ids] != [len(p) for p in logprobs]:
+                raise ValueError(
+                    "Length mismatch between completion_ids and logprobs after tool execution. "
+                    f"completion_ids lengths: {[len(ids) for ids in completion_ids]}, "
+                    f"logprobs lengths: {[len(p) for p in logprobs]}"
+                )
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -1624,6 +1652,16 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+
+        if self.tools:
+            agg_tool_call_count = self.accelerator.gather(torch.tensor(tool_call_count, device=device)).sum()
+            tool_call_frequency = (agg_tool_call_count / len(agg_prompt_lengths)).item()
+            self._metrics[mode]["tools/call_frequency"].append(tool_call_frequency)
+            agg_tool_failure_count = self.accelerator.gather(torch.tensor(tool_failure_count, device=device)).sum()
+            failure_frequency = (
+                (agg_tool_failure_count / agg_tool_call_count).item() if agg_tool_call_count > 0 else 0.0
+            )
+            self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
 
         return (
             prompt_ids,
@@ -1857,7 +1895,7 @@ class GRPOTrainer(BaseTrainer):
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            mask = completion_mask.bool() if self.tools is None else (completion_mask * (1 - tool_mask)).bool()
+            mask = completion_mask.bool() if not self.tools else (completion_mask * (1 - tool_mask)).bool()
             delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
@@ -1914,7 +1952,7 @@ class GRPOTrainer(BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
-        if self.tools is not None:
+        if self.tools:
             output["tool_mask"] = tool_mask
         return output
 
@@ -2060,7 +2098,7 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        mask = completion_mask if self.tools is None else completion_mask * (1 - inputs["tool_mask"])
+        mask = completion_mask if not self.tools else completion_mask * (1 - inputs["tool_mask"])
         if self.loss_type == "grpo":
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             loss = loss / self.current_gradient_accumulation_steps
