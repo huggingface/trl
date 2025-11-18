@@ -329,7 +329,13 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
 
     return text2.startswith(text1) and text3.startswith(text2)
 
-
+# Modifications:
+# - {%- if '</think>' in content %}
+# + {%- if '<think>' in content and '</think>' in content %}
+#   Always check for both tags to avoid edge cases where the model generates only one tag, which would otherwise be parsed incorrectly
+# - {%- if loop.index0 > ns.last_query_index %} ... {%- endif %}
+# + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+#   Always include thinking block during training. It's important to have a prefix-preserving template.
 # docstyle-ignore
 qwen3_training_chat_template = r"""{%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -368,12 +374,12 @@ qwen3_training_chat_template = r"""{%- if tools %}
         {%- if message.reasoning_content is string %}
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
-            {%- if '<think>' in content and '</think>' in content %}  # Modify this to always check for both tags to avoid edge cases where the model generates only one tag, which would otherwise be parsed incorrectly
+            {%- if '<think>' in content and '</think>' in content %}
                 {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
         {%- endif %}
-        {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}  # Always include thinking block during training
+        {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
         {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if (loop.first and content) or (not loop.first) %}

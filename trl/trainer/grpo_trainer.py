@@ -642,7 +642,7 @@ class GRPOTrainer(BaseTrainer):
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
                     quantization=vllm_quantization,
-                    enforce_eager=True,
+                    enforce_eager=True
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
@@ -1195,15 +1195,15 @@ class GRPOTrainer(BaseTrainer):
             if is_conversational({"prompt": prompts[0]}):
                 prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
 
-            # In vLLM, tool call arguments must be JSON strings.
-            # See https://github.com/vllm-project/vllm/pull/28820
+            # In vLLM, tool call arguments must be JSON strings. See https://github.com/vllm-project/vllm/pull/28820
             for prompt in prompts:  # iterate over each conversation
-                for message in prompt:  # iterate over each message
-                    if "tool_calls" in message:  # check if message has tool calls
-                        for call in message["tool_calls"]:
-                            args = call["function"]["arguments"]
-                            if isinstance(args, dict):  # only convert dict → JSON string
-                                call["function"]["arguments"] = json.dumps(args)
+                if is_conversational({"prompt": prompt}):
+                    for message in prompt:  # iterate over each message
+                        if "tool_calls" in message:  # check if message has tool calls
+                            for call in message["tool_calls"]:
+                                args = call["function"]["arguments"]
+                                if isinstance(args, dict):  # only convert dict → JSON string
+                                    call["function"]["arguments"] = json.dumps(args)
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
@@ -1380,6 +1380,7 @@ class GRPOTrainer(BaseTrainer):
                     tokenize=True,
                     return_dict=True,
                     **self.chat_template_kwargs,
+                    tools=self.tools,
                 )
             else:
                 processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1519,9 +1520,7 @@ class GRPOTrainer(BaseTrainer):
                         try:
                             result = self._tool_dict[function["name"]](**function["arguments"])
                         except Exception as e:
-                            # Store the full traceback as a string in the result
                             result = {"error": str(e)}
-                            # keep track of how many times each tool failed
                             tool_failure_count += 1
                     else:
                         result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
@@ -1597,9 +1596,8 @@ class GRPOTrainer(BaseTrainer):
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
-                if (
-                    post_tool_completions[idx]["content"] or "tool_calls" in post_tool_completions[idx]
-                ):  # when the post-tool if completly truncated, content is empty
+                # When the post-tool if completly truncated, content is empty.
+                if post_tool_completions[idx]["content"] or "tool_calls" in post_tool_completions[idx]:
                     completions[idx_with_tool].append(post_tool_completions[idx])
 
             # Check for further tool calls

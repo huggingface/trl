@@ -262,6 +262,15 @@ class GRPOConfig(TrainingArguments):
 
         > Deprecated arguments
 
+        max_prompt_length (`bool`, *optional*):
+
+            <Deprecated version="0.26.0">
+
+            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
+            filter your dataset before training to ensure that prompts do not exceed your desired length.
+
+            </Deprecated>
+
         wandb_log_unique_prompts (`bool`, *optional*):
 
             <Deprecated version="0.26.0">
@@ -330,8 +339,9 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
-            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only supported when the model"
-            " has untied word embedding and language modeling head layers i.e. `tie_word_embeddings` in the model config is False."
+            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only "
+            "supported when the model has untied word embedding and language modeling head layers i.e. "
+            "`tie_word_embeddings` in the model config is False."
         },
     )
 
@@ -687,11 +697,19 @@ class GRPOConfig(TrainingArguments):
     log_unique_prompts: bool = field(
         default=False,
         metadata={
-            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are logged."
+            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all "
+            "prompts are logged."
         },
     )
 
     # Deprecated arguments
+    max_prompt_length: int | None = field(
+        default=512,
+        metadata={
+            "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
+            "desired length."
+        },
+    )
     wandb_log_unique_prompts: bool | None = field(
         default=None,
         metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
