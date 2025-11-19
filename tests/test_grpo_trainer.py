@@ -1696,6 +1696,9 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     def test_training_with_tools(self):
+        # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
+        # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
+        # succeed and the other will fail (because of a wrong argument name).
         def multiply(a: int, b: int) -> int:
             """
             Multiplies two integers.
