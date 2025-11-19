@@ -27,8 +27,8 @@ uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 
 Usage:
 
-# Build and start the BrowserGym docker container (recommended)
-```sh
+# Build and start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
+# ```sh
 cd OpenEnv
 docker build -t openenv-base:latest -f src/core/containers/images/Dockerfile .
 docker build -t browsergym-env:latest -f src/envs/browsergym_env/server/Dockerfile .
@@ -45,12 +45,12 @@ python examples/scripts/openenv/browsergym.py --vllm-mode colocate
 
 # Option 2: Separate vLLM server (2 GPUs required)
 
-# Spin up vLLM server
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-VL-2B-Instruct --host 0.0.0.0 --port 8001
 ```
 
-# Run training
+# Run training (Terminal 2)
 ```sh
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym.py --vllm-mode server --vllm-server-url http://localhost:8001
 ```
@@ -84,10 +84,16 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen3-VL-2B-Instruct",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
+    parser.add_argument("--env-host", type=str, default="0.0.0.0", help="Host for the Echo environment.")
+    parser.add_argument("--env-port", type=int, default=8001, help="Port for the Echo environment.")
     parser.add_argument(
-        "--env-url",
-        default="http://localhost:8000",
-        help="URL for the BrowserGym environment Docker container.",
+        "--env-mode",
+        choices=["docker-local", "docker-image", "docker-hub", "space"],
+        default="docker-image",
+        help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
+    )
+    parser.add_argument(
+        "--env-image", type=str, default="openspiel-env:latest", help="Docker image for the OpenSpiel environment."
     )
     parser.add_argument(
         "--benchmark",
@@ -434,53 +440,60 @@ def reward_completion(completions: list[str], **kwargs) -> list[float]:
 
 
 def main() -> None:
-    cli_args = parse_args()
+    args = parse_args()
 
-    tokenizer = AutoTokenizer.from_pretrained(cli_args.tokenizer_id)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Connect to BrowserGym environment
-    env = BrowserGymEnv.from_docker_image(
-        image="browsergym-env:latest",
-        env_vars={
-            "BROWSERGYM_BENCHMARK": cli_args.benchmark,
-            "BROWSERGYM_TASK_NAME": cli_args.task_name,
-        },
-        base_url=cli_args.env_url,
-    )
+    # Select environment mode
+    if args.env_mode == "docker-local":
+        env_url = f"http://{args.env_host}:{args.env_port}"
+        client = BrowserGymEnv(base_url=env_url)
+        print(f"🌍 Using existing BrowserGym Environment (Docker) at: {env_url}")
+    elif args.env_mode == "docker-image":
+        client = BrowserGymEnv.from_docker_image(args.env_image)
+        print(f"🌍 Using BrowserGym Environment (Docker) from local Image")
+    elif args.env_mode == "docker-hub":
+        client = BrowserGymEnv.from_hub(args.env_image)
+        print(f"🌍 Using existing BrowserGym Environment (Docker) from Hub Image")
+    elif args.env_mode == "space":
+        env_url = args.env_host
+        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
+    else:
+        raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
-    dataset = Dataset.from_dict({"prompt": [cli_args.dataset_prompt] * cli_args.dataset_size})
+    dataset = Dataset.from_dict({"prompt": [args.dataset_prompt] * args.dataset_size})
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    default_output_dir = Path("outputs") / f"browsergym-grpo-{sanitize_name(cli_args.model_id)}-{timestamp}"
-    output_dir = Path(cli_args.output_dir or default_output_dir)
+    default_output_dir = Path("outputs") / f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}"
+    output_dir = Path(args.output_dir or default_output_dir)
 
     grpo_config = GRPOConfig(
         use_vllm=True,
-        vllm_mode=cli_args.vllm_mode,
-        vllm_server_base_url=cli_args.vllm_server_url if cli_args.vllm_mode == "server" else None,
+        vllm_mode=args.vllm_mode,
+        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         vllm_gpu_memory_utilization=0.4,
         output_dir=str(output_dir),
-        num_train_epochs=cli_args.num_epochs,
-        learning_rate=cli_args.learning_rate,
-        weight_decay=cli_args.weight_decay,
-        gradient_accumulation_steps=cli_args.gradient_accumulation_steps,
-        per_device_train_batch_size=cli_args.per_device_batch_size,
-        warmup_steps=cli_args.warmup_steps,
-        num_generations=cli_args.num_generations,
-        generation_batch_size=cli_args.num_generations,  # Must be divisible by num_generations
-        max_completion_length=cli_args.max_new_tokens,
-        logging_steps=cli_args.logging_steps,
+        num_train_epochs=args.num_epochs,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        per_device_train_batch_size=args.per_device_batch_size,
+        warmup_steps=args.warmup_steps,
+        num_generations=args.num_generations,
+        generation_batch_size=args.num_generations,  # Must be divisible by num_generations
+        max_completion_length=args.max_new_tokens,
+        logging_steps=args.logging_steps,
         save_strategy="steps",
-        save_steps=cli_args.save_interval,
-        save_total_limit=cli_args.save_total_limit,
-        temperature=cli_args.temperature,
-        top_k=cli_args.top_k,
-        top_p=cli_args.top_p,
+        save_steps=args.save_interval,
+        save_total_limit=args.save_total_limit,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
     )
 
-    grpo_config.run_name = cli_args.run_name or f"run-{timestamp}"
-    grpo_config.project = cli_args.project or f"group-{sanitize_name(cli_args.model_id)}"
+    grpo_config.run_name = args.run_name or f"run-{timestamp}"
+    grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
 
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
@@ -495,12 +508,12 @@ def main() -> None:
             print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
             episode = rollout_once(
                 trainer=trainer,
-                env=env,
+                env=client,
                 tokenizer=tokenizer,
                 dataset_prompt=prompt_text,
-                max_steps=cli_args.max_steps,
-                image_size=cli_args.image_size,
-                debug=cli_args.debug,
+                max_steps=args.max_steps,
+                image_size=args.image_size,
+                debug=args.debug,
             )
             episode_prompt_ids.append(episode["prompt_ids"])
             episode_completion_ids.append(episode["completion_ids"])
@@ -531,7 +544,7 @@ def main() -> None:
         return result
 
     trainer = GRPOTrainer(
-        model=cli_args.model_id,
+        model=args.model_id,
         processing_class=tokenizer,
         reward_funcs=[reward_completion],
         train_dataset=dataset,
@@ -541,10 +554,10 @@ def main() -> None:
 
     print("=" * 80)
     print("Starting GRPO training with BrowserGym environment")
-    print(f"Benchmark: {cli_args.benchmark}")
-    print(f"Task: {cli_args.task_name}")
-    print(f"Model: {cli_args.model_id}")
-    print(f"Using {cli_args.num_generations} rollouts per dataset prompt")
+    print(f"Benchmark: {args.benchmark}")
+    print(f"Task: {args.task_name}")
+    print(f"Model: {args.model_id}")
+    print(f"Using {args.num_generations} rollouts per dataset prompt")
     print(f"Output directory: {output_dir}")
     print("=" * 80)
 
@@ -552,7 +565,7 @@ def main() -> None:
         trainer.train()
         print("\nTraining completed successfully!")
     finally:
-        env.close()
+        client.close()
 
 
 if __name__ == "__main__":
