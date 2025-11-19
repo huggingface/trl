@@ -92,7 +92,7 @@ args = GRPOConfig(
 args = GRPOConfig(
     use_vllm=True,
     vllm_mode="server",
-    vllm_server_url="http://localhost:8000",
+    vllm_server_base_url="http://localhost:8000",
     # ... other args
 )
 
