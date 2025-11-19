@@ -285,12 +285,13 @@ def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor
     Returns:
         `TokenizerOrProcessor`:
             Tokenizer or processor with the added response schema.
-    
+
     Examples:
 
     ```python
     >>> from trl.chat_template_utils import add_response_schema
     >>> from transformers import AutoTokenizer
+
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     >>> tokenizer = add_response_schema(tokenizer)
     >>> assistant_text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
@@ -453,6 +454,7 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
     ```python
     >>> from trl.chat_template_utils import patch_chat_template_for_training
     >>> from transformers import AutoTokenizer
+
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     >>> messages1 = [
     ...     {"role": "user", "content": "What color is the sky?"},
@@ -465,12 +467,15 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
     ... ]
     >>> tokenizer.apply_chat_template(messages1, tokenize=False)
     '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+
     >>> tokenizer.apply_chat_template(messages2, tokenize=False)
     '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
-    >>> #                                                                       ^ think tags missing 
+
+    >>> #                                                                       ^ think tags missing
     >>> tokenizer = patch_chat_template_for_training(tokenizer)
     >>> tokenizer.apply_chat_template(messages1, tokenize=False)
     '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+
     >>> tokenizer.apply_chat_template(messages2, tokenize=False)
     '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
     ```

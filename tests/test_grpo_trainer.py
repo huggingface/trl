@@ -1690,6 +1690,11 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0.dev0",
+        strict=True,
+    )
     def test_training_with_tools(self):
         def multiply(a: int, b: int) -> int:
             """
@@ -1711,7 +1716,7 @@ class TestGRPOTrainer(TrlTestCase):
             learning_rate=0.1,
             per_device_train_batch_size=3,
             num_generations=3,
-            max_completion_length=64,
+            max_completion_length=128,
             report_to="none",
         )
         trainer = GRPOTrainer(
