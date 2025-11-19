@@ -14,16 +14,25 @@
 
 import textwrap
 
+import pytest
+import transformers
+from packaging.version import Version
 from transformers import AutoTokenizer
 
 from trl.chat_template_utils import (
     add_response_schema,
     is_chat_template_prefix_preserving,
+    parse_response,
     patch_chat_template_for_training,
 )
 
 
 class TestAddResponseSchema:
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        reason="Response parsing is not supported in transformers versions below 5.0.0.dev0",
+        strict=True,
+    )
     def test_add_response_schema(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
@@ -113,3 +122,58 @@ class TestPatchChatTemplateForTraining:
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = patch_chat_template_for_training(tokenizer)
         assert is_chat_template_prefix_preserving(tokenizer) is True
+
+
+class TestParseResponse:
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        reason="Response parsing is not supported in transformers versions below 5.0.0.dev0",
+        strict=True,
+    )
+    def test_parse_response(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+        assistant_text = tokenizer([text])["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+        expected = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+            }
+        ]
+        assert parsed == expected
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        reason="Response parsing is not supported in transformers versions below 5.0.0.dev0",
+        strict=True,
+    )
+    def test_parse_response_no_tool_call(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        text = "Here is the answer to your question.<|im_end|>"
+        assistant_text = tokenizer([text])["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+        expected = [
+            {
+                "role": "assistant",
+                "content": "Here is the answer to your question.",
+            }
+        ]
+        assert parsed == expected
+
+    def test_parse_response_malformed_tool_call(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
+        assistant_text = tokenizer([text])["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+        expected = [
+            {
+                "role": "assistant",
+                "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call>',
+            }
+        ]
+        assert parsed == expected
