@@ -1100,7 +1100,6 @@ class TestRLOOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
         )
         trainer = RLOOTrainer(
@@ -1247,7 +1246,6 @@ class TestRLOOTrainer(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            max_prompt_length=18,
             report_to="none",
             use_vllm=True,
             vllm_mode="server",
@@ -1289,7 +1287,6 @@ class TestRLOOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
         )
         trainer = RLOOTrainer(

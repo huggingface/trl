@@ -2211,7 +2211,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             gradient_accumulation_steps=2,  # Make effective batch size 2, divisible by num_generations
             num_generations=2,
             max_completion_length=4,  # Very short completions to reduce memory
-            max_prompt_length=32,  # Very short prompts to reduce memory
             use_vllm=True,  # Enable vLLM
             vllm_mode="colocate",  # Use colocate mode to avoid server dependency
             vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)

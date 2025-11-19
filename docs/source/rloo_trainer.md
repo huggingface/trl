@@ -528,7 +528,6 @@ accelerate launch \
   --learning_rate 1e-5 \
   --gradient_checkpointing \
   --dtype bfloat16 \
-  --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
