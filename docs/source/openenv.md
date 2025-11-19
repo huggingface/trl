@@ -6,6 +6,9 @@
 
 In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel free to explore the links above to dive deeper into OpenEnv itself.
 
+> [!NOTE]
+> You can explore ready-to-use example scripts in the [`examples/scripts/openenv/`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/) directory.
+
 ## Installation
 
 To use OpenEnv with TRL, install the framework:
