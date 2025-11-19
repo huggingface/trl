@@ -60,6 +60,7 @@ class TestIsChatTemplatePrefixPreserving:
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         # The following template is quite typical of models like Qwen3 and GPT-OSS, where the thinking part is
         # only present for last assistant message, which makes it non-prefix-preserving.
+        # docstyle-ignore
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- if messages[0].role == 'system' %}
             {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}

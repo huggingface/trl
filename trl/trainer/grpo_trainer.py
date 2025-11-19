@@ -642,7 +642,6 @@ class GRPOTrainer(BaseTrainer):
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
                     quantization=vllm_quantization,
-                    enforce_eager=True
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
@@ -1605,7 +1604,7 @@ class GRPOTrainer(BaseTrainer):
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
 
-            if [len(ids) for ids in completion_ids] != [len(p) for p in logprobs]:
+            if logprobs and [len(ids) for ids in completion_ids] != [len(p) for p in logprobs]:
                 raise ValueError(
                     "Length mismatch between completion_ids and logprobs after tool execution. "
                     f"completion_ids lengths: {[len(ids) for ids in completion_ids]}, "
