@@ -1247,7 +1247,7 @@ class GRPOTrainer(BaseTrainer):
                                     # tokenizer's original template isn't, we replace it at initialization with a
                                     # training-safe, prefix-preserving template (see patch_chat_template_for_training).
                                     # In such cases, we must ensure vLLM uses the training template here.
-                                    chat_template=getattr(self.processing_class, "_training_chat_template"),
+                                    chat_template=self.processing_class._training_chat_template,
                                 )
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
@@ -1345,7 +1345,7 @@ class GRPOTrainer(BaseTrainer):
                                 # tokenizer's original template isn't, we replace it at initialization with a
                                 # training-safe, prefix-preserving template (see patch_chat_template_for_training).
                                 # In such cases, we must ensure vLLM uses the training template here.
-                                chat_template=getattr(self.processing_class, "_training_chat_template"),
+                                chat_template=self.chat_template,
                             )
                         else:
                             all_outputs = self.llm.generate(
@@ -1379,19 +1379,18 @@ class GRPOTrainer(BaseTrainer):
                         self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            processor_kwargs = {"truncation": True, "add_special_tokens": False}
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
+                    tools=self.tools,
+                    chat_template=self.chat_template,
                     add_generation_prompt=True,
                     tokenize=True,
                     return_dict=True,
                     **self.chat_template_kwargs,
-                    tools=self.tools,
                 )
             else:
-                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
+                processor_outputs = self.processing_class(text=prompts)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -1421,25 +1420,23 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            processor_kwargs = {
-                "return_tensors": "pt",
-                "padding": True,
-                "padding_side": "left",
-                "truncation": True,
-                "add_special_tokens": False,
-            }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
+                    tools=self.tools,
+                    chat_template=self._chat_template,
                     add_generation_prompt=True,
                     tokenize=True,
-                    tools=self.tools,
+                    padding=True,
+                    padding_side="left",
+                    return_tensors="pt",
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
+                generate_inputs = self.processing_class(
+                    text=prompts, padding=True, padding_side="left", return_tensors="pt"
+                )
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
@@ -1512,7 +1509,12 @@ class GRPOTrainer(BaseTrainer):
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
             # Tokenize the current prompt. We will use this to filter out overlong samples later.
-            kwargs = dict(tools=self.tools, add_generation_prompt=True, tokenize=True, **self.chat_template_kwargs)
+            kwargs = {
+                "tools": self.tools,
+                "add_generation_prompt": True,
+                "tokenize": True,
+                **self.chat_template_kwargs,
+            }
             p_ids = self.processing_class.apply_chat_template(prompt_completion_tools, **kwargs)["input_ids"]
 
             # Call the tools, and build the new prompt for generation
