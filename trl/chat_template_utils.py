@@ -526,6 +526,19 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[list[int]]) -> list
     Returns:
         `list[dict]`:
             List of response dictionaries.
+
+    Example:
+    ```python
+    >>> from trl.chat_template_utils import parse_response, add_response_schema
+    >>> from transformers import AutoTokenizer
+
+    >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    >>> tokenizer = add_response_schema(tokenizer)  # temporary until built-in support
+    >>> text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+    >>> sequences = tokenizer([text])["input_ids"]
+    >>> parse_response(tokenizer, sequences)
+    [{'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}]
+    ```
     """
 
     outputs = []
