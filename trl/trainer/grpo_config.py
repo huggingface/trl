@@ -698,6 +698,23 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are logged."
         },
     )
+    trust_region_method: str = field(
+        default="clip",
+        metadata={
+            "help": (
+                "Which trust-region constraint to use. Options:\n"
+                "  - 'clip': Standard PPO/GRPO ratio clipping (default)\n"
+                "  - 'pspo': Probability smoothing toward behavior policy\n"
+                "See https://arxiv.org/abs/2509.21282 for details on PSPO."
+            )
+        },
+    )
+    smoothing_alpha: float = field(
+        default=0.1,
+        metadata={
+            "help": "Smoothing strength in [0,1]. For use with pspo trust_region_method. 0 disables smoothing; 1 is maximum smoothing."
+        },
+    )
 
     # Deprecated arguments
     wandb_log_unique_prompts: bool | None = field(
@@ -776,3 +793,9 @@ class GRPOConfig(TrainingArguments):
                 stacklevel=2,
             )
             self.log_unique_prompts = self.wandb_log_unique_prompts
+
+        valid_tr_methods = {"clip", "pspo"}
+        if self.trust_region_method not in valid_tr_methods:
+            raise ValueError(
+                f"trust_region_method must be one of {valid_tr_methods}, got {self.trust_region_method!r}."
+            )
