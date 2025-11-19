@@ -201,7 +201,7 @@ def main():
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Catch",
         use_vllm=True,
         vllm_mode=args.vllm_mode,
-        vllm_server_url=args.vllm_server_url if args.vllm_mode == "server" else None,
+        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         logging_steps=1,
         report_to="trackio",
         num_train_epochs=1,

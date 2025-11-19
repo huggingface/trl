@@ -429,7 +429,7 @@ def main() -> None:
     grpo_config = GRPOConfig(
         use_vllm=True,
         vllm_mode=cli_args.vllm_mode,
-        vllm_server_url=cli_args.vllm_server_url if cli_args.vllm_mode == "server" else None,
+        vllm_server_base_url=cli_args.vllm_server_url if cli_args.vllm_mode == "server" else None,
         output_dir=str(output_dir),
         num_train_epochs=cli_args.num_epochs,
         learning_rate=cli_args.learning_rate,
