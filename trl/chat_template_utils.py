@@ -436,12 +436,12 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     """
     Get a prefix-preserving chat template for training, if needed.
 
-    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template
-    (currently only Qwen3 supported). Otherwise, returns `None`.
+    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently only Qwen3
+    supported). Otherwise, returns `None`.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
-            Tokenizer instance to patch.
+            Tokenizer instance to check.
 
     Returns:
         `str` or `None`:
@@ -491,11 +491,11 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
         )
 
 
-def parse_response(tokenizer: PreTrainedTokenizer, ids: list[list[int]]) -> list[dict]:
+def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     """
-    Parse token sequences into structured response dictionaries with fallback handling.
+    Parse a token sequence into structured response dictionaries with fallback handling.
 
-    Attempts to parse each sequence using `tokenizer.parse_response()`. If parsing fails (e.g., due to malformed tool
+    Attempts to parse the sequence using `tokenizer.parse_response()`. If parsing fails (e.g., due to malformed tool
     calls like `<tool_call>{"type":"function"</tool_call>`), falls back to decoding as plain text.
 
     Also removes incorrectly appended EOS tokens from tool call content when present.
@@ -503,12 +503,12 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[list[int]]) -> list
     Args:
         tokenizer (`PreTrainedTokenizer`):
             Tokenizer with a `parse_response()` method.
-        ids (`list[list[int]]`):
+        ids (`list[int]`):
             List of token sequences.
 
     Returns:
-        `list[dict]`:
-            List of response dictionaries.
+        `dict`:
+            Response dictionary.
 
     Example:
     ```python
@@ -518,22 +518,18 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[list[int]]) -> list
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     >>> tokenizer = add_response_schema(tokenizer)  # temporary until built-in support
     >>> text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-    >>> sequences = tokenizer([text])["input_ids"]
-    >>> parse_response(tokenizer, sequences)
-    [{'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}]
+    >>> ids = tokenizer(text)["input_ids"]
+    >>> parse_response(tokenizer, ids)
+    {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-
-    outputs = []
-    for seq in ids:
-        try:
-            parsed = tokenizer.parse_response(seq)
-            # Hotfix: remove incorrectly appended EOS token from tool calls
-            # See https://github.com/huggingface/transformers/issues/42249
-            parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
-        except Exception:
-            # Fallback: decode as plain text if parsing fails. This happens if the model outputs malformed tool calls.
-            content = tokenizer.decode(seq, skip_special_tokens=True)
-            parsed = {"role": "assistant", "content": content}
-        outputs.append(parsed)
-    return outputs
+    try:
+        parsed = tokenizer.parse_response(ids)
+        # Hotfix: remove incorrectly appended EOS token from tool calls
+        # See https://github.com/huggingface/transformers/issues/42249
+        parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
+    except Exception:
+        # Fallback: decode as plain text if parsing fails. This happens if the model outputs malformed tool calls.
+        content = tokenizer.decode(ids, skip_special_tokens=True)
+        parsed = {"role": "assistant", "content": content}
+    return parsed

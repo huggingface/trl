@@ -8,9 +8,9 @@
 
 [[autodoc]] chat_template_utils.is_chat_template_prefix_preserving
 
-## patch_chat_template_for_training
+## get_training_chat_template
 
-[[autodoc]] chat_template_utils.patch_chat_template_for_training
+[[autodoc]] chat_template_utils.get_training_chat_template
 
 ## parse_response
 

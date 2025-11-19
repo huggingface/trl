@@ -1481,8 +1481,7 @@ class GRPOTrainer(BaseTrainer):
                 and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
                 and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = parse_response(self.processing_class, completion_ids)
-                completions = [[completion] for completion in completions]  # format as list of messages
+                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
@@ -1602,7 +1601,7 @@ class GRPOTrainer(BaseTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions
-            post_tool_completions = parse_response(self.processing_class, post_tool_ids)
+            post_tool_completions = [parse_response(self.processing_class, ids) for ids in post_tool_ids]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):

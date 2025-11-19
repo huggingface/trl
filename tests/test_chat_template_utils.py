@@ -135,15 +135,13 @@ class TestParseResponse:
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-        assistant_text = tokenizer([text])["input_ids"]
+        assistant_text = tokenizer(text)["input_ids"]
         parsed = parse_response(tokenizer, assistant_text)
-        expected = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
-            }
-        ]
+        expected = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+        }
         assert parsed == expected
 
     @pytest.mark.xfail(
@@ -155,26 +153,24 @@ class TestParseResponse:
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
         text = "Here is the answer to your question.<|im_end|>"
-        assistant_text = tokenizer([text])["input_ids"]
+        assistant_text = tokenizer(text)["input_ids"]
         parsed = parse_response(tokenizer, assistant_text)
-        expected = [
-            {
-                "role": "assistant",
-                "content": "Here is the answer to your question.",
-            }
-        ]
+        expected = {
+            "role": "assistant",
+            "content": "Here is the answer to your question.",
+        }
+
         assert parsed == expected
 
     def test_parse_response_malformed_tool_call(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
-        assistant_text = tokenizer([text])["input_ids"]
+        assistant_text = tokenizer(text)["input_ids"]
         parsed = parse_response(tokenizer, assistant_text)
-        expected = [
-            {
-                "role": "assistant",
-                "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call>',
-            }
-        ]
+        expected = {
+            "role": "assistant",
+            "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call>',
+        }
+
         assert parsed == expected
