@@ -285,6 +285,18 @@ def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor
     Returns:
         `TokenizerOrProcessor`:
             Tokenizer or processor with the added response schema.
+    
+    Examples:
+
+    ```python
+    >>> from trl.chat_template_utils import add_response_schema
+    >>> from transformers import AutoTokenizer
+    >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    >>> tokenizer = add_response_schema(tokenizer)
+    >>> assistant_text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+    >>> tokenizer.parse_response(assistant_text)
+    {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
+    ```
     """
     if processor.chat_template == qwen3_chat_template:
         # The Qwen3 response schema seems to be smollm_schema, and not the qwen3_schema. See
@@ -422,30 +434,11 @@ qwen3_training_chat_template = r"""{%- if tools %}
 
 def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     """
-    Wrap `tokenizer.apply_chat_template()` to use a training-compatible chat template if needed.
+    Ensure a tokenizer uses a prefix-preserving chat template during training.
 
-    During training, we need a *prefix-preserving* template where each message strictly appends to previous ones. For
-    example:
-
-    ```python
-    turn0 = {"role": "user", "content": "Hello!"}
-    turn1 = {"role": "assistant", "content": "Hi!"}
-    text0 = tokenizer.apply_chat_template([turn0], add_generation_prompt=True)
-    text1 = tokenizer.apply_chat_template([turn0, turn1])
-    assert text1.startswith(text0)
-    ```
-
-    Tokenizers typically use inference-ready templates that may differ from the template used in training. The
-    inference template may not satisfy the prefix-preservation requirement. For example, Qwen3 and OpenAI GPT OSS drop
-    thinking blocks from non-final turns.
-
-    This function first checks if the template is prefix-preserving. If it is, no patching is needed. If not, it
-    patches the `apply_chat_template()` method to temporarily swap in a training-compatible template during calls, then
-    restore the original afterward. This ensures the chat template complies with training needs while preserving the
-    original template for later inference. It also stores the training template in a `_training_chat_template`
-    attribute, which is useful when you need to access it—for example, when using vLLM inference.
-
-    Currently supported: Qwen3 models only.
+    If the tokenizer's template isn't prefix-preserving, temporarily swap in a training-compatible template (currently
+    only Qwen3 supported) for the duration of `apply_chat_template()` calls. The training template is saved as
+    `tokenizer._training_chat_template`.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -454,6 +447,33 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
     Returns:
         `PreTrainedTokenizer`:
             The same tokenizer with `apply_chat_template()` patched (if needed and supported).
+
+    Example:
+
+    ```python
+    >>> from trl.chat_template_utils import patch_chat_template_for_training
+    >>> from transformers import AutoTokenizer
+    >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    >>> messages1 = [
+    ...     {"role": "user", "content": "What color is the sky?"},
+    ...     {"role": "assistant", "content": "It is blue."},
+    ... ]
+    >>> messages2 = [
+    ...     {"role": "user", "content": "What color is the sky?"},
+    ...     {"role": "assistant", "content": "It is blue."},
+    ...     {"role": "user", "content": "And at night?"},
+    ... ]
+    >>> tokenizer.apply_chat_template(messages1, tokenize=False)
+    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    >>> tokenizer.apply_chat_template(messages2, tokenize=False)
+    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
+    >>> #                                                                       ^ think tags missing 
+    >>> tokenizer = patch_chat_template_for_training(tokenizer)
+    >>> tokenizer.apply_chat_template(messages1, tokenize=False)
+    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
+    >>> tokenizer.apply_chat_template(messages2, tokenize=False)
+    '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
+    ```
     """
     # First check if patching is needed
     if is_chat_template_prefix_preserving(tokenizer):
