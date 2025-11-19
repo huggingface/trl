@@ -23,7 +23,7 @@ uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 
 Usage:
 
-# Start the docker container for the Wordle environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
+# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
 ```sh
 docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
 # or TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 python -m src.envs.textarena_env.server.app
