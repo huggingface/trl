@@ -34,7 +34,7 @@ import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -390,7 +390,7 @@ class GRPOTrainer(BaseTrainer):
         self.rollout_func = rollout_func
 
         # Tools
-        if tools and not version.parse(transformers.__version__) >= version.parse("5.0.0.dev0"):
+        if tools and not Version(transformers.__version__) >= Version("5.0.0.dev0"):
             raise ImportError(
                 "Using tools with GRPOTrainer requires transformers version 5.0.0.dev0 or higher. Please upgrade "
                 "transformers to use this feature."
@@ -1474,7 +1474,7 @@ class GRPOTrainer(BaseTrainer):
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
             if (
-                version.parse(transformers.__version__) >= version.parse("5.0.0.dev0")  # parse_response added in v5
+                Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
                 and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
                 and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
             ):
