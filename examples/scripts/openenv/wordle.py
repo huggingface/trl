@@ -36,12 +36,12 @@ python examples/scripts/openenv/wordle.py --vllm-mode colocate
 
 # Option 2: Separate vLLM server (2 GPUs required)
 
-# Spin up vLLM server
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
 ```
 
-# Run training
+# Run training (Terminal 2)
 ```sh
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
@@ -423,6 +423,7 @@ def main() -> None:
     # Select environment mode
     if args.env_mode == "docker-local":
         env_url = f"http://{args.env_host}:{args.env_port}"
+        client = TextArenaEnv(base_url=env_url)
         print(f"🌍 Using existing TextArena Environment (Docker) at: {env_url}")
     elif args.env_mode == "docker-image":
         client = TextArenaEnv.from_docker_image(args.env_image)
@@ -435,11 +436,6 @@ def main() -> None:
         print(f"🌍 Using Hugging Face Space environment at: {env_url}")
     else:
         raise ValueError(f"Unknown environment mode: {args.env_mode}")
-
-    if args.env_mode != "docker-hub" and args.env_mode != "docker-image":
-        client = TextArenaEnv(base_url=env_url)
-
-    #env = TextArenaEnv(base_url=args.env_url)
 
     system_prompt = resolve_system_prompt(args.system_prompt_path)
 

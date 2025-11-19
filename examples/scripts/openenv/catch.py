@@ -36,12 +36,12 @@ python examples/scripts/openenv/catch.py --vllm-mode colocate
 
 # Option 2: Separate vLLM server (2 GPUs required)
 
-# Spin up vLLM server
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 ```
 
-# Run training
+# Run training (Terminal 2)
 ```sh
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/catch.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
