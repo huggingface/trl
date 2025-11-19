@@ -1532,12 +1532,15 @@ class GRPOTrainer(BaseTrainer):
             # is called with an input longer than its max model length, it will error out.
             pct_ids = self.processing_class.apply_chat_template(prompt_completion_tools, **kwargs)["input_ids"]
             overlong = [len(pct) - len(p) >= self.max_completion_length for p, pct in zip(p_ids, pct_ids, strict=True)]
-            if logprobs is not None:
-                for idx in range(len(idxs_with_tool)):
-                    if overlong[idx]:
-                        num_tokens = len(pct_ids[idx]) - len(p_ids[idx])
-                        logprobs[idxs_with_tool[idx]] += [0.0] * num_tokens
-                        tool_mask[idxs_with_tool[idx]] += [0] * num_tokens
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if overlong[idx]:
+                    prompt_length = len(prompt_ids[idx_with_tool])
+                    ct = pct_ids[idx][prompt_length : prompt_length + self.max_completion_length]
+                    completion_ids[idx_with_tool] = ct
+                    tool_mask[idx_with_tool] += [0] * (len(ct) - len(tool_mask[idx_with_tool]))
+                    if logprobs is not None:
+                        logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
             prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
             if not idxs_with_tool:
@@ -1603,13 +1606,6 @@ class GRPOTrainer(BaseTrainer):
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
-
-            if logprobs and [len(ids) for ids in completion_ids] != [len(p) for p in logprobs]:
-                raise ValueError(
-                    "Length mismatch between completion_ids and logprobs after tool execution. "
-                    f"completion_ids lengths: {[len(ids) for ids in completion_ids]}, "
-                    f"logprobs lengths: {[len(p) for p in logprobs]}"
-                )
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
