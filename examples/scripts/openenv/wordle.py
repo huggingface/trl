@@ -423,6 +423,7 @@ def main() -> None:
     # Select environment mode
     if args.env_mode == "docker-local":
         env_url = f"http://{args.env_host}:{args.env_port}"
+        client = TextArenaEnv(base_url=env_url)
         print(f"🌍 Using existing TextArena Environment (Docker) at: {env_url}")
     elif args.env_mode == "docker-image":
         client = TextArenaEnv.from_docker_image(args.env_image)
@@ -435,11 +436,6 @@ def main() -> None:
         print(f"🌍 Using Hugging Face Space environment at: {env_url}")
     else:
         raise ValueError(f"Unknown environment mode: {args.env_mode}")
-
-    if args.env_mode != "docker-hub" and args.env_mode != "docker-image":
-        client = TextArenaEnv(base_url=env_url)
-
-    #env = TextArenaEnv(base_url=args.env_url)
 
     system_prompt = resolve_system_prompt(args.system_prompt_path)
 
