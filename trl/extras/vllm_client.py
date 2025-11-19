@@ -282,6 +282,7 @@ class VLLMClient:
         generation_kwargs: dict | None = None,
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
+        chat_template: str | None = None,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided chat messages.
@@ -318,6 +319,9 @@ class VLLMClient:
                 Additional keyword arguments to customize the chat template used by the model.
             tools (`list`, *optional*):
                 List of tool functions available for tool calling during chat generation.
+            chat_template (`str`, *optional*):
+                Template to use for structuring the chat. If not provided, the model's default chat template will be
+                used.
 
         Returns:
             `dict` with keys:
@@ -330,6 +334,8 @@ class VLLMClient:
         """
         if tools is not None:
             raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
+        if chat_template is not None:
+            raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
 
         url = f"{self.base_url}/chat/"
 
