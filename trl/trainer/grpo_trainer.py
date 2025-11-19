@@ -55,7 +55,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
-from ..chat_template_utils import add_response_schema, parse_response, patch_chat_template_for_training
+from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -402,7 +402,12 @@ class GRPOTrainer(BaseTrainer):
         # known chat templates.
         if tools and not processing_class.response_schema:
             processing_class = add_response_schema(processing_class)
-            processing_class = patch_chat_template_for_training(processing_class)
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        if tools:
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
 
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
@@ -1243,11 +1248,7 @@ class GRPOTrainer(BaseTrainer):
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
                                     tools=self.tools,
-                                    # In multi-turn training, the chat template must be prefix-preserving. If the
-                                    # tokenizer's original template isn't, we replace it at initialization with a
-                                    # training-safe, prefix-preserving template (see patch_chat_template_for_training).
-                                    # In such cases, we must ensure vLLM uses the training template here.
-                                    chat_template=self.processing_class._training_chat_template,
+                                    chat_template=self.chat_template,
                                 )
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
@@ -1341,10 +1342,6 @@ class GRPOTrainer(BaseTrainer):
                                 use_tqdm=False,
                                 chat_template_kwargs=self.chat_template_kwargs,
                                 tools=self.tools,
-                                # In multi-turn training, the chat template must be prefix-preserving. If the
-                                # tokenizer's original template isn't, we replace it at initialization with a
-                                # training-safe, prefix-preserving template (see patch_chat_template_for_training).
-                                # In such cases, we must ensure vLLM uses the training template here.
                                 chat_template=self.chat_template,
                             )
                         else:
@@ -1424,7 +1421,7 @@ class GRPOTrainer(BaseTrainer):
                 generate_inputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
                     tools=self.tools,
-                    chat_template=self._chat_template,
+                    chat_template=self.chat_template,
                     add_generation_prompt=True,
                     tokenize=True,
                     padding=True,
@@ -1513,6 +1510,7 @@ class GRPOTrainer(BaseTrainer):
                 "tools": self.tools,
                 "add_generation_prompt": True,
                 "tokenize": True,
+                "chat_template": self.chat_template,
                 **self.chat_template_kwargs,
             }
             p_ids = self.processing_class.apply_chat_template(prompt_completion_tools, **kwargs)["input_ids"]

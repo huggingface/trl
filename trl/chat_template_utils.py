@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
 from typing import TypeVar
 
 from transformers import PreTrainedTokenizer, ProcessorMixin
@@ -433,26 +432,25 @@ qwen3_training_chat_template = r"""{%- if tools %}
 {%- endif %}"""
 
 
-def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
+def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     """
-    Ensure a tokenizer uses a prefix-preserving chat template during training.
+    Get a prefix-preserving chat template for training, if needed.
 
-    If the tokenizer's template isn't prefix-preserving, temporarily swap in a training-compatible template (currently
-    only Qwen3 supported) for the duration of `apply_chat_template()` calls. The training template is saved as
-    `tokenizer._training_chat_template`.
+    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template
+    (currently only Qwen3 supported). Otherwise, returns `None`.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
             Tokenizer instance to patch.
 
     Returns:
-        `PreTrainedTokenizer`:
-            The same tokenizer with `apply_chat_template()` patched (if needed and supported).
+        `str` or `None`:
+            Training-compatible chat template, or `None` if no patching is needed.
 
     Example:
 
     ```python
-    >>> from trl.chat_template_utils import patch_chat_template_for_training
+    >>> from trl.chat_template_utils import get_training_chat_template
     >>> from transformers import AutoTokenizer
 
     >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
@@ -472,40 +470,25 @@ def patch_chat_template_for_training(tokenizer: PreTrainedTokenizer) -> PreTrain
     '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
 
     >>> #                                                                       ^ think tags missing
-    >>> tokenizer = patch_chat_template_for_training(tokenizer)
-    >>> tokenizer.apply_chat_template(messages1, tokenize=False)
+    >>> chat_template = get_training_chat_template(tokenizer)
+    >>> tokenizer.apply_chat_template(messages1, tokenize=False, chat_template=chat_template)
     '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n'
 
-    >>> tokenizer.apply_chat_template(messages2, tokenize=False)
+    >>> tokenizer.apply_chat_template(messages2, tokenize=False, chat_template=chat_template)
     '<|im_start|>user\nWhat color is the sky?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nIt is blue.<|im_end|>\n<|im_start|>user\nAnd at night?<|im_end|>\n'
     ```
     """
     # First check if patching is needed
     if is_chat_template_prefix_preserving(tokenizer):
-        return tokenizer  # No patching needed
-
-    original_method = tokenizer.apply_chat_template
-    original_chat_template = tokenizer.chat_template
+        return None  # No patching needed
 
     if tokenizer.chat_template == qwen3_chat_template:
-        tokenizer._training_chat_template = qwen3_training_chat_template
+        return qwen3_training_chat_template
     else:
         raise ValueError(
             "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "
             "Please manually modify the tokenizer's chat template for training."
         )
-
-    @functools.wraps(original_method)
-    def wrapper(*args, **kwargs):
-        tokenizer.chat_template = tokenizer._training_chat_template
-        try:
-            result = original_method(*args, **kwargs)
-        finally:
-            tokenizer.chat_template = original_chat_template
-        return result
-
-    tokenizer.apply_chat_template = wrapper
-    return tokenizer
 
 
 def parse_response(tokenizer: PreTrainedTokenizer, ids: list[list[int]]) -> list[dict]:

@@ -21,9 +21,9 @@ from transformers import AutoTokenizer
 
 from trl.chat_template_utils import (
     add_response_schema,
+    get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
-    patch_chat_template_for_training,
 )
 
 
@@ -117,10 +117,11 @@ class TestIsChatTemplatePrefixPreserving:
         assert is_chat_template_prefix_preserving(tokenizer) is False
 
 
-class TestPatchChatTemplateForTraining:
-    def test_patch_qwen3(self):
+class TestGetTrainingChatTemplate:
+    def test_qwen3(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
-        tokenizer = patch_chat_template_for_training(tokenizer)
+        assert is_chat_template_prefix_preserving(tokenizer) is False
+        tokenizer.chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
 
