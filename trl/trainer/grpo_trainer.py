@@ -1535,10 +1535,11 @@ class GRPOTrainer(BaseTrainer):
                         except Exception as e:
                             result = {"error": str(e)}
                             tool_failure_count += 1
+                        tool_message = {"role": "tool", "name": function["name"], "content": str(result)}
                     else:
                         result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
+                        tool_message = {"role": "tool", "name": tool_call.get("name", "unknown"), "content": str(result)}
                     tool_call["result"] = result
-                    tool_message = {"role": "tool", "name": function["name"], "content": str(result)}
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
 

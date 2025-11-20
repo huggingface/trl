@@ -1747,7 +1747,7 @@ class TestGRPOTrainer(TrlTestCase):
                     device=input_ids.device,
                 )
                 # fmt: on
-            else:  # second call will only have two inputs in the batch, because two examples haave a tool call.
+            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
                 completion_ids = torch.tensor(
                     [
                         # 'Done!<|im_end|>'
