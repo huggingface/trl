@@ -1530,16 +1530,17 @@ class GRPOTrainer(BaseTrainer):
                     tool_call_count += 1
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
+                        name = function["name"]
                         try:
-                            result = self._tool_dict[function["name"]](**function["arguments"])
+                            result = self._tool_dict[name](**function["arguments"])
                         except Exception as e:
-                            result = {"error": str(e)}
                             tool_failure_count += 1
-                        tool_message = {"role": "tool", "name": function["name"], "content": str(result)}
+                            result = {"error": str(e)}
                     else:
+                        tool_failure_count += 1
+                        name = tool_call.get("name", "unknown")
                         result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
-                        tool_message = {"role": "tool", "name": tool_call.get("name", "unknown"), "content": str(result)}
-                    tool_call["result"] = result
+                    tool_message = {"role": "tool", "name": name, "content": str(result)}
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
 
