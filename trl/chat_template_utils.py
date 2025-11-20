@@ -270,7 +270,7 @@ TokenizerOrProcessor = TypeVar("TokenizerOrProcessor", PreTrainedTokenizer, Proc
 
 
 def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor:
-    """
+    r"""
     Adds the appropriate response schema to the given tokenizer or processor based on its chat template.
 
     At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
@@ -492,7 +492,7 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
 
 def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
-    """
+    r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
     Attempts to parse the sequence using `tokenizer.parse_response()`. If parsing fails (e.g., due to malformed tool
