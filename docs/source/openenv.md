@@ -55,7 +55,7 @@ def rollout_func(
 
 The typical pattern when combining OpenEnv with TRL looks like this:
 
-1. Start or connect to an OpenEnv environment (e.g., an HTTP endpoint or Dockerized env).
+1. Start or connect to an OpenEnv environment (e.g., a Dockerized env or HTTP endpoint).
 2. Generate completions from your model — either via `trl.experimental.openenv.generate_rollout_completions` when using colocated vLLM, or by hitting your inference server when using vLLM in server mode.
 3. Step through the environment using each completion to compute rewards or metrics.
 4. Add environment results (e.g., `env_reward`) to the rollout result dict.
@@ -106,8 +106,8 @@ args = GRPOConfig(
 You can run OpenEnv environments in three different ways: 
 
 - We can load the environment from the Hugging Face Hub and execute it as a Docker container.
-- We can launch the environment directly using Uvicorn in Python, which you need on Google Colab.
 - We can connect to a hosted environment running on the Hugging Face Hub.
+- We can launch the environment directly using Uvicorn in Python.
 
 <hfoptions id="env_mode">
 
@@ -115,7 +115,7 @@ You can run OpenEnv environments in three different ways:
 
 **Load from Hugging Face Hub** *(recommended)*
 
-We can use the [`from_hub`](https://meta-pytorch.org/OpenEnv/core/#core.http_env_client.HTTPEnvClient.from_hub) method to load the environment from the hub. This method will automatically start a Docker container for the environment on your local machine. `openenv/echo-env` is the repo_id of the space on the hub.
+We can use the [`from_hub`](https://meta-pytorch.org/OpenEnv/core/#core.http_env_client.HTTPEnvClient.from_hub) method to load the environment from the hub. This method will automatically start a Docker container for the environment on your local machine. [`openenv/echo-env`](https://huggingface.co/spaces/openenv/echo_env) is the repo_id of the space on the hub.
 
 ```python
 env = EchoEnv.from_hub("openenv/echo-env")
@@ -146,8 +146,7 @@ Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but yo
 > ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
 
 > [!NOTE]
-> You can also use the **Docker option** with `from_docker_image` by providing the image name,
-> or connect directly to an already running container by setting `base_url` in the environment.
+> You can also use the **Docker option** with `from_docker_image` by providing the image name..
 > For more details, refer to the official [OpenEnv documentation](https://meta-pytorch.org/OpenEnv/core/).
 
 </hfoption>
@@ -169,13 +168,16 @@ env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
 > * Select **“Embed this Space.”**
 > * Copy the connection URL.
 
+> [!WARNING]
+> **Currently**, it is recommended to **duplicate the Space to your own account** to avoid potential concurrency issues.  
+
 </hfoption>
 
 <hfoption id="local">
 
 **Local Python process**
 
-You can start the server manually as a local Python process. For more details about the available environments, refer to the [OpenEnv repository](https://github.com/meta-pytorch/OpenEnv/tree/main/src/envs).
+You can start the server manually as a local Python process. For more details about the available environments, refer to the [OpenEnv catalog](https://meta-pytorch.org/OpenEnv/environments/).
    
 ```bash
 hf download openenv/echo_env --repo-type=space --local-dir=echo_env
@@ -203,7 +205,10 @@ Environments are tightly integrated with the Hub, allowing you to **push new env
 
 ## A simple example
 
-The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the Echo environment rewards completions based on their text length, encouraging the model to generate longer outputs. This pattern can be extended to any custom environment that provides structured feedback or task-based rewards:
+> [!NOTE]
+> You can explore more ready-to-use example scripts in the [`examples/scripts/openenv/`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/) directory.
+
+The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the [Echo environment](https://meta-pytorch.org/OpenEnv/environments/echo/) rewards completions based on their text length, encouraging the model to generate longer outputs. This pattern can be extended to any custom environment that provides structured feedback or task-based rewards:
 
 ```python
 from envs.echo_env import EchoEnv, EchoAction
@@ -340,19 +345,17 @@ Below is the reward curve from training:
 
 <iframe src="https://trl-lib-trackio.hf.space?project=openenv&metrics=train/rewards/reward_from_env/mean&runs=qgallouedec-1761202871&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>
 
-To learn more about how to create custom environments, see the [OpenEnv documentation](https://github.com/meta-pytorch/OpenEnv/blob/main/src/envs/README.md).
-
 ## Advanced Example
 
-Let's level this up a bit by training a model to interact with a more complex environment. We'll use the game word guessing game [wordle](https://www.nytimes.com/games/wordle/index.html) from the `textarena` environment. 
+Let's level this up a bit by training a model to interact with a more complex environment. We'll use the game word guessing game [wordle](https://www.nytimes.com/games/wordle/index.html) from the [`TextArena`](https://meta-pytorch.org/OpenEnv/environments/textarena/) environment.
 
 ### The TextArena Environment
 
 [TextArena](https://huggingface.co/papers/2504.11442) is an open-source collection of competitive text-based games designed to evaluate reasoning skills in LLMs using textual games like Wordle, Snake, Tic-Tac-Toe, and more. Research has shown that such games improve model performance on reasoning tasks.
 
-![image of textarena](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/text_arena_evals.png)
+![image of TextArena](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/text_arena_evals.png)
 
-We will use the `textarena` environment to train a model to play Wordle. The environment is a simple text based response environment that allows the model to interact with the game by making guesses and receive feedback on them.
+We will use the `TextArena` environment to train a model to play Wordle. The environment is a simple text based response environment that allows the model to interact with the game by making guesses and receive feedback on them.
 
 ### Wordle
 
@@ -578,7 +581,7 @@ You can also manually start the TextArena environment in a Docker container befo
 docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
 ```
 
-Then connect to it using `--env-url http://localhost:8001`.
+Then connect to it using `--env-mode docker-local--env-host localhost --env-port 8001`.
 
 ### Results
 
