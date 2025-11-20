@@ -196,3 +196,23 @@ else:
         module_spec=__spec__,
         extra_objects={"__version__": __version__},
     )
+
+
+# Monkey-patch for vLLM.
+# Bug introduced in https://github.com/vllm-project/vllm/pull/52
+# Fixed inhttps://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
+# Since TRL currently only supports vLLM v0.10.2, we patch it here. This can be removed when TRL requires vLLM >=0.11.1
+from .import_utils import is_vllm_available  # noqa: E402
+
+
+if is_vllm_available():
+    import vllm.model_executor.model_loader.weight_utils
+    from tqdm import tqdm
+
+    class DisabledTqdm(tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs["disable"] = True
+            super().__init__(*args, **kwargs)
+
+    # overwrite the class in the dependency
+    vllm.model_executor.model_loader.weight_utils.DisabledTqdm = DisabledTqdm
