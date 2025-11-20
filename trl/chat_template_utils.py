@@ -528,7 +528,7 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
         # Hotfix: remove incorrectly appended EOS token from tool calls
         # See https://github.com/huggingface/transformers/issues/42249
         parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
-    except Exception:
+    except ValueError:
         # Fallback: decode as plain text if parsing fails. This happens if the model outputs malformed tool calls.
         content = tokenizer.decode(ids, skip_special_tokens=True)
         parsed = {"role": "assistant", "content": content}

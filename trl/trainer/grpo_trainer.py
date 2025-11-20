@@ -53,7 +53,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
+from transformers.utils import is_datasets_available, is_jmespath_available, is_peft_available, is_rich_available
 
 from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from ..data_utils import (
@@ -390,11 +390,17 @@ class GRPOTrainer(BaseTrainer):
         self.rollout_func = rollout_func
 
         # Tools
-        if tools and not Version(transformers.__version__) >= Version("5.0.0.dev0"):
-            raise ImportError(
-                "Using tools with GRPOTrainer requires transformers version 5.0.0.dev0 or higher. Please upgrade "
-                "transformers to use this feature."
-            )
+        if tools:
+            if not Version(transformers.__version__) >= Version("5.0.0.dev0"):
+                raise ImportError(
+                    "Using tools with GRPOTrainer requires transformers version 5.0.0.dev0 or higher. Please upgrade "
+                    "transformers to use this feature."
+                )
+            if not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
+                    "it with `pip install jmespath` to use this feature."
+                )
         self.tools = tools or []
         self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
