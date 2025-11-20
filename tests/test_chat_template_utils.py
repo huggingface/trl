@@ -125,12 +125,12 @@ class TestGetTrainingChatTemplate:
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
 
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0.dev0",
+    strict=True,
+)
 class TestParseResponse:
-    @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-        reason="Tool parsing is not supported in transformers versions below 5.0.0.dev0",
-        strict=True,
-    )
     def test_parse_response(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
