@@ -197,7 +197,7 @@ env = EchoEnv(base_url="http://0.0.0.0:8001")
 ## Environments Catalog
 
 Environment development is active and evolving.
-The best way to explore the **current catalog of maintained environments** is by visiting the official OpenEnv [catalog](https://meta-pytorch.org/OpenEnv/environments/).
+The best way to explore the **current catalog of maintained environments** is by visiting the official OpenEnv [catalog](https://huggingface.co/collections/openenv/environment-hub).
 
 Custom environments are also supported. To learn how to create your own, check out the guide on [Building Your Own Environment with OpenEnv](https://meta-pytorch.org/OpenEnv/environment-builder/).
 
