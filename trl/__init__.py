@@ -206,6 +206,9 @@ from .import_utils import is_vllm_available  # noqa: E402
 
 
 if is_vllm_available():
+    import os
+
+    os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
     import vllm.model_executor.model_loader.weight_utils
     from tqdm import tqdm
 
