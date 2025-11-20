@@ -1385,17 +1385,21 @@ class GRPOTrainer(BaseTrainer):
                 "truncation": True,
                 "add_special_tokens": False,
             }
+            processor_tokenizer_kwargs = {
+                "return_token_type_ids": False,
+            }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
                     **processor_kwargs,
+                    tokenizer_kwargs=processor_tokenizer_kwargs,
                     add_generation_prompt=True,
                     tokenize=True,
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
+                generate_inputs = self.processing_class(text=prompts, **processor_kwargs, **processor_tokenizer_kwargs)
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
