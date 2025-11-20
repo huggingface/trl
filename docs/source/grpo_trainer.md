@@ -516,7 +516,65 @@ Note that [`GRPOTrainer`] supports multiple reward functions of different types.
 
 ## Agent Training
 
-To write...
+GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
+This parameter expects a list of Python functions that define the tools available to the agent:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    tools=[tool1, tool2],
+    ...,
+)
+```
+
+Each tool must be a standard Python function with **type-hinted arguments and return types**, along with a **Google-style docstring** describing its purpose, arguments, and return value.
+For more details, see the [Passing tools guide](https://huggingface.co/docs/transformers/en/chat_extras#passing-tools).
+
+Example:
+
+```python
+from trl import GRPOTrainer
+
+def multiply(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+trainer = GRPOTrainer(
+    tools=[multiply],
+    ...,
+)
+```
+
+### Supported Models
+
+Tested with:
+
+- **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
+
+> [!TIP]
+> Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+
+### Quick Start
+
+Use [grpo\_agent.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_agent.py) to fine-tune a LLM for agentic workflows.
+
+```bash
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/grpo_agent.py \
+  --model_name_or_path Qwen/Qwen3-0.6B
+  ...
+```
 
 ## Vision-Language Model (VLM) Training
 
