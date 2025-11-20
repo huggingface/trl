@@ -704,7 +704,7 @@ class GRPOConfig(TrainingArguments):
 
     # Deprecated arguments
     max_prompt_length: int | None = field(
-        default=512,
+        default=None,
         metadata={
             "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
             "desired length."
@@ -777,6 +777,15 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.max_prompt_length is not None:
+            warnings.warn(
+                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
+                "instead filter your dataset before training to ensure that prompts do not exceed your desired "
+                "length.",
+                FutureWarning,
+                stacklevel=2,
+            )
 
         if self.wandb_log_unique_prompts is not None:
             warnings.warn(
