@@ -128,7 +128,7 @@ class TestGetTrainingChatTemplate:
 class TestParseResponse:
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-        reason="Response parsing is not supported in transformers versions below 5.0.0.dev0",
+        reason="Tool parsing is not supported in transformers versions below 5.0.0.dev0",
         strict=True,
     )
     def test_parse_response(self):
@@ -144,11 +144,6 @@ class TestParseResponse:
         }
         assert parsed == expected
 
-    @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-        reason="Response parsing is not supported in transformers versions below 5.0.0.dev0",
-        strict=True,
-    )
     def test_parse_response_no_tool_call(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
