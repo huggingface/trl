@@ -1,13 +1,14 @@
 # OpenEnv Integration for Training LLMs with Environments
 
-## Overview
-
 [OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework from Meta's PyTorch team for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It offers [Gymnasium-style APIs](https://gymnasium.farama.org) (e.g., `reset()` and `step()`) to interface with environments in a standard manner, and supports running these environments as backend servers (for example, via HTTP or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/environment-hub).
 
 In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel free to explore the links above to dive deeper into OpenEnv itself.
 
 > [!NOTE]
 > You can explore ready-to-use example scripts in the [`examples/scripts/openenv/`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/) directory.
+
+> [!NOTE]
+> Explore the [OpenEnv docs](https://meta-pytorch.org/OpenEnv/) for more details.
 
 ## Installation
 
@@ -114,7 +115,7 @@ You can run OpenEnv environments in three different ways:
 
 **Load from Hugging Face Hub** *(recommended)*
 
-We can use the `from_hub` method to load the environment from the hub. This method will automatically start a Docker container for the environment on your local machine. `openenv/echo-env` is the repo_id of the space on the hub.
+We can use the [`from_hub`](https://meta-pytorch.org/OpenEnv/core/#core.http_env_client.HTTPEnvClient.from_hub) method to load the environment from the hub. This method will automatically start a Docker container for the environment on your local machine. `openenv/echo-env` is the repo_id of the space on the hub.
 
 ```python
 env = EchoEnv.from_hub("openenv/echo-env")
@@ -143,6 +144,11 @@ Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but yo
 > * Copy and execute the provided command in your terminal.
 >
 > ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
+
+> [!NOTE]
+> You can also use the **Docker option** with `from_docker_image` by providing the image name,
+> or connect directly to an already running container by setting `base_url` in the environment.
+> For more details, refer to the official [OpenEnv documentation](https://meta-pytorch.org/OpenEnv/core/).
 
 </hfoption>
 <hfoption id="space">
@@ -185,6 +191,15 @@ env = EchoEnv(base_url="http://0.0.0.0:8001")
 </hfoption>
 
 </hfoptions>
+
+## Environments Catalog
+
+Environment development is active and evolving.
+The best way to explore the **current catalog of maintained environments** is by visiting the official OpenEnv [catalog](https://meta-pytorch.org/OpenEnv/environments/).
+
+Custom environments are also supported. To learn how to create your own, check out the guide on [Building Your Own Environment with OpenEnv](https://meta-pytorch.org/OpenEnv/environment-builder/).
+
+Environments are tightly integrated with the Hub, allowing you to **push new environments directly** so the community can easily pull, reuse, and adapt them for their own use cases.
 
 ## A simple example
 
