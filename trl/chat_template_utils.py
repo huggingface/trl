@@ -12,138 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import TypeVar
-
-from transformers import PreTrainedTokenizer, ProcessorMixin
+from transformers import PreTrainedTokenizer
 
 
-# These schemas are copy-pasted from https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
-cohere_schema = {
-    "type": "object",
-    "properties": {
-        "role": {"const": "assistant"},
-        "content": {"type": "string", "x-regex": r"<\|START_RESPONSE\|>(.*?)(?:<\|END_RESPONSE\|>|$)"},
-        "thinking": {"type": "string", "x-regex": r"<\|START_THINKING\|>(.*?)(?:<\|END_THINKING\|>|$)"},
-        "tool_calls": {
-            "x-regex": r"<\|START_ACTION\|>(.*?)(?:<\|END_ACTION\|>|$)",
-            "x-parser": "json",
-            "x-parser-args": {
-                "transform": "[*].{type: 'function', function: {name: tool_name, arguments: parameters}}"
-            },
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {"const": "function"},
-                    "function": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "arguments": {
-                                "type": "object",
-                                "additionalProperties": {},
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
-ernie_schema = {
-    "type": "object",
-    "properties": {
-        "role": {"const": "assistant"},
-        "content": {"type": "string", "x-regex": "<response>\n(.*?)\n?</response>"},
-        "thinking": {"type": "string", "x-regex": r"(?:^|<think>\s*)(.*?)\s*<\/think>"},
-        "tool_calls": {
-            "x-regex-iterator": "<tool_call>(.*?)</tool_call>",
-            "type": "array",
-            "items": {
-                "type": "object",
-                "x-parser": "json",
-                "x-parser-args": {"transform": "{type: 'function', function: @}"},
-                "properties": {
-                    "type": {"const": "function"},
-                    "function": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "arguments": {
-                                "type": "object",
-                                "additionalProperties": {},
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
-gpt_oss_schema = {
-    "type": "object",
-    "properties": {
-        "role": {"const": "assistant"},
-        "content": {"type": "string", "x-regex": r"<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|$)"},
-        "thinking": {"type": "string", "x-regex": r"<\|channel\|>analysis<\|message\|>(.*?)<\|end\|>"},
-        "tool_calls": {
-            "x-regex-iterator": r"<\|channel\|>commentary (to=functions\..*?<\|message\|>.*?)(?:<\|call\|>|$)",
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {"const": "function"},
-                    "function": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string", "x-regex": r"^to=functions\.(\w+)"},
-                            "arguments": {
-                                "type": "object",
-                                "x-regex": r"<\|message\|>(.*)",
-                                "x-parser": "json",
-                                "additionalProperties": {},
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
-smollm_schema = {
-    "x-regex": r"(?:<think>\n?(?P<thinking>.+?)\n?</think>)?\s*(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?P<content>.+?)?\s*(?:<\|im_end\|>|$)",
-    "type": "object",
-    "properties": {
-        "role": {"const": "assistant"},
-        "content": {"type": "string"},
-        "thinking": {"type": "string"},
-        "tool_calls": {
-            "x-parser": "json",
-            "x-parser-args": {"transform": "[{type: 'function', function: @}]"},
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {"const": "function"},
-                    "function": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "arguments": {
-                                "type": "object",
-                                "additionalProperties": {},
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
+# Adapted and corrected versions of the schemas from:
+# https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
     "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
@@ -266,10 +139,8 @@ qwen3_chat_template = r"""{%- if tools %}
     {%- endif %}
 {%- endif %}"""
 
-TokenizerOrProcessor = TypeVar("TokenizerOrProcessor", PreTrainedTokenizer, ProcessorMixin)
 
-
-def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor:
+def add_response_schema(processor: PreTrainedTokenizer) -> PreTrainedTokenizer:
     r"""
     Adds the appropriate response schema to the given tokenizer or processor based on its chat template.
 
@@ -278,11 +149,11 @@ def add_response_schema(processor: TokenizerOrProcessor) -> TokenizerOrProcessor
     templates.
 
     Args:
-        processor (`TokenizerOrProcessor`):
+        processor (`PreTrainedTokenizer`):
             Tokenizer or processor to which the response schema will be added.
 
     Returns:
-        `TokenizerOrProcessor`:
+        `PreTrainedTokenizer`:
             Tokenizer or processor with the added response schema.
 
     Examples:
