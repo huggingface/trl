@@ -28,6 +28,7 @@ LIGER_KERNEL_MIN_VERSION = "0.5.8"
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
 _fastapi_available = _is_package_available("fastapi")
+_is_jmespath_available = _is_package_available("jmespath")
 _joblib_available = _is_package_available("joblib")
 _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
 _llm_blender_available = _is_package_available("llm_blender")
@@ -48,6 +49,10 @@ def is_deepspeed_available() -> bool:
 
 def is_fastapi_available() -> bool:
     return _fastapi_available
+
+
+def is_jmespath_available() -> bool:
+    return _is_jmespath_available
 
 
 def is_joblib_available() -> bool:

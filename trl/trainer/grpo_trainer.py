@@ -53,7 +53,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_jmespath_available, is_peft_available, is_rich_available
+from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
 from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from ..data_utils import (
@@ -64,7 +64,7 @@ from ..data_utils import (
 )
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_liger_kernel_available, is_vllm_available
+from ..import_utils import is_liger_kernel_available, is_vllm_available, is_jmespath_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .base_trainer import BaseTrainer
