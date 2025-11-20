@@ -140,21 +140,21 @@ qwen3_chat_template = r"""{%- if tools %}
 {%- endif %}"""
 
 
-def add_response_schema(processor: PreTrainedTokenizer) -> PreTrainedTokenizer:
+def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     r"""
-    Adds the appropriate response schema to the given tokenizer or processor based on its chat template.
+    Adds the appropriate response schema to the given tokenizer based on its chat template.
 
     At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
     waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
     templates.
 
     Args:
-        processor (`PreTrainedTokenizer`):
-            Tokenizer or processor to which the response schema will be added.
+        tokenizer (`PreTrainedTokenizer`):
+            Tokenizer to which the response schema will be added.
 
     Returns:
         `PreTrainedTokenizer`:
-            Tokenizer or processor with the added response schema.
+            Tokenizer with the added response schema.
 
     Examples:
 
@@ -169,11 +169,9 @@ def add_response_schema(processor: PreTrainedTokenizer) -> PreTrainedTokenizer:
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
-    if processor.chat_template == qwen3_chat_template:
-        # The Qwen3 response schema seems to be smollm_schema, and not the qwen3_schema. See
-        # https://github.com/huggingface/transformers/issues/42220
-        processor.response_schema = qwen3_schema
-        return processor
+    if tokenizer.chat_template == qwen3_chat_template:
+        tokenizer.response_schema = qwen3_schema
+        return tokenizer
     raise ValueError(
         "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
         "tokenizer or processor."
