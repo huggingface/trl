@@ -1532,82 +1532,14 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
-    @require_vision
-    def test_train_vlm_text_only_data(self, model_id):
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = SFTTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n.startswith("model.visual"):
-                assert torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
-            else:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
-
     @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-        ],
+        "dataset_config",
+        ["conversational_language_modeling", "conversational_prompt_completion", "standard_prompt_completion"],
     )
     @require_vision
-    def test_train_vlm_text_only_data_prompt_completion(self, model_id):
+    def test_train_vlm_text_only_data(self, model_id, dataset_config):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = SFTTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n.startswith("model.visual"):
-                assert torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
-            else:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-        ],
-    )
-    @require_vision
-    def test_train_vlm_text_only_data_prompt_completion_non_conversational(self, model_id):
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
