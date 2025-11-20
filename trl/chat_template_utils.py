@@ -433,7 +433,7 @@ qwen3_training_chat_template = r"""{%- if tools %}
 
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
-    """
+    r"""
     Get a prefix-preserving chat template for training, if needed.
 
     If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently only Qwen3
