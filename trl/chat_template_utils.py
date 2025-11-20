@@ -145,12 +145,12 @@ smollm_schema = {
 }
 
 qwen3_schema = {
-    "x-regex": r"^(?:<think>\n?(?P<thinking>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?:<\|im_end\|>|$)",
+    "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
         "content": {"type": "string"},
-        "thinking": {"type": "string"},
+        "reasoning_content": {"type": "string"},
         "tool_calls": {
             "x-parser": "json",
             "x-parser-args": {"transform": "[{type: 'function', function: @}]"},
