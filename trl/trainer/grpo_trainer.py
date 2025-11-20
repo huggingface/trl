@@ -1607,13 +1607,14 @@ class GRPOTrainer(BaseTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions
-            post_tool_completions = [parse_response(self.processing_class, ids) for ids in post_tool_ids]
+            post_tool_completions = [
+                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
+            ]
 
             # Add post-tool completions to the existing completions
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
-                # When the post-tool if completly truncated, content is empty.
-                if post_tool_completions[idx]["content"] or "tool_calls" in post_tool_completions[idx]:
+                if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
                     completions[idx_with_tool].append(post_tool_completions[idx])
 
             # Check for further tool calls
