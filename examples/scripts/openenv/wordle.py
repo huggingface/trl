@@ -93,7 +93,9 @@ def parse_args() -> argparse.Namespace:
         default="docker-image",
         help="Where to run the environment: 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
-    parser.add_argument("--env-image", type=str, default="textarena-env:latest", help="Docker image for the TextArena environment.")
+    parser.add_argument(
+        "--env-image", type=str, default="textarena-env:latest", help="Docker image for the TextArena environment."
+    )
     parser.add_argument(
         "--system-prompt-path",
         default="wordle_prompt.txt",
@@ -427,10 +429,10 @@ def main() -> None:
         print(f"🌍 Using existing TextArena Environment (Docker) at: {env_url}")
     elif args.env_mode == "docker-image":
         client = TextArenaEnv.from_docker_image(args.env_image)
-        print(f"🌍 Using TextArena Environment (Docker) from local Image")
+        print("🌍 Using TextArena Environment (Docker) from local Image")
     elif args.env_mode == "docker-hub":
         client = TextArenaEnv.from_hub(args.env_image)
-        print(f"🌍 Using existing TextArena Environment (Docker) from Hub Image")
+        print("🌍 Using existing TextArena Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
         print(f"🌍 Using Hugging Face Space environment at: {env_url}")

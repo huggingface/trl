@@ -452,10 +452,10 @@ def main() -> None:
         print(f"🌍 Using existing BrowserGym Environment (Docker) at: {env_url}")
     elif args.env_mode == "docker-image":
         client = BrowserGymEnv.from_docker_image(args.env_image)
-        print(f"🌍 Using BrowserGym Environment (Docker) from local Image")
+        print("🌍 Using BrowserGym Environment (Docker) from local Image")
     elif args.env_mode == "docker-hub":
         client = BrowserGymEnv.from_hub(args.env_image)
-        print(f"🌍 Using existing BrowserGym Environment (Docker) from Hub Image")
+        print("🌍 Using existing BrowserGym Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
         print(f"🌍 Using Hugging Face Space environment at: {env_url}")
