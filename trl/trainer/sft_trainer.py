@@ -603,7 +603,11 @@ class SFTTrainer(BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model = create_model_from_path(model, **args.model_init_kwargs or {})
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
