@@ -100,7 +100,7 @@ The comparison table below highlights the key differences between the two approa
 | **Method** | Ring Self-Attention | Attention Head Parallelism |
 | **Backend** | PyTorch FSDP2 | DeepSpeed ZeRO |
 | **Attention** | SDPA only | Flash Attention 2 or SDPA |
-| **Minimum Accelerate** | 1.10+ | 1.10+ |
+| **Minimum Accelerate** | 1.11.0+ | 1.12.0+ |
 | **Minimum DeepSpeed** | N/A | 0.18.1+ |
 | **Sequence Divisibility** | `cp_size * 2` | `sp_size` |
 | **Zero Stage** | N/A | ZeRO Stage 1/2/3 |
@@ -130,7 +130,7 @@ Ring Attention uses a ring-like communication pattern where each GPU processes a
 
 #### Requirements and Limitations
 
-1. **Accelerate 1.10 or higher** is required
+1. **Accelerate 1.11.0 or higher** is required for Ring Attention / Context Parallelism support
 2. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
 3. **SDPA attention** - Flash Attention is currently not supported
 4. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is automatically handled using the `pad_to_multiple_of` parameter in the data collator.
@@ -252,7 +252,7 @@ ALST (Arctic Long Sequence Training) / Ulysses uses attention head parallelism t
 #### Requirements and Limitations
 
 1. **DeepSpeed 0.18.1 or higher** is required
-2. **Accelerate 1.10 or higher** for parallelism configuration support
+2. **Accelerate 1.12.0 or higher** is required for ALST/Ulysses sequence parallelism support
 3. **Attention implementation** - Flash Attention 2 recommended (clean output), SDPA works as fallback
 4. **Sequence length divisibility** - sequences must be divisible by `sp_size`. Use `pad_to_multiple_of` in your training config.
 5. **Parallelism configuration** - You must ensure `dp_replicate_size × dp_shard_size × sp_size = num_processes`
