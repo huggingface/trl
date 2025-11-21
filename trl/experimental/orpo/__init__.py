@@ -12,18 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-from dataclasses import dataclass
-
-from ..experimental.orpo import ORPOTrainer as _ORPOTrainer
+from .orpo_config import ORPOConfig
+from .orpo_trainer import ORPOTrainer
 
 
-@dataclass
-class ORPOTrainer(_ORPOTrainer):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "The `ORPOTrainer` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.orpo import ORPOTrainer`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
-        )
-        super().__init__(*args, **kwargs)
+__all__ = ["ORPOConfig", "ORPOTrainer"]
