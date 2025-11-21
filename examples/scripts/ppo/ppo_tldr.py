@@ -44,7 +44,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 """
 python examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
     --learning_rate 3e-6 \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \
@@ -62,7 +62,7 @@ python examples/scripts/ppo/ppo_tldr.py \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \
     --learning_rate 3e-6 \
