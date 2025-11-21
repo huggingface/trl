@@ -134,11 +134,7 @@ if __name__ == "__main__":
         """pre-tokenize the dataset before training; only collate during training"""
 
         def tokenize(element):
-            input_ids = tokenizer.apply_chat_template(
-                element["messages"][:1],
-                padding=False,
-                add_generation_prompt=True,
-            )
+            input_ids = tokenizer(element["prompt"], padding=False)["input_ids"]
             return {"input_ids": input_ids, "lengths": len(input_ids)}
 
         return dataset.map(
