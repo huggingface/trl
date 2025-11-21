@@ -1532,10 +1532,14 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
+    @pytest.mark.parametrize(
+        "dataset_config",
+        ["conversational_language_modeling", "conversational_prompt_completion", "standard_prompt_completion"],
+    )
     @require_vision
-    def test_train_vlm_text_only_data(self, model_id):
+    def test_train_vlm_text_only_data(self, model_id, dataset_config):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")

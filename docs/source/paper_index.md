@@ -696,3 +696,27 @@ trainer.train()
 ```
 
 For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
+
+## Distributed Training
+
+### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models
+
+**📜 Paper**: https://huggingface.co/papers/1910.02054
+
+ZeRO (Zero Redundancy Optimizer) eliminates memory redundancies in data- and model-parallel training by partitioning optimizer states, gradients, and parameters across devices while retaining low communication volume and high computational granularity. This allows for the efficient training of large models that would otherwise not fit in GPU memory.
+
+TRL supports ZeRO via the [DeepSpeed integration](deepspeed_integration). To use it, provide a DeepSpeed configuration file with your desired settings,
+
+```yaml
+# config.yaml
+distributed_type: DEEPSPEED
+num_processes: 2
+deepspeed_config:
+  zero_stage: 3
+```
+
+and launch the training script using `accelerate launch --config_file config_file`.
+
+```sh
+accelerate launch --config_file config.yaml train.py
+```
