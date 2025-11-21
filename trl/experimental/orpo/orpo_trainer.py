@@ -82,7 +82,7 @@ class ORPOTrainer(BaseTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
-        args ([`ORPOConfig`]):
+        args ([`experimental.orpo.ORPOConfig`]):
             The ORPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
@@ -153,7 +153,7 @@ class ORPOTrainer(BaseTrainer):
             raise ValueError("You passed model_kwargs to the ORPOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
                 if isinstance(dtype, str) and dtype != "auto":
@@ -163,6 +163,7 @@ class ORPOTrainer(BaseTrainer):
                         f"Invalid `dtype` passed to the ORPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
                 model_init_kwargs["dtype"] = dtype
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)

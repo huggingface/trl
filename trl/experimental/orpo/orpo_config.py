@@ -21,7 +21,7 @@ from transformers import TrainingArguments
 @dataclass
 class ORPOConfig(TrainingArguments):
     r"""
-    Configuration class for the [`ORPOTrainer`].
+    Configuration class for the [`experimental.orpo.ORPOTrainer`].
 
     This class includes only the parameters that are specific to ORPO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
@@ -172,3 +172,8 @@ class ORPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
+
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        super().__post_init__()

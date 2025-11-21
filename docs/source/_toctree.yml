@@ -123,8 +123,4 @@
     title: XPO
   - local: openenv
     title: OpenEnv Integration
-  - local: orpo_trainer
-    title: ORPO
-  - local: papo_trainer
-    title: PAPO
   title: Experimental
