@@ -313,7 +313,7 @@ class DPOTrainer(BaseTrainer):
             # Special case for DeepSpeed: requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type == "DEEPSPEED":
                 model_init_kwargs["device_map"] = None
-            ref_model = create_model_from_path(model, **model_init_kwargs)
+            ref_model = create_model_from_path(ref_model, **model_init_kwargs)
         else:
             if args.ref_model_init_kwargs is not None:
                 logger.warning(
