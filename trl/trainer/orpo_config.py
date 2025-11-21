@@ -15,35 +15,15 @@
 import warnings
 from dataclasses import dataclass
 
-from ..experimental.orpo import ORPOConfig as ExperimentalORPOConfig
+from ..experimental.orpo import ORPOConfig as _ORPOConfig
 
 
 @dataclass
-class ORPOConfig(ExperimentalORPOConfig):
-    r"""
-    Configuration class for the [`ORPOTrainer`].
-
-    <Deprecated version="0.25.0">
-
-    This class has been moved to `trl.experimental.orpo.ORPOConfig` and will be removed in TRL 0.29.0.
-    Please update your imports:
-
-    ```python
-    from trl.experimental.orpo import ORPOConfig
-    ```
-
-    For more details, see: https://github.com/huggingface/trl/issues/4223
-
-    </Deprecated>
-    """
-
+class ORPOConfig(_ORPOConfig):
     def __post_init__(self):
         warnings.warn(
-            "ORPOConfig has been moved to trl.experimental.orpo.ORPOConfig and will be removed from "
-            "trl.trainer in TRL 0.29.0. Please update your imports to: "
-            "`from trl.experimental.orpo import ORPOConfig`. "
-            "For more details, see: https://github.com/huggingface/trl/issues/4223",
-            FutureWarning,
-            stacklevel=2,
+            "The `ORPOConfig` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.orpo import ORPOConfig`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
         super().__post_init__()

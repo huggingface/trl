@@ -75,6 +75,8 @@ from transformers import (
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
     Qwen3MoeForSequenceClassification,
+    Qwen3VLConfig,
+    Qwen3VLForConditionalGeneration,
     SmolVLMForConditionalGeneration,
     T5ForConditionalGeneration,
 )
@@ -313,6 +315,7 @@ for model_id, model_class in [
     ("OpenGVLab/InternVL3-8B-hf", InternVLForConditionalGeneration),
     ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLForConditionalGeneration),
     ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLForConditionalGeneration),
+    ("Qwen/Qwen3-VL-2B-Instruct", Qwen3VLForConditionalGeneration),
 ]:
     processor = AutoProcessor.from_pretrained(model_id)
 
@@ -349,6 +352,16 @@ for model_id, model_class in [
 
     if issubclass(model_class.config_class, Idefics2Config):
         kwargs["perceiver_config"] = {"hidden_size": 16}
+
+    if issubclass(model_class.config_class, Qwen3VLConfig):
+        # So hasattr(config, "layer_types") is False
+        # See: https://github.com/huggingface/transformers/blob/fe5ca9ddaa07fac2872407e75c7a7661216ac956/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L420
+        del text_config["layer_types"]
+        # "mrope_section" needs 3 elements: for dim, offset in enumerate((1, 2), start=1): mrope_section[dim]
+        # See: https://github.com/huggingface/transformers/blob/fe5ca9ddaa07fac2872407e75c7a7661216ac956/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L361
+        text_config["rope_scaling"] = {"mrope_interleaved": True, "mrope_section": [2, 2, 2], "rope_type": "default"}
+        vision_config["depth"] = 2
+        vision_config["out_hidden_size"] = 16
 
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=torch.bfloat16)
