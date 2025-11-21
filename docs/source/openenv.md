@@ -5,7 +5,8 @@
 In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel free to explore the links above to dive deeper into OpenEnv itself.
 
 > [!NOTE]
-> You can explore ready-to-use example scripts in the [`examples/scripts/openenv/`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/) directory.
+> You can explore ready-to-use example [scripts](example_overview#scripts) and [notebooks](example_overview#notebooks) in the Examples Overview.
+
 
 > [!NOTE]
 > Explore the [OpenEnv docs](https://meta-pytorch.org/OpenEnv/) for more details.
