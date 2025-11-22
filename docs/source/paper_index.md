@@ -188,7 +188,7 @@ $$
 }
 $$
 
-where  \\( C \\) is a hyper-parameter. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `sequence_truncate` or `token_truncate`.
+where  \\( C \\) is a hyper-parameter. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
 
 ```python
 from trl import GRPOConfig
@@ -232,7 +232,7 @@ $$
 }
 $$
 
-MIS is implemented for GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `mask`, such as `sequence_mask` or `token_mask`.
+MIS is implemented for GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `"mask"`, such as `"sequence_mask"` or `"token_mask"`.
 
 ```python
 from trl import GRPOConfig
@@ -250,7 +250,7 @@ training_args = GRPOConfig(
 
 **📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
 
-The theoretically principled way to correct for the training-inference distribution shift is importance sampling, as introduced in the two papers above [Truncated Importance Sampling](#truncated-importance-sampling) and [Masked Importance Sampling](). However, the choice of formulation is crucial for keeping the gradient unbiased and ensuring stable training.
+The theoretically principled way to correct for the training-inference distribution shift is importance sampling, as introduced in the two papers above [Truncated Importance Sampling](#truncated-importance-sampling) and [Masked Importance Sampling](#masked-importance-sampling). However, the choice of formulation is crucial for keeping the gradient unbiased and ensuring stable training.
 
 This work shows that sequence-level importance sampling is the sound approach for addressing the training–inference mismatch. Although token-level importance sampling achieves lower variance than a sequence-level ratio, it introduces bias and is therefore argued to be unsuitable for autoregressive models. The token-level gradient estimator is
 
@@ -265,7 +265,7 @@ $$
 \Bigg]
 $$
 
-The correct, unbiased policy gradient estimator applies a single importance ratio over the entire generated sequence (trajectory) $y$, The Sequence-Level IS estimator looks like:
+The correct, unbiased policy gradient estimator applies a single importance ratio over the entire generated sequence (trajectory) \\( y \\), The Sequence-Level IS estimator looks like:
 
 $$
 \mathbb{E}_{x\sim\mathcal{D},\, y\sim \pi^{\text{inference}}_\theta(\cdot|x)}
@@ -277,7 +277,7 @@ $$
 \Bigg]
 $$
 
-TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `sequence_*` modes implement a sequence-level importance sampling ratio and `token_*` a per-token ratio.
+TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
 
 ### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
 

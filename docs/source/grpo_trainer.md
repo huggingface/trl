@@ -254,21 +254,21 @@ This mismatch leads to a biased gradient update which has been observed to desta
 
 $$
 \nabla_\theta \mathcal{J}(x,\theta)
-= \mathbb{E}*{y \sim \pi^\text{train}(\cdot \mid x,\theta)}
-\left[ \nabla*\theta \log \pi^\text{train}(y \mid x,\theta) \cdot R(x,y) \right]
+= \mathbb{E}_{y \sim \pi^\text{train}(\cdot \mid x,\theta)}
+\left[ \nabla_\theta \log \pi^\text{train}(y \mid x,\theta) \cdot R(x,y) \right]
 $$
 
-Here (x) denotes prompts sampled from some data distribution, and (\pi^\text{train}) is the policy implemented by the training engine. With vLLM in the loop we obtain a separate inference policy (\pi^\text{inference}), so the effective policy gradient becomes
+Here \\( x \\) denotes prompts sampled from some data distribution, and \\( \pi^\text{train} \\) is the policy implemented by the training engine. With vLLM in the loop we obtain a separate inference policy \\( \pi^\text{inference} \\), so the effective policy gradient becomes
 
 $$
-\nabla_\theta \mathcal{J}*{\text{biased}}(x,\theta)
-= \mathbb{E}*{y \sim \pi^\text{inference}(\cdot \mid x,\theta)}
+\nabla_\theta \mathcal{J}_{\text{biased}}(x,\theta)
+= \mathbb{E}_{y \sim \pi^\text{inference}(\cdot \mid x,\theta)}
 \left[ \nabla_\theta \log \pi^\text{train}(y \mid x,\theta) \cdot R(x,y) \right].
 $$
 
 This turns an otherwise on policy RL problem into an off policy one.
 
-The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: Truncated Importance Sampling (TIS) and Masked Importance Sampling (MIS). Both variants can be applied either at the token level or at the sequence level.Let (\rho) denote the importance weight, for example (\rho_t) per token or (\rho_{\text{seq}}) per sequence. Under TIS, ratios larger than `vllm_importance_sampling_cap` are clipped,
+The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: [Truncated Importance Sampling (TIS)](paper_index#truncated-importance-sampling) and [Masked Importance Sampling (MIS)](paper_index#masked-importance-sampling). Both variants can be applied either at the token level or at the sequence level.Let (\rho) denote the importance weight, for example \\( \rho_t \\) per token or \\( \rho_{\text{seq}} \\) per sequence. Under TIS, ratios larger than `vllm_importance_sampling_cap` are clipped,
 
 $$
 \rho \leftarrow \min(\rho, C).
