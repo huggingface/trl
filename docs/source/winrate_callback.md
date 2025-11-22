@@ -1,0 +1,3 @@
+# WinRateCallback
+
+[[autodoc]] WinRateCallback

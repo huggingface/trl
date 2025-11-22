@@ -91,6 +91,8 @@
 - sections:
   - local: experimental_overview
     title: Experimental Overview
+  - local: openenv
+    title: OpenEnv Integration
   - local: bema_for_reference_model # Sorted alphabetically
     title: BEMA for Reference Model
   - local: bco_trainer
@@ -119,8 +121,8 @@
     title: PAPO
   - local: ppo_trainer
     title: PPO
+  - local: winrate_callback
+    title: WinRateCallback
   - local: xpo_trainer
     title: XPO
-  - local: openenv
-    title: OpenEnv Integration
   title: Experimental
