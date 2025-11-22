@@ -1158,7 +1158,6 @@ class GRPOTrainer(BaseTrainer):
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
-        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1178,6 +1177,7 @@ class GRPOTrainer(BaseTrainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts = gather_object(prompts)
+                num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
