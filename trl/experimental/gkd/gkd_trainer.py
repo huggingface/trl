@@ -14,6 +14,7 @@
 
 import random
 import textwrap
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -23,6 +24,7 @@ import torch.nn.functional as F
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
+    AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -38,7 +40,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
+from ...trainer.utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache, pad
 from .gkd_config import GKDConfig
 
 
@@ -47,6 +49,85 @@ if is_peft_available():
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
+
+
+def build_teacher_inputs_from_texts(
+    tokenizer: PreTrainedTokenizerBase,
+    prompt_texts: list[str],
+    completion_texts: list[str],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    """Tokenize teacher prompts/completions and produce tensors ready for GKD loss computation.
+
+    This utility function is used for cross-tokenizer distillation, where the teacher model uses a different
+    tokenizer than the student model. It takes raw text prompts and completions, tokenizes them using the
+    teacher's tokenizer, and returns properly formatted input tensors for the teacher model.
+
+    Args:
+        tokenizer: The teacher model's tokenizer.
+        prompt_texts: List of prompt strings (one per batch item).
+        completion_texts: List of completion strings (one per batch item).
+
+    Returns:
+        A tuple containing:
+        - teacher_input_ids: Padded input IDs tensor for teacher model [batch_size, max_seq_len]
+        - teacher_labels: Labels tensor with prompts masked out (-100) [batch_size, max_seq_len]
+        - teacher_attention_mask: Attention mask tensor [batch_size, max_seq_len]
+        - teacher_prompt_length: Maximum prompt length across the batch (for logit slicing)
+    """
+    pad_token_id = tokenizer.pad_token_id
+    eos_token_id = tokenizer.eos_token_id
+
+    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
+    completion_token_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+
+    sequences: list[torch.Tensor] = []
+    attention_masks: list[torch.Tensor] = []
+    labels_list: list[torch.Tensor] = []
+    prompt_lengths: list[int] = []
+
+    for prompt_ids, completion_ids in zip(prompt_token_ids, completion_token_ids, strict=True):
+        # Remove trailing EOS from prompt so completions can extend cleanly
+        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+            prompt_ids = prompt_ids[:-1]
+
+        prompt_lengths.append(len(prompt_ids))
+        sequence = list(prompt_ids)
+        sequence.extend(completion_ids)
+        if eos_token_id is not None:
+            sequence.append(eos_token_id)
+
+        seq_tensor = torch.tensor(sequence, dtype=torch.long)
+        sequences.append(seq_tensor)
+        attention_masks.append(torch.ones_like(seq_tensor))
+
+        labels = seq_tensor.clone()
+        labels[: len(prompt_ids)] = -100
+        if pad_token_id is not None:
+            labels[labels == pad_token_id] = -100
+        labels_list.append(labels)
+
+    teacher_input_ids = pad(
+        sequences,
+        padding_side="right",
+        padding_value=pad_token_id if pad_token_id is not None else 0,
+    )
+    teacher_attention_mask = pad(attention_masks, padding_side="right", padding_value=0).bool()
+    teacher_labels = pad(labels_list, padding_side="right", padding_value=-100)
+
+    if eos_token_id is not None:
+        for row in range(teacher_attention_mask.size(0)):
+            valid = (
+                teacher_input_ids[row] != pad_token_id
+                if pad_token_id is not None
+                else teacher_attention_mask[row].bool()
+            )
+            if valid.any():
+                last_idx = valid.nonzero(as_tuple=True)[0][-1]
+                teacher_attention_mask[row, last_idx + 1 :] = False
+
+    teacher_prompt_length = max(prompt_lengths) if prompt_lengths else 0
+
+    return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
 
 
 class GKDTrainer(SFTTrainer):
@@ -191,6 +272,33 @@ class GKDTrainer(SFTTrainer):
         else:
             self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 
+        # Load teacher tokenizer if specified for cross-tokenizer distillation
+        self.teacher_tokenizer = None
+        if args.teacher_tokenizer_name_or_path is not None:
+            self.teacher_tokenizer = AutoTokenizer.from_pretrained(args.teacher_tokenizer_name_or_path)
+            if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
+                self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
+
+            # Check for Liger kernel incompatibility
+            if self.use_liger_gkd_loss:
+                raise ValueError(
+                    "Cross-tokenizer distillation (teacher_tokenizer_name_or_path is set) is not compatible with "
+                    "Liger kernel optimization (use_liger_kernel=True). Please disable use_liger_kernel when using "
+                    "different tokenizers for student and teacher models."
+                )
+        elif hasattr(self.teacher_model, "config") and hasattr(self.model, "config"):
+            # Warn if models appear to be different but teacher_tokenizer not specified
+            teacher_model_name = getattr(self.teacher_model.config, "_name_or_path", None)
+            student_model_name = getattr(self.model.config, "_name_or_path", None)
+            if teacher_model_name and student_model_name and teacher_model_name != student_model_name:
+                warnings.warn(
+                    f"Student model ({student_model_name}) and teacher model ({teacher_model_name}) appear to be "
+                    f"different. If they use different tokenizers, you should set 'teacher_tokenizer_name_or_path' "
+                    f"in GKDConfig for correct cross-tokenizer distillation.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
         self.lmbda = args.lmbda
         self.beta = args.beta
         self.temperature = args.temperature
@@ -286,6 +394,75 @@ class GKDTrainer(SFTTrainer):
             return jsd
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Cross-tokenizer distillation path
+        if self.teacher_tokenizer is not None:
+            # Extract or decode text from student rollouts
+            if "original_prompt_text" in inputs and "original_completion_text" in inputs:
+                prompt_texts = inputs["original_prompt_text"]
+                completion_texts = inputs["original_completion_text"]
+            else:
+                # Fallback: decode from student tokens
+                prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
+                full_texts = self.processing_class.batch_decode(inputs["input_ids"], skip_special_tokens=False)
+                completion_texts = [
+                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
+                ]
+
+            # Re-tokenize using teacher's tokenizer
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_prompt_length,
+            ) = build_teacher_inputs_from_texts(
+                self.teacher_tokenizer,
+                prompt_texts,
+                completion_texts,
+            )
+
+            teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
+            teacher_labels = teacher_labels.to(self.accelerator.device)
+            teacher_attention_mask = teacher_attention_mask.to(self.accelerator.device)
+
+            # Student forward pass (unchanged)
+            student_outputs = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+            )
+
+            # Teacher forward pass with re-tokenized inputs
+            self.teacher_model.eval()
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(
+                    input_ids=teacher_input_ids,
+                    attention_mask=teacher_attention_mask,
+                )
+
+            # Extract logits with appropriate prompt lengths
+            student_prompt_length = inputs["prompts"].shape[1]
+            shifted_student_logits = student_outputs.logits[:, student_prompt_length - 1 : -1, :]
+            shifted_teacher_logits = teacher_outputs.logits[:, teacher_prompt_length - 1 : -1, :]
+            shifted_student_labels = inputs["labels"][:, student_prompt_length:]
+
+            # Handle different sequence lengths
+            min_length = min(shifted_student_logits.size(1), shifted_teacher_logits.size(1))
+            shifted_student_logits = shifted_student_logits[:, :min_length, :]
+            shifted_teacher_logits = shifted_teacher_logits[:, :min_length, :]
+            shifted_student_labels = shifted_student_labels[:, :min_length]
+
+            # Compute loss
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_student_labels,
+                beta=self.beta,
+                temperature=self.temperature,
+            )
+
+            empty_cache()
+            return (loss, student_outputs) if return_outputs else loss
+
+        # Same-tokenizer paths (Liger and non-Liger)
         if self.use_liger_gkd_loss:
             # Forward only through the base models (avoid lm_head to save memory)
             unwrapped_student = self.accelerator.unwrap_model(model)
@@ -387,7 +564,7 @@ class GKDTrainer(SFTTrainer):
         return (loss, student_outputs) if return_outputs else loss
 
     @staticmethod
-    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
+    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None, processing_class=None):
         # Generate output with respect to the prompt-only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
@@ -407,7 +584,30 @@ class GKDTrainer(SFTTrainer):
             new_labels[new_labels == pad_token_id] = -100
             new_attention_mask[generated_tokens == pad_token_id] = 0
 
-        return generated_tokens, new_attention_mask, new_labels
+        # Extract text for cross-tokenizer support
+        prompt_texts = []
+        completion_texts = []
+        if processing_class is not None:
+            batch_size = generated_tokens.size(0)
+            for idx in range(batch_size):
+                # Extract prompt tokens
+                prompt_tokens = inputs["prompts"][idx]
+                if pad_token_id is not None:
+                    prompt_tokens = prompt_tokens[prompt_tokens != pad_token_id]
+                prompt_texts.append(
+                    processing_class.decode(prompt_tokens.tolist(), skip_special_tokens=False)
+                )
+
+                # Extract completion tokens (everything after the prompt)
+                prompt_length = prompt_tokens.size(0)
+                completion_tokens = generated_tokens[idx, prompt_length:]
+                if pad_token_id is not None:
+                    completion_tokens = completion_tokens[completion_tokens != pad_token_id]
+                completion_texts.append(
+                    processing_class.decode(completion_tokens.tolist(), skip_special_tokens=False)
+                )
+
+        return generated_tokens, new_attention_mask, new_labels, prompt_texts, completion_texts
 
     def training_step(
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
@@ -421,20 +621,37 @@ class GKDTrainer(SFTTrainer):
         """
         if self.seq_kd:
             with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                result = self.generate_on_policy_outputs(
+                    unwrapped_model,
+                    inputs,
+                    self.generation_config,
+                    self.processing_class.pad_token_id,
+                    self.processing_class if self.teacher_tokenizer is not None else None,
                 )
+                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
+            if self.teacher_tokenizer is not None:
+                inputs["original_prompt_text"] = prompt_texts
+                inputs["original_completion_text"] = completion_texts
+
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                result = self.generate_on_policy_outputs(
+                    unwrapped_model,
+                    inputs,
+                    self.generation_config,
+                    self.processing_class.pad_token_id,
+                    self.processing_class if self.teacher_tokenizer is not None else None,
                 )
+                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
+            if self.teacher_tokenizer is not None:
+                inputs["original_prompt_text"] = prompt_texts
+                inputs["original_completion_text"] = completion_texts
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
