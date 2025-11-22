@@ -21,18 +21,16 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13"
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
     "transformers>=4.56.1",
-    "transformers!=4.57.0; python_version == '3.9'"
 ]
 dynamic = ["version"]
 
@@ -54,6 +52,9 @@ judges = [
     "openai>=1.23.2",
     "llm-blender>=0.0.2"
 ]
+kernels = [
+    "kernels"
+]
 liger = [
     "liger-kernel>=0.6.2"
 ]
@@ -71,7 +72,6 @@ scikit = [
     "scikit-learn"
 ]
 test = [
-    "parameterized",
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
@@ -101,6 +101,8 @@ dev = [
     # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
+    # kernels
+    "kernels",
     # liger
     "liger-kernel>=0.6.2",
     # peft
@@ -112,7 +114,6 @@ dev = [
     "bitsandbytes",
     # scikit: included in bco
     # test
-    "parameterized",
     "pytest-cov",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
@@ -134,7 +135,7 @@ version = { file = "VERSION" }
 branch = true
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 119
 src = ["trl"]
 

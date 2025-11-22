@@ -9,6 +9,7 @@ on:
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  TRL_EXPERIMENTAL_SILENCE: 1
 
 jobs:
   tests:
@@ -24,7 +25,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
-        with: { ref: v0.24-release }
+        with: { ref: v0.25-release }
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5

@@ -20,18 +20,6 @@ from typing import TYPE_CHECKING
 from .import_utils import _LazyModule
 
 
-if sys.version_info[:2] == (3, 9):
-    warnings.warn(
-        (
-            "Support for Python 3.9 will be dropped in the next release "
-            "(after its end-of-life on October 31, 2025). "
-            "Please upgrade to Python 3.10 or newer."
-        ),
-        category=FutureWarning,
-        stacklevel=2,
-    )
-
-
 try:
     __version__ = version("trl")
 except PackageNotFoundError:
@@ -50,10 +38,10 @@ _import_structure = {
         "maybe_unpair_preference_dataset",
         "pack_dataset",
         "prepare_multimodal_messages",
+        "prepare_multimodal_messages_vllm",
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "extras": ["BestOfNSampler"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -130,10 +118,10 @@ if TYPE_CHECKING:
         maybe_unpair_preference_dataset,
         pack_dataset,
         prepare_multimodal_messages,
+        prepare_multimodal_messages_vllm,
         truncate_dataset,
         unpair_preference_dataset,
     )
-    from .extras import BestOfNSampler
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

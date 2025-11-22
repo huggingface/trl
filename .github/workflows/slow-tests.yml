@@ -11,6 +11,7 @@ env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
   SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+  TRL_EXPERIMENTAL_SILENCE: 1
 
 jobs:
   run_all_tests_single_gpu:
@@ -46,7 +47,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog parameterized
+          uv pip install pytest-reportlog
 
       - name: Run slow SFT tests on single GPU
         if: always()
@@ -94,7 +95,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install pytest-reportlog parameterized
+          uv pip install pytest-reportlog
 
       - name: Run slow SFT tests on Multi GPU
         if: always()

@@ -14,7 +14,7 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -59,17 +59,6 @@ class OnlineDPOConfig(TrainingArguments):
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
-
-        dataset_num_proc (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Since OnlineDPO does not involve
-            dataset preparation, you can safely remove it.
-
-            </Deprecated>
-
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -174,7 +163,7 @@ class OnlineDPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -182,14 +171,24 @@ class OnlineDPOConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
-    reward_model_path: Optional[str] = field(
+    reward_model_path: str | None = field(
         default=None,
         metadata={
             "help": "Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both."
         },
     )
-    judge: Optional[str] = field(
+    judge: str | None = field(
         default=None,
         metadata={
             "help": "Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both."
@@ -218,14 +217,14 @@ class OnlineDPOConfig(TrainingArguments):
             "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: Optional[int] = field(
+    top_k: int | None = field(
         default=None,
         metadata={
             "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
-    min_p: Optional[float] = field(
+    min_p: float | None = field(
         default=None,
         metadata={
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
@@ -240,7 +239,7 @@ class OnlineDPOConfig(TrainingArguments):
             "to repeat tokens."
         },
     )
-    generation_kwargs: Optional[dict] = field(
+    generation_kwargs: dict | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -257,11 +256,11 @@ class OnlineDPOConfig(TrainingArguments):
             "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
-    cache_implementation: Optional[str] = field(
+    cache_implementation: str | None = field(
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
-    missing_eos_penalty: Optional[float] = field(
+    missing_eos_penalty: float | None = field(
         default=None,
         metadata={
             "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
@@ -304,11 +303,11 @@ class OnlineDPOConfig(TrainingArguments):
             "model implementation."
         },
     )
-    vllm_guided_decoding_regex: Optional[str] = field(
+    vllm_guided_decoding_regex: str | None = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
-    vllm_gpu_memory_utilization: Optional[float] = field(
+    vllm_gpu_memory_utilization: float | None = field(
         default=0.55,
         metadata={
             "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
@@ -326,7 +325,7 @@ class OnlineDPOConfig(TrainingArguments):
             "contention with training.",
         },
     )
-    vllm_server_base_url: Optional[str] = field(
+    vllm_server_base_url: str | None = field(
         default=None,
         metadata={
             "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
@@ -365,14 +364,14 @@ class OnlineDPOConfig(TrainingArguments):
             "is not compatible with vLLM generation."
         },
     )
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
             "from a string."
         },
     )
-    reward_weights: Optional[list[float]] = field(
+    reward_weights: list[float] | None = field(
         default=None,
         metadata={
             "help": "Weights for combining multiple reward functions. Must match the number of reward functions. "
@@ -380,35 +379,10 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
 
-    # Deprecated parameters
-    dataset_num_proc: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    gpu_memory_utilization: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.25.0. Please use "
-            "`vllm_gpu_memory_utilization` instead.",
-        },
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
-
-        if self.dataset_num_proc is not None:
-            warnings.warn(
-                "The parameter `dataset_num_proc` is deprecated and will be removed in version 0.25.0. "
-                "Since OnlineDPO does not involve dataset preparation, you can safely remove it.",
-            )
-        if self.gpu_memory_utilization is not None:
-            warnings.warn(
-                "The parameter `gpu_memory_utilization` is deprecated and will be removed in version 0.25.0. "
-                "Please use `vllm_gpu_memory_utilization` instead.",
-            )
-            self.vllm_gpu_memory_utilization = self.gpu_memory_utilization
 
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]

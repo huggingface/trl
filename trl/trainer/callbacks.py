@@ -14,8 +14,6 @@
 
 import logging
 import os
-from collections.abc import Callable
-from typing import Optional, Union
 
 import pandas as pd
 import torch
@@ -39,8 +37,7 @@ from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_mergekit_available, is_weave_available
 from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
 from ..models.utils import unwrap_model_for_generation
-from .judges import BasePairwiseJudge
-from .utils import log_table_to_comet_experiment
+from .utils import get_config_model_id, log_table_to_comet_experiment
 
 
 if is_rich_available():
@@ -69,7 +66,7 @@ def _generate_completions(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     accelerator: Accelerator,
-    generation_config: Optional[GenerationConfig],
+    generation_config: GenerationConfig | None,
     batch_size: int = 1,
 ) -> list[str]:
     """
@@ -95,7 +92,7 @@ def _generate_completions(
                 **tokenized_batch,
                 generation_config=generation_config,
             )
-            for prompt, generation in zip(tokenized_batch.input_ids, generations):
+            for prompt, generation in zip(tokenized_batch.input_ids, generations, strict=True):
                 # Remove prompt from generation
                 generation = generation[len(prompt) :]
                 completion = tokenizer.decode(generation, skip_special_tokens=True)
@@ -110,15 +107,15 @@ class SyncRefModelCallback(TrainerCallback):
 
     def __init__(
         self,
-        ref_model: Union[PreTrainedModel, torch.nn.Module],
-        accelerator: Optional[Accelerator],
+        ref_model: PreTrainedModel | torch.nn.Module,
+        accelerator: Accelerator | None,
     ):
         self.accelerator = accelerator
         self.ref_model = ref_model
 
     @staticmethod
     def _sync_target_model(model, target_model, alpha):
-        for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
+        for target_param, copy_param in zip(target_model.parameters(), model.parameters(), strict=True):
             target_param.data.mul_(1.0 - alpha).add_(copy_param.data, alpha=alpha)
 
     @staticmethod
@@ -259,7 +256,7 @@ def _win_rate_completions_df(
     state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
 ) -> pd.DataFrame:
     global_step = [str(state.global_step)] * len(prompts)
-    data = list(zip(global_step, prompts, completions, winner_indices))
+    data = list(zip(global_step, prompts, completions, winner_indices, strict=True))
     # Split completions from reference model and policy
     split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
     return pd.DataFrame(split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"])
@@ -284,7 +281,7 @@ class WinRateCallback(TrainerCallback):
     ```
 
     Args:
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for comparing completions.
         trainer (`Trainer`):
             Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
@@ -305,10 +302,10 @@ class WinRateCallback(TrainerCallback):
 
     def __init__(
         self,
-        judge: BasePairwiseJudge,
+        judge,
         trainer: Trainer,
-        generation_config: Optional[GenerationConfig] = None,
-        num_prompts: Optional[int] = None,
+        generation_config: GenerationConfig | None = None,
+        num_prompts: int | None = None,
         shuffle_order: bool = True,
         use_soft_judge: bool = False,
     ):
@@ -353,7 +350,7 @@ class WinRateCallback(TrainerCallback):
                 batch_size=args.per_device_eval_batch_size,
             )
             # Compute initial win rate as a reference point
-            completions = list(zip(self.ref_completions, self.ref_completions))
+            completions = list(zip(self.ref_completions, self.ref_completions, strict=True))
             if self.use_soft_judge:
                 ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
                 winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
@@ -413,7 +410,7 @@ class WinRateCallback(TrainerCallback):
                 batch_size=args.per_device_eval_batch_size,
             )
 
-            completions = list(zip(self.ref_completions, completions))
+            completions = list(zip(self.ref_completions, completions, strict=True))
 
             if self.use_soft_judge:
                 ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
@@ -484,9 +481,9 @@ class LogCompletionsCallback(TrainerCallback):
     def __init__(
         self,
         trainer: Trainer,
-        generation_config: Optional[GenerationConfig] = None,
-        num_prompts: Optional[int] = None,
-        freq: Optional[int] = None,
+        generation_config: GenerationConfig | None = None,
+        num_prompts: int | None = None,
+        freq: int | None = None,
     ):
         self.trainer = trainer
         self.generation_config = generation_config
@@ -532,7 +529,7 @@ class LogCompletionsCallback(TrainerCallback):
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
             global_step = [str(state.global_step)] * len(prompts)
-            data = list(zip(global_step, prompts, completions))
+            data = list(zip(global_step, prompts, completions, strict=True))
             self.table.extend(data)
             table = pd.DataFrame(columns=["step", "prompt", "completion"], data=self.table)
 
@@ -601,7 +598,7 @@ class WeaveCallback(TrainerCallback):
         scorers (`dict[str, Callable]`, *optional*):
             Dictionary mapping scorer names to scorer functions. If `None`, operates in tracing mode (predictions
             only). If provided, operates in evaluation mode (predictions + scores + summary). Scorer functions should
-            have signature: `scorer(prompt: str, completion: str) -> Union[float, int]`
+            have signature: `scorer(prompt: str, completion: str) -> float | int`
         generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*):
@@ -616,12 +613,12 @@ class WeaveCallback(TrainerCallback):
     def __init__(
         self,
         trainer: Trainer,
-        project_name: Optional[str] = None,
-        scorers: Optional[dict[str, Callable]] = None,
-        generation_config: Optional[GenerationConfig] = None,
-        num_prompts: Optional[int] = None,
+        project_name: str | None = None,
+        scorers: dict[str, callable] | None = None,
+        generation_config: GenerationConfig | None = None,
+        num_prompts: int | None = None,
         dataset_name: str = "eval_dataset",
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
     ):
         self.trainer = trainer
         self.project_name = project_name
@@ -730,7 +727,7 @@ class WeaveCallback(TrainerCallback):
             successful_predictions = 0
             total_score_values = {}  # For summary statistics
 
-            for prompt, completion in zip(all_prompts, all_completions):
+            for prompt, completion in zip(all_prompts, all_completions, strict=True):
                 try:
                     pred_logger = eval_logger.log_prediction(inputs={"prompt": prompt}, output=completion)
 
@@ -805,7 +802,7 @@ class MergeModelCallback(TrainerCallback):
 
     def __init__(
         self,
-        merge_config: Optional["MergeConfig"] = None,
+        merge_config: "MergeConfig | None" = None,
         merge_at_every_checkpoint: bool = False,
         push_to_hub: bool = False,
     ):
@@ -821,7 +818,7 @@ class MergeModelCallback(TrainerCallback):
         checkpoint_path = os.path.join(output_dir, f"checkpoint-{global_step}")
         self.merge_config.policy_model_path = checkpoint_path
         if self.merge_config.target_model_path is None:
-            self.merge_config.target_model_path = model.config._name_or_path
+            self.merge_config.target_model_path = get_config_model_id(model.config)
         merge_path = os.path.join(checkpoint_path, "merged")
 
         merge_models(self.merge_config.create(), merge_path)
@@ -988,7 +985,7 @@ class BEMACallback(TrainerCallback):
 
         # Compute EMA + BEMA in-place and write directly to running_model
         for thetat, theta0, ema, run_param in zip(
-            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters()
+            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters(), strict=True
         ):
             thetat = thetat.detach().to(self.device)
             ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
@@ -1006,7 +1003,9 @@ class BEMACallback(TrainerCallback):
 
         # Snapshot θ₀ and EMA at first update
         if step == self.update_after:
-            for thetat_param, theta0_param, ema_param in zip(self.thetat_params, self.theta0_params, self.ema_params):
+            for thetat_param, theta0_param, ema_param in zip(
+                self.thetat_params, self.theta0_params, self.ema_params, strict=True
+            ):
                 theta0_param.copy_(thetat_param)
                 ema_param.copy_(thetat_param)
 

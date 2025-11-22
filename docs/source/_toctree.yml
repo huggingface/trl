@@ -11,8 +11,6 @@
     title: Dataset Formats
   - local: paper_index
     title: Paper Index
-  - local: experimental
-    title: Experimental
   title: Conceptual Guides
 - sections:
   - local: clis
@@ -39,6 +37,8 @@
     title: Liger Kernel
   - local: peft_integration
     title: PEFT
+  - local: rapidfire_integration
+    title: RapidFire AI
   - local: trackio_integration
     title: Trackio
   - local: unsloth_integration
@@ -53,52 +53,28 @@
     title: Community Tutorials
   - local: lora_without_regret
     title: LoRA Without Regret
-  - local: sentiment_tuning
-    title: Sentiment Tuning
-  - local: multi_adapter_rl
-    title: Multi Adapter RLHF
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: bco_trainer
-      title: BCO
-    - local: cpo_trainer
-      title: CPO
     - local: dpo_trainer
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
-    - local: gkd_trainer
-      title: GKD
     - local: grpo_trainer
       title: GRPO
     - local: kto_trainer
       title: KTO
-    - local: nash_md_trainer
-      title: Nash-MD
-    - local: orpo_trainer
-      title: ORPO
-    - local: ppo_trainer
-      title: PPO
-    - local: prm_trainer
-      title: PRM
     - local: reward_trainer
       title: Reward
     - local: rloo_trainer
       title: RLOO
     - local: sft_trainer
       title: SFT
-    - local: xpo_trainer
-      title: XPO
     title: Trainers
   - local: models
     title: Model Classes
   - local: model_utils
     title: Model Utilities
-  - local: best_of_n
-    title: Best of N Sampling
-  - local: judges
-    title: Judges
   - local: callbacks
     title: Callbacks
   - local: data_utils
@@ -110,3 +86,41 @@
   - local: others
     title: Others
   title: API
+- sections:
+  - local: experimental_overview
+    title: Experimental Overview
+  - local: bema_for_reference_model # Sorted alphabetically
+    title: BEMA for Reference Model
+  - local: bco_trainer
+    title: BCO
+  - local: cpo_trainer
+    title: CPO
+  - local: gfpo
+    title: GFPO
+  - local: gkd_trainer
+    title: GKD
+  - local: gold_trainer
+    title: GOLD
+  - local: grpo_with_replay_buffer
+    title: GRPO With Replay Buffer
+  - local: gspo_token
+    title: GSPO-token
+  - local: judges
+    title: Judges
+  - local: minillm
+    title: MiniLLM
+  - local: nash_md_trainer
+    title: Nash-MD
+  - local: orpo_trainer
+    title: ORPO
+  - local: papo_trainer
+    title: PAPO
+  - local: ppo_trainer
+    title: PPO
+  - local: prm_trainer
+    title: PRM
+  - local: xpo_trainer
+    title: XPO
+  - local: openenv
+    title: OpenEnv Integration
+  title: Experimental

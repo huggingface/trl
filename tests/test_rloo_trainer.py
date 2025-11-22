@@ -17,7 +17,6 @@ from unittest.mock import patch
 import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -45,7 +44,7 @@ class TestRLOOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
@@ -491,7 +490,9 @@ class TestRLOOTrainer(TrlTestCase):
 
         def reward_func(completions, some_values, **kwargs):
             """Reward function that rewards completions with lengths closer to the values in some_values."""
-            return [float(abs(len(completion) - value)) for completion, value in zip(completions, some_values)]
+            return [
+                float(abs(len(completion) - value)) for completion, value in zip(completions, some_values, strict=True)
+            ]
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
@@ -1075,14 +1076,15 @@ class TestRLOOTrainer(TrlTestCase):
             for i in range(8, 16):
                 assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",), seems not to support bf16 properly
-        ]
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+        ],
     )
     @require_vision
     def test_training_vlm(self, model_id):
@@ -1129,8 +1131,14 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_training_vlm_beta_non_zero(self):
+    def test_training_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1147,7 +1155,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -1169,12 +1177,16 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
     @require_peft
-    def test_training_vlm_peft(self):
-        model = AutoModelForImageTextToText.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
-        )
+    def test_training_vlm_peft(self, model_id):
+        model = AutoModelForImageTextToText.from_pretrained(model_id)
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1212,11 +1224,12 @@ class TestRLOOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-        ]
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        ],
     )
     @require_vision
     @require_vllm
@@ -1256,8 +1269,14 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_training_vlm_multi_image(self):
+    def test_training_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1274,7 +1293,7 @@ class TestRLOOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -1286,6 +1305,37 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_training_with_chat_template_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            bf16=False,
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."

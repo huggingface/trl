@@ -15,9 +15,10 @@
 import contextlib
 import os
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -54,6 +55,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    get_config_model_id,
     pad,
     remove_none_values,
     selective_log_softmax,
@@ -70,13 +72,13 @@ logger = logging.get_logger(__name__)
 FLASH_ATTENTION_VARIANTS = {
     "flash_attention_2",
     "flash_attention_3",
-    "kernels-community/flash-attn",
-    "kernels-community/vllm-flash-attn3",
+    "kernels-community/flash-attn2",
     "kernels-community/flash-attn3",
+    "kernels-community/vllm-flash-attn3",
 }
 
 
-def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
@@ -151,7 +153,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     pad_token_id: int
     completion_only_loss: bool = True
     padding_free: bool = False
-    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -328,9 +330,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     """
 
     processor: ProcessorMixin
-    max_length: Optional[int] = None
+    max_length: int | None = None
     completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
-    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of: int | None = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
 
@@ -353,9 +355,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images = None
 
         if "messages" in examples[0]:  # conversational case
-            for example in examples:
-                prepare_multimodal_messages(example["messages"], len(example["images"]))
-            messages = [example["messages"] for example in examples]
+            messages = [prepare_multimodal_messages(example["messages"], example["images"]) for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
@@ -396,7 +396,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images = None
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["completion"] = prepare_multimodal_messages(example["completion"], images=[])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
@@ -497,7 +498,7 @@ class SFTTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -523,7 +524,7 @@ class SFTTrainer(BaseTrainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -547,7 +548,7 @@ class SFTTrainer(BaseTrainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
         optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
@@ -574,24 +575,24 @@ class SFTTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
-        args: Optional[Union[SFTConfig, TrainingArguments]] = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        compute_loss_func: Optional[Callable] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Callable[[dict], str]] = None,
+        model: str | PreTrainedModel,
+        args: SFTConfig | TrainingArguments | None = None,
+        data_collator: DataCollator | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        compute_loss_func: Callable | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+        peft_config: "PeftConfig | None" = None,
+        formatting_func: Callable[[dict], str] | None = None,
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
@@ -602,18 +603,21 @@ class SFTTrainer(BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model = create_model_from_path(model, **args.model_init_kwargs or {})
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -871,13 +875,13 @@ class SFTTrainer(BaseTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args: SFTConfig,
         packing: bool,
-        formatting_func: Optional[Callable[[dict], str]],
+        formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
         # sampled data.
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
@@ -936,9 +940,10 @@ class SFTTrainer(BaseTrainer):
                             example["completion"] = example["completion"] + eos_token
                         return example
 
+                    eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
                     dataset = dataset.map(
                         add_eos,
-                        fn_kwargs={"eos_token": processing_class.eos_token},
+                        fn_kwargs={"eos_token": eos_token},
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
@@ -952,10 +957,13 @@ class SFTTrainer(BaseTrainer):
                         output = {}
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["prompt"], num_images=0)
-                                prepare_multimodal_messages(example["completion"], num_images=0)
+                                prompt = prepare_multimodal_messages(example["prompt"], images=[])
+                                completion = prepare_multimodal_messages(example["completion"], images=[])
+                            else:
+                                prompt = example["prompt"]
+                                completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"],
+                                prompt,
                                 tokenize=True,
                                 add_generation_prompt=True,
                                 tools=example.get("tools"),
@@ -965,7 +973,7 @@ class SFTTrainer(BaseTrainer):
                             # even for single examples, while for LLMs it returns lists of ints.
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"],
+                                prompt + completion,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -986,6 +994,14 @@ class SFTTrainer(BaseTrainer):
                             prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
                                 "input_ids"
                             ]
+                            # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
+                            prompt_completion_ids = (
+                                prompt_completion_ids[0]
+                                if isinstance(prompt_completion_ids[0], list)
+                                else prompt_completion_ids
+                            )
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
@@ -1003,9 +1019,11 @@ class SFTTrainer(BaseTrainer):
                     else:  # language modeling case
                         if is_conversational(example):
                             if self._is_vlm:
-                                prepare_multimodal_messages(example["messages"], num_images=0)
+                                messages = prepare_multimodal_messages(example["messages"], images=[])
+                            else:
+                                messages = example["messages"]
                             processed = processing_class.apply_chat_template(
-                                example["messages"],
+                                messages,
                                 return_dict=True,
                                 tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1081,9 +1099,9 @@ class SFTTrainer(BaseTrainer):
     def compute_loss(
         self,
         model: nn.Module,
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs: bool = False,
-        num_items_in_batch: Optional[torch.Tensor] = None,
+        num_items_in_batch: torch.Tensor | None = None,
     ):
         """
         Compute training loss and additionally compute token accuracies
@@ -1196,7 +1214,7 @@ class SFTTrainer(BaseTrainer):
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 

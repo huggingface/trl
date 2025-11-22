@@ -16,9 +16,7 @@ import pytest
 import transformers
 from datasets import Dataset, features, load_dataset
 from packaging.version import Version
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_torch_accelerator
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer
@@ -28,6 +26,7 @@ from .testing_utils import (
     TrlTestCase,
     require_llm_blender,
     require_peft,
+    require_torch_accelerator,
     require_vision,
     require_vllm,
 )
@@ -39,7 +38,7 @@ if is_peft_available():
 if is_vision_available():
     import numpy as np
     from PIL import Image
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+    from transformers import AutoModelForImageTextToText, AutoProcessor
 
 
 class TestOnlineDPOTrainer(TrlTestCase):
@@ -55,7 +54,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training(self, config_name):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
@@ -244,7 +243,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
     def test_training_with_judge(self, config_name):
         training_args = OnlineDPOConfig(
@@ -270,11 +269,19 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     @require_vllm
     @pytest.mark.slow
     def test_training_with_vllm(self, config_name):
+        def cleanup_vllm_communicator(trainer):
+            """Clean up vLLM communicator to avoid conflicts between test runs"""
+            try:
+                if hasattr(trainer, "vllm_client") and trainer.vllm_client is not None:
+                    trainer.vllm_client.close_communicator()
+            except Exception:
+                pass  # Continue if cleanup fails
+
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -296,10 +303,14 @@ class TestOnlineDPOTrainer(TrlTestCase):
             processing_class=tokenizer,
             reward_processing_classes=self.reward_tokenizer,
         )
-        trainer.train()
 
-        # Check if training loss is available
-        assert "train_loss" in trainer.state.log_history[-1]
+        # Ensure cleanup of vLLM communicator after the test
+        try:
+            trainer.train()
+            # Check if training loss is available
+            assert "train_loss" in trainer.state.log_history[-1]
+        finally:
+            cleanup_vllm_communicator(trainer)
 
     @require_vllm
     def test_training_with_vllm_colocate(self):
@@ -425,7 +436,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):
         if Version(transformers.__version__) < Version("4.57.0"):
@@ -455,7 +466,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training_with_reward_funcs(self, config_name):
         def simple_reward_func(prompts, completions, completion_ids, **kwargs):
             return [0.5 for _ in prompts]
@@ -490,11 +501,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
 @require_vision
 class TestOnlineDPOVisionTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
-        ]
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+        ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):
         dataset_dict = {
@@ -510,7 +522,7 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         dataset = Dataset.from_dict(dataset_dict)
         dataset = dataset.cast_column("images", features.Sequence(features.Image()))
 
-        model = AutoModelForVision2Seq.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id)
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
         )

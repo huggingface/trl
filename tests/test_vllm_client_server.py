@@ -17,12 +17,18 @@ import subprocess
 
 import pytest
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_torch_multi_accelerator, torch_device
+from transformers.testing_utils import torch_device
 
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
 
-from .testing_utils import TrlTestCase, kill_process, require_3_accelerators, require_vllm
+from .testing_utils import (
+    TrlTestCase,
+    kill_process,
+    require_3_accelerators,
+    require_torch_multi_accelerator,
+    require_vllm,
+)
 
 
 class TestChunkList(TrlTestCase):
@@ -86,6 +92,26 @@ class TestVLLMClientServer(TrlTestCase):
         # Check that the number of sequences are equal to the number of prompts
         assert len(prompt_ids) == len(prompts)
         assert len(completion_ids) == len(prompts)
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat(self):
+        messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
+        outputs = self.client.chat(messages)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of messages
+        assert len(prompt_ids) == len(messages)
+        assert len(completion_ids) == len(messages)
 
         # Check that the sequences are lists of integers
         for seq in prompt_ids:
@@ -167,6 +193,26 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         # Check that the number of sequences are equal to the number of prompts
         assert len(prompt_ids) == len(prompts)
         assert len(completion_ids) == len(prompts)
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat(self):
+        messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
+        outputs = self.client.chat(messages)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of messages
+        assert len(prompt_ids) == len(messages)
+        assert len(completion_ids) == len(messages)
 
         # Check that the sequences are lists of integers
         for seq in prompt_ids:
@@ -257,6 +303,26 @@ class TestVLLMClientServerTP(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_chat(self):
+        messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
+        outputs = self.client.chat(messages)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of messages
+        assert len(prompt_ids) == len(messages)
+        assert len(completion_ids) == len(messages)
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
@@ -313,6 +379,26 @@ class TestVLLMClientServerDP(TrlTestCase):
         # Check that the number of sequences are equal to the number of prompts
         assert len(prompt_ids) == len(prompts)
         assert len(completion_ids) == len(prompts)
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat(self):
+        messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
+        outputs = self.client.chat(messages)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of messages
+        assert len(prompt_ids) == len(messages)
+        assert len(completion_ids) == len(messages)
 
         # Check that the sequences are lists of integers
         for seq in prompt_ids:
