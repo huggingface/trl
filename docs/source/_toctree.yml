@@ -64,8 +64,6 @@
       title: GRPO
     - local: kto_trainer
       title: KTO
-    - local: prm_trainer
-      title: PRM
     - local: reward_trainer
       title: Reward
     - local: rloo_trainer
@@ -121,6 +119,8 @@
     title: PAPO
   - local: ppo_trainer
     title: PPO
+  - local: prm_trainer
+    title: PRM
   - local: winrate_callback
     title: WinRateCallback
   - local: xpo_trainer
