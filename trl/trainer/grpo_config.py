@@ -239,38 +239,20 @@ class GRPOConfig(TrainingArguments):
             instead.
 
             </Deprecated>
-
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM
             completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied
             regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines
             how the IS ratios are computed and constrained.
-
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
-            Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`.
+            Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
+            values are:
 
-            The mode is defined along two orthogonal dimensions:
-            * Constraint: how to handle importance ratios above `vllm_importance_sampling_cap` (C):
-                 - truncation: clip ratios from above, ρ ← min(ρ, C), as in
-                [Your Efficient RL Framework Secretly Brings You Off-Policy RL Training](https://fengyao.notion.site/off-policy-rl)
-                - masking: set ratios above C to zero, so those contributions do not affect the gradient, as in
-                [When Speed Kills Stability: Demystifying RL Collapse from the Training-Inference Mismatch](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)
-
-            * Granularity: the level at which ratios are computed:
-                - token: per-token ratios ρ_t
-                - sequence: a single ratio ρ_seq per sequence, applied to all tokens
-
-            Supported options are:
-                - `"token_truncate"`:
-                    Token-level truncated IS (default). Per-token ratios are clipped from above at C.
-                - `"token_mask"`:
-                    Token-level masked IS. Per-token ratios above C are set to zero.
-                - `"sequence_truncate"`:
-                    Sequence-level truncated IS. A single sequence ratio is clipped from above at C and
-                    applied to all tokens in the sequence.
-                - `"sequence_mask"`:
-                    Sequence-level masked IS. Sequences with ratios above C are masked out.
-
+                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped from above at C.
+                - `"token_mask"`: Token-level masked IS. Per-token ratios above C are set to zero.
+                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
+                  C and applied to all tokens in the sequence.
+                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
             Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
             importance ratios are clipped from above at C. For `*_mask` modes, ratios larger than C
