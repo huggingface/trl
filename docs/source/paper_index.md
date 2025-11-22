@@ -465,10 +465,24 @@ Papers relating to the [`KTOTrainer`]
 
 **📜 Paper**: https://huggingface.co/papers/2402.01306
 
-KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.  
-**Used in TRL via:** [`KTOTrainer`]
+KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
+To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
 
+```python
+from trl import KTOConfig, KTOTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
+model = AutoModelForCausalLM.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+trainer = KTOTrainer(
+    model=model,
+    processing_class=tokenizer,
+    args=KTOConfig(),
+    train_dataset=...,
+)
+trainer.train()
+```
 
 ## Supervised Fine-Tuning
 
