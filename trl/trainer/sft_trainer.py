@@ -603,7 +603,11 @@ class SFTTrainer(BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model = create_model_from_path(model, **args.model_init_kwargs or {})
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
@@ -935,9 +939,10 @@ class SFTTrainer(BaseTrainer):
                             example["completion"] = example["completion"] + eos_token
                         return example
 
+                    eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
                     dataset = dataset.map(
                         add_eos,
-                        fn_kwargs={"eos_token": processing_class.eos_token},
+                        fn_kwargs={"eos_token": eos_token},
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
@@ -988,6 +993,14 @@ class SFTTrainer(BaseTrainer):
                             prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
                                 "input_ids"
                             ]
+                            # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
+                            prompt_completion_ids = (
+                                prompt_completion_ids[0]
+                                if isinstance(prompt_completion_ids[0], list)
+                                else prompt_completion_ids
+                            )
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:

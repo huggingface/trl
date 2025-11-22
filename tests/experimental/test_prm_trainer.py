@@ -20,9 +20,9 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.utils import is_peft_available
 
-from trl import PRMConfig, PRMTrainer
+from trl.experimental.prm import PRMConfig, PRMTrainer
 
-from .testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
