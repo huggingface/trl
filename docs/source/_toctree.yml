@@ -64,10 +64,6 @@
       title: GRPO
     - local: kto_trainer
       title: KTO
-    - local: orpo_trainer
-      title: ORPO
-    - local: prm_trainer
-      title: PRM
     - local: reward_trainer
       title: Reward
     - local: rloo_trainer
@@ -115,10 +111,14 @@
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
+  - local: orpo_trainer
+    title: ORPO
   - local: papo_trainer
     title: PAPO
   - local: ppo_trainer
     title: PPO
+  - local: prm_trainer
+    title: PRM
   - local: xpo_trainer
     title: XPO
   - local: openenv
