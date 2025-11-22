@@ -17,7 +17,6 @@ import os
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
-from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -1116,7 +1115,7 @@ class SFTTrainer(BaseTrainer):
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
-        if self.args.use_liger_kernel and version("liger_kernel") >= "0.6.4":
+        if self.args.use_liger_kernel:
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
@@ -1159,9 +1158,8 @@ class SFTTrainer(BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         if self.args.use_liger_kernel:
-            if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
-                token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
-                self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+            token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
+            self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
         else:
             # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():
