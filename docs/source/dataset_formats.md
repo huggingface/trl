@@ -391,7 +391,6 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
-| [`PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
 | [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
 | [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
@@ -401,6 +400,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`experimental.nash_md.NashMDTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.orpo.ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.ppo.PPOTrainer`] | Tokenized language modeling |
+| [`experimental.prm.PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`experimental.xpo.XPOTrainer`] | [Prompt-only](#prompt-only) |
 
 ## Using any dataset with TRL: preprocessing and conversion
