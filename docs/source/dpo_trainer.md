@@ -253,7 +253,7 @@ model = AutoModelForCausalLM.from_pretrained(
     "mistralai/mixtral-8x7b-v0.1",
     load_in_4bit=True,
     quantization_config=bnb_config,
-    attn_implementation="flash_attention_2",
+    attn_implementation="kernels-community/flash-attn2",
     dtype=torch.bfloat16,
     device_map="auto",
 )

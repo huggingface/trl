@@ -14,8 +14,7 @@
 
 import torch
 
-from trl import GRPOTrainer as _GRPOTrainer
-
+from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin
 
 
