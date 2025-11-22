@@ -19,7 +19,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 import torch.nn as nn
@@ -88,8 +88,8 @@ FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
 def setup_chat_format(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    format: Optional[Literal["chatml"]] = "chatml",
-    resize_to_multiple_of: Optional[int] = None,
+    format: Literal["chatml"] | None = "chatml",
+    resize_to_multiple_of: int | None = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
     # docstyle-ignore
     """
@@ -105,7 +105,7 @@ def setup_chat_format(
     Args:
         model ([`~transformers.PreTrainedModel`]): The model to be modified.
         tokenizer ([`~transformers.PreTrainedTokenizer`]): The tokenizer to be modified.
-        format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
+        format (`Literal["chatml"] | None`): The format to be set. Defaults to "chatml".
         resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
@@ -165,7 +165,7 @@ def clone_chat_template(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     source_tokenizer_path: str,
-    resize_to_multiple_of: Optional[int] = 64,
+    resize_to_multiple_of: int | None = 64,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[int]]:
     """
     Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
@@ -307,7 +307,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 @contextmanager
 def unwrap_model_for_generation(
-    model: Union["DistributedDataParallel", "DeepSpeedEngine"],
+    model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
 ):
@@ -315,7 +315,7 @@ def unwrap_model_for_generation(
     Context manager to unwrap distributed or accelerated models for generation tasks.
 
     Args:
-        model (`Union[DistributedDataParallel, DeepSpeedEngine]`):
+        model (`DistributedDataParallel | DeepSpeedEngine`):
             Model to be unwrapped.
         accelerator ([`~accelerate.Accelerator`]):
             Accelerator instance managing the model.
@@ -485,17 +485,9 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
     if gradient_checkpointing_kwargs is None:
         gradient_checkpointing_kwargs = {}
 
-    n_upcasted = 0
-    for name, param in model.named_parameters():
+    for _, param in model.named_parameters():
         # freeze all parameters
         param.requires_grad = False
-
-        # upcast LayerNorm / Norm to float32 for numerical stability
-        if (param.dtype in [torch.float16, torch.bfloat16]) and (
-            "norm" in name.lower() or "layernorm" in name.lower()
-        ):
-            param.data = param.data.to(torch.float32)
-            n_upcasted += 1
 
     # Enable gradient checkpointing if needed
     if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
@@ -518,7 +510,7 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
 
 
 def enable_gradient_checkpointing(
-    model: PreTrainedModel, gradient_checkpointing_kwargs: Optional[dict]
+    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
 ) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
     # Enable gradient checkpointing on the base model for PEFT
@@ -557,7 +549,7 @@ def peft_module_casting_to_bf16(model):
 
 
 def prepare_peft_model(
-    model: PreTrainedModel, peft_config: Optional["PeftConfig"], args: TrainingArguments
+    model: PreTrainedModel, peft_config: "PeftConfig | None", args: TrainingArguments
 ) -> PreTrainedModel:
     """Prepares a model for PEFT training."""
     if not is_peft_available():

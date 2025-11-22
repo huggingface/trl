@@ -11,18 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import pytest
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import CPOConfig, CPOTrainer
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 
-from .testing_utils import TrlTestCase, require_peft
+from ..testing_utils import TrlTestCase, require_peft
 
 
-class TestCPOTrainer(TrlTestCase):
+class TestORPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -33,22 +33,17 @@ class TestCPOTrainer(TrlTestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     @pytest.mark.parametrize(
-        "name, loss_type, config_name",
+        "name, config_name",
         [
-            ("qwen", "sigmoid", "standard_preference"),
-            ("t5", "hinge", "standard_implicit_prompt_preference"),
-            ("qwen", "ipo", "conversational_preference"),
-            ("t5", "ipo", "conversational_implicit_prompt_preference"),
-            ("qwen", "simpo", "standard_preference"),
-            ("t5", "simpo", "standard_implicit_prompt_preference"),
-            ("qwen", "hinge", "conversational_preference"),
+            ("qwen", "standard_preference"),
+            ("t5", "standard_implicit_prompt_preference"),
+            ("qwen", "conversational_preference"),
         ],
     )
-    def test_cpo_trainer(self, name, loss_type, config_name):
-        training_args = CPOConfig(
+    def test_orpo_trainer(self, name, config_name):
+        training_args = ORPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
@@ -57,8 +52,6 @@ class TestCPOTrainer(TrlTestCase):
             learning_rate=9e-1,
             eval_strategy="steps",
             beta=0.1,
-            loss_type=loss_type,
-            cpo_alpha=1.0,
             report_to="none",
         )
 
@@ -72,7 +65,7 @@ class TestCPOTrainer(TrlTestCase):
             tokenizer = self.t5_tokenizer
             training_args.is_encoder_decoder = True
 
-        trainer = CPOTrainer(
+        trainer = ORPOTrainer(
             model=model,
             args=training_args,
             processing_class=tokenizer,
@@ -102,7 +95,7 @@ class TestCPOTrainer(TrlTestCase):
         ],
     )
     @require_peft
-    def test_cpo_trainer_with_lora(self, config_name):
+    def test_orpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -113,7 +106,7 @@ class TestCPOTrainer(TrlTestCase):
             task_type="CAUSAL_LM",
         )
 
-        training_args = CPOConfig(
+        training_args = ORPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
@@ -122,13 +115,12 @@ class TestCPOTrainer(TrlTestCase):
             learning_rate=9e-1,
             eval_strategy="steps",
             beta=0.1,
-            cpo_alpha=1.0,
             report_to="none",
         )
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-        trainer = CPOTrainer(
+        trainer = ORPOTrainer(
             model=self.model,
             args=training_args,
             processing_class=self.tokenizer,
@@ -151,15 +143,19 @@ class TestCPOTrainer(TrlTestCase):
                     assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer.pad_token = tokenizer.eos_token
+
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
 
-        training_args = CPOConfig(
+        training_args = ORPOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
             remove_unused_columns=False,
+            per_device_train_batch_size=2,
             do_eval=True,
             eval_strategy="steps",
             eval_steps=1,
@@ -167,10 +163,10 @@ class TestCPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        trainer = CPOTrainer(
-            model=self.model,
+        trainer = ORPOTrainer(
+            model=model,
             args=training_args,
-            processing_class=self.tokenizer,
+            processing_class=tokenizer,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             compute_metrics=dummy_compute_metrics,
@@ -179,40 +175,3 @@ class TestCPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
-
-    def test_alphapo_trainer(self):
-        training_args = CPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            loss_type="alphapo",
-            alpha=0.5,
-            simpo_gamma=0.5,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        trainer = CPOTrainer(
-            model=self.model,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if param.sum() != 0:
-                assert not torch.equal(param, new_param)

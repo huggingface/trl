@@ -14,7 +14,7 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -86,13 +86,15 @@ class KTOConfig(TrainingArguments):
 
             <Deprecated version="0.25.0">
 
-            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel` instead.
+            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel`
+            instead.
 
             </Deprecated>
 
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
-            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is `True`.
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
+            `True`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
@@ -115,7 +117,7 @@ class KTOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -123,19 +125,29 @@ class KTOConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={
             "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
             "collator and your model is an encoder-decoder."
         },
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=None,
         metadata={
             "help": "Maximum length of the completion. This argument is required if you want to use the default data "
@@ -176,7 +188,7 @@ class KTOConfig(TrainingArguments):
             "help": "Label pad token id. This argument is required if you want to use the default data collator."
         },
     )
-    padding_value: Optional[int] = field(
+    padding_value: int | None = field(
         default=None,
         metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
     )
@@ -194,7 +206,7 @@ class KTOConfig(TrainingArguments):
             "during evaluation."
         },
     )
-    is_encoder_decoder: Optional[bool] = field(
+    is_encoder_decoder: bool | None = field(
         default=None,
         metadata={
             "help": "When using the `model_init` argument (callable) to instantiate the model instead of the `model` "
@@ -212,21 +224,21 @@ class KTOConfig(TrainingArguments):
             "This is useful when training without the reference model to reduce the total GPU memory needed."
         },
     )
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
             "from a string."
         },
     )
-    ref_model_init_kwargs: Optional[dict[str, Any]] = field(
+    ref_model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
             "reference model from a string."
         },
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
