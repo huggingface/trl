@@ -14,27 +14,14 @@
 
 import warnings
 
-from ..experimental.prm import PRMConfig as ExperimentalPRMConfig
+from ..experimental.prm import PRMConfig as _PRMConfig
 
 
-class PRMConfig(ExperimentalPRMConfig):
-    r"""
-    Configuration class for the [`PRMTrainer`].
-
-    .. warning::
-        This class is deprecated and will be removed in TRL 0.29.0. Please use
-        `trl.experimental.prm.PRMConfig` instead. See https://github.com/huggingface/trl/issues/4467
-        for more information.
-
-    For full documentation, see [`trl.experimental.prm.PRMConfig`].
-    """
-
-    def __init__(self, *args, **kwargs):
+class PRMConfig(_PRMConfig):
+    def __post_init__(self):
         warnings.warn(
-            "PRMConfig is deprecated and will be removed in TRL 0.29.0. "
-            "Please use `trl.experimental.prm.PRMConfig` instead. "
-            "See https://github.com/huggingface/trl/issues/4467 for more information.",
-            FutureWarning,
-            stacklevel=2,
+            "The `PRMConfig` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.xco import PRMConfig`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
-        super().__init__(*args, **kwargs)
+        super().__post_init__()

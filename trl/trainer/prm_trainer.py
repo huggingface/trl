@@ -14,27 +14,14 @@
 
 import warnings
 
-from ..experimental.prm import PRMTrainer as ExperimentalPRMTrainer
+from ..experimental.prm import PRMTrainer as _PRMTrainer
 
 
-class PRMTrainer(ExperimentalPRMTrainer):
-    """
-    Initialize PRMTrainer.
-
-    .. warning::
-        This class is deprecated and will be removed in TRL 0.29.0. Please use
-        `trl.experimental.prm.PRMTrainer` instead. See https://github.com/huggingface/trl/issues/4467
-        for more information.
-
-    For full documentation, see [`trl.experimental.prm.PRMTrainer`].
-    """
-
+class PRMTrainer(_PRMTrainer):
     def __init__(self, *args, **kwargs):
         warnings.warn(
-            "PRMTrainer is deprecated and will be removed in TRL 0.29.0. "
-            "Please use `trl.experimental.prm.PRMTrainer` instead. "
-            "See https://github.com/huggingface/trl/issues/4467 for more information.",
-            FutureWarning,
-            stacklevel=2,
+            "The `PRMTrainer` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.prm import PRMTrainer`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
         )
         super().__init__(*args, **kwargs)
