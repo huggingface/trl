@@ -364,7 +364,6 @@ TRL provides several ready-to-use Accelerate configs to simplify common training
 
 | Name | Description |
 | --- | --- |
-| `fsdp1` | Fully Sharded Data Parallel Stage 1 |
 | `fsdp2` | Fully Sharded Data Parallel Stage 2 |
 | `zero1` | DeepSpeed ZeRO Stage 1 |
 | `zero2` | DeepSpeed ZeRO Stage 2 |
