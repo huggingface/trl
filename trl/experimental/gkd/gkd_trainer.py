@@ -450,13 +450,47 @@ class GKDTrainer(SFTTrainer):
             shifted_teacher_logits = shifted_teacher_logits[:, :min_length, :]
             shifted_student_labels = shifted_student_labels[:, :min_length]
 
-            # Compute loss
-            loss = self.generalized_jsd_loss(
-                student_logits=shifted_student_logits,
-                teacher_logits=shifted_teacher_logits,
-                labels=shifted_student_labels,
-                beta=self.beta,
-                temperature=self.temperature,
+            # For cross-tokenizer distillation with different vocab sizes, we use a text-aligned approach:
+            # 1. Get teacher's predicted tokens (already in teacher vocab space)
+            # 2. Decode to text and re-encode with student tokenizer
+            # 3. Use as pseudo-labels for the student (sequence-level KD)
+
+            # Get teacher predictions (argmax over teacher vocab)
+            with torch.no_grad():
+                teacher_predictions = shifted_teacher_logits.argmax(dim=-1)  # [batch, seq_len]
+
+                # Decode teacher predictions to text, then encode with student tokenizer
+                # to get aligned target labels in student vocab space
+                batch_size, seq_len = teacher_predictions.shape
+                aligned_labels = []
+
+                for b in range(batch_size):
+                    # Get valid teacher predictions (non-padded)
+                    valid_mask = teacher_attention_mask[b, teacher_prompt_length:teacher_prompt_length + seq_len]
+                    valid_preds = teacher_predictions[b][valid_mask]
+
+                    # Decode teacher tokens to text
+                    teacher_text = self.teacher_tokenizer.decode(valid_preds.tolist(), skip_special_tokens=False)
+
+                    # Encode with student tokenizer
+                    student_tokens = self.processing_class.encode(teacher_text, add_special_tokens=False)
+
+                    # Pad/truncate to match sequence length
+                    if len(student_tokens) < seq_len:
+                        student_tokens = student_tokens + [-100] * (seq_len - len(student_tokens))
+                    else:
+                        student_tokens = student_tokens[:seq_len]
+
+                    aligned_labels.append(torch.tensor(student_tokens, dtype=torch.long))
+
+                # Stack into batch tensor
+                aligned_labels = torch.stack(aligned_labels).to(self.accelerator.device)  # [batch, seq_len]
+
+            # Compute cross-entropy loss between student logits and aligned teacher labels
+            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(
+                shifted_student_logits.reshape(-1, shifted_student_logits.size(-1)),  # [batch*seq, vocab]
+                aligned_labels.reshape(-1),  # [batch*seq]
             )
 
             empty_cache()
