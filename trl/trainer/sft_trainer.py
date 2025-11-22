@@ -17,6 +17,7 @@ import os
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -1115,7 +1116,7 @@ class SFTTrainer(BaseTrainer):
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
-        if self.args.use_liger_kernel:
+        if self.args.use_liger_kernel and version("liger_kernel") >= "0.6.4":
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
