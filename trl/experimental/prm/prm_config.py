@@ -20,7 +20,7 @@ from transformers import TrainingArguments
 @dataclass
 class PRMConfig(TrainingArguments):
     r"""
-    Configuration class for the [`PRMTrainer`].
+    Configuration class for the [`experimental.prm.PRMTrainer`].
 
     This class includes only the parameters that are specific to PRM training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
