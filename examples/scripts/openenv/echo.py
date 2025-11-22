@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Simple script to run GRPO training with OpenEnv's Echo environment and a vLLM server. The reward function encourages
+Simple script to run GRPO training with OpenEnv's Echo environment and vLLM. The reward function encourages
 longer completions.
 
 Setup:
@@ -22,23 +22,28 @@ Setup:
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 ```
 
-Usage (2 GPUs required):
+Usage:
 
-# Start the docker container for the Echo environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
+# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
 ```sh
 docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
 ```
 
-# Spin up server
+# Option 1: Colocated vLLM (1 GPU required)
+```sh
+python examples/scripts/openenv/echo.py --vllm-mode colocate
+```
 
+# Option 2: Separate vLLM server (2 GPUs required)
+
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 ```
 
-# Run training
-
+# Run training (Terminal 2)
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 """
 
@@ -56,6 +61,7 @@ from envs.echo_env import EchoEnv
 from envs.echo_env.models import EchoAction
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
+from trl.experimental.openenv import generate_rollout_completions
 
 
 def parse_args():
@@ -65,15 +71,9 @@ def parse_args():
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the Echo environment.")
     parser.add_argument(
         "--env-mode",
-        choices=["local", "docker", "space"],
-        default="docker",
-        help="Where to run the Echo environment: 'local' to launch it, 'docker' if already running, or 'space' to use a remote Space URL.",
-    )
-    parser.add_argument(
-        "--gen-url",
-        type=str,
-        default="http://0.0.0.0:8000/generate/",
-        help="Base URL for the vLLM generation endpoint.",
+        choices=["local", "docker-local", "docker-image", "docker-hub", "space"],
+        default="docker-image",
+        help="Where to run the Echo environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
     parser.add_argument(
         "--model",
@@ -86,6 +86,21 @@ def parse_args():
         type=str,
         default="trl-lib/ultrafeedback-prompt",
         help="Dataset to use for training.",
+    )
+    parser.add_argument(
+        "--env-image", type=str, default="echo-env:latest", help="Docker image for the Echo environment."
+    )
+    parser.add_argument(
+        "--vllm-mode",
+        choices=["colocate", "server"],
+        default="colocate",
+        help="vLLM execution mode: 'colocate' or 'server'.",
+    )
+    parser.add_argument(
+        "--vllm-server-url",
+        type=str,
+        default="http://localhost:8000",
+        help="URL for the vLLM server (only used when --vllm-mode=server).",
     )
 
     return parser.parse_args()
@@ -121,39 +136,6 @@ def start_env_server(env_host: str, env_port: int):
     return process
 
 
-def rollout_func(
-    prompts: list[str], args: GRPOConfig, processing_class, client: EchoEnv, gen_url: str
-) -> dict[str, list]:
-    """Generate completions via vLLM and compute environment rewards."""
-    payload = {
-        "prompts": prompts,
-        "n": args.num_generations,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "top_k": -1 if args.top_k is None else args.top_k,
-        "min_p": 0.0 if args.min_p is None else args.min_p,
-        "max_tokens": args.max_completion_length,
-        "repetition_penalty": args.repetition_penalty,
-    }
-
-    response = requests.post(gen_url, json=payload)
-    if response.status_code != 200:
-        print(f"Error response: {response.text}")
-    response.raise_for_status()
-
-    result = response.json()
-    completions_text = processing_class.batch_decode(result["completion_ids"], skip_special_tokens=True)
-
-    env_result = client.reset()
-    env_rewards = []
-    for msg in completions_text:
-        env_result = client.step(EchoAction(message=msg))
-        env_rewards.append(env_result.reward)
-
-    result["env_reward"] = env_rewards
-    return result
-
-
 def reward_from_env(completions, **kwargs):
     """Extract environment rewards for training."""
     env_rewards = kwargs.get("env_reward", [])
@@ -167,25 +149,34 @@ def main():
     if args.env_mode == "local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = start_env_server(args.env_host, args.env_port)
-    elif args.env_mode == "docker":
+    elif args.env_mode == "docker-local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = None
         print(f"🌍 Using existing Echo Environment (Docker) at: {env_url}")
+    elif args.env_mode == "docker-image":
+        client = EchoEnv.from_docker_image(args.env_image)
+        server_process = None
+        print("🌍 Using Echo Environment (Docker) from local Image")
+    elif args.env_mode == "docker-hub":
+        client = EchoEnv.from_hub(args.env_image)
+        server_process = None
+        print("🌍 Using existing Echo Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
         server_process = None
-        print(f"🚀 Using Hugging Face Space environment at: {env_url}")
+        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
     else:
         raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
-    gen_url = args.gen_url
-    client = EchoEnv(base_url=env_url)
+    if args.env_mode != "docker-hub" and args.env_mode != "docker-image":
+        client = EchoEnv(base_url=env_url)
     dataset = load_dataset(args.dataset, split="train[:1000]")
 
     training_args = GRPOConfig(
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Rollout",
-        vllm_mode="server",
         use_vllm=True,
+        vllm_mode=args.vllm_mode,
+        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         logging_steps=1,
         report_to="trackio",
         num_train_epochs=1,
@@ -193,12 +184,31 @@ def main():
         gradient_accumulation_steps=4,
     )
 
+    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+        outputs = generate_rollout_completions(trainer, prompts)
+        tokenizer = trainer.processing_class
+
+        completions_text = [tokenizer.decode(output["completion_ids"], skip_special_tokens=True) for output in outputs]
+
+        env_result = client.reset()
+        env_rewards: list[float] = []
+        for message in completions_text:
+            env_result = client.step(EchoAction(message=message))
+            env_rewards.append(env_result.reward)
+
+        return {
+            "prompt_ids": [output["prompt_ids"] for output in outputs],
+            "completion_ids": [output["completion_ids"] for output in outputs],
+            "logprobs": [output["logprobs"] for output in outputs],
+            "env_reward": env_rewards,
+        }
+
     trainer = GRPOTrainer(
         model=args.model,
         reward_funcs=reward_from_env,
         args=training_args,
         train_dataset=dataset,
-        rollout_func=lambda p, a, pc: rollout_func(p, a, pc, client, gen_url),
+        rollout_func=rollout_func,
         callbacks=[RichProgressCallback()],
     )
 
