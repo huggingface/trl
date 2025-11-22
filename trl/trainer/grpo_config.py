@@ -513,6 +513,13 @@ class GRPOConfig(TrainingArguments):
             "after the timeout, a `ConnectionError` is raised."
         },
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group."
+            "This is used to communicate with the vllm server. Unless the port is occupied, there is no need to modify it by default."
+        },
+    )
 
     # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
