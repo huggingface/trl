@@ -673,38 +673,32 @@ class GRPOConfig(TrainingArguments):
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
-            "help": (
-                "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
-                "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
-                "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
-                "IS ratios are computed and constrained."
-            )
+            "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
+            "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
+            "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
+            "IS ratios are computed and constrained."
         },
     )
 
     vllm_importance_sampling_mode: str = field(
         default="sequence_mask",
         metadata={
-            "help": (
-                "Specifies how Importance Sampling (IS) is performed when "
-                "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
-                "dimensions: (1) constraint, which determines how to handle ratios above "
-                "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
-                "masking (set ratios above C to zero); and (2) granularity, which determines whether "
-                "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
-                "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
-                "'sequence_mask'."
-            )
+            "help": "Specifies how Importance Sampling (IS) is performed when "
+            "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
+            "dimensions: (1) constraint, which determines how to handle ratios above "
+            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
+            "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+            "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
+            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
+            "'sequence_mask'."
         },
     )
 
     vllm_importance_sampling_cap: float = field(
         default=2.0,
         metadata={
-            "help": (
-                "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
-                "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
-            )
+            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
 

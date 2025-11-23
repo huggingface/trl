@@ -205,6 +205,7 @@ training_args = GRPOConfig(
 ### Masked Importance Sampling
 
 **📰 Blog**: https://ringtech.notion.site/icepop
+
 **📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
 
 Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy exceeds a threshold  \\( C \\). We apply upper-side masking, so any ratio above  \\( C \\) is removed from the update.
@@ -263,8 +264,7 @@ $$
     \,\nabla_\theta \log \pi^{\text{training}}_\theta(y_t\,|\,x, y_{<t})
 \Bigg]
 $$
-
-The correct, unbiased policy gradient estimator applies a single importance ratio over the entire generated sequence (trajectory) \\( y \\), The Sequence-Level IS estimator looks like:
+The correct, unbiased policy gradient estimator applies a single importance ratio over the entire generated sequence (trajectory)  \\( y \\), The Sequence-Level IS estimator looks like:
 
 $$
 \mathbb{E}_{x\sim\mathcal{D},\, y\sim \pi^{\text{inference}}_\theta(\cdot|x)}
