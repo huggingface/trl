@@ -12,25 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 from ..import_utils import is_math_verify_available
 
+
+logger = logging.getLogger(__name__)
 
 if is_math_verify_available():
     from latex2sympy2_extended import NormalizationConfig
     from math_verify import LatexExtractionConfig, parse, verify
 
 
-def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[float | None]:
+def accuracy_reward(completions: list[list[dict[str, str]]], solutions: list[str], **kwargs) -> list[float | None]:
     r"""
-    Reward function that checks if the completion is the same as the ground truth.
+    Reward function that checks if the completion matches the ground truth.
         - If both gold and prediction are parseable → use math verification.
-        - If not parseable → compare as normalized text.
+        - If either is not parseable → return `None` to skip the example.
 
     Args:
         completions (`list[list[dict[str, str]]]`):
             List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
-        solution: (`list[str]`):
+        solutions: (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
         **kwargs:
             Additional keyword arguments. This function does not use them, but they are required in the function
@@ -39,12 +43,12 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     ```python
     >>> from trl.rewards import accuracy_reward
 
-    >>> solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
-    >>> completion = [
+    >>> solutions = [r"\frac{1}{3}", r"\frac{1}{3}"]
+    >>> completions = [
     ...     [{"role": "assistant", "content": r"My answer is \boxed{\frac{1}{3}}"}],
     ...     [{"role": "assistant", "content": r"My answer is \boxed{\frac{1}{2}}"}],
     ... ]
-    >>> accuracy_reward(completion, solution)
+    >>> accuracy_reward(completions, solutions)
     [1.0, 0.0]
     ```
     """
@@ -53,7 +57,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
 
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
-    for content, sol in zip(contents, solution, strict=True):
+    for content, sol in zip(contents, solutions, strict=True):
         gold_parsed = parse(sol)
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
@@ -70,68 +74,39 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
                 extraction_mode="first_match",
             )
             # Compute binary rewards if verifiable, `None` otherwise to skip this example
-            reward = float(verify(gold_parsed, answer_parsed))
+            try:
+                reward = float(verify(gold_parsed, answer_parsed))
+            except Exception as e:
+                logger.warning(f"Verification failed with error: {e}. Assigning reward=None for this example.")
+                reward = None
         else:
-            # If the gold solution is not parseable, we assign `None` to skip this example
-            reward = float(content.strip().lower() == sol.strip().lower())
+            # If the gold solution cannot be parsed, we assign `None` to skip this example
+            reward = None
         rewards.append(reward)
 
     return rewards
 
 
-def _remove_reasoning_content(text: str, tag_pairs: list[tuple[str, str]]) -> str:
-    """Removes all reasoning content from text.
-
-    Iteratively removes content between specified start and end tag pairs. This is useful for cleaning model outputs
-    that contain reasoning sections that should be excluded from evaluation or computing rewards.
-
-    Args:
-        text (str): The input text containing reasoning tags to remove.
-        tag_pairs (list[tuple[str, str]]): List of (start_tag, end_tag) pairs to remove.
-
-    Returns:
-        str: The text with all reasoning tag content removed.
-
-    Examples:
-        >>> text = "<think> Reasoning section </think> Answer section" >>> tag_pairs = [("<think>", "</think>")] >>>
-        _remove_reasoning_content(text, tag_pairs) ' Answer section'
-
-        >>> text = "<reasoning>Step 1</reasoning>Answer<reasoning>Step 2</reasoning>" >>> tag_pairs = [("<reasoning>",
-        "</reasoning>")] >>> _remove_reasoning_content(text, tag_pairs) 'Answer'
-    """
-    result = text
-
-    for start_tag, end_tag in tag_pairs:
-        while start_tag in result and end_tag in result:
-            start = result.find(start_tag)
-            end = result.find(end_tag, start)
-            if start != -1 and end != -1:
-                result = result[:start] + result[end + len(end_tag) :]
-            else:
-                break
-
-    return result
-
-
 def reasoning_accuracy_reward(
     completions: list[list[dict[str, str]]],
-    solution: list[str],
-    reasoning_tags: list[tuple[str, str]] = None,
+    solutions: list[str],
+    reasoning_delimiters: list[str] | None = None,
     **kwargs,
 ) -> list[float | None]:
     r"""
-    Reward function that removes the reasoning content and checks if the completion is the same as the ground truth.
+    Reward function that removes the reasoning content and checks if the final answer matches the ground truth.
         - If both gold and prediction are parseable → use math verification.
-        - If not parseable → compare as normalized text.
+        - If either is not parseable → return `None` to skip the example.
 
     Args:
         completions (`list[list[dict[str, str]]]`):
             List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
-        solution: (`list[str]`):
+        solutions: (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
-        reasoning_tags (`list[tuple[str, str]]`, *optional*, defaults to `("<think>", "</think>")`):
-            The opening and closing tags that should enclose the reasoning process.
+        reasoning_delimiters (`list[str]]`, *optional*, defaults to `None`):
+            List of strings indicating where the reasoning content ends. The final answer is assumed to be after the
+            last occurrence of any of these delimiters. If `None`, defaults to `["</think>"]`.
         **kwargs:
             Additional keyword arguments. This function does not use them, but they are required in the function
             signature to ensure compatibility with trainers like [`GRPOTrainer`].
@@ -139,34 +114,55 @@ def reasoning_accuracy_reward(
         ```python
         >>> from trl.rewards import reasoning_accuracy_reward
 
-        >>> solution = [r"\frac{1}{3}", r"\frac{1}{3}", r"\frac{1}{3}"]
-        >>> completion = [
+        >>> reasoning_delimiters = ["</think>"]
+        >>> solutions = [r"\frac{1}{3}", r"\frac{1}{3}", r"\frac{1}{3}"]
+        >>> completions = [
         ...     [
         ...         {
         ...             "role": "assistant",
-        ...             "content": r"<think> Reasoning content </think> My answer is \boxed{\frac{1}{3}}",
+        ...             "content": r"<think> Reasoning content </think> The final answer is \boxed{\frac{1}{3}}",
         ...         }
         ...     ],
-        ...     [{"role": "assistant", "content": r"Reasoning content </think> My answer is \boxed{\frac{1}{2}}"}],
-        ...     [{"role": "assistant", "content": r"<think> My answer is \boxed{\frac{1}{3}} </think> I don't know."}],
+        ...     [
+        ...         {
+        ...             "role": "assistant",
+        ...             "content": r"<think> Reasoning content </think> The final answer is \boxed{\frac{1}{2}}",
+        ...         }
+        ...     ],
+        ...     [
+        ...         {
+        ...             "role": "assistant",
+        ...             "content": r"<think> Reasoning content with partial answers \boxed{\frac{1}{3}} but no final answer",
+        ...         }
+        ...     ],
         ... ]
-        >>> reasoning_accuracy_reward(completion, solution)
+        >>> reasoning_accuracy_reward(completions, solutions, reasoning_delimiters=reasoning_delimiters)
         [1.0, 0.0, 0.0]
         ```
     """
     if not is_math_verify_available():
         raise ImportError("Please install the `math_verify` package to use accuracy_reward")
 
-    if reasoning_tags is None:
-        # Use sensible defaults for majority of reasoning models. The second case captures models that prefill the think tag.
-        reasoning_tags = [("<think>", "</think>"), ("", "</think>")]
-    contents = [completion[0]["content"] for completion in completions]
+    if reasoning_delimiters is None:
+        # Use sensible defaults for majority of reasoning models
+        reasoning_delimiters = ["</think>"]
+
     rewards = []
-    for content, sol in zip(contents, solution, strict=True):
-        content = _remove_reasoning_content(content, reasoning_tags)
-        gold_parsed = parse(
-            sol, extraction_config=[LatexExtractionConfig(boxed_match_priority=0, try_extract_without_anchor=True)]
-        )
+    contents = [completion[0]["content"] for completion in completions]
+    for content, solution in zip(contents, solutions, strict=True):
+        # Split final answer from reasoning content
+        is_reasoning_complete = False
+        for delim in reasoning_delimiters:
+            if delim in content:
+                content = content.split(delim)[-1]
+                is_reasoning_complete = True
+                break
+        if not is_reasoning_complete:
+            # We assign zero reward instead of `None` to penalize incomplete reasoning
+            rewards.append(0.0)
+            continue
+
+        gold_parsed = parse(solution)
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
             answer_parsed = parse(
@@ -185,10 +181,11 @@ def reasoning_accuracy_reward(
             # Compute binary rewards if verifiable, `None` otherwise to skip this example
             try:
                 reward = float(verify(gold_parsed, answer_parsed))
-            except Exception as _:
+            except Exception as e:
+                logger.warning(f"Verification failed with error: {e}. Assigning reward=None for this example.")
                 reward = None
         else:
-            # If the gold solution is not parseable, we assign `None` to skip this example
+            # If the gold solution cannot be parsed, we assign `None` to skip this example
             reward = None
         rewards.append(reward)
 
