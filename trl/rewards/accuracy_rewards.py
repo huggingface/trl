@@ -24,7 +24,7 @@ if is_math_verify_available():
     from math_verify import LatexExtractionConfig, parse, verify
 
 
-def accuracy_reward(completions: list[list[dict[str, str]]], solutions: list[str], **kwargs) -> list[float | None]:
+def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[float | None]:
     r"""
     Reward function that checks if the completion matches the ground truth.
         - If both gold and prediction are parseable → use math verification.
@@ -34,7 +34,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solutions: list[str
         completions (`list[list[dict[str, str]]]`):
             List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
-        solutions: (`list[str]`):
+        solution: (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
         **kwargs:
             Additional keyword arguments. This function does not use them, but they are required in the function
@@ -57,7 +57,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solutions: list[str
 
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
-    for content, sol in zip(contents, solutions, strict=True):
+    for content, sol in zip(contents, solution, strict=True):
         gold_parsed = parse(sol)
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
@@ -89,7 +89,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solutions: list[str
 
 def reasoning_accuracy_reward(
     completions: list[list[dict[str, str]]],
-    solutions: list[str],
+    solution: list[str],
     reasoning_delimiters: list[str] | None = None,
     **kwargs,
 ) -> list[float | None]:
@@ -102,7 +102,7 @@ def reasoning_accuracy_reward(
         completions (`list[list[dict[str, str]]]`):
             List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
-        solutions: (`list[str]`):
+        solution: (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
         reasoning_delimiters (`list[str]]`, *optional*, defaults to `None`):
             List of strings indicating where the reasoning content ends. The final answer is assumed to be after the
@@ -149,7 +149,7 @@ def reasoning_accuracy_reward(
 
     rewards = []
     contents = [completion[0]["content"] for completion in completions]
-    for content, solution in zip(contents, solutions, strict=True):
+    for content, sol in zip(contents, solution, strict=True):
         # Split final answer from reasoning content
         is_reasoning_complete = False
         for delim in reasoning_delimiters:
@@ -162,7 +162,7 @@ def reasoning_accuracy_reward(
             rewards.append(0.0)
             continue
 
-        gold_parsed = parse(solution)
+        gold_parsed = parse(sol)
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
             answer_parsed = parse(
