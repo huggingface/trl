@@ -450,48 +450,73 @@ class GKDTrainer(SFTTrainer):
             shifted_teacher_logits = shifted_teacher_logits[:, :min_length, :]
             shifted_student_labels = shifted_student_labels[:, :min_length]
 
-            # For cross-tokenizer distillation with different vocab sizes, we use a text-aligned approach:
-            # 1. Get teacher's predicted tokens (already in teacher vocab space)
-            # 2. Decode to text and re-encode with student tokenizer
-            # 3. Use as pseudo-labels for the student (sequence-level KD)
+            # For cross-tokenizer distillation with different vocab sizes, we use sequence-level KL divergence:
+            # Both models evaluate the SAME completion text (student-generated, re-tokenized for teacher).
+            # We compute the total log-probability each model assigns to this text, then compare via KL.
+            # This preserves GKD's on-policy objective without requiring token-level alignment.
 
-            # Get teacher predictions (argmax over teacher vocab)
+            # Compute sequence-level log-probabilities from teacher
             with torch.no_grad():
-                teacher_predictions = shifted_teacher_logits.argmax(dim=-1)  # [batch, seq_len]
+                teacher_log_probs = F.log_softmax(shifted_teacher_logits, dim=-1)  # [batch, teacher_seq_len, teacher_vocab]
 
-                # Decode teacher predictions to text, then encode with student tokenizer
-                # to get aligned target labels in student vocab space
-                batch_size, seq_len = teacher_predictions.shape
-                aligned_labels = []
+                # Get teacher's actual token IDs (what it's evaluating)
+                teacher_completion_ids = teacher_input_ids[:, teacher_prompt_length:teacher_prompt_length + shifted_teacher_logits.size(1)]
 
-                for b in range(batch_size):
-                    # Get valid teacher predictions (non-padded)
-                    valid_mask = teacher_attention_mask[b, teacher_prompt_length:teacher_prompt_length + seq_len]
-                    valid_preds = teacher_predictions[b][valid_mask]
+                # Gather log-probs for each token: log P_teacher(token_i | context)
+                teacher_token_log_probs = torch.gather(
+                    teacher_log_probs,
+                    dim=-1,
+                    index=teacher_completion_ids.unsqueeze(-1)
+                ).squeeze(-1)  # [batch, teacher_seq_len]
 
-                    # Decode teacher tokens to text
-                    teacher_text = self.teacher_tokenizer.decode(valid_preds.tolist(), skip_special_tokens=False)
+                # Mask padding and sum to get sequence-level: log P_teacher(completion)
+                teacher_mask = teacher_attention_mask[:, teacher_prompt_length:teacher_prompt_length + shifted_teacher_logits.size(1)]
+                teacher_mask = teacher_mask.float()
 
-                    # Encode with student tokenizer
-                    student_tokens = self.processing_class.encode(teacher_text, add_special_tokens=False)
+                # Normalize by token count for fair comparison across tokenizers
+                teacher_length = teacher_mask.sum(dim=1)  # [batch]
+                # Avoid division by zero for empty sequences
+                teacher_seq_log_prob = (teacher_token_log_probs * teacher_mask).sum(dim=1) / teacher_length.clamp(min=1.0)  # [batch]
 
-                    # Pad/truncate to match sequence length
-                    if len(student_tokens) < seq_len:
-                        student_tokens = student_tokens + [-100] * (seq_len - len(student_tokens))
-                    else:
-                        student_tokens = student_tokens[:seq_len]
+            # Compute sequence-level log-probabilities from student
+            student_log_probs = F.log_softmax(shifted_student_logits, dim=-1)  # [batch, student_seq_len, student_vocab]
 
-                    aligned_labels.append(torch.tensor(student_tokens, dtype=torch.long))
+            # Gather log-probs for tokens the student actually generated
+            student_token_log_probs = torch.gather(
+                student_log_probs,
+                dim=-1,
+                index=shifted_student_labels.unsqueeze(-1).clamp(min=0)  # Clamp to avoid -100 indexing
+            ).squeeze(-1)  # [batch, student_seq_len]
 
-                # Stack into batch tensor
-                aligned_labels = torch.stack(aligned_labels).to(self.accelerator.device)  # [batch, seq_len]
+            # Mask padding (-100 labels) and sum
+            student_mask = (shifted_student_labels != -100).float()
+            student_length = student_mask.sum(dim=1)  # [batch]
+            # Avoid division by zero for empty sequences
+            student_seq_log_prob = (student_token_log_probs * student_mask).sum(dim=1) / student_length.clamp(min=1.0)  # [batch]
 
-            # Compute cross-entropy loss between student logits and aligned teacher labels
-            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
-            loss = loss_fct(
-                shifted_student_logits.reshape(-1, shifted_student_logits.size(-1)),  # [batch*seq, vocab]
-                aligned_labels.reshape(-1),  # [batch*seq]
-            )
+            # Sequence-level reverse KL: KL(P_student || P_teacher) ≈ log P_student - log P_teacher
+            # This encourages student to match teacher's confidence in the completion
+            seq_kl = student_seq_log_prob - teacher_seq_log_prob.detach()
+
+            # Only include samples with valid lengths (both teacher and student have >= 1 token)
+            valid_mask = (teacher_length >= 1.0) & (student_length >= 1.0)
+            if valid_mask.sum() == 0:
+                # All samples invalid - return zero loss
+                loss = torch.tensor(0.0, device=seq_kl.device, requires_grad=True)
+            else:
+                seq_kl_valid = seq_kl[valid_mask]
+
+                # Apply variance reduction: subtract moving average baseline
+                if not hasattr(self, 'seq_kl_baseline'):
+                    self.seq_kl_baseline = seq_kl_valid.detach().mean()
+                else:
+                    # Exponential moving average with decay 0.99
+                    self.seq_kl_baseline = 0.99 * self.seq_kl_baseline + 0.01 * seq_kl_valid.detach().mean()
+
+                seq_kl_centered = seq_kl_valid - self.seq_kl_baseline
+
+                # Loss: negative KL (we want to minimize divergence)
+                loss = -seq_kl_centered.mean()
 
             empty_cache()
             return (loss, student_outputs) if return_outputs else loss
