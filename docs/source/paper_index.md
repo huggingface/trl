@@ -111,7 +111,6 @@ training_args = GRPOConfig(
     loss_type="dr_grpo",
     per_device_train_batch_size=1, # train_batch_size_per_device in the Training section of the repository
     num_generations=8, #  num_samples in the Training section of the repository
-    max_prompt_length=1024, #  prompt_max_length in the Training section of the repository
     max_completion_length=3000, # generate_max_length in the Training section of the repository
     beta=0.0, # beta in the Training section of the repository
 )

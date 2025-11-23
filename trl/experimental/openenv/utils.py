@@ -43,7 +43,6 @@ def _build_colocate_sampling_params(
         "top_k": -1 if trainer.top_k is None else trainer.top_k,
         "min_p": 0.0 if trainer.min_p is None else trainer.min_p,
         "max_tokens": trainer.max_completion_length,
-        "truncate_prompt_tokens": trainer.max_prompt_length,
         "guided_decoding": guided_decoding,
     }
     if trainer.repetition_penalty is not None:
