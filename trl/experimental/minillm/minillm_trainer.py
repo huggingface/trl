@@ -13,18 +13,20 @@
 # limitations under the License.
 
 import textwrap
+import warnings
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
-from transformers import AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
 from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from ..gkd.gkd_trainer import build_teacher_inputs_from_texts
 from .minillm_config import MiniLLMConfig
 
 
@@ -219,6 +221,25 @@ class MiniLLMTrainer(GRPOTrainer):
         else:
             self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 
+        # Load teacher tokenizer if specified for cross-tokenizer distillation
+        self.teacher_tokenizer = None
+        if args.teacher_tokenizer_name_or_path is not None:
+            self.teacher_tokenizer = AutoTokenizer.from_pretrained(args.teacher_tokenizer_name_or_path)
+            if not hasattr(self.teacher_tokenizer, "pad_token") or self.teacher_tokenizer.pad_token is None:
+                self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
+        elif hasattr(self.teacher_model, "config") and hasattr(self.model, "config"):
+            # Warn if models appear to be different but teacher_tokenizer not specified
+            teacher_model_name = getattr(self.teacher_model.config, "_name_or_path", None)
+            student_model_name = getattr(self.model.config, "_name_or_path", None)
+            if teacher_model_name and student_model_name and teacher_model_name != student_model_name:
+                warnings.warn(
+                    f"Student model ({student_model_name}) and teacher model ({teacher_model_name}) appear to be "
+                    f"different. If they use different tokenizers, you should set 'teacher_tokenizer_name_or_path' "
+                    f"in MiniLLMConfig for correct cross-tokenizer distillation.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
         self.temperature = args.temperature
         self.kd_temperature = args.kd_temperature
         self.single_step_decomposition = args.single_step_decomposition
@@ -339,16 +360,60 @@ class MiniLLMTrainer(GRPOTrainer):
         # Compute student output
         student_outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
 
-        # Compute teacher output in eval mode
-        self.teacher_model.eval()
-        with torch.no_grad():
-            teacher_outputs = self.teacher_model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+        # Cross-tokenizer distillation: re-tokenize for teacher if different tokenizer
+        if self.teacher_tokenizer is not None:
+            # Decode student sequences to text
+            prompt_texts = self.processing_class.batch_decode(inputs["prompt_ids"], skip_special_tokens=False)
+            completion_texts = self.processing_class.batch_decode(inputs["completion_ids"], skip_special_tokens=False)
 
-        # Slice the logits for the generated tokens using the inputs["prompts"] lengths
-        prompt_lengths = inputs["prompt_ids"].shape[1]
-        student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
-        teacher_logits = teacher_outputs.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_labels = input_ids[:, prompt_lengths:]
+            # Re-tokenize using teacher's tokenizer
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_prompt_length,
+            ) = build_teacher_inputs_from_texts(
+                self.teacher_tokenizer,
+                prompt_texts,
+                completion_texts,
+            )
+
+            teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
+            teacher_labels = teacher_labels.to(self.accelerator.device)
+            teacher_attention_mask = teacher_attention_mask.to(self.accelerator.device)
+
+            # Compute teacher output with re-tokenized inputs
+            self.teacher_model.eval()
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(
+                    input_ids=teacher_input_ids,
+                    attention_mask=teacher_attention_mask,
+                    use_cache=False,
+                )
+
+            # Slice logits with appropriate prompt lengths for each model
+            prompt_lengths = inputs["prompt_ids"].shape[1]
+            student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
+            teacher_logits = teacher_outputs.logits[:, teacher_prompt_length - 1 : -1, :]
+            shifted_labels = input_ids[:, prompt_lengths:]
+
+            # Handle different sequence lengths
+            min_length = min(student_logits.size(1), teacher_logits.size(1))
+            student_logits = student_logits[:, :min_length, :]
+            teacher_logits = teacher_logits[:, :min_length, :]
+            shifted_labels = shifted_labels[:, :min_length]
+        else:
+            # Same-tokenizer path: use same input_ids for both models
+            # Compute teacher output in eval mode
+            self.teacher_model.eval()
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+
+            # Slice the logits for the generated tokens using the inputs["prompts"] lengths
+            prompt_lengths = inputs["prompt_ids"].shape[1]
+            student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
+            teacher_logits = teacher_outputs.logits[:, prompt_lengths - 1 : -1, :]
+            shifted_labels = input_ids[:, prompt_lengths:]
 
         # Apply temperature scaling
         student_logits = student_logits / self.kd_temperature
