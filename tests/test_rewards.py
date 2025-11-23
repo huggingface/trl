@@ -174,7 +174,7 @@ class TestReasoningAccuracyReward:
         assert rewards[0] == 0.0
 
     @require_math_latex
-    def test_answer_in_reasoning(self):
+    def test_correct_answer_in_reasoning(self):
         completions = [
             [{"content": r"<think> My answer is \boxed{42} </think> Some other text."}],
             [{"content": r"<think> The answer is \boxed{42} </think> Here's a wrong answer: \boxed{43}."}],
