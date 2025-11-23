@@ -12,6 +12,22 @@
   - local: paper_index
     title: Paper Index
   title: Conceptual Guides
+- sections: # Sorted alphabetically
+  - local: dpo_trainer
+    title: DPO
+  - local: online_dpo_trainer
+    title: Online DPO
+  - local: grpo_trainer
+    title: GRPO
+  - local: kto_trainer
+    title: KTO
+  - local: reward_trainer
+    title: Reward
+  - local: rloo_trainer
+    title: RLOO
+  - local: sft_trainer
+    title: SFT
+  title: Trainers
 - sections:
   - local: clis
     title: Command Line Interface (CLI)
@@ -55,22 +71,6 @@
     title: LoRA Without Regret
   title: Examples
 - sections:
-  - sections: # Sorted alphabetically
-    - local: dpo_trainer
-      title: DPO
-    - local: online_dpo_trainer
-      title: Online DPO
-    - local: grpo_trainer
-      title: GRPO
-    - local: kto_trainer
-      title: KTO
-    - local: reward_trainer
-      title: Reward
-    - local: rloo_trainer
-      title: RLOO
-    - local: sft_trainer
-      title: SFT
-    title: Trainers
   - local: models
     title: Model Classes
   - local: model_utils
