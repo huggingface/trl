@@ -187,8 +187,8 @@ class TestReasoningAccuracyReward:
     @require_math_latex
     def test_incomplete_reasoning(self):
         completions = [
-            [{"content": r"<think> Incomplete reasoning without closing tag. \boxed{\frac{63}{400}}"}],
-            [{"content": r"Completely missing reasoning content. \boxed{\frac{63}{400}}"}],
+            [{"content": r"<think> Incomplete reasoning without closing tag"}],
+            [{"content": r"Correct answer \frac{63}{400} but completely missing reasoning content"}],
         ]
         solutions = [r"\frac{63}{400}", r"\frac{63}{400}"]
         rewards = reasoning_accuracy_reward(completions, solutions)
