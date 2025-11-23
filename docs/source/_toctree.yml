@@ -107,7 +107,7 @@
     title: GSPO-token
   - local: judges
     title: Judges
-  - local: minillm
+  - local: minillm_trainer
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
