@@ -36,7 +36,6 @@ from transformers.utils import is_peft_available
 from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
-from ...trainer.online_dpo_trainer import OnlineDPOTrainer
 from ...trainer.utils import (
     SIMPLE_CHAT_TEMPLATE,
     empty_cache,
@@ -44,6 +43,7 @@ from ...trainer.utils import (
     selective_log_softmax,
     truncate_right,
 )
+from ..online_dpo import OnlineDPOTrainer
 from .xpo_config import XPOConfig
 
 
@@ -55,7 +55,7 @@ class XPOTrainer(OnlineDPOTrainer):
     """
     Trainer for Exploratory Preference Optimization (XPO).
 
-    It is implemented as a subclass of [`OnlineDPOTrainer`].
+    It is implemented as a subclass of [`experimental.online_dpo.OnlineDPOTrainer`].
 
     Args:
         model ([`~transformers.PreTrainedModel`]):

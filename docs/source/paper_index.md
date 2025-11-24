@@ -479,6 +479,33 @@ training_args = DPOConfig(
 
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
+## Kahneman–Tversky Optimization
+
+Papers relating to the [`KTOTrainer`]
+
+### KTO: Model Alignment as Prospect Theoretic Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2402.01306
+
+KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
+To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
+
+```python
+from trl import KTOConfig, KTOTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+trainer = KTOTrainer(
+    model=model,
+    processing_class=tokenizer,
+    args=KTOConfig(),
+    train_dataset=...,
+)
+trainer.train()
+```
+
 ## Supervised Fine-Tuning
 
 Papers relating to the [`SFTTrainer`]
@@ -697,3 +724,27 @@ trainer.train()
 ```
 
 For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
+
+## Distributed Training
+
+### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models
+
+**📜 Paper**: https://huggingface.co/papers/1910.02054
+
+ZeRO (Zero Redundancy Optimizer) eliminates memory redundancies in data- and model-parallel training by partitioning optimizer states, gradients, and parameters across devices while retaining low communication volume and high computational granularity. This allows for the efficient training of large models that would otherwise not fit in GPU memory.
+
+TRL supports ZeRO via the [DeepSpeed integration](deepspeed_integration). To use it, provide a DeepSpeed configuration file with your desired settings,
+
+```yaml
+# config.yaml
+distributed_type: DEEPSPEED
+num_processes: 2
+deepspeed_config:
+  zero_stage: 3
+```
+
+and launch the training script using `accelerate launch --config_file config_file`.
+
+```sh
+accelerate launch --config_file config.yaml train.py
+```

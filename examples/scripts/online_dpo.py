@@ -58,8 +58,6 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from trl import (
     LogCompletionsCallback,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
@@ -67,6 +65,7 @@ from trl import (
     get_quantization_config,
 )
 from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 
 # Enable logging in a Hugging Face Space
