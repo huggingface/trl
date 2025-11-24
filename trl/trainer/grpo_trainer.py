@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import asyncio
 import inspect
 import os
 import textwrap
@@ -1108,12 +1108,14 @@ class GRPOTrainer(BaseTrainer):
 
         # This allows for dynamic reward shaping based on training progress.
         reward_kwargs["trainer_state"] = self.state
+        custom_funcs_info = []
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names, strict=True)
         ):
-            with profiling_context(self, reward_func_name):
-                if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+            # Collect module-based rewards immediately; defer custom function rewards for parallel execution.
+            if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+                with profiling_context(self, reward_func_name):
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
@@ -1128,14 +1130,56 @@ class GRPOTrainer(BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-                else:
-                    output_reward_func = reward_func(
-                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
-                    )
-                    # Convert None values to NaN
-                    output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+            else:
+                # Defer custom (non-nn.Module) reward funcs for asyncio parallel execution.
+                custom_funcs_info.append((i, reward_func, reward_func_name))
 
-                    rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+        # Parallel execution of custom reward functions (non-nn.Module) using asyncio threads.
+        if custom_funcs_info:
+
+            async def _invoke_custom_reward(index, func, func_name):
+                with profiling_context(self, func_name):
+                    # If the reward function itself is async, await it directly; else offload to a thread.
+                    if asyncio.iscoroutinefunction(func):
+                        output = await func(
+                            prompts=prompts,
+                            completions=completions,
+                            completion_ids=completion_ids_list,
+                            **reward_kwargs,
+                        )
+                    else:
+                        output = await asyncio.to_thread(
+                            func,
+                            prompts=prompts,
+                            completions=completions,
+                            completion_ids=completion_ids_list,
+                            **reward_kwargs,
+                        )
+                    output = [r if r is not None else torch.nan for r in output]
+                    return index, output
+
+            async def _run_all():
+                coros = [_invoke_custom_reward(i, func, func_name) for (i, func, func_name) in custom_funcs_info]
+                return await asyncio.gather(*coros)
+
+            # Detect if a loop is already running (e.g., pytest-asyncio). If so create a new loop to avoid
+            # creating coroutines that never get awaited due to fallback.
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+
+            if running_loop and running_loop.is_running():
+                new_loop = asyncio.new_event_loop()
+                try:
+                    results = new_loop.run_until_complete(_run_all())
+                finally:
+                    new_loop.close()
+            else:
+                results = asyncio.run(_run_all())
+
+            for idx, output_reward_func in results:
+                rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():

@@ -508,6 +508,44 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_training_sync_and_async_reward_funcs(self):
+        # Test that GRPOTrainer can be instantiated with multiple reward functions one of which is async
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func1(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion)) for completion in completions]
+
+        async def reward_func2(completions, **kwargs):
+            """Async Reward function that rewards completions with more unique letters."""
+            return [float(len(set(completion))) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[reward_func1, reward_func2],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_training_multiple_reward_funcs_with_None_output(self):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
