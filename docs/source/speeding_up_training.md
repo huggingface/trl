@@ -20,7 +20,7 @@ pip install trl[vllm]
 Then, enable it by passing `use_vllm=True` in the training arguments.
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(..., use_vllm=True)
 ```
