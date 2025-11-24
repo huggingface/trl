@@ -561,7 +561,9 @@ class GRPOTrainer(BaseTrainer):
                         base_url = args.vllm_server_base_url
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                    self.vllm_client = VLLMClient(base_url=base_url,group_port=args.vllm_group_port,connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client = VLLMClient(
+                        base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                    )
                     self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
             elif self.vllm_mode == "colocate":
