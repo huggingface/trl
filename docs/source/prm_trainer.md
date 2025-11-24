@@ -2,6 +2,9 @@
 
 [![model badge](https://img.shields.io/badge/All_models-PRM-blue)](https://huggingface.co/models?other=prm,trl)
 
+> [!TIP]
+> PRMTrainer has been moved to `trl.experimental.prm.PRMTrainer`. The `trl.trainer` version is deprecated and will be removed in TRL 0.29.0. Please update your imports to use `trl.experimental.prm.PRMTrainer` instead. See [issue #4467](https://github.com/huggingface/trl/issues/4467) for more information.
+
 > [!WARNING]
 > PRM Trainer is an experimental API which is subject to change at any time.
 
@@ -31,7 +34,7 @@ Below is the script to train the model:
 ```python
 # train_prm.py
 from datasets import load_dataset
-from trl import PRMConfig, PRMTrainer
+from trl.experimental.prm import PRMConfig, PRMTrainer
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
 model = AutoModelForTokenClassification.from_pretrained("Qwen/Qwen2-0.5B", num_labels=2)
@@ -112,11 +115,11 @@ accelerate launch examples/scripts/prm.py \
 
 ## PRMTrainer
 
-[[autodoc]] PRMTrainer
+[[autodoc]] experimental.prm.PRMTrainer
     - train
     - save_model
     - push_to_hub
 
 ## PRMConfig
 
-[[autodoc]] PRMConfig
+[[autodoc]] experimental.prm.PRMConfig
