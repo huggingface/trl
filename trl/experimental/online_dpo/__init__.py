@@ -14,3 +14,6 @@
 
 from .online_dpo_config import OnlineDPOConfig
 from .online_dpo_trainer import OnlineDPOTrainer
+
+
+__all__ = ["OnlineDPOConfig", "OnlineDPOTrainer"]
