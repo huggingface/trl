@@ -1363,10 +1363,10 @@ class GOLDTrainer(SFTTrainer):
                 # Try to split prompt/completion using original prompt length
                 prompt_lengths = inputs["prompts"].shape[1]
                 prompt_texts = self.processing_class.batch_decode(inputs["prompts"], skip_special_tokens=False)
-                completion_texts = [
-                    full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
-                ]
 
+            completion_texts = [
+                full.replace(prompt, "", 1) for full, prompt in zip(full_texts, prompt_texts, strict=True)
+            ]
             (
                 teacher_input_ids,
                 teacher_labels,
