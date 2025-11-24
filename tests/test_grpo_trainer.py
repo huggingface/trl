@@ -223,6 +223,30 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
+    def test_training_with_num_generations_eval(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_generations_eval=1,
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
+
     def test_training_multiple_iterations(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1518,7 +1542,6 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             use_liger_kernel=True,  # enable Liger kernel
-            loss_type="bnpo",  # default dapo is not supported yet
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1839,7 +1862,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
-            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -1888,7 +1910,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
-            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)

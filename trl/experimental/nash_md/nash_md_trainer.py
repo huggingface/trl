@@ -37,8 +37,8 @@ from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.modeling_base import GeometricMixtureWrapper
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
-from ...trainer.online_dpo_trainer import OnlineDPOTrainer
 from ...trainer.utils import SIMPLE_CHAT_TEMPLATE, empty_cache, get_reward, selective_log_softmax, truncate_right
+from ..online_dpo import OnlineDPOTrainer
 from .nash_md_config import NashMDConfig
 
 
@@ -50,7 +50,7 @@ class NashMDTrainer(OnlineDPOTrainer):
     """
     Trainer for the Nash-MD method.
 
-    It is implemented as a subclass of [`OnlineDPOTrainer`].
+    It is implemented as a subclass of [`experimental.online_dpo.OnlineDPOTrainer`].
 
     Args:
         model ([`~transformers.PreTrainedModel`]):

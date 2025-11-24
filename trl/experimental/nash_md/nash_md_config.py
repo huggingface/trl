@@ -14,7 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from ...trainer.online_dpo_config import OnlineDPOConfig
+from ..online_dpo import OnlineDPOConfig
 
 
 @dataclass
@@ -22,7 +22,7 @@ class NashMDConfig(OnlineDPOConfig):
     r"""
     Configuration class for the [`experimental.nash_md.NashMDTrainer`].
 
-    Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
+    Subclass of [`experimental.online_dpo.OnlineDPOConfig`] we can use all its arguments and add the following:
 
     Parameters:
         mixture_coef (`float` or `list[float]`, *optional*, defaults to `0.5`):
