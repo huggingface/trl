@@ -24,15 +24,15 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 - [`GRPOTrainer`] ⚡️
 - [`RLOOTrainer`] ⚡️
+- [`experimental.nash_md.NashMDTrainer`] 🧪 ⚡️
 - [`experimental.online_dpo.OnlineDPOTrainer`] 🧪 ⚡️
-- [`NashMDTrainer`] ⚡️
+- [`experimental.ppo.PPOTrainer`] 🧪
 - [`experimental.xpo.XPOTrainer`] 🧪 ⚡️
-- [`PPOTrainer`]
 
 ### Reward modeling
 
-- [`PRMTrainer`]
 - [`RewardTrainer`]
+- [`experimental.prm.PRMTrainer`] 🧪
 
 </div>
 <div style="flex: 1; min-width: 0;">
@@ -41,14 +41,15 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 - [`SFTTrainer`]
 - [`DPOTrainer`]
-- [`ORPOTrainer`]
-- [`experimental.bco.BCOTrainer`] 🧪
-- [`CPOTrainer`]
 - [`KTOTrainer`]
+- [`experimental.bco.BCOTrainer`] 🧪
+- [`experimental.cpo.CPOTrainer`] 🧪
+- [`experimental.orpo.ORPOTrainer`] 🧪
 
 ### Knowledge distillation
 
-- [`GKDTrainer`]
+- [`experimental.gkd.GKDTrainer`] 🧪
+- [`experimental.minillm.MiniLLMTrainer`] 🧪
 
 </div>
 </div>

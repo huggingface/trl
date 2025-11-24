@@ -33,8 +33,9 @@ from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 from .testing_utils import (
     TrlTestCase,
     ignore_warnings,
+    require_ampere_or_newer,
     require_bitsandbytes,
-    require_flash_attn,
+    require_kernels,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
@@ -44,6 +45,7 @@ from .testing_utils import (
 
 
 if is_peft_available():
+    import peft
     from peft import (
         LoraConfig,
         PeftModel,
@@ -537,6 +539,11 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
+            if parse_version(peft.__version__) <= Version("0.17.1"):
+                pytest.xfail(
+                    "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
+                    "https://github.com/huggingface/peft/issues/2821"
+                )
             peft_config = PrefixTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
                 num_virtual_tokens=4,
@@ -864,7 +871,8 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    @require_flash_attn
+    @require_kernels
+    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
     def test_train_padding_free(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -873,7 +881,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             padding_free=True,
-            model_init_kwargs={"attn_implementation": "flash_attention_2"},
+            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )
@@ -1524,10 +1532,14 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
+    @pytest.mark.parametrize(
+        "dataset_config",
+        ["conversational_language_modeling", "conversational_prompt_completion", "standard_prompt_completion"],
+    )
     @require_vision
-    def test_train_vlm_text_only_data(self, model_id):
+    def test_train_vlm_text_only_data(self, model_id, dataset_config):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")

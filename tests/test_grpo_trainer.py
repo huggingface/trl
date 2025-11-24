@@ -41,8 +41,9 @@ from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
+    require_ampere_or_newer,
     require_bitsandbytes,
-    require_flash_attn,
+    require_kernels,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
@@ -1517,7 +1518,6 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             use_liger_kernel=True,  # enable Liger kernel
-            loss_type="bnpo",  # default dapo is not supported yet
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1838,7 +1838,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
-            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -1887,7 +1886,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
-            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -1987,7 +1985,8 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "HuggingFaceTB/SmolVLM-Instruct",  # Only test the smaller model to avoid OOM
         ],
     )
-    @require_flash_attn
+    @require_kernels
+    @require_ampere_or_newer  # Flash attention 2 requires Ampere or newer GPUs
     @require_bitsandbytes
     @require_peft
     def test_vlm_training(self, model_name):
@@ -2040,7 +2039,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         )
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
-            attn_implementation="flash_attention_2",
+            attn_implementation="kernels-community/flash-attn2",
             dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,

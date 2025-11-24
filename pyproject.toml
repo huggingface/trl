@@ -52,8 +52,11 @@ judges = [
     "openai>=1.23.2",
     "llm-blender>=0.0.2"
 ]
+kernels = [
+    "kernels"
+]
 liger = [
-    "liger-kernel>=0.6.2"
+    "liger-kernel>=0.6.4"
 ]
 peft = [
     "peft>=0.8.0"
@@ -98,8 +101,10 @@ dev = [
     # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
+    # kernels
+    "kernels",
     # liger
-    "liger-kernel>=0.6.2",
+    "liger-kernel>=0.6.4",
     # peft
     "peft>=0.8.0",
     # quality

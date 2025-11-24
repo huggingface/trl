@@ -72,9 +72,9 @@ logger = logging.get_logger(__name__)
 FLASH_ATTENTION_VARIANTS = {
     "flash_attention_2",
     "flash_attention_3",
-    "kernels-community/flash-attn",
-    "kernels-community/vllm-flash-attn3",
+    "kernels-community/flash-attn2",
     "kernels-community/flash-attn3",
+    "kernels-community/vllm-flash-attn3",
 }
 
 
@@ -603,7 +603,11 @@ class SFTTrainer(BaseTrainer):
 
         # Model
         if isinstance(model, str):
-            model = create_model_from_path(model, **args.model_init_kwargs or {})
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
@@ -818,18 +822,19 @@ class SFTTrainer(BaseTrainer):
                     )
 
         # Loss function
-        if args.loss_type == "nll":
-            pass  # use the default loss
-        elif args.loss_type == "dft":
-            if compute_loss_func is not None:
-                raise ValueError(
-                    "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
-                    "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so passing a "
-                    "`compute_loss_func` is not allowed."
-                )
-            compute_loss_func = dft_loss
-        else:
-            raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+        if not args.use_liger_kernel:  # liger supports dft loss by just passing use_token_scaling=True
+            if args.loss_type == "nll":
+                pass  # use the default loss
+            elif args.loss_type == "dft":
+                if compute_loss_func is not None:
+                    raise ValueError(
+                        "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
+                        "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so "
+                        "passing a `compute_loss_func` is not allowed."
+                    )
+                compute_loss_func = dft_loss
+            else:
+                raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -935,9 +940,10 @@ class SFTTrainer(BaseTrainer):
                             example["completion"] = example["completion"] + eos_token
                         return example
 
+                    eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
                     dataset = dataset.map(
                         add_eos,
-                        fn_kwargs={"eos_token": processing_class.eos_token},
+                        fn_kwargs={"eos_token": eos_token},
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
@@ -988,6 +994,14 @@ class SFTTrainer(BaseTrainer):
                             prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
                                 "input_ids"
                             ]
+                            # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
+                            prompt_completion_ids = (
+                                prompt_completion_ids[0]
+                                if isinstance(prompt_completion_ids[0], list)
+                                else prompt_completion_ids
+                            )
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
@@ -1100,6 +1114,11 @@ class SFTTrainer(BaseTrainer):
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
+        # Request token accuracy from Liger kernel and set token scaling if using DFT loss
+        if self.args.use_liger_kernel:
+            inputs["return_token_accuracy"] = True
+            inputs["use_token_scaling"] = self.args.loss_type == "dft"
+
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
@@ -1138,8 +1157,11 @@ class SFTTrainer(BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if not self.args.use_liger_kernel:
+        if self.args.use_liger_kernel:
+            token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
+            self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+        else:
+            # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
@@ -1177,10 +1199,12 @@ class SFTTrainer(BaseTrainer):
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-                if self.aux_loss_enabled:
-                    aux_loss = outputs.aux_loss
-                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
-                    self._metrics[mode]["aux_loss"].append(aux_loss)
+
+        # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
+        if self.aux_loss_enabled:
+            aux_loss = outputs.aux_loss
+            aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
+            self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 
