@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
-
 from ..import_utils import is_math_verify_available
 
-
-logger = logging.getLogger(__name__)
 
 if is_math_verify_available():
     from latex2sympy2_extended import NormalizationConfig
@@ -73,12 +69,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
                 ],
                 extraction_mode="first_match",
             )
-            # Compute binary rewards if verifiable, `None` otherwise to skip this example
-            try:
-                reward = float(verify(gold_parsed, answer_parsed))
-            except Exception as e:
-                logger.warning(f"Verification failed with error: {e}. Assigning reward=None for this example.")
-                reward = None
+            reward = float(verify(gold_parsed, answer_parsed))
         else:
             # If the gold solution cannot be parsed, we assign `None` to skip this example
             reward = None
@@ -178,12 +169,7 @@ def reasoning_accuracy_reward(
                 ],
                 extraction_mode="first_match",
             )
-            # Compute binary rewards if verifiable, `None` otherwise to skip this example
-            try:
-                reward = float(verify(gold_parsed, answer_parsed))
-            except Exception as e:
-                logger.warning(f"Verification failed with error: {e}. Assigning reward=None for this example.")
-                reward = None
+            reward = float(verify(gold_parsed, answer_parsed))
         else:
             # If the gold solution cannot be parsed, we assign `None` to skip this example
             reward = None

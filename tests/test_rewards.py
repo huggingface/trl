@@ -134,8 +134,8 @@ class TestAccuracyReward:
             "Answer is 42.34560",  # Extra trailing zero
         ]
         rewards = accuracy_reward(completion, solution)
-        assert rewards[0] == 1.0  # Should revert to exact text match
-        assert rewards[1] == 0.0
+        assert rewards[0] is None
+        assert rewards[1] is None
         assert rewards[2] == 1.0
         assert rewards[3] == 1.0
         assert rewards[4] == 1.0
@@ -145,7 +145,7 @@ class TestAccuracyReward:
 
 class TestReasoningAccuracyReward:
     @require_math_latex
-    def test_correct_answer(self):
+    def test_correct_answer_yields_unit_reward(self):
         completions = [
             [{"content": r"<think> Reasoning content </think> \boxed{\frac{63}{400}}"}],
             [{"content": r"Reasoning content </think> \boxed{\frac{63}{400}}"}],
@@ -156,7 +156,7 @@ class TestReasoningAccuracyReward:
         assert rewards[1] == 1.0
 
     @require_math_latex
-    def test_correct_answer_with_custom_tags(self):
+    def test_correct_answer_with_custom_tags_yields_unit_reward(self):
         completions = [
             [{"content": r"<REASONING_START> Reasoning content </REASONING_END> \boxed{\frac{63}{400}}"}],
         ]
@@ -167,14 +167,14 @@ class TestReasoningAccuracyReward:
         assert rewards[0] == 1.0
 
     @require_math_latex
-    def test_incorrect_answer(self):
+    def test_incorrect_answer_yields_zero_reward(self):
         completion = [[{"content": r"<think> Reasoning content </think> \boxed{\frac{64}{400}}"}]]
         solution = [r"\frac{63}{400}"]
         rewards = reasoning_accuracy_reward(completion, solution)
         assert rewards[0] == 0.0
 
     @require_math_latex
-    def test_correct_answer_in_reasoning(self):
+    def test_correct_answer_in_reasoning_yields_zero_reward(self):
         completions = [
             [{"content": r"<think> My answer is \boxed{42} </think> Some other text."}],
             [{"content": r"<think> The answer is \boxed{42} </think> Here's a wrong answer: \boxed{43}."}],
@@ -185,7 +185,7 @@ class TestReasoningAccuracyReward:
         assert rewards[1] == 0.0
 
     @require_math_latex
-    def test_incomplete_reasoning(self):
+    def test_incomplete_reasoning_yields_zero_reward(self):
         completions = [
             [{"content": r"<think> Incomplete reasoning without closing tag"}],
             [{"content": r"Correct answer \frac{63}{400} but completely missing reasoning content"}],
@@ -196,7 +196,7 @@ class TestReasoningAccuracyReward:
         assert rewards[1] == 0.0
 
     @require_math_latex
-    def test_unparseable_gold_solution(self):
+    def test_unparseable_gold_solution_yields_none_reward(self):
         completions = [
             [{"content": r"<think> Reasoning content </think> \boxed{42}"}],
         ]
