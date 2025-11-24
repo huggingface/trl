@@ -50,11 +50,7 @@ from transformers import (
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
-from transformers.utils import (
-    is_flash_attn_2_available,
-    is_peft_available,
-    is_sagemaker_mp_enabled,
-)
+from transformers.utils import is_flash_attn_2_available, is_peft_available, is_sagemaker_mp_enabled
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
