@@ -9,9 +9,9 @@ This document will guide you through the process of using vLLM with TRL for fast
 > The following trainers currently support generation with vLLM:
 >
 > - [`GRPOTrainer`]
-> - [`OnlineDPOTrainer`]
 > - [`RLOOTrainer`]
 > - [`experimental.nash_md.NashMDTrainer`]
+> - [`experimental.online_dpo.OnlineDPOTrainer`]
 > - [`experimental.xpo.XPOTrainer`]
 
 ## 🚀 How can I use vLLM with TRL to speed up training?
@@ -65,7 +65,7 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl import OnlineDPOTrainer, OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 from trl.rewards import accuracy_reward
 
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
@@ -316,7 +316,7 @@ training_args = GRPOConfig(
 <hfoption id="OnlineDPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
     ...,
@@ -391,7 +391,7 @@ training_args = GRPOConfig(
 <hfoption id="OnlineDPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
     ...,

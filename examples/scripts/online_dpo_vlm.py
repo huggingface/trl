@@ -92,14 +92,13 @@ from transformers import AutoConfig, AutoProcessor, GenerationConfig
 from trl import (
     LogCompletionsCallback,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 from trl.rewards import accuracy_reward, think_format_reward
 
 

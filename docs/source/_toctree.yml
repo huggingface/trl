@@ -111,6 +111,8 @@
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
+  - local: online_dpo_trainer
+    title: Online DPO
   - local: orpo_trainer
     title: ORPO
   - local: papo_trainer
