@@ -58,8 +58,6 @@
   - sections: # Sorted alphabetically
     - local: dpo_trainer
       title: DPO
-    - local: online_dpo_trainer
-      title: Online DPO
     - local: grpo_trainer
       title: GRPO
     - local: kto_trainer
@@ -111,6 +109,8 @@
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
+  - local: online_dpo_trainer
+    title: Online DPO
   - local: orpo_trainer
     title: ORPO
   - local: papo_trainer
