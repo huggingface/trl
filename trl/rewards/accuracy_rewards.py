@@ -24,7 +24,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     r"""
     Reward function that checks if the completion matches the ground truth.
         - If both gold and prediction are parseable → use math verification.
-        - If either is not parseable → return `None` to skip the example.
+        - If gold is not parseable → return `None` to skip the example.
 
     Args:
         completions (`list[list[dict[str, str]]]`):
@@ -87,7 +87,7 @@ def reasoning_accuracy_reward(
     r"""
     Reward function that removes the reasoning content and checks if the final answer matches the ground truth.
         - If both gold and prediction are parseable → use math verification.
-        - If either is not parseable → return `None` to skip the example.
+        - If gold is not parseable → return `None` to skip the example.
 
     Args:
         completions (`list[list[dict[str, str]]]`):
