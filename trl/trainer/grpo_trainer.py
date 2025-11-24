@@ -1869,29 +1869,29 @@ class GRPOTrainer(BaseTrainer):
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
         elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
-            if self.trust_region_method == 'clip':
+            if self.trust_region_method == "clip":
                 coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-            
+
                 # Two-sided clipping
                 if self.args.delta is not None:
                     coef_1 = torch.clamp(coef_1, max=self.args.delta)
-    
+
                 per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-    
+
                 per_token_loss2 = coef_2 * advantages.unsqueeze(1)
                 per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-    
+
             elif self.trust_region_method == "pspo":
                 # smooth the ratio (equiv. to smoothing prob when smoothing toward behaviour policy)
-                coef_2 = (1.0 - self.smoothing_alpha)*coef_1 + self.smoothing_alpha
+                coef_2 = (1.0 - self.smoothing_alpha) * coef_1 + self.smoothing_alpha
                 per_token_loss1 = None
                 per_token_loss2 = None
                 # always use smoothing for loss (no min)
                 per_token_loss = -(coef_2 * advantages.unsqueeze(1))
-        
+
             else:
-                raise AttributeError(f'Trust Region Method not clip or pspo: {self.trust_region_method}')
-    
+                raise AttributeError(f"Trust Region Method not clip or pspo: {self.trust_region_method}")
+
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
