@@ -68,7 +68,6 @@ from ...models import (
     unwrap_model_for_generation,
 )
 from ...trainer.base_trainer import BaseTrainer
-from ...trainer.online_dpo_config import OnlineDPOConfig
 from ...trainer.utils import (
     SIMPLE_CHAT_TEMPLATE,
     DPODataCollatorWithPadding,
@@ -80,6 +79,7 @@ from ...trainer.utils import (
     truncate_right,
 )
 from ..judges import BasePairwiseJudge
+from .online_dpo_config import OnlineDPOConfig
 
 
 if is_peft_available():

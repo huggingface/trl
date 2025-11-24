@@ -9,9 +9,9 @@ This document will guide you through the process of using vLLM with TRL for fast
 > The following trainers currently support generation with vLLM:
 >
 > - [`GRPOTrainer`]
-> - [`OnlineDPOTrainer`]
 > - [`RLOOTrainer`]
 > - [`experimental.nash_md.NashMDTrainer`]
+> - [`experimental.online_dpo.OnlineDPOTrainer`]
 > - [`experimental.xpo.XPOTrainer`]
 
 ## 🚀 How can I use vLLM with TRL to speed up training?
