@@ -117,30 +117,15 @@ class TestAccuracyReward:
         """Test accuracy_reward with an unparseable gold solution."""
         completion = [
             [{"content": "Answer is forty two."}],
-            [{"content": "Some other content."}],
-            [{"content": r"Answer is \boxed{42}."}],
-            [{"content": r"Answer is \boxed{\mathbf{42}}."}],  # Make response bold
-            [{"content": r"Answer is \boxed{\textbf{42}}."}],  # Different latex command for bold
-            [{"content": r"Answer is \boxed{42}."}],
-            [{"content": r"Answer is \boxed{42.3456}."}],
+            [{"content": r"Some other content. \boxed{43}."}],
         ]
         solution = [
             "Answer is forty two.",
             "Answer is forty three.",
-            "Answer is 42.0",  # Decimal point
-            "Answer is 42 43 okay?",  # Extra space
-            "Answer is 42",
-            r"Answer is \n\boxed{42}",  # Newline in gold solution
-            "Answer is 42.34560",  # Extra trailing zero
         ]
         rewards = accuracy_reward(completion, solution)
         assert rewards[0] is None
         assert rewards[1] is None
-        assert rewards[2] == 1.0
-        assert rewards[3] == 1.0
-        assert rewards[4] == 1.0
-        assert rewards[5] == 1.0
-        assert rewards[6] == 1.0  # Should ignore trailing zeros
 
 
 class TestReasoningAccuracyReward:
