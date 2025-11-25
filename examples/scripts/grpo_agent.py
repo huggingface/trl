@@ -63,45 +63,63 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 # ------------------------
 
 
-def correctness_reward(completions, answer, **kwargs):  # measures Yes/No answer correctness
+def correctness_reward(completions, answer, **kwargs):
+    """
+    Reward Yes/No correctness.
+    Robust to extra spaces, punctuation, or surrounding stars.
+    """
     rewards = []
     for completion, ans in zip(completions, answer, strict=False):
-        guess = completion[-1]["content"].strip()
+        guess = completion[-1]["content"].strip().lower()
+        guess_clean = guess.replace("*", "").replace("`", "").strip()
         reward = 0.0
 
-        if "*Yes*" not in guess and "*No*" not in guess:
-            reward -= 0.2
-        elif ("*Yes*" in guess and ans == "Yes") or ("*No*" in guess and ans == "No"):
-            reward += 0.5
-        elif ("*Yes*" in guess and ans == "No") or ("*No*" in guess and ans == "Yes"):
-            reward -= 0.2
-        rewards.append(reward)
+        if guess_clean not in ["yes", "no"]:
+            reward -= 0.2  # didn't produce a valid Yes/No
+        elif guess_clean == ans.lower():
+            reward += 0.5  # correct answer
+        else:
+            reward -= 0.2  # incorrect answer
 
+        rewards.append(reward)
     return rewards
 
 
-def tool_usage_reward(completions, **kwargs):  # rewards correct tool usage
+def tool_usage_reward(completions, **kwargs):
+    """
+    Reward proper tool usage.
+    Looks for assistant tool_calls and corresponding tool responses.
+    """
     rewards = []
     for completion in completions:
-        tool_used = False
+        tool_called = False
+        tool_response_ok = False
         reward = 0.0
 
         for turn in completion:
-            if turn["role"] == "tool":
-                tool_used = True
-                if "error" in turn["content"]:
-                    reward -= 0.3
+            if turn.get("role") == "assistant" and turn.get("tool_calls"):
+                tool_called = True
+            if turn.get("role") == "tool" and turn.get("content"):
+                tool_response_ok = True
+                if "error" in turn["content"].lower():
+                    reward -= 0.3  # penalize errors
 
-        if not tool_used:
-            reward -= 0.3
-        elif reward == 0.0:
-            reward += 0.25
+        if tool_called and tool_response_ok:
+            reward += 0.25  # reward correct tool usage
+        elif not tool_called:
+            reward -= 0.3  # penalize missing tool call
+        elif tool_called and not tool_response_ok:
+            reward -= 0.2  # called tool but no response
 
         rewards.append(reward)
     return rewards
 
 
-def structure_reward(completions, **kwargs):  # rewards proper assistant structure
+def structure_reward(completions, **kwargs):
+    """
+    Reward proper assistant structure.
+    Encourages a logical sequence: tool call + response + optional extra content.
+    """
     rewards = []
 
     for completion in completions:
@@ -110,22 +128,26 @@ def structure_reward(completions, **kwargs):  # rewards proper assistant structu
         has_other = False
 
         for turn in completion:
-            if turn.get("role") == "assistant" and turn.get("tool_calls"):
+            role = turn.get("role")
+            if role == "assistant" and turn.get("tool_calls"):
                 has_call = True
-            elif turn.get("role") == "tool":
+            elif role == "tool":
                 has_response = True
             else:
                 content = turn.get("content")
                 if content and content.strip() not in ["", "<think>"]:
                     has_other = True
 
-        reward = 0.0
-        if has_call and has_response and has_other:
-            reward = 0.25
-        elif has_call and has_response and not has_other:
-            reward = -0.15
+        # Reward sequences
+        if has_call and has_response:
+            if has_other:
+                reward = 0.25
+            else:
+                reward = 0.1  # still positive even without extra text
         elif has_call and not has_response:
             reward = -0.15
+        else:
+            reward = 0.0  # neutral if no call
 
         rewards.append(reward)
 
