@@ -1165,6 +1165,7 @@ class GRPOTrainer(BaseTrainer):
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
                 self.llm.wake_up(tags=["weights"])
+                # Work around for https://github.com/vllm-project/vllm/issues/29341
                 self.llm.collective_rpc("reload_weights")
 
             # First, update the vLLM weights if needed
