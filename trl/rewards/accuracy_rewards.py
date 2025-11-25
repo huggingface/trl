@@ -95,7 +95,7 @@ def reasoning_accuracy_reward(
             containing the key `"content"` with the value being the text of the completion.
         solution: (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
-        reasoning_delimiters (`list[str]]`, *optional*, defaults to `None`):
+        reasoning_delimiters (`list[str]]`, *optional*):
             List of strings indicating where the reasoning content ends. The final answer is assumed to be after the
             last occurrence of any of these delimiters. If `None`, defaults to `["</think>"]`.
         **kwargs:
@@ -132,7 +132,7 @@ def reasoning_accuracy_reward(
         ```
     """
     if not is_math_verify_available():
-        raise ImportError("Please install the `math_verify` package to use accuracy_reward")
+        raise ImportError("Please install the `math_verify` package to use reasoning_accuracy_reward")
 
     if reasoning_delimiters is None:
         # Use sensible defaults for majority of reasoning models
