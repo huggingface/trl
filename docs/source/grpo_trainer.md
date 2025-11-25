@@ -141,14 +141,14 @@ This constant is recommended to be the maximum completion length. To use this fo
 
 While training and evaluating, we record the following reward metrics:
 
-- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions. When using tools, only non-tool tokens are counted.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
-- `completions/mean_length`: The average length of generated completions.
-- `completions/min_length`: The minimum length of generated completions.
-- `completions/max_length`: The maximum length of generated completions.
-- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
-- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
-- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
