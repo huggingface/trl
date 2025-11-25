@@ -21,8 +21,6 @@
     title: KTO
   - local: reward_trainer
     title: Reward
-  - local: rloo_trainer
-    title: RLOO
   - local: sft_trainer
     title: SFT
   title: Trainers
@@ -119,6 +117,8 @@
     title: PPO
   - local: prm_trainer
     title: PRM
+  - local: rloo_trainer
+    title: RLOO
   - local: xpo_trainer
     title: XPO
   - local: openenv
