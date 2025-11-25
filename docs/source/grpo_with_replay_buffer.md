@@ -26,7 +26,6 @@ training_args = GRPOWithReplayBufferConfig(
     max_completion_length=8,
     replay_buffer_size=8,
     report_to="none",
-    max_steps=10,
 )
 
 trainer = GRPOWithReplayBufferTrainer(
