@@ -34,7 +34,7 @@ python grpo_agent.py \
     --max_completion_length 1024 \
     --report_to trackio \
     --log_completions True \
-    --max_steps 200
+    --max_steps 400
 ```
 """
 
