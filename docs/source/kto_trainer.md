@@ -30,7 +30,7 @@ Below is the script to train the model:
 ```python
 # train_kto.py
 from datasets import load_dataset
-from trl import KTOConfig, KTOTrainer
+from trl.experimental.kto import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -73,7 +73,7 @@ Here are some other factors to consider when choosing a programming language for
 
 KTO requires an [unpaired preference dataset](dataset_formats#unpaired-preference). Alternatively, you can provide a *paired* preference dataset (also known simply as a *preference dataset*). In this case, the trainer will automatically convert it to an unpaired format by separating the chosen and rejected responses, assigning `label = True` to the chosen completions and `label = False` to the rejected ones.
 
-The [`KTOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`experimental.kto.KTOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 In theory, the dataset should contain at least one chosen and one rejected completion. However, some users have successfully run KTO using *only* chosen or only rejected data. If using only rejected data, it is advisable to adopt a conservative learning rate.
 
@@ -111,7 +111,7 @@ Each choice of `beta` has a maximum learning rate it can tolerate before learnin
 
 ### Imbalanced data
 
-The `desirable_weight` and `undesirable_weight` of the [`KTOConfig`] refer to the weights placed on the losses for desirable/positive and undesirable/negative examples.
+The `desirable_weight` and `undesirable_weight` of the [`experimental.kto.KTOConfig`] refer to the weights placed on the losses for desirable/positive and undesirable/negative examples.
 By default, they are both 1. However, if you have more of one or the other, then you should upweight the less common type such that the ratio of (`desirable_weight`  \\(\times\\) number of positives) to (`undesirable_weight`  \\(\times\\) number of negatives) is in the range 1:1 to 4:3.
 
 ## Logged metrics
@@ -129,11 +129,11 @@ While training and evaluating, we record the following reward metrics:
 
 ## KTOTrainer
 
-[[autodoc]] KTOTrainer
+[[autodoc]] experimental.kto.KTOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## KTOConfig
 
-[[autodoc]] KTOConfig
+[[autodoc]] experimental.kto.KTOConfig

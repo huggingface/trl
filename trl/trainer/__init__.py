@@ -47,8 +47,6 @@ _import_structure = {
         "OpenAIPairwiseJudge",
         "PairRMJudge",
     ],
-    "kto_config": ["KTOConfig"],
-    "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
     "nash_md_config": ["NashMDConfig"],
     "nash_md_trainer": ["NashMDTrainer"],
@@ -107,8 +105,6 @@ if TYPE_CHECKING:
         OpenAIPairwiseJudge,
         PairRMJudge,
     )
-    from .kto_config import KTOConfig
-    from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
     from .nash_md_config import NashMDConfig
     from .nash_md_trainer import NashMDTrainer
