@@ -39,11 +39,13 @@ python grpo_agent.py \
 """
 
 import os
-import sqlite3
 import signal
-from contextlib import contextmanager
+import sqlite3
 import textwrap
+from contextlib import contextmanager
+
 from datasets import load_dataset
+
 from trl import (
     GRPOConfig,
     GRPOTrainer,
@@ -51,6 +53,7 @@ from trl import (
     ScriptArguments,
     TrlParser,
 )
+
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
@@ -60,12 +63,12 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 # ------------------------
 
 
-def correctness_reward(completions, answer, **kwargs): # measures Yes/No answer correctness
+def correctness_reward(completions, answer, **kwargs):  # measures Yes/No answer correctness
     rewards = []
-    for completion, ans in zip(completions, answer):
+    for completion, ans in zip(completions, answer, strict=False):
         guess = completion[-1]["content"].strip()
         reward = 0.0
-        
+
         if "*Yes*" not in guess and "*No*" not in guess:
             reward -= 0.2
         elif ("*Yes*" in guess and ans == "Yes") or ("*No*" in guess and ans == "No"):
@@ -77,28 +80,28 @@ def correctness_reward(completions, answer, **kwargs): # measures Yes/No answer 
     return rewards
 
 
-def tool_usage_reward(completions, **kwargs): # rewards correct tool usage
+def tool_usage_reward(completions, **kwargs):  # rewards correct tool usage
     rewards = []
     for completion in completions:
         tool_used = False
         reward = 0.0
-        
+
         for turn in completion:
             if turn["role"] == "tool":
                 tool_used = True
                 if "error" in turn["content"]:
                     reward -= 0.3
-        
+
         if not tool_used:
             reward -= 0.3
         elif reward == 0.0:
             reward += 0.25
-            
+
         rewards.append(reward)
     return rewards
 
 
-def structure_reward(completions, **kwargs): # rewards proper assistant structure
+def structure_reward(completions, **kwargs):  # rewards proper assistant structure
     rewards = []
 
     for completion in completions:
@@ -134,19 +137,24 @@ def structure_reward(completions, **kwargs): # rewards proper assistant structur
 # ------------------------
 class TimeoutError(Exception):
     """Raised when a function call times out."""
+
     pass
+
 
 @contextmanager
 def timeout(seconds):
     """Context manager that raises TimeoutError if execution exceeds time limit."""
+
     def timeout_handler(signum, frame):
         raise TimeoutError(f"Operation timed out after {seconds} seconds")
+
     signal.signal(signal.SIGALRM, timeout_handler)
     signal.alarm(seconds)
     try:
         yield
     finally:
         signal.alarm(0)
+
 
 def query_biogrid(sql_command: str) -> list[tuple]:
     """
@@ -211,7 +219,7 @@ if __name__ == "__main__":
     train_dataset = dataset
     eval_dataset = None  # No eval by default, can be added if needed
 
-    training_args.chat_template_kwargs={"enable_thinking": False}
+    training_args.chat_template_kwargs = {"enable_thinking": False}
 
     # ------------------------
     # Initialize trainer
@@ -222,7 +230,7 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
         tools=[query_biogrid],
         reward_funcs=[correctness_reward, tool_usage_reward, structure_reward],
-        args=training_args
+        args=training_args,
     )
 
     # ------------------------
