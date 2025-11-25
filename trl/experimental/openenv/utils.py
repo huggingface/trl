@@ -101,6 +101,7 @@ def generate_rollout_completions(
 
     if trainer.args.vllm_enable_sleep_mode:
         trainer.llm.wake_up(tags=["kv_cache"])
+        trainer.llm.collective_rpc("reload_weights")
 
     with profiling_context(trainer, "vLLM.generate_rollout"):
         if as_chat:

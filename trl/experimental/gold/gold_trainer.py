@@ -1845,6 +1845,7 @@ class GOLDTrainer(SFTTrainer):
         if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
             empty_cache()
             self.vllm_engine.wake_up(tags=["weights"])
+            self.vllm_engine.collective_rpc("reload_weights")
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as

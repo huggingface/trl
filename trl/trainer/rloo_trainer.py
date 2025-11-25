@@ -1006,6 +1006,7 @@ class RLOOTrainer(BaseTrainer):
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
                 self.llm.wake_up(tags=["weights"])
+                self.llm.collective_rpc("reload_weights")
 
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
