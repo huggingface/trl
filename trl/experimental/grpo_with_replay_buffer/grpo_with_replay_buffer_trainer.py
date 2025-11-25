@@ -114,7 +114,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             sampling_per_token_logps = None
         if self.tools:
             tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
-            tool_mask = pad(tool_mask, padding_value=0, padding_side="right")
+            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")  # 0 for tool result tokens, 1 elsewhere
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -286,7 +286,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            mask = completion_mask.bool() if not self.tools else (completion_mask * (1 - tool_mask)).bool()
+            mask = completion_mask.bool() if not self.tools else (completion_mask * tool_mask).bool()
             delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)

@@ -1502,7 +1502,7 @@ class GRPOTrainer(BaseTrainer):
             tool_calls = [completion[0].get("tool_calls") for completion in completions]
             idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
             tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
-            tool_mask = [[0] * len(ids) for ids in completion_ids]
+            tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
             tool_call_count = 0
             tool_failure_count = 0
         else:
@@ -1557,7 +1557,7 @@ class GRPOTrainer(BaseTrainer):
                     prompt_length = len(prompt_ids[idx_with_tool])
                     ct = pct_ids[idx][prompt_length : prompt_length + self.max_completion_length]
                     completion_ids[idx_with_tool] = ct
-                    tool_mask[idx_with_tool] += [0] * (len(ct) - len(tool_mask[idx_with_tool]))
+                    tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
                     if logprobs is not None:
                         logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
@@ -1592,7 +1592,7 @@ class GRPOTrainer(BaseTrainer):
                         # If still exceeding max length, truncate completion_tool_ids as well
                         prompt_completion_tool_ids[idx] = prompt_completion_tool_ids[idx][:-excess_length]
 
-            # Update tool_mask: the tool result should be 1 and the post-tool 0
+            # Update tool_mask: the tool result should be 0 and the post-tool 1
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
@@ -1600,7 +1600,7 @@ class GRPOTrainer(BaseTrainer):
                 completion_length = len(completion_ids[idx_with_tool])
                 post_tool_length = len(post_tool_ids[idx])
                 tool_length = prompt_completion_tool_length - prompt_length - completion_length
-                tool_mask[idx_with_tool] += [1] * tool_length + [0] * post_tool_length
+                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
                 if logprobs is not None:
                     logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
 
@@ -1730,7 +1730,7 @@ class GRPOTrainer(BaseTrainer):
             sampling_per_token_logps = None
         if self.tools:
             tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
-            tool_mask = pad(tool_mask, padding_value=0, padding_side="right")
+            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")  # 0 for tool result tokens, 1 elsewhere
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1900,7 +1900,7 @@ class GRPOTrainer(BaseTrainer):
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            mask = completion_mask.bool() if not self.tools else (completion_mask * (1 - tool_mask)).bool()
+            mask = completion_mask.bool() if not self.tools else (completion_mask * tool_mask).bool()
             delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
@@ -2103,7 +2103,7 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        mask = completion_mask if not self.tools else completion_mask * (1 - inputs["tool_mask"])
+        mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
         if self.loss_type == "grpo":
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             loss = loss / self.current_gradient_accumulation_steps
