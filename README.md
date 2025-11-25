@@ -104,6 +104,9 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
+> [NOTE!]
+> For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
+
 ### `DPOTrainer`
 
 [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer) implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train [Llama 3](https://huggingface.co/papers/2407.21783) and many other models. Here is a basic example of how to use the `DPOTrainer`:
