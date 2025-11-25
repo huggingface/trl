@@ -12,6 +12,20 @@
   - local: paper_index
     title: Paper Index
   title: Conceptual Guides
+- sections: # Sorted alphabetically
+  - local: dpo_trainer
+    title: DPO
+  - local: grpo_trainer
+    title: GRPO
+  - local: kto_trainer
+    title: KTO
+  - local: reward_trainer
+    title: Reward
+  - local: rloo_trainer
+    title: RLOO
+  - local: sft_trainer
+    title: SFT
+  title: Trainers
 - sections:
   - local: clis
     title: Command Line Interface (CLI)
@@ -55,22 +69,6 @@
     title: LoRA Without Regret
   title: Examples
 - sections:
-  - sections: # Sorted alphabetically
-    - local: dpo_trainer
-      title: DPO
-    - local: online_dpo_trainer
-      title: Online DPO
-    - local: grpo_trainer
-      title: GRPO
-    - local: kto_trainer
-      title: KTO
-    - local: reward_trainer
-      title: Reward
-    - local: rloo_trainer
-      title: RLOO
-    - local: sft_trainer
-      title: SFT
-    title: Trainers
   - sections:
     - local: chat_template_utils
       title: Chat Template Utilities
@@ -111,10 +109,12 @@
     title: GSPO-token
   - local: judges
     title: Judges
-  - local: minillm
+  - local: minillm_trainer
     title: MiniLLM
   - local: nash_md_trainer
     title: Nash-MD
+  - local: online_dpo_trainer
+    title: Online DPO
   - local: orpo_trainer
     title: ORPO
   - local: papo_trainer
