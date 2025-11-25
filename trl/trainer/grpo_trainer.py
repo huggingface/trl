@@ -1474,42 +1474,15 @@ class GRPOTrainer(BaseTrainer):
 
         return prompt_ids, completion_ids, logprobs, extra_fields
 
-    def _generate(self, prompts: list):
-        device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
-
-        # Copy the prompts to avoid modifying the original list
-        prompts = copy.deepcopy(prompts)
-
-        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
-
-        # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
-        if is_conversational({"prompt": prompts[0]}):
-            if (
-                Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
-                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
-                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
-            ):
-                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
-            else:
-                contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-                completions = [[{"role": "assistant", "content": content}] for content in contents]
-        else:
-            completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
-        # Extract tool calls from the completions
-        if self.tools:
-            tool_calls = [completion[0].get("tool_calls") for completion in completions]
-            idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
-            tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
-            tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
-            tool_call_count = 0
-            tool_failure_count = 0
-        else:
-            idxs_with_tool = []
-            tool_mask = None
-
+    def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
+        tool_calls = [completion[0].get("tool_calls") for completion in completions]
+        idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
+        tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
+        tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        tool_call_count = 0
+        tool_failure_count = 0
+
         while idxs_with_tool:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
@@ -1528,6 +1501,7 @@ class GRPOTrainer(BaseTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 tool_call_list = tool_calls[idx]
                 prompt_completion_tool = prompt_completion_tools[idx]
+                # Append the last assistant message (which triggered tool_calls) to the prompt
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
                 for tool_call in tool_call_list:
                     tool_call_count += 1
@@ -1560,6 +1534,7 @@ class GRPOTrainer(BaseTrainer):
                     tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
                     if logprobs is not None:
                         logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
+            # Keep only non-overlong items for further processing
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
             prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
             if not idxs_with_tool:
@@ -1626,6 +1601,44 @@ class GRPOTrainer(BaseTrainer):
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+
+        return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
+
+    def _generate(self, prompts: list):
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+
+        # Copy the prompts to avoid modifying the original list
+        prompts = copy.deepcopy(prompts)
+
+        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+
+        # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
+        if is_conversational({"prompt": prompts[0]}):
+            if (
+                Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
+                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
+                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+            ):
+                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
+            else:
+                contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+                completions = [[{"role": "assistant", "content": content}] for content in contents]
+        else:
+            completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+
+        # Extract tool calls from the completions and (possibly) execute them
+        if self.tools:
+            (
+                tool_mask,
+                completions,
+                completion_ids,
+                logprobs,
+                tool_call_count,
+                tool_failure_count,
+            ) = self._tool_call_loop(prompts, prompt_ids, completion_ids, completions, logprobs)
+        else:
+            tool_mask = None
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
