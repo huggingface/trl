@@ -22,34 +22,34 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 ### Online methods
 
-- [`GRPOTrainer`] ⚡️
-- [`RLOOTrainer`] ⚡️
-- [`experimental.nash_md.NashMDTrainer`] 🧪 ⚡️
-- [`experimental.online_dpo.OnlineDPOTrainer`] 🧪 ⚡️
-- [`experimental.ppo.PPOTrainer`] 🧪
-- [`experimental.xpo.XPOTrainer`] 🧪 ⚡️
+- [`GRPOTrainer`](grpo_trainer) ⚡️
+- [`RLOOTrainer`](rloo_trainer) ⚡️
+- [`OnlineDPOTrainer`](online_dpo_trainer) 🧪 ⚡️
+- [`NashMDTrainer`](nash_md_trainer) 🧪 ⚡️
+- [`PPOTrainer`](ppo_trainer) 🧪
+- [`XPOTrainer`](xpo_trainer) 🧪 ⚡️
 
 ### Reward modeling
 
-- [`RewardTrainer`]
-- [`experimental.prm.PRMTrainer`] 🧪
+- [`RewardTrainer`](reward_trainer)
+- [`PRMTrainer`](prm_trainer) 🧪
 
 </div>
 <div style="flex: 1; min-width: 0;">
 
 ### Offline methods
 
-- [`SFTTrainer`]
-- [`DPOTrainer`]
-- [`KTOTrainer`]
-- [`experimental.bco.BCOTrainer`] 🧪
-- [`experimental.cpo.CPOTrainer`] 🧪
-- [`experimental.orpo.ORPOTrainer`] 🧪
+- [`SFTTrainer`](sft_trainer)
+- [`DPOTrainer`](dpo_trainer)
+- [`KTOTrainer`](kto_trainer)
+- [`BCOTrainer`](bco_trainer) 🧪
+- [`CPOTrainer`](cpo_trainer) 🧪
+- [`ORPOTrainer`](orpo_trainer) 🧪
 
 ### Knowledge distillation
 
-- [`experimental.gkd.GKDTrainer`] 🧪
-- [`experimental.minillm.MiniLLMTrainer`] 🧪
+- [`GKDTrainer`](gkd_trainer) 🧪
+- [`MiniLLMTrainer`](minillm_trainer) 🧪
 
 </div>
 </div>
