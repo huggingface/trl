@@ -1071,6 +1071,11 @@ class SFTTrainer(BaseTrainer):
 
                 dataset = dataset.select_columns(columns)
 
+                # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
+                # packing as well to avoid correlations between sequences packed together.
+                if args.shuffle_dataset:
+                    dataset = dataset.shuffle(seed=args.seed)
+
                 # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
@@ -1082,6 +1087,9 @@ class SFTTrainer(BaseTrainer):
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
                 column_names = get_dataset_column_names(dataset)
                 dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
+
+        if args.shuffle_dataset:
+            dataset = dataset.shuffle(seed=args.seed)
 
         return dataset
 
