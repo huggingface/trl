@@ -5,7 +5,8 @@ This experimental trainer, trains a model with GRPO but replaces groups (and cor
 ## Usage
 
 ```python
-from trl.experimental.grpo_with_replay_buffer import GRPOWithReplayBufferTrainer
+import torch
+from trl.experimental.grpo_with_replay_buffer import GRPOWithReplayBufferConfig, GRPOWithReplayBufferTrainer
 from datasets import load_dataset
 
 dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -18,7 +19,7 @@ def custom_reward_func(completions, **kwargs):
         return torch.rand(len(completions)).tolist()
 
 training_args = GRPOWithReplayBufferConfig(
-    output_dir=self.tmp_dir,
+    output_dir="./tmp",
     learning_rate=1e-4,
     per_device_train_batch_size=4,
     num_generations=4,
@@ -26,7 +27,8 @@ training_args = GRPOWithReplayBufferConfig(
     replay_buffer_size=8,
     report_to="none",
 )
-trainer = GRPOTrainer(
+
+trainer = GRPOWithReplayBufferTrainer(
     model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     reward_funcs=[custom_reward_func],
     args=training_args,
