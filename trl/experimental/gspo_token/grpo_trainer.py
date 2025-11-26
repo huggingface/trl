@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import torch
 
-from trl import GRPOTrainer as _GRPOTrainer
-
+from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin
 
 

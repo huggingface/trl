@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
 from huggingface_hub import ModelCard
@@ -79,7 +78,7 @@ class ScriptArguments:
         default="trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness",
         metadata={"help": "Hugging Face repository ID to push the dataset to."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of workers to use for dataset processing."},
     )

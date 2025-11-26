@@ -21,11 +21,11 @@
 
 **OpenEnv Integration:** TRL now supports **[OpenEnv](https://huggingface.co/blog/openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
 
-Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](openenv).
+Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](https://huggingface.co/docs/trl/openenv).
 
 ## Overview
 
-TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
+TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
 
 ## Highlights
 
@@ -92,20 +92,20 @@ trainer.train()
 ```python
 from datasets import load_dataset
 from trl import GRPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_num_unique_chars,
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 trainer.train()
 ```
+
+> [NOTE!]
+> For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
 
 ### `DPOTrainer`
 

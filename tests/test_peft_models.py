@@ -153,7 +153,7 @@ class TestPeftModel(TrlTestCase):
         model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(self.tmp_dir)
 
         # check all the weights are the same
-        for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):
+        for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
             assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
 
     def test_load_pretrained_peft(self):
@@ -177,7 +177,7 @@ class TestPeftModel(TrlTestCase):
         )
 
         # check all the weights are the same
-        for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):
+        for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
             if p1[0] not in ["v_head.summary.weight", "v_head.summary.bias"]:
                 assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
 
