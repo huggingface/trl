@@ -266,14 +266,14 @@ def _win_rate_completions_df(
 
 
 class WinRateCallback(_WinRateCallback):
-    def __post_init__(self):
+    def __init__(self, *args, **kwargs):
         warnings.warn(
             "The `WinRateCallback` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.winrate_callback import WinRateCallback`. The current import path will be removed "
             "and no longer supported in TRL 0.29. For more information, see "
             "https://github.com/huggingface/trl/issues/4223."
         )
-        super().__post_init__()
+        super().__init__(*args, **kwargs)
 
 
 class LogCompletionsCallback(TrainerCallback):
