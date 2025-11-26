@@ -29,7 +29,7 @@ Below is the script to train the model.
 ```python
 # train_rloo.py
 from datasets import load_dataset
-from trl import RLOOTrainer
+from trl.experimental.rloo import RLOOTrainer
 from trl.rewards import accuracy_reward
 
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
@@ -179,7 +179,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 2. **Enable server mode in your training script**:
 
    ```python
-   from trl import RLOOConfig
+   from trl.experimental.rloo import RLOOConfig
 
    training_args = RLOOConfig(
        ...,
@@ -196,7 +196,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
 
 ```python
-from trl import RLOOConfig
+from trl.experimental.rloo import RLOOConfig
 
 training_args = RLOOConfig(
     ...,
@@ -206,7 +206,7 @@ training_args = RLOOConfig(
 ```
 
 > [!TIP]
-> Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`RLOOConfig`] to avoid underutilization or out-of-memory errors.
+> Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`experimental.rloo.RLOOConfig`] to avoid underutilization or out-of-memory errors.
 >
 > We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
 >
@@ -264,7 +264,7 @@ wait
 import argparse
 
 from datasets import load_dataset
-from trl import RLOOTrainer, RLOOConfig
+from trl.experimental.rloo import RLOOTrainer, RLOOConfig
 
 def main():
     parser = argparse.ArgumentParser()
@@ -296,7 +296,7 @@ if __name__=="__main__":
 
 ### Using a custom reward function
 
-The [`RLOOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
+The [`experimental.rloo.RLOOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
 
 1. **Input arguments**:
    - The function must accept the following as keyword arguments:
@@ -412,7 +412,7 @@ You can test this function as follows:
 
 #### Example 4: Multi-task reward functions
 
-Below is an example of using multiple reward functions in the [`RLOOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+Below is an example of using multiple reward functions in the [`experimental.rloo.RLOOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
 
 ```python
 from datasets import Dataset
@@ -466,16 +466,16 @@ trainer = RLOOTrainer(
 trainer.train()
 ```
 
-In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None`, and the [`RLOOTrainer`] will continue with the valid functions and tasks. This allows the [`RLOOTrainer`] to handle multiple reward functions with different applicability.
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None`, and the [`experimental.rloo.RLOOTrainer`] will continue with the valid functions and tasks. This allows the [`experimental.rloo.RLOOTrainer`] to handle multiple reward functions with different applicability.
 
-Note that the [`RLOOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
+Note that the [`experimental.rloo.RLOOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
 #### Passing the reward function to the trainer
 
-To use your custom reward function, pass it to the [`RLOOTrainer`] as follows:
+To use your custom reward function, pass it to the [`experimental.rloo.RLOOTrainer`] as follows:
 
 ```python
-from trl import RLOOTrainer
+from trl.experimental.rloo import RLOOTrainer
 
 trainer = RLOOTrainer(
     reward_funcs=reward_func,
@@ -486,7 +486,7 @@ trainer = RLOOTrainer(
 If you have multiple reward functions, you can pass them as a list:
 
 ```python
-from trl import RLOOTrainer
+from trl.experimental.rloo import RLOOTrainer
 
 trainer = RLOOTrainer(
     reward_funcs=[reward_func1, reward_func2],
@@ -496,7 +496,7 @@ trainer = RLOOTrainer(
 
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
-Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+Note that [`experimental.rloo.RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
 ## Vision-Language Model (VLM) Training
 
@@ -540,7 +540,7 @@ accelerate launch \
 ### Configuration Tips
 
 > [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`RLOOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`experimental.rloo.RLOOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
 >
 > ```python
 > RLOOConfig(max_prompt_length=None, ...)
@@ -564,14 +564,14 @@ The trainer automatically handles image-to-tensor conversion via the model’s i
 
 ## RLOOTrainer
 
-[[autodoc]] RLOOTrainer
+[[autodoc]] experimental.rloo.RLOOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## RLOOConfig
 
-[[autodoc]] RLOOConfig
+[[autodoc]] experimental.rloo.RLOOConfig
 
 ## References
 
@@ -584,8 +584,8 @@ The trainer automatically handles image-to-tensor conversion via the model’s i
 
 ## Migration Guide from the old implementation (0.21 and below)
 
-With the release of version 0.22.0, we have revamped the [`RLOOTrainer`] to be more aligned with other online trainers in the library, like [`GRPOTrainer`]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
-Below is a summary of the key changes for [`RLOOConfig`]:
+With the release of version 0.22.0, we have revamped the [`experimental.rloo.RLOOTrainer`] to be more aligned with other online trainers in the library, like [`GRPOTrainer`]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
+Below is a summary of the key changes for [`experimental.rloo.RLOOConfig`]:
 
 | TRL ≤ 0.21.x | TRL ≥ 0.22.0 |
 | --- | --- |
@@ -606,7 +606,7 @@ Below is a summary of the key changes for [`RLOOConfig`]:
 | `stop_token_id` | **removed** – use `processing_class.eos_token_id` instead |
 | `missing_eos_penalty` | **removed** – replicate with a custom reward function checking if `eos_token_id` is in `completion_ids` |
 
-Below is a summary of the key changes for [`RLOOTrainer`]:
+Below is a summary of the key changes for [`experimental.rloo.RLOOTrainer`]:
 
 | TRL ≤ 0.21.x | TRL ≥ 0.22.0 |
 | --- | --- |

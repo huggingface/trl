@@ -33,13 +33,12 @@ from datasets import load_dataset
 from trl import (
     DatasetMixtureConfig,
     ModelConfig,
-    RLOOConfig,
-    RLOOTrainer,
     ScriptArguments,
     TrlParser,
     get_dataset,
     get_peft_config,
 )
+from trl.experimental.rloo import RLOOConfig, RLOOTrainer
 from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
 
 

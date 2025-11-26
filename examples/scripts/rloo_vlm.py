@@ -73,14 +73,13 @@ from datasets import load_dataset
 
 from trl import (
     ModelConfig,
-    RLOOConfig,
-    RLOOTrainer,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.rloo import RLOOConfig, RLOOTrainer
 from trl.rewards import accuracy_reward, think_format_reward
 
 

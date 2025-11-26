@@ -16,7 +16,6 @@ import inspect
 import os
 import textwrap
 import time
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -52,20 +51,19 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
-from ..data_utils import (
+from ...data_utils import (
     apply_chat_template,
     is_conversational,
     prepare_multimodal_messages,
     prepare_multimodal_messages_vllm,
 )
-from ..extras.profiling import profiling_context, profiling_decorator
-from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
-from .base_trainer import BaseTrainer
-from .callbacks import SyncRefModelCallback
-from .rloo_config import RLOOConfig
-from .utils import (
+from ...extras.profiling import profiling_context, profiling_decorator
+from ...extras.vllm_client import VLLMClient
+from ...import_utils import is_vllm_available
+from ...models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from ...trainer.base_trainer import BaseTrainer
+from ...trainer.callbacks import SyncRefModelCallback
+from ...trainer.utils import (
     RepeatSampler,
     disable_dropout_in_model,
     ensure_master_addr_port,
@@ -83,6 +81,7 @@ from .utils import (
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
 )
+from .rloo_config import RLOOConfig
 
 
 if is_peft_available():
@@ -242,14 +241,6 @@ class RLOOTrainer(BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
     ):
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
-
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
