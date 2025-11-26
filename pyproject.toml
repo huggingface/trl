@@ -98,7 +98,7 @@ dev = [
     "scikit-learn",
     "joblib",
     # deepspeed
-    "deepspeed>=0.14.4",
+    # "deepspeed>=0.14.4",
     # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
