@@ -15,6 +15,7 @@
 import inspect
 import os
 import textwrap
+import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -44,6 +45,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    is_bitsandbytes_available,
     is_trackio_available,
     is_wandb_available,
 )
@@ -95,6 +97,9 @@ if is_wandb_available():
 
 if is_trackio_available():
     import trackio
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 logger = logging.get_logger(__name__)
@@ -256,7 +261,7 @@ class RLOOTrainer(BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass  # dtype is already a torch.dtype or "auto" or None
             elif isinstance(dtype, str):  # it's a str, but not "auto"
@@ -267,7 +272,7 @@ class RLOOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
-            # Disable caching if gradient checkpointing is enabled (not supported)
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
@@ -365,6 +370,7 @@ class RLOOTrainer(BaseTrainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
+        self.num_generations_eval = args.num_generations_eval or args.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -448,8 +454,9 @@ class RLOOTrainer(BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+        self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
-        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -511,6 +518,14 @@ class RLOOTrainer(BaseTrainer):
                     max_model_len = self.max_prompt_length + self.max_completion_length
                 else:
                     max_model_len = None
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -526,6 +541,7 @@ class RLOOTrainer(BaseTrainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
+                    quantization=vllm_quantization,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
@@ -676,7 +692,7 @@ class RLOOTrainer(BaseTrainer):
         # See _get_train_sampler for an explanation of the sampler.
         return RepeatSampler(
             data_source=eval_dataset,
-            mini_repeat_count=self.num_generations,
+            mini_repeat_count=self.num_generations_eval,
             seed=self.args.seed,
         )
 
@@ -878,6 +894,17 @@ class RLOOTrainer(BaseTrainer):
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
+        return output
+
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
@@ -971,6 +998,7 @@ class RLOOTrainer(BaseTrainer):
 
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -978,6 +1006,8 @@ class RLOOTrainer(BaseTrainer):
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
                 self.llm.wake_up(tags=["weights"])
+                # Work around for https://github.com/vllm-project/vllm/issues/29341
+                self.llm.collective_rpc("reload_weights")
 
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -989,15 +1019,16 @@ class RLOOTrainer(BaseTrainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts = gather_object(prompts)
+                num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
-                    ordered_set_of_prompts = all_prompts[:: self.num_generations]
+                    ordered_set_of_prompts = all_prompts[::num_generations]
 
                     sampling_params = {
-                        "n": self.num_generations,
+                        "n": num_generations,
                         "repetition_penalty": self.repetition_penalty,
                         "temperature": self.temperature,
                         "top_p": self.top_p,
@@ -1027,7 +1058,7 @@ class RLOOTrainer(BaseTrainer):
                 all_prompt_ids, all_completion_ids, _ = obj_list[0]
 
                 # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
@@ -1369,14 +1400,15 @@ class RLOOTrainer(BaseTrainer):
             kl = gather(kl)  # rewards are gathered, so kl must be too
             rewards = rewards - self.beta * kl
 
-        grouped_rewards = rewards.view(-1, self.num_generations)
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        grouped_rewards = rewards.view(-1, num_generations)
         mean_grouped_rewards = grouped_rewards.mean(dim=1)
         std_rewards = grouped_rewards.std(dim=1)
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
 
         # RLOO advantages computation
         grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
-        baselines = (grouped_sum - grouped_rewards) / (self.num_generations - 1)  # (num_prompts, num_generations)
+        baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
         baselines = baselines.view(-1)  # Flatten back to match rewards shape
         advantages = rewards - baselines
 
@@ -1534,6 +1566,12 @@ class RLOOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
+            logging_backends = []
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
+
             table = {
                 "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
@@ -1545,34 +1583,23 @@ class RLOOTrainer(BaseTrainer):
             df_base = pd.DataFrame(table)
             images_raw = self._logs["images"] or []
 
-            for logging_backend in self.args.report_to:
-                if logging_backend == "wandb":
-                    if images_raw:
-                        images = []
-                        for image_list in self._logs["images"]:
-                            images.append([wandb.Image(image) for image in image_list])
-                        df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
-                    else:
-                        df = df_base
+            for logging_backend in logging_backends:
+                if images_raw:
+                    images = []
+                    for image_list in self._logs["images"]:
+                        images.append([logging_backend.Image(image) for image in image_list])
+                    df = pd.concat(
+                        [df_base, pd.Series(images, name="image")],
+                        axis=1,
+                        copy=False,
+                    )
+                else:
+                    df = df_base
 
-                    if self.wandb_log_unique_prompts:
-                        df = df.drop_duplicates(subset=["prompt"])
+                if self.log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
 
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
-
-                if logging_backend == "trackio":
-                    if images_raw:
-                        # TODO: Implement once supported upstream https://github.com/gradio-app/trackio/issues/334
-                        logger.info("Skipping image logging for Trackio")
-                        df = df_base
-                        # images = []
-                        # for image_list in self._logs["images"]:
-                        #     images.append([trackio.Image(image) for image in image_list])
-                        # df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
-                    else:
-                        df = df_base
-
-                    trackio.log({"completions": trackio.Table(dataframe=df)})
+                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

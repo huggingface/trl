@@ -17,7 +17,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 ## Quick start
 
-This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the XPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`experimental.judges.PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
   frameborder="0"
@@ -30,7 +30,7 @@ Below is the script to train the model:
 ```python
 # train_xpo.py
 from datasets import load_dataset
-from trl import PairRMJudge
+from trl.experimental.judges import PairRMJudge
 from trl.experimental.xpo import XPOConfig, XPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -75,7 +75,7 @@ XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`experim
 Instead of a judge, you can chose to use a reward model -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use. Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
 
 ```diff
-- from trl import PairRMJudge
+- from trl.experimental.judges import PairRMJudge
 + from transformers import AutoModelForSequenceClassification
 
 - judge = PairRMJudge()

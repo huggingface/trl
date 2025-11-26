@@ -485,17 +485,9 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
     if gradient_checkpointing_kwargs is None:
         gradient_checkpointing_kwargs = {}
 
-    n_upcasted = 0
-    for name, param in model.named_parameters():
+    for _, param in model.named_parameters():
         # freeze all parameters
         param.requires_grad = False
-
-        # upcast LayerNorm / Norm to float32 for numerical stability
-        if (param.dtype in [torch.float16, torch.bfloat16]) and (
-            "norm" in name.lower() or "layernorm" in name.lower()
-        ):
-            param.data = param.data.to(torch.float32)
-            n_upcasted += 1
 
     # Enable gradient checkpointing if needed
     if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:

@@ -9,10 +9,10 @@ This document will guide you through the process of using vLLM with TRL for fast
 > The following trainers currently support generation with vLLM:
 >
 > - [`GRPOTrainer`]
-> - [`OnlineDPOTrainer`]
-> - [`NashMDTrainer`]
-> - [`experimental.xpo.XPOTrainer`]
 > - [`RLOOTrainer`]
+> - [`experimental.nash_md.NashMDTrainer`]
+> - [`experimental.online_dpo.OnlineDPOTrainer`]
+> - [`experimental.xpo.XPOTrainer`]
 
 ## 🚀 How can I use vLLM with TRL to speed up training?
 
@@ -46,24 +46,14 @@ Sample of a simple `train.py` script:
 ```python
 from datasets import load_dataset
 from trl import GRPOTrainer, GRPOConfig
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
-
-training_args = GRPOConfig(
-    output_dir="my_test",
-    use_vllm=True,
-    bf16=True,
-    gradient_checkpointing=True,
-)
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=training_args,
-    reward_funcs=reward_num_unique_chars,
+    args=GRPOConfig(use_vllm=True),
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 
@@ -75,25 +65,15 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl import OnlineDPOTrainer, OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
-
-training_args = OnlineDPOConfig(
-    output_dir="my_test",
-    use_vllm=True,
-    bf16=True,
-    gradient_checkpointing=True,
-)
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = OnlineDPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=training_args,
-    reward_funcs=reward_num_unique_chars,
+    args=OnlineDPOConfig(use_vllm=True),
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 
@@ -105,25 +85,15 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl import NashMDTrainer, NashMDConfig
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
-
-training_args = NashMDConfig(
-    output_dir="my_test",
-    use_vllm=True,
-    bf16=True,
-    gradient_checkpointing=True,
-)
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = NashMDTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=training_args,
-    reward_funcs=reward_num_unique_chars,
+    args=NashMDConfig(use_vllm=True),
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 
@@ -135,25 +105,15 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl.experimental.xpo import XPOTrainer, XPOConfig
+from trl import XPOTrainer, XPOConfig
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
-
-training_args = XPOConfig(
-    output_dir="my_test",
-    use_vllm=True,
-    bf16=True,
-    gradient_checkpointing=True,
-)
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = XPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=training_args,
-    reward_funcs=reward_num_unique_chars,
+    args=XPOConfig(use_vllm=True),
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 
@@ -166,24 +126,14 @@ trainer.train()
 ```python
 from datasets import load_dataset
 from trl import RLOOTrainer, RLOOConfig
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
-
-training_args = RLOOConfig(
-    output_dir="my_test",
-    use_vllm=True,
-    bf16=True,
-    gradient_checkpointing=True,
-)
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = RLOOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=training_args,
-    reward_funcs=reward_num_unique_chars,
+    args=RLOOConfig(use_vllm=True),
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 
@@ -366,7 +316,7 @@ training_args = GRPOConfig(
 <hfoption id="OnlineDPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
     ...,
@@ -379,7 +329,7 @@ training_args = OnlineDPOConfig(
 <hfoption id="NashMD">
 
 ```python
-from trl import NashMDConfig
+from trl.experimental.nash_md import NashMDConfig
 
 training_args = NashMDConfig(
     ...,
@@ -441,7 +391,7 @@ training_args = GRPOConfig(
 <hfoption id="OnlineDPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
     ...,
@@ -454,7 +404,7 @@ training_args = OnlineDPOConfig(
 <hfoption id="NashMD">
 
 ```python
-from trl import NashMDConfig
+from trl.experimental.nash_md import NashMDConfig
 
 training_args = NashMDConfig(
     ...,

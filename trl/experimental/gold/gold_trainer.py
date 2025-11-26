@@ -29,7 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -83,6 +83,9 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 def print_prompt_completions_sample_uld(
@@ -941,6 +944,15 @@ class GOLDTrainer(SFTTrainer):
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
                 ensure_master_addr_port()
 
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+
                 self.vllm_engine = LLM(
                     model=student_model_name_or_path,
                     revision=self.model_revision,
@@ -952,6 +964,7 @@ class GOLDTrainer(SFTTrainer):
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     enable_sleep_mode=self.vllm_enable_sleep_mode,
+                    quantization=vllm_quantization,
                 )
 
                 if self.vllm_enable_sleep_mode:
@@ -1649,7 +1662,7 @@ class GOLDTrainer(SFTTrainer):
         # prompts_text = [p.replace(target_system_prompt, system_prompt) for p in prompts_text]
         # Add system prompt to prompts
 
-        max_completion_length = generation_config.max_completion_length
+        max_completion_length = generation_config.max_new_tokens
         temperature = generation_config.temperature
         # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
         top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
@@ -1671,7 +1684,7 @@ class GOLDTrainer(SFTTrainer):
                     min_p=min_p,
                     max_tokens=max_completion_length,
                     guided_decoding_regex=self.vllm_guided_decoding_regex,
-                )
+                )["completion_ids"]
             else:
                 completion_ids = [None] * len(all_prompts_text)
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
@@ -1832,6 +1845,8 @@ class GOLDTrainer(SFTTrainer):
         if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
             empty_cache()
             self.vllm_engine.wake_up(tags=["weights"])
+            # Work around for https://github.com/vllm-project/vllm/issues/29341
+            self.vllm_engine.collective_rpc("reload_weights")
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as

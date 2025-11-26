@@ -64,6 +64,8 @@ class SFTConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
+        shuffle_dataset (`bool`, *optional*, defaults to `False`):
+            Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
@@ -127,6 +129,16 @@ class SFTConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | None = field(
@@ -186,6 +198,10 @@ class SFTConfig(TrainingArguments):
             "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
             "sequence length."
         },
+    )
+    shuffle_dataset: bool = field(
+        default=False,
+        metadata={"help": "Whether to shuffle the dataset."},
     )
     packing: bool = field(
         default=False,

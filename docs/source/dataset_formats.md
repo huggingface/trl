@@ -387,20 +387,20 @@ Choosing the right dataset type depends on the task you are working on and the s
 
 | Trainer | Expected dataset type |
 | --- | --- |
-| [`experimental.bco.BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
-| [`CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`DPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
-| [`GKDTrainer`] | [Prompt-completion](#prompt-completion) |
 | [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
-| [`NashMDTrainer`] | [Prompt-only](#prompt-only) |
-| [`OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
-| [`ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
-| [`PPOTrainer`] | Tokenized language modeling |
-| [`PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
 | [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
 | [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
+| [`experimental.bco.BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
+| [`experimental.cpo.CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`experimental.gkd.GKDTrainer`] | [Prompt-completion](#prompt-completion) |
+| [`experimental.nash_md.NashMDTrainer`] | [Prompt-only](#prompt-only) |
+| [`experimental.online_dpo.OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
+| [`experimental.orpo.ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`experimental.ppo.PPOTrainer`] | Tokenized language modeling |
+| [`experimental.prm.PRMTrainer`] | [Stepwise supervision](#stepwise-supervision) |
 | [`experimental.xpo.XPOTrainer`] | [Prompt-only](#prompt-only) |
 
 ## Using any dataset with TRL: preprocessing and conversion
