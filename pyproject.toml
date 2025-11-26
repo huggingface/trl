@@ -112,7 +112,7 @@ dev = [
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes",
+    # "bitsandbytes",
     # scikit: included in bco
     # test
     "pytest-cov",
