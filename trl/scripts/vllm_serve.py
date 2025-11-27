@@ -59,6 +59,7 @@ if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
+    from vllm.lora.request import LoRARequest
     from vllm.sampling_params import GuidedDecodingParams
     from vllm.utils import get_open_port
 
@@ -325,6 +326,20 @@ class ScriptArguments:
             "model implementation."
         },
     )
+    enable_lora: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable LoRA adapter support in vLLM. When enabled, the server can accept LoRA "
+            "adapter paths in generation requests and apply them dynamically."
+        },
+    )
+    max_lora_rank: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum LoRA rank to support. Should match the highest rank among adapters. Only used when "
+            "`enable_lora` is True. If None, vLLM will infer from the adapters."
+        },
+    )
 
 
 def llm_worker(
@@ -336,23 +351,31 @@ def llm_worker(
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
 
-    llm = LLM(
-        model=script_args.model,
-        revision=script_args.revision,
-        tensor_parallel_size=script_args.tensor_parallel_size,
-        gpu_memory_utilization=script_args.gpu_memory_utilization,
-        enforce_eager=script_args.enforce_eager,
-        dtype=script_args.dtype,
+    llm_kwargs = {
+        "model": script_args.model,
+        "revision": script_args.revision,
+        "tensor_parallel_size": script_args.tensor_parallel_size,
+        "gpu_memory_utilization": script_args.gpu_memory_utilization,
+        "enforce_eager": script_args.enforce_eager,
+        "dtype": script_args.dtype,
         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
         # This is particularly useful here because we generate completions from the same prompts.
-        enable_prefix_caching=script_args.enable_prefix_caching,
-        kv_cache_dtype=script_args.kv_cache_dtype,
-        max_model_len=script_args.max_model_len,
-        worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
-        trust_remote_code=script_args.trust_remote_code,
-        model_impl=script_args.vllm_model_impl,
-    )
+        "enable_prefix_caching": script_args.enable_prefix_caching,
+        "kv_cache_dtype": script_args.kv_cache_dtype,
+        "max_model_len": script_args.max_model_len,
+        "worker_extension_cls": "trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        "trust_remote_code": script_args.trust_remote_code,
+        "model_impl": script_args.vllm_model_impl,
+    }
+
+    # Enable LoRA support if requested
+    if script_args.enable_lora:
+        llm_kwargs["enable_lora"] = True
+        if script_args.max_lora_rank is not None:
+            llm_kwargs["max_lora_rank"] = script_args.max_lora_rank
+
+    llm = LLM(**llm_kwargs)
 
     # Send ready signal to parent process
     connection.send({"status": "ready"})
@@ -497,6 +520,9 @@ def main(script_args: ScriptArguments):
         truncate_prompt_tokens: int | None = None
         guided_decoding_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
+        lora_adapter_name: str | None = None
+        lora_adapter_id: int | None = None
+        lora_adapter_path: str | None = None
 
     class GenerateResponse(BaseModel):
         prompt_ids: list[list[int]]
@@ -585,6 +611,12 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
+        # Prepare LoRA request if LoRA parameters are provided
+        lora_request = None
+        if request.lora_adapter_name is not None and request.lora_adapter_path is not None:
+            lora_adapter_id = request.lora_adapter_id if request.lora_adapter_id is not None else 1
+            lora_request = LoRARequest(request.lora_adapter_name, lora_adapter_id, request.lora_adapter_path)
+
         # Evenly distribute prompts across DP ranks
         chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
 
@@ -595,7 +627,7 @@ def main(script_args: ScriptArguments):
             # with vLLM's requirement, and we later ignore the result.
             if not prompts:
                 prompts = ["<placeholder>"]
-            kwargs = {"prompts": prompts, "sampling_params": sampling_params}
+            kwargs = {"prompts": prompts, "sampling_params": sampling_params, "lora_request": lora_request}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results
