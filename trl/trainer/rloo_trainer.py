@@ -15,14 +15,17 @@
 import inspect
 import os
 import textwrap
+import time
 import warnings
 from collections import defaultdict, deque
+from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import datasets
+import pandas as pd
 import torch
 import torch.utils.data
 import transformers
@@ -42,12 +45,19 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    is_bitsandbytes_available,
+    is_trackio_available,
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
+from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
+from ..data_utils import (
+    apply_chat_template,
+    is_conversational,
+    prepare_multimodal_messages,
+    prepare_multimodal_messages_vllm,
+)
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
@@ -60,6 +70,7 @@ from .utils import (
     disable_dropout_in_model,
     ensure_master_addr_port,
     entropy_from_logits,
+    get_config_model_id,
     identity,
     nanmax,
     nanmin,
@@ -84,12 +95,18 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
+if is_trackio_available():
+    import trackio
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
+
 
 logger = logging.get_logger(__name__)
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 
 
 class RLOOTrainer(BaseTrainer):
@@ -122,7 +139,7 @@ class RLOOTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -131,7 +148,7 @@ class RLOOTrainer(BaseTrainer):
               using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
 
@@ -164,14 +181,14 @@ class RLOOTrainer(BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
-        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*):
+        reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
             - A single processing class: Used when `reward_funcs` contains only one reward function.
@@ -192,47 +209,6 @@ class RLOOTrainer(BaseTrainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-
-        config:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `args` instead.
-
-            </Deprecated>
-
-        reward_model:
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
-
-            </Deprecated>
-
-        policy:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `model` instead.
-
-            </Deprecated>
-
-        ref_policy:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. To use the initial model as the
-            reference model, simply omit this parameter. The parameter is ignored.
-
-            </Deprecated>
-
-        data_collator:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. The RLOOTrainer does not use a data
-            collator, so this parameter is ignored.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "rloo"]
@@ -255,23 +231,16 @@ class RLOOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        # Note for dev: we can remove the default None when we remove the deprecated model parameter in version 0.25.0
-        model: Union[str, PreTrainedModel] = None,
-        reward_funcs: Union[RewardFunc, list[RewardFunc]] = None,
-        args: Optional[RLOOConfig] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        peft_config: Optional["PeftConfig"] = None,
-        # Deprecated parameters
-        config=None,
-        reward_model=None,
-        policy=None,
-        ref_policy=None,
-        data_collator=None,
+        model: str | PreTrainedModel = None,
+        reward_funcs: RewardFunc | list[RewardFunc] = None,
+        args: RLOOConfig | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        peft_config: "PeftConfig | None" = None,
     ):
         if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
             warnings.warn(
@@ -280,74 +249,10 @@ class RLOOTrainer(BaseTrainer):
                 "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
                 "TRL_EXPERIMENTAL_SILENCE=1."
             )
-        # Handle deprecated parameters
-        if config is not None:
-            warnings.warn(
-                "Parameter 'config' is deprecated and will be removed in version 0.25.0. Please use 'args' instead. "
-                "We are setting args=config"
-            )
-            if args is None:
-                args = config
-            else:
-                raise ValueError("Cannot specify both 'config' (deprecated) and 'args'. Please use 'args' only.")
-
-        if reward_model is not None:
-            warnings.warn(
-                "Parameter 'reward_model' is deprecated and will be removed in version 0.25.0. Please use "
-                "'reward_funcs' instead. We are setting reward_funcs=reward_model"
-            )
-            if reward_funcs is None:
-                reward_funcs = reward_model
-            else:
-                raise ValueError(
-                    "Cannot specify both 'reward_model' (deprecated) and 'reward_funcs'. Please use 'reward_funcs' "
-                    "only."
-                )
-        if policy is not None:
-            warnings.warn(
-                "Parameter 'policy' is deprecated and will be removed in version 0.25.0. Please use 'model' instead. "
-                "We are setting model=policy"
-            )
-            if model is None:
-                model = policy
-            else:
-                raise ValueError("Cannot specify both 'policy' (deprecated) and 'model'. Please use 'model' only.")
-        if ref_policy is not None:
-            warnings.warn(
-                "Parameter 'ref_policy' is deprecated and will be removed in version 0.25.0. To use the initial model "
-                "as the reference model, simply omit this parameter. The parameter is ignored."
-            )
-        if data_collator is not None:
-            warnings.warn(
-                "Parameter 'data_collator' is deprecated and will be removed in version 0.25.0. The RLOOTrainer does "
-                "not use a data collator, so this parameter is ignored."
-            )
-        if "input_ids" in train_dataset.column_names:
-            warnings.warn(
-                "The training dataset contains a column named 'input_ids', indicating that it is pre-tokenized. "
-                "Support for pre-tokenized datasets is deprecated and will be removed in version 0.25. Please provide "
-                "the raw dataset (conversational or standard) with a 'prompt' column instead."
-            )
-
-            def decode(example, tokenizer):
-                return {"prompt": tokenizer.decode(example["input_ids"])}
-
-            train_dataset = train_dataset.map(decode, fn_kwargs={"tokenizer": processing_class})
-        if eval_dataset is not None and "input_ids" in eval_dataset.column_names:
-            warnings.warn(
-                "The evaluation dataset contains a column named 'input_ids', indicating that it is pre-tokenized. "
-                "Support for pre-tokenized datasets is deprecated and will be removed in version 0.25. Please provide "
-                "the raw dataset (conversational or standard) with a 'prompt' column instead."
-            )
-
-            def decode(example, tokenizer):
-                return {"prompt": tokenizer.decode(example["input_ids"])}
-
-            eval_dataset = eval_dataset.map(decode, fn_kwargs={"tokenizer": processing_class})
 
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = RLOOConfig(f"{model_name}-RLOO")
 
@@ -356,7 +261,7 @@ class RLOOTrainer(BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            dtype = model_init_kwargs.get("dtype")
+            dtype = model_init_kwargs.get("dtype", "auto")
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass  # dtype is already a torch.dtype or "auto" or None
             elif isinstance(dtype, str):  # it's a str, but not "auto"
@@ -367,12 +272,12 @@ class RLOOTrainer(BaseTrainer):
                     "Invalid `dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
-            # Disable caching if gradient checkpointing is enabled (not supported)
+            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
         else:
-            model_id = model.config._name_or_path
+            model_id = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RLOOConfig`, but your model is already instantiated. "
@@ -392,7 +297,7 @@ class RLOOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side="left")
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config), truncation_side="left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -419,7 +324,7 @@ class RLOOTrainer(BaseTrainer):
                     reward_func, num_labels=1, **model_init_kwargs
                 )
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
-                self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+                self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
@@ -446,10 +351,12 @@ class RLOOTrainer(BaseTrainer):
                 f"reward functions ({len(reward_funcs)})."
             )
 
-        for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
+        for i, (reward_processing_class, reward_func) in enumerate(
+            zip(reward_processing_classes, reward_funcs, strict=True)
+        ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
+                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
@@ -463,6 +370,8 @@ class RLOOTrainer(BaseTrainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
+        self.num_generations_eval = args.num_generations_eval or args.num_generations
+        self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -545,8 +454,9 @@ class RLOOTrainer(BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+        self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
-        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -608,6 +518,14 @@ class RLOOTrainer(BaseTrainer):
                     max_model_len = self.max_prompt_length + self.max_completion_length
                 else:
                     max_model_len = None
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -623,9 +541,10 @@ class RLOOTrainer(BaseTrainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
+                    quantization=vllm_quantization,
                 )
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
@@ -733,7 +652,7 @@ class RLOOTrainer(BaseTrainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
-    def _get_train_sampler(self, dataset: Optional[Dataset] = None) -> Sampler:
+    def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
         # Returns a sampler that
         # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
         #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
@@ -773,7 +692,7 @@ class RLOOTrainer(BaseTrainer):
         # See _get_train_sampler for an explanation of the sampler.
         return RepeatSampler(
             data_source=eval_dataset,
-            mini_repeat_count=self.num_generations,
+            mini_repeat_count=self.num_generations_eval,
             seed=self.args.seed,
         )
 
@@ -792,7 +711,7 @@ class RLOOTrainer(BaseTrainer):
         pixel_attention_mask=None,
         image_sizes=None,
         token_type_ids=None,
-    ) -> dict[str, Optional[torch.Tensor]]:
+    ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
@@ -852,7 +771,7 @@ class RLOOTrainer(BaseTrainer):
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return logps, entropies
 
-    def _fix_param_name_to_vllm(self, name, extra_prefixes: Optional[list[str]] = None):
+    def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):
         extra_prefixes = extra_prefixes or []
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
         for prefix in prefixes:
@@ -975,10 +894,19 @@ class RLOOTrainer(BaseTrainer):
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        time_after = time.perf_counter()
+        self._current_train_step_time += time_after - time_before
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics["train"]["step_time"].append(self._current_train_step_time)
+            self._current_train_step_time = 0.0
+        return output
+
     @profiling_decorator
-    def _prepare_inputs(
-        self, generation_batch: dict[str, Union[torch.Tensor, Any]]
-    ) -> dict[str, Union[torch.Tensor, Any]]:
+    def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
         # During training:
         #   - Receives the local generation batch (Per-GPU batch size × steps per generation)
@@ -1023,15 +951,18 @@ class RLOOTrainer(BaseTrainer):
         reward_kwargs["trainer_state"] = self.state
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
-            zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
+            zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names, strict=True)
         ):
             with profiling_context(self, reward_func_name):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
-                        messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+                        messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
+                        texts = [
+                            apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
+                            for x in messages
+                        ]
                     else:
-                        texts = [p + c for p, c in zip(prompts, completions)]
+                        texts = [p + c for p, c in zip(prompts, completions, strict=True)]
                     reward_inputs = reward_processing_class(
                         text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
                     )
@@ -1065,74 +996,58 @@ class RLOOTrainer(BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _generate_single_turn(self, prompts: list[str], images: Optional[list]):
+    def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
-
-        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
-        # [{"role": "user", "content": "What color is the sky?"}] to
-        # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
-        kwargs = {}
-        if images is not None:
-            kwargs = {"images": images}
-            for prompt, image_list in zip(prompts, images):
-                if isinstance(prompt, list):  # i.e., when using conversational data
-                    prepare_multimodal_messages(prompt, num_images=len(image_list))
-
-        prompts_text = [
-            maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
-        ]
-
-        if images is not None:
-            prompt_inputs = self.processing_class(text=prompts_text, padding=True, return_tensors="pt", **kwargs)
-            prompt_inputs = super()._prepare_inputs(prompt_inputs)
-            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
-        else:
-            forward_kwargs = {}
+        mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
-                self.llm.wake_up()
+                self.llm.wake_up(tags=["weights"])
+                # Work around for https://github.com/vllm-project/vllm/issues/29341
+                self.llm.collective_rpc("reload_weights")
 
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
+            prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
+
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
-                all_prompts_text = gather_object(prompts_text)
-                if images is not None:
-                    all_images = gather_object(images)
+                all_prompts = gather_object(prompts)
+                num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    ordered_set_of_prompts = all_prompts[::num_generations]
 
-                    if images is not None:
-                        ordered_set_of_images = all_images[:: self.num_generations]
-                    else:
-                        ordered_set_of_images = None
-
+                    sampling_params = {
+                        "n": num_generations,
+                        "repetition_penalty": self.repetition_penalty,
+                        "temperature": self.temperature,
+                        "top_p": self.top_p,
+                        "top_k": -1 if self.top_k is None else self.top_k,
+                        "min_p": 0.0 if self.min_p is None else self.min_p,
+                        "max_tokens": self.max_completion_length,
+                        "truncate_prompt_tokens": self.max_prompt_length,
+                        "guided_decoding_regex": self.guided_decoding_regex,
+                        "generation_kwargs": self.args.generation_kwargs,
+                    }
                     with profiling_context(self, "vLLM.generate"):
-                        output = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            images=ordered_set_of_images,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            truncate_prompt_tokens=self.max_prompt_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                            generation_kwargs=self.args.generation_kwargs,
-                        )
+                        if is_conversational({"prompt": ordered_set_of_prompts[0]}):
+                            output = self.vllm_client.chat(
+                                messages=ordered_set_of_prompts,
+                                **sampling_params,
+                                chat_template_kwargs=self.chat_template_kwargs,
+                            )
+                        else:
+                            output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
                         payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
                 else:
                     payload = None
@@ -1143,7 +1058,7 @@ class RLOOTrainer(BaseTrainer):
                 all_prompt_ids, all_completion_ids, _ = obj_list[0]
 
                 # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
@@ -1177,31 +1092,21 @@ class RLOOTrainer(BaseTrainer):
                 if self.vllm_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.
                     # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
-                    orig_size = len(prompts_text)
+                    orig_size = len(prompts)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
-                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
-
-                    if images is not None:
-                        gathered_images = [None for _ in range(self.vllm_tensor_parallel_size)]
-                        torch.distributed.all_gather_object(gathered_images, images, group=self.tp_group)
-                        all_images = [img for sublist in gathered_images for img in sublist]
-                    else:
-                        all_images = None
+                    torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
+                    all_prompts = [p for sublist in gathered_prompts for p in sublist]
                 else:
-                    all_prompts_text = prompts_text
-                    all_images = images
+                    all_prompts = prompts
 
-                if images is not None and all_images:
-                    vllm_inputs = []
-                    for prompt, image_list in zip(all_prompts_text, all_images):
-                        vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image_list}})
-
-                else:
-                    vllm_inputs = all_prompts_text
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.wake_up(tags=["kv_cache"])
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
+                    if is_conversational({"prompt": prompts[0]}):
+                        all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                    else:
+                        all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
 
                 all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
                 all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
@@ -1218,18 +1123,26 @@ class RLOOTrainer(BaseTrainer):
                     completion_ids = all_completion_ids
 
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                    self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            # Re-process inputs for paged generation if needed
-            # Note: images are already validated and preprocessed above
-            paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
-            previous_attn = self.model_wrapped.config._attn_implementation
-
-            if is_flash_attn_2_available():
-                self.model_wrapped.config._attn_implementation = "paged_attention"
+            processor_kwargs = {
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "add_special_tokens": False,
+            }
+            if is_conversational({"prompt": prompts[0]}):
+                processor_outputs = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    **processor_kwargs,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
+                )
             else:
-                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
+
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1244,27 +1157,35 @@ class RLOOTrainer(BaseTrainer):
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
+                    # Continuous batching API expects 'inputs' arg only
                     all_outputs = unwrapped_model.generate_batch(
-                        paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
+                        processor_outputs["input_ids"], generation_config=self.generation_config, progress_bar=False
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = paged_prompt_inputs.input_ids
-            # Restore the original attention implementation, training mode
-            self.model_wrapped.config._attn_implementation = previous_attn
+            prompt_ids = processor_outputs["input_ids"]
 
         else:
             # Regular generation path
-            generate_inputs = self.processing_class(
-                text=prompts_text,
-                return_tensors="pt",
-                padding=True,
-                padding_side="left",
-                max_length=self.max_prompt_length,
-                truncation=True,
-                add_special_tokens=False,
-                **kwargs,
-            )
+            processor_kwargs = {
+                "return_tensors": "pt",
+                "padding": True,
+                "padding_side": "left",
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "add_special_tokens": False,
+            }
+            if is_conversational({"prompt": prompts[0]}):
+                generate_inputs = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    **processor_kwargs,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
+                )
+            else:
+                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
@@ -1289,16 +1210,16 @@ class RLOOTrainer(BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
+            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
+            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
 
-        return prompt_ids, completion_ids, forward_kwargs
+        return prompt_ids, completion_ids
 
-    def _generate(self, prompts: list[str], images: Optional[list]):
+    def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompt_ids, completion_ids, forward_kwargs = self._generate_single_turn(prompts, images)
+        prompt_ids, completion_ids = self._generate_single_turn(prompts)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -1331,11 +1252,11 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, forward_kwargs
+        return prompt_ids, completion_ids
 
     def _generate_and_score_completions(
-        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
-    ) -> dict[str, Union[torch.Tensor, Any]]:
+        self, inputs: list[dict[str, torch.Tensor | Any]]
+    ) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1351,7 +1272,16 @@ class RLOOTrainer(BaseTrainer):
         if images is not None and all(img_list == [] for img_list in images):
             images = None
 
-        prompt_ids_list, completion_ids_list, forward_kwargs = self._generate(prompts, images)
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            prompts = [
+                prepare_multimodal_messages(prompt, image_list)
+                for prompt, image_list in zip(prompts, images, strict=True)
+            ]
+
+        prompt_ids_list, completion_ids_list = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -1372,17 +1302,30 @@ class RLOOTrainer(BaseTrainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
+
+        num_images = [len(img_list) for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
             token_type_ids = forward_kwargs["token_type_ids"]
             forward_kwargs["token_type_ids"] = torch.cat(
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
-
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
-
-        num_images = [len(img_list) for img_list in images] if images is not None else None
 
         with torch.no_grad():
             # Compute the per-token log probabilities for the current model
@@ -1428,8 +1371,11 @@ class RLOOTrainer(BaseTrainer):
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
-            for prompt, completion in zip(prompts, completions_text):
+            for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
+                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
+                    bootstrap = bootstrap[0]["text"]
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
@@ -1454,14 +1400,15 @@ class RLOOTrainer(BaseTrainer):
             kl = gather(kl)  # rewards are gathered, so kl must be too
             rewards = rewards - self.beta * kl
 
-        grouped_rewards = rewards.view(-1, self.num_generations)
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        grouped_rewards = rewards.view(-1, num_generations)
         mean_grouped_rewards = grouped_rewards.mean(dim=1)
         std_rewards = grouped_rewards.std(dim=1)
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
 
         # RLOO advantages computation
         grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
-        baselines = (grouped_sum - grouped_rewards) / (self.num_generations - 1)  # (num_prompts, num_generations)
+        baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
         baselines = baselines.view(-1)  # Flatten back to match rewards shape
         advantages = rewards - baselines
 
@@ -1587,7 +1534,7 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
@@ -1595,7 +1542,7 @@ class RLOOTrainer(BaseTrainer):
             loss = loss.mean().detach()
         return loss, None, None
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
@@ -1619,27 +1566,40 @@ class RLOOTrainer(BaseTrainer):
                     self.num_completions_to_print,
                 )
 
+            logging_backends = []
             if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                import pandas as pd
+                logging_backends.append(wandb)
+            if self.args.report_to and "trackio" in self.args.report_to:
+                logging_backends.append(trackio)
 
-                table = {
-                    "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
-                    "prompt": self._logs["prompt"],
-                    "completion": self._logs["completion"],
-                    **self._logs["rewards"],
-                    "advantage": self._logs["advantages"],
-                }
+            table = {
+                "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                "prompt": self._logs["prompt"],
+                "completion": self._logs["completion"],
+                **self._logs["rewards"],
+                "advantage": self._logs["advantages"],
+            }
 
-                if self._logs["images"]:
-                    table["images"] = []
+            df_base = pd.DataFrame(table)
+            images_raw = self._logs["images"] or []
+
+            for logging_backend in logging_backends:
+                if images_raw:
+                    images = []
                     for image_list in self._logs["images"]:
-                        # Convert images to wandb Image objects for proper visualization
-                        table["images"].append([wandb.Image(image) for image in image_list])
+                        images.append([logging_backend.Image(image) for image in image_list])
+                    df = pd.concat(
+                        [df_base, pd.Series(images, name="image")],
+                        axis=1,
+                        copy=False,
+                    )
+                else:
+                    df = df_base
 
-                df = pd.DataFrame(table)
-                if self.wandb_log_unique_prompts:
+                if self.log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+
+                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

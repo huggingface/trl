@@ -14,10 +14,10 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [UltraFeedback prompts dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -28,21 +28,14 @@ Below is the script to train the model.
 ```python
 # train_grpo.py
 from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-# Dummy reward function for demonstration purposes
-def reward_num_unique_letters(completions, **kwargs):
-    """Reward function that rewards completions with more unique letters."""
-    completion_contents = [completion[0]["content"] for completion in completions]
-    return [float(len(set(content))) for content in completion_contents]
-
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_num_unique_letters,
-    args=training_args,
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 trainer.train()
@@ -80,7 +73,7 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 > It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
 
 > [!TIP]
-> [Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221) showed that calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
+> As shown in [Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221), calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
 
 ### Estimating the KL divergence
 
@@ -149,6 +142,7 @@ This constant is recommended to be the maximum completion length. To use this fo
 While training and evaluating, we record the following reward metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `step_time`: The average time (in seconds) taken per training step (including generation).
 - `completions/mean_length`: The average length of generated completions.
 - `completions/min_length`: The minimum length of generated completions.
 - `completions/max_length`: The maximum length of generated completions.
@@ -289,29 +283,27 @@ import argparse
 
 from datasets import load_dataset
 from trl import GRPOTrainer, GRPOConfig
+from trl.rewards import accuracy_reward
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
     args = parser.parse_args()
 
-    # Example dataset from TLDR
-    dataset = load_dataset("trl-lib/tldr", split="train")
-
-    # Dummy reward function: count the number of unique characters in the completions
-    def reward_num_unique_chars(completions, **kwargs):
-        return [len(set(c)) for c in completions]
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
     training_args = GRPOConfig(
-        output_dir="Qwen2.5-72B-GRPO",
         per_device_train_batch_size=4,
-        bf16=True,
-        gradient_checkpointing=True,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 
-    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer = GRPOTrainer(
+        model="Qwen/Qwen2.5-72B",
+        args=training_args,
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset
+    )
     trainer.train()
 
 if __name__=="__main__":
@@ -563,8 +555,14 @@ accelerate launch \
 
 ### Configuration Tips
 
-> [!WARNING]
-> VLM training may fail if image tokens are truncated. We highly recommend disabling truncation by setting `max_prompt_length` to `None`.
+> [!TIP]
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`GRPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> GRPOConfig(max_prompt_length=None, ...)
+> ```
+>
+> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage

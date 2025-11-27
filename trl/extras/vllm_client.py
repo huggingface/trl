@@ -14,11 +14,11 @@
 
 import atexit
 import base64
+import copy
 import logging
 import socket
 import time
 from io import BytesIO
-from typing import Optional, Union
 from urllib.parse import urlparse
 
 import torch
@@ -43,6 +43,13 @@ if is_vllm_available():
 
 
 logger = logging.getLogger(__name__)
+
+
+def pil_to_base64(image):
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    img_bytes = buffer.getvalue()
+    return base64.b64encode(img_bytes).decode("utf-8")
 
 
 class VLLMClient:
@@ -109,7 +116,7 @@ class VLLMClient:
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
         host: str = "0.0.0.0",
         server_port: int = 8000,
         group_port: int = 51216,
@@ -174,7 +181,7 @@ class VLLMClient:
     def generate(
         self,
         prompts: list[str],
-        images: Optional[list] = None,
+        images: list | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -182,10 +189,10 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
-        truncate_prompt_tokens: Optional[int] = None,
-        guided_decoding_regex: Optional[str] = None,
-        generation_kwargs: Optional[dict] = None,
-    ) -> list[list[int]]:
+        truncate_prompt_tokens: int | None = None,
+        guided_decoding_regex: str | None = None,
+        generation_kwargs: dict | None = None,
+    ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided prompts.
 
@@ -230,12 +237,6 @@ class VLLMClient:
         """
         url = f"{self.base_url}/generate/"
 
-        def pil_to_base64(image):
-            buffer = BytesIO()
-            image.save(buffer, format="PNG")
-            img_bytes = buffer.getvalue()
-            return base64.b64encode(img_bytes).decode("utf-8")
-
         # Convert PIL images to base64 strings
         images = [pil_to_base64(img) for img in images] if images else None
 
@@ -266,7 +267,103 @@ class VLLMClient:
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_communicator(self, device: Union[torch.device, str, int] = 0):
+    def chat(
+        self,
+        messages: list[list[dict]],
+        n: int = 1,
+        repetition_penalty: float = 1.0,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        max_tokens: int = 16,
+        truncate_prompt_tokens: int | None = None,
+        guided_decoding_regex: str | None = None,
+        generation_kwargs: dict | None = None,
+        chat_template_kwargs: dict | None = None,
+    ) -> dict[str, list[list[int]]]:
+        """
+        Generates model completions for the provided chat messages.
+
+        Args:
+            messages (`list[list[dict]]`):
+                List of message lists for which the model will generate completions. Each message is a dictionary with
+                keys like "role" and "content".
+            n (`int`, *optional*, defaults to `1`):
+                Number of completions to generate for each message list.
+            repetition_penalty (`float`, *optional*, defaults to `1.0`):
+                Parameter for repetition penalty. 1.0 means no penalty.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature parameter for sampling. Higher values increase diversity.
+            top_p (`float`, *optional*, defaults to `1.0`):
+                Top-p sampling parameter.`1.0` means no truncation.
+            top_k (`int`, *optional*, defaults to `-1`):
+                Top-k sampling parameter. `-1` means no truncation.
+            min_p (`float`, *optional*, defaults to `0.0`):
+                Minimum probability for sampling.
+            max_tokens (`int`, *optional*, defaults to `16`):
+                Maximum number of tokens to generate for each message list.
+            truncate_prompt_tokens (`int`, *optional*):
+                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
+                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
+                disabled.
+            guided_decoding_regex (`str`, *optional*):
+                Regular expression to guide the decoding process.
+            generation_kwargs (`dict`, *optional*):
+                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
+                will override them.
+            chat_template_kwargs (`dict`, *optional*):
+                Additional keyword arguments to customize the chat template used by the model.
+
+        Returns:
+            `dict` with keys:
+                - `prompt_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the tokenized input messages.
+                - `completion_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the model-generated completions for each message list.
+                - `logprobs` (`list[list[float]]`):
+                    List of lists of log probabilities for each generated token.
+        """
+        url = f"{self.base_url}/chat/"
+
+        # Convert PIL images to base64 strings
+        messages = copy.deepcopy(messages)  # avoid modifying the original messages
+        for message_list in messages:
+            for message in message_list:
+                if isinstance(message["content"], list):
+                    for part in message["content"]:
+                        if part["type"] == "image_pil":
+                            part["image_pil"] = pil_to_base64(part["image_pil"])
+
+        response = self.session.post(
+            url,
+            json={
+                "messages": messages,
+                "n": n,
+                "repetition_penalty": repetition_penalty,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "min_p": min_p,
+                "max_tokens": max_tokens,
+                "truncate_prompt_tokens": truncate_prompt_tokens,
+                "guided_decoding_regex": guided_decoding_regex,
+                "generation_kwargs": generation_kwargs or {},
+                "chat_template_kwargs": chat_template_kwargs or {},
+            },
+        )
+        if response.status_code == 200:
+            json_response = response.json()
+            return {
+                "prompt_ids": json_response["prompt_ids"],
+                "completion_ids": json_response["completion_ids"],
+                "logprobs": json_response["logprobs"],
+            }
+        else:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def init_communicator(self, device: torch.device | str | int = 0):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
 
@@ -297,7 +394,8 @@ class VLLMClient:
         else:
             client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
 
-        # In the server side, the host is set to 0.0.0.0
+        # Set the weight update group's host to "0.0.0.0" so that
+        # clients from different IPs can send updated weights
         response = self.session.post(
             url,
             json={
@@ -396,6 +494,9 @@ class VLLMClient:
         else:
             if response.status_code != 200:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+        if self.communicator is not None:
+            self.communicator = None
 
 
 # Example usage

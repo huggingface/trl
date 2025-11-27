@@ -34,7 +34,7 @@ Below is the script to train the model:
 ```python
 # train_orpo.py
 from datasets import load_dataset
-from trl import ORPOConfig, ORPOTrainer
+from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -79,9 +79,9 @@ Here are some other factors to consider when choosing a programming language for
 
 ## Expected dataset type
 
-ORPO requires a [preference dataset](dataset_formats#preference). The [`ORPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+ORPO requires a [preference dataset](dataset_formats#preference). The [`experimental.orpo.ORPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-Although the [`ORPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
+Although the [`experimental.orpo.ORPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
 
 ## Example script
 
@@ -121,11 +121,11 @@ While training and evaluating, we record the following reward metrics:
 
 ## ORPOTrainer
 
-[[autodoc]] ORPOTrainer
+[[autodoc]] experimental.orpo.ORPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## ORPOConfig
 
-[[autodoc]] ORPOConfig
+[[autodoc]] experimental.orpo.ORPOConfig

@@ -12,18 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
-from transformers.testing_utils import require_liger_kernel
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
-from .testing_utils import TrlTestCase, require_no_wandb, require_peft
+from .testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, require_peft
 
 
 class TestKTOTrainer(TrlTestCase):
@@ -40,7 +37,8 @@ class TestKTOTrainer(TrlTestCase):
         self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "name, config_name, loss_type, pre_compute, eval_dataset",
         [
             ("qwen", "standard_preference", "kto", True, True),
             # ("t5", "standard_implicit_prompt_preference", "kto", True, False), # KTO broken for enc-dec
@@ -50,7 +48,7 @@ class TestKTOTrainer(TrlTestCase):
             # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", True, False),
             ("qwen", "standard_unpaired_preference", "apo_zero_unpaired", False, True),
             # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", False, False),
-        ]
+        ],
     )
     def test_kto_trainer(self, name, config_name, loss_type, pre_compute, eval_dataset):
         training_args = KTOConfig(
@@ -362,11 +360,11 @@ class TestKTOTrainer(TrlTestCase):
 
     @require_liger_kernel
     def test_kto_trainer_with_liger(self):
-        """Test KTO trainer with Liger loss enabled."""
+        """Test KTO trainer with Liger kernel enabled."""
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            use_liger_loss=True,  # Enable Liger loss
+            use_liger_kernel=True,  # Enable Liger kernel
         )
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")

@@ -19,15 +19,13 @@
 
 ## 🎉 What's New
 
-> **✨ OpenAI GPT OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4)! Check out the:
->
-> - [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
-> - [GPT OSS recipes](https://github.com/huggingface/gpt-oss-recipes)
-> - [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
+**OpenEnv Integration:** TRL now supports **[OpenEnv](https://huggingface.co/blog/openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
+
+Explore how to seamlessly integrate TRL with OpenEnv in our [dedicated documentation](https://huggingface.co/docs/trl/openenv).
 
 ## Overview
 
-TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
+TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
 
 ## Highlights
 
@@ -94,20 +92,20 @@ trainer.train()
 ```python
 from datasets import load_dataset
 from trl import GRPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_num_unique_chars,
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 trainer.train()
 ```
+
+> [NOTE!]
+> For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
 
 ### `DPOTrainer`
 
@@ -168,7 +166,7 @@ trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --output_dir Qwen2.5-0.5B-DPO 
 ```
 
-Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/clis) or use `--help` for more details.
 
 ## Development
 
@@ -190,7 +188,7 @@ Example:
 from trl.experimental.new_trainer import NewTrainer
 ```
 
-Read more in the [Experimental docs](https://huggingface.co/docs/trl/main/en/experimental).
+Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimental_overview).
 
 ## Citation
 

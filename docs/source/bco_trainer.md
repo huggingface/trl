@@ -8,8 +8,8 @@ For a full example have a look at  [`examples/scripts/bco.py`].
 
 ## Expected dataset type
 
-The [`BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
-The [`BCOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`experimental.bco.BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
+The [`experimental.bco.BCOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Expected model format
 
@@ -93,11 +93,11 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 ## BCOTrainer
 
-[[autodoc]] BCOTrainer
+[[autodoc]] experimental.bco.BCOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## BCOConfig
 
-[[autodoc]] BCOConfig
+[[autodoc]] experimental.bco.BCOConfig

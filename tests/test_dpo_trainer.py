@@ -12,36 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import re
-import sys
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 import torch
+from accelerate.utils.memory import release_memory
 from datasets import Dataset, features, load_dataset
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     PreTrainedTokenizerBase,
     is_vision_available,
 )
-from transformers.testing_utils import (
-    get_device_properties,
-    require_liger_kernel,
-)
+from transformers.testing_utils import backend_empty_cache, get_device_properties, torch_device
+from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
+    require_liger_kernel,
     require_no_wandb,
     require_peft,
+    require_torch_accelerator,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
     require_vision,
 )
@@ -49,6 +50,9 @@ from .testing_utils import (
 
 if is_vision_available():
     from PIL import Image
+
+if is_peft_available():
+    from peft import LoraConfig, PeftModel
 
 
 class TestTokenizeRow(TrlTestCase):
@@ -192,22 +196,23 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "loss_type",
         [
-            ("sigmoid",),
-            ("hinge",),
-            ("ipo",),
-            ("exo_pair",),
-            ("nca_pair",),
-            ("robust",),
-            ("bco_pair",),
-            ("sppo_hard",),
-            ("aot",),
-            ("aot_pair",),
-            ("discopop",),
-            ("apo_zero",),
-            ("apo_down",),
-        ]
+            "sigmoid",
+            "hinge",
+            "ipo",
+            "exo_pair",
+            "nca_pair",
+            "robust",
+            "bco_pair",
+            "sppo_hard",
+            "aot",
+            "aot_pair",
+            "discopop",
+            "apo_zero",
+            "apo_down",
+        ],
     )
     def test_train_loss_types(self, loss_type):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -252,7 +257,7 @@ class TestDPOTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             learning_rate=9e-1,
             report_to="none",
-            use_liger_loss=True,
+            use_liger_kernel=True,
         )
         trainer = DPOTrainer(
             model=model,
@@ -345,7 +350,7 @@ class TestDPOTrainer(TrlTestCase):
                 loss_weights=[1.0, 0.5, 0.1],  # Wrong length
             )
 
-    @parameterized.expand([(None,), (0.5,)])
+    @pytest.mark.parametrize("rpo_alpha", [None, 0.5])
     def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -637,11 +642,13 @@ class TestDPOTrainer(TrlTestCase):
         except OSError:
             pytest.fail("Loading the saved peft adapter failed")
 
+    @require_bitsandbytes
     @require_peft
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_dpo_lora_bf16_autocast_llama(self):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
+        from transformers import BitsAndBytesConfig
 
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -655,7 +662,9 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -689,7 +698,8 @@ class TestDPOTrainer(TrlTestCase):
         # save peft adapter
         trainer.save_model()
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "loss_type, pre_compute, gen_during_eval",
         [
             ("sigmoid", False, False),
             ("sigmoid", False, True),
@@ -715,7 +725,7 @@ class TestDPOTrainer(TrlTestCase):
             ("robust", False, True),
             ("robust", True, False),
             ("robust", True, True),
-        ]
+        ],
     )
     @require_bitsandbytes
     @require_peft
@@ -725,6 +735,7 @@ class TestDPOTrainer(TrlTestCase):
     )
     def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
         from peft import LoraConfig
+        from transformers import BitsAndBytesConfig
 
         lora_config = LoraConfig(
             r=16,
@@ -735,7 +746,9 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1291,7 +1304,8 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "beta, loss_type",
         [
             (0.1, "sigmoid"),
             (0.1, "apo_zero"),
@@ -1303,10 +1317,9 @@ class TestDPOTrainer(TrlTestCase):
             (0.5, "apo_down"),
             (0.5, "sppo_hard"),
             (0.5, "nca_pair"),
-        ]
+        ],
     )
     @require_liger_kernel
-    @pytest.mark.skipif(not (sys.version_info >= (3, 10)), reason="Liger kernel is not supported on Python 3.9")
     def test_dpo_trainer_with_liger(self, beta, loss_type):
         """Test DPO trainer with Liger loss enabled across supported loss types.
 
@@ -1324,7 +1337,7 @@ class TestDPOTrainer(TrlTestCase):
             learning_rate=9e-1,
             eval_strategy="steps",
             beta=beta,
-            use_liger_loss=True,  # Enable Liger loss
+            use_liger_kernel=True,  # Enable Liger kernel
             loss_type=loss_type,
             report_to="none",
         )
@@ -1410,13 +1423,15 @@ class TestDPOTrainer(TrlTestCase):
 
 @require_vision
 class TestDPOVisionTrainer(TrlTestCase):
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            # ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # ("trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
-        ]
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        ],
     )
     def test_vdpo_trainer(self, model_id):
         # fmt: off
@@ -1502,7 +1517,8 @@ class TestDPOVisionTrainer(TrlTestCase):
 
 
 class TestDPOConfig(TrlTestCase):
-    @parameterized.expand([(f_div_type, as_str) for f_div_type in list(FDivergenceType) for as_str in [False, True]])
+    @pytest.mark.parametrize("as_string", [False, True])
+    @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
     def test_f_divergence_type(self, f_divergence_type, as_string: bool):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1517,3 +1533,206 @@ class TestDPOConfig(TrlTestCase):
         # Serialization: TrainingArguments.to_dict should yield the enum's string value
         configparser_dict = training_args.to_dict()
         assert configparser_dict["f_divergence_type"] == f_divergence_type.value
+
+
+@pytest.mark.slow
+@require_torch_accelerator
+@require_peft
+class TestDPOTrainerSlow(TrlTestCase):
+    def setup_method(self):
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        self.peft_config = LoraConfig(
+            lora_alpha=16,
+            lora_dropout=0.1,
+            r=8,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        self.max_length = 128
+
+    def teardown_method(self):
+        gc.collect()
+        backend_empty_cache(torch_device)
+        gc.collect()
+
+    @pytest.mark.parametrize("pre_compute_logits", [True, False])
+    @pytest.mark.parametrize("loss_type", ["sigmoid", "ipo"])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    def test_dpo_bare_model(self, model_id, loss_type, pre_compute_logits):
+        """
+        A test that tests the simple usage of `DPOTrainer` using a bare model in full precision.
+        """
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=2,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            fp16=True,
+            logging_strategy="no",
+            report_to="none",
+            beta=0.1,
+            loss_type=loss_type,
+            precompute_ref_log_probs=pre_compute_logits,
+            max_length=self.max_length,
+        )
+
+        # dpo train lora model
+        trainer = DPOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            eval_dataset=self.dataset["test"],
+            processing_class=tokenizer,
+        )
+
+        # train the model
+        trainer.train()
+
+        # save trained model or adapter
+        trainer.save_model()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("pre_compute_logits", [True, False])
+    @pytest.mark.parametrize("loss_type", ["sigmoid", "ipo"])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_peft
+    def test_dpo_peft_model(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
+        """
+        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios
+        of gradient checkpointing.
+        """
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=2,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            fp16=True,
+            logging_strategy="no",
+            report_to="none",
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+            generate_during_eval=False,
+            loss_type=loss_type,
+            precompute_ref_log_probs=pre_compute_logits,
+            beta=0.1,
+            max_length=self.max_length,
+        )
+
+        # dpo train lora model
+        trainer = DPOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            eval_dataset=self.dataset["test"],
+            processing_class=tokenizer,
+            peft_config=self.peft_config,
+        )
+
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
+
+        # train the model
+        trainer.train()
+
+        # save trained model or adapter
+        trainer.save_model()
+
+        release_memory(model, trainer)
+
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+    )
+    @pytest.mark.parametrize("pre_compute_logits", [True, False])
+    @pytest.mark.parametrize("loss_type", ["sigmoid", "ipo"])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    @require_bitsandbytes
+    @require_peft
+    def test_dpo_peft_model_qlora(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
+        """
+        A test that tests the simple usage of `DPOTrainer` using QLoRA + different scenarios of gradient checkpointing.
+        """
+        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+
+        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=2,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            fp16=True,
+            logging_strategy="no",
+            report_to="none",
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+            beta=0.1,
+            generate_during_eval=False,
+            loss_type=loss_type,
+            precompute_ref_log_probs=pre_compute_logits,
+            max_length=self.max_length,
+        )
+
+        # dpo train lora model
+        trainer = DPOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            eval_dataset=self.dataset["test"],
+            processing_class=tokenizer,
+            peft_config=self.peft_config,
+        )
+
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
+
+        # train the model
+        trainer.train()
+
+        # save trained model or adapter
+        trainer.save_model()
+
+        release_memory(model, trainer)

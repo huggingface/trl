@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from datasets import Dataset, load_dataset
@@ -118,6 +118,7 @@ class TestDatasetFormatting(TrlTestCase):
         assert formatting_func is None
 
 
+@pytest.mark.filterwarnings("ignore::FutureWarning")
 class TestSetupChatFormat(TrlTestCase):
     def setup_method(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

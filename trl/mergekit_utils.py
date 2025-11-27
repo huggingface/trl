@@ -15,7 +15,7 @@
 import torch
 from huggingface_hub import HfApi
 
-from trl.import_utils import is_mergekit_available
+from .import_utils import is_mergekit_available
 
 
 if is_mergekit_available():
@@ -264,7 +264,7 @@ def merge_models(config: MergeConfig, out_path: str):
     Merge two models using mergekit
 
     Args:
-        config (`MergeConfig`): The merge configuration.
+        config ([`MergeConfig`]): The merge configuration.
         out_path (`str`): The output path for the merged model.
     """
     if not is_mergekit_available():

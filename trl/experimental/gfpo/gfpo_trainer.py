@@ -13,12 +13,13 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from accelerate.utils import gather_object
 
-from ...data_utils import is_conversational
+from ...data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin, nanstd, pad
 
@@ -80,13 +81,18 @@ class GFPOTrainer(_GRPOTrainer):
         if images is not None and all(img_list == [] for img_list in images):
             images = None
 
-        (
-            prompt_ids_list,
-            completion_ids_list,
-            num_items_in_batch,
-            sampling_per_token_logps_list,
-            forward_kwargs,
-        ) = self._generate(prompts, images)
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
+        if images is not None:
+            prompts = [
+                prepare_multimodal_messages(prompt, image_list)
+                for prompt, image_list in zip(prompts, images, strict=True)
+            ]
+
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
+            self._generate(prompts)
+        )
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -112,17 +118,29 @@ class GFPOTrainer(_GRPOTrainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
+
+        num_images = [len(img_list) for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs
+        if images is not None:
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
+
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
             token_type_ids = forward_kwargs["token_type_ids"]
             forward_kwargs["token_type_ids"] = torch.cat(
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
-
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
-
-        num_images = [len(img_list) for img_list in images] if images is not None else None
 
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
@@ -186,8 +204,11 @@ class GFPOTrainer(_GRPOTrainer):
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
-            for prompt, completion in zip(prompts, completions_text):
+            for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
+                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
+                    bootstrap = bootstrap[0]["text"]
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
@@ -272,6 +293,15 @@ class GFPOTrainer(_GRPOTrainer):
             agg_completion_lengths = self.accelerator.gather(completion_lengths)
             num_items_in_batch = agg_completion_lengths.sum()
 
+            if sampling_per_token_logps is not None:
+                sampling_per_token_logps = sampling_per_token_logps[local_input_indices_to_keep].contiguous()
+            if old_per_token_logps is not None:
+                old_per_token_logps = old_per_token_logps[local_input_indices_to_keep].contiguous()
+            if ref_per_token_logps is not None:
+                ref_per_token_logps = ref_per_token_logps[local_input_indices_to_keep].contiguous()
+            if self.use_vllm and self.vllm_importance_sampling_correction:
+                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep].contiguous()
+
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
@@ -300,15 +330,10 @@ class GFPOTrainer(_GRPOTrainer):
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
         if images is not None:
-            self._logs["images"].extend(gather_object(images))
+            self._logs["images"].extend(all_images)
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-
-            if self.num_remains_in_group is not None and mode == "train":
-                delta = delta[local_input_indices_to_keep]
-                importance_sampling_ratio = importance_sampling_ratio[local_input_indices_to_keep]
-
             delta = delta[completion_mask.bool()]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
