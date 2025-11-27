@@ -800,9 +800,10 @@ class OnlineDPOTrainer(BaseTrainer):
             # Prepare LoRA parameters if using LoRA
             lora_kwargs = {}
             if self.vllm_use_lora:
-                # Use step-specific lora_int_id to ensure vLLM reloads updated weights
+                # Cycle through 2 adapter IDs to force vLLM to reload updated weights while keeping memory usage bounded
                 # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
-                adapter_id = self.vllm_lora_adapter_id + self.state.global_step
+                # By alternating between 2 IDs, we ensure the adapter is reloaded each step without accumulating N adapters
+                adapter_id = self.vllm_lora_adapter_id + (self.state.global_step % 2)
                 lora_kwargs = {
                     "lora_adapter_name": self.vllm_lora_adapter_name,
                     "lora_adapter_id": adapter_id,
@@ -881,9 +882,10 @@ class OnlineDPOTrainer(BaseTrainer):
         # Prepare LoRA request if using LoRA
         lora_request = None
         if self.vllm_use_lora:
-            # Use step-specific lora_int_id to ensure vLLM reloads the adapter when weights are updated
+            # Cycle through 2 adapter IDs to force vLLM to reload updated weights while keeping memory usage bounded
             # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
-            adapter_id = self.vllm_lora_adapter_id + self.state.global_step
+            # By alternating between 2 IDs, we ensure the adapter is reloaded each step without accumulating N adapters
+            adapter_id = self.vllm_lora_adapter_id + (self.state.global_step % 2)
             lora_request = LoRARequest(self.vllm_lora_adapter_name, adapter_id, self._vllm_lora_path)
             logger.debug(
                 f"Using LoRA adapter: {self.vllm_lora_adapter_name} (ID={adapter_id}) from path: {self._vllm_lora_path}"
