@@ -531,8 +531,13 @@ class OnlineDPOTrainer(BaseTrainer):
                 # Enable LoRA support if requested
                 if self.vllm_use_lora:
                     vllm_kwargs["enable_lora"] = True
-                    if self.vllm_max_lora_rank is not None:
-                        vllm_kwargs["max_lora_rank"] = self.vllm_max_lora_rank
+
+                    # Determine max_lora_rank from PEFT config and/or user setting
+                    peft_rank = model.peft_config[model.active_adapter].r
+                    max_rank = max(peft_rank, self.vllm_max_lora_rank) if self.vllm_max_lora_rank is not None else peft_rank
+
+                    vllm_kwargs["max_lora_rank"] = max_rank
+                    logger.info(f"Setting vLLM max_lora_rank={max_rank}")
 
                 # vLLM requires the environment variables to be set for distributed training.
                 os.environ["RANK"] = str(self.accelerator.process_index)
