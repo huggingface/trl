@@ -24,7 +24,7 @@
 """
 # Full training
 ```
-python grpo_agent.py \
+python examples/scripts/grpo_agent.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --output_dir grpo_biogrid_qwen_3g-1.7b \
     --push_to_hub True \
@@ -39,6 +39,7 @@ python grpo_agent.py \
 """
 
 import os
+import re
 import signal
 import sqlite3
 import textwrap
@@ -63,55 +64,98 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 # ------------------------
 
 
-def correctness_reward(completions, answer, **kwargs):
+def query_reward(completions, answer, **kwargs):
     """
-    Reward Yes/No correctness.
-    Robust to extra spaces, punctuation, or surrounding stars.
+    Reward query strategy:
+    - Penalize more than 2 queries
+    - Penalize generic queries (LIMIT 1 / PRAGMA)
+    - Reward usage of WHERE
+    - Reward evidence supporting the final answer
     """
     rewards = []
-    for completion, ans in zip(completions, answer, strict=False):
-        guess = completion[-1]["content"].strip().lower()
-        guess_clean = guess.replace("*", "").replace("`", "").strip()
-        reward = 0.0
 
-        if guess_clean not in ["yes", "no"]:
-            reward -= 0.2  # didn't produce a valid Yes/No
-        elif guess_clean == ans.lower():
-            reward += 0.5  # correct answer
+    for completion, ans in zip(completions, answer, strict=False):
+        reward = 0.0
+        sql_queries = []
+        tool_results = []
+
+        # collect all SQL queries and tool results
+        for turn in completion:
+            if turn.get("tool_calls"):
+                for call in turn["tool_calls"]:
+                    sql = call["function"]["arguments"].get("sql_command", "").lower()
+                    sql_queries.append(sql)
+            if turn.get("role") == "tool" and turn.get("content"):
+                tool_results.append(turn["content"])
+
+        # --- penalize too many queries ---
+        if len(sql_queries) > 3:
+            reward -= 1.5
+
+        # --- check query quality ---
+        where_count = 0
+        for q in sql_queries:
+            if "limit 1" in q:
+                reward -= 1.0
+            if " where " not in q:
+                reward -= 0.5
+            else:
+                where_count += 1
+        reward += min(where_count, 3) * 0.4  # small bonus for WHERE usage
+
+        # --- evidence check: do queries support the answer? ---
+        combined_results = []
+        error_detected = False
+
+        for res in tool_results:
+            if isinstance(res, dict) and "error" in res:
+                error_detected = True
+            elif isinstance(res, list):
+                combined_results.extend(res)
+
+        # if error detected, penalize heavily
+        if error_detected:
+            reward -= 2.0
+        elif len(sql_queries) == 0:
+            reward -= 1.5
         else:
-            reward -= 0.2  # incorrect answer
+            has_hits = len(combined_results) > 0
+            correct_answer = ans.lower()
+            if (has_hits and correct_answer == "yes") or (not has_hits and correct_answer == "no"):
+                reward += 2.0
+            else:
+                reward -= 1.5
 
         rewards.append(reward)
+
     return rewards
 
 
-def tool_usage_reward(completions, **kwargs):
+def correctness_reward(completions, answer, **kwargs):
     """
-    Reward proper tool usage.
-    Looks for assistant tool_calls and corresponding tool responses.
+    Reward Yes/No correctness.
+    Model must provide final answer enclosed in stars — *yes* or *no*.
+    Does not reward informal yes/no buried in text.
     """
     rewards = []
-    for completion in completions:
-        tool_called = False
-        tool_response_ok = False
+    for completion, ans in zip(completions, answer, strict=False):
+        raw = completion[-1]["content"].lower()
+
+        # detect form *yes* or *no*
+        match = re.search(r"\*(yes|no)\*", raw)
+        guess = match.group(1) if match else None
+
         reward = 0.0
 
-        for turn in completion:
-            if turn.get("role") == "assistant" and turn.get("tool_calls"):
-                tool_called = True
-            if turn.get("role") == "tool" and turn.get("content"):
-                tool_response_ok = True
-                if "error" in turn["content"].lower():
-                    reward -= 0.3  # penalize errors
-
-        if tool_called and tool_response_ok:
-            reward += 0.25  # reward correct tool usage
-        elif not tool_called:
-            reward -= 0.3  # penalize missing tool call
-        elif tool_called and not tool_response_ok:
-            reward -= 0.2  # called tool but no response
+        if guess is None:
+            reward -= 0.5  # invalid format
+        elif guess == ans.lower():
+            reward += 0.6  # correct under required format
+        else:
+            reward -= 1.0  # wrong answer
 
         rewards.append(reward)
+
     return rewards
 
 
@@ -141,9 +185,9 @@ def structure_reward(completions, **kwargs):
         # Reward sequences
         if has_call and has_response:
             if has_other:
-                reward = 0.25
+                reward = 0.1
             else:
-                reward = 0.1  # still positive even without extra text
+                reward = 0.05  # still positive even without extra text
         elif has_call and not has_response:
             reward = -0.15
         else:
@@ -207,10 +251,23 @@ def query_biogrid(sql_command: str) -> list[tuple]:
 def format_example(example):
     question = example["question"]
     preamble = textwrap.dedent("""\
-    You may use the BioGRID database to answer the question. Feel free to run exploratory SQL queries to familiarize yourself with the database structure if needed (e.g., `SELECT * FROM interactions LIMIT 1;` or `PRAGMA table_info(interactions);`).
-    Provide your final answer enclosed in stars, such as `*Yes*` or `*No*`.
+    You have access to the BioGRID SQLite database.
+    Use SQL queries to retrieve only the information needed to answer the question.
+
+    Genes may appear in the database in columns `Alt_IDs_Interactor_A` `Alt_IDs_Interactor_B`, `Aliases_Interactor_A` and `Aliases_Interactor_B`,
+    and each entry can contain multiple gene names or synonyms separated by '|', for example:
+    'entrez gene/locuslink:JNKK(gene name synonym)|entrez gene/locuslink:MAPKK4(gene name synonym)|...'
+    So a gene like 'JNKK' or 'MAPKK4' may appear inside one of these strings.
+
+    If the database schema is unclear or you are unsure about column names:
+    - First inspect the schema with `PRAGMA table_info(interactions);`
+    - Or preview a few rows with `SELECT * FROM interactions LIMIT 1;`
+
+    Otherwise, directly query the required data.
+
+    Final answer must be enclosed in stars, e.g. *Yes* or *No*.
     Facts:
-      - The NCBI Taxonomy identifier for humans is taxid:9606
+    - The NCBI Taxonomy identifier for humans is taxid:9606.
     """)
     content = f"{preamble}\nQuestion: {question}"
     prompt = [{"role": "user", "content": content}]
@@ -228,14 +285,26 @@ if __name__ == "__main__":
     # Create DB
     # ------------------------
     print("Creating biogrid.db...")
+    # Load dataset
     biogrid_dataset = load_dataset("qgallouedec/biogrid", split="train")
-    biogrid_dataset.to_sql("interactions", "sqlite:///biogrid.db", if_exists="replace")
-    print("biogrid.db created.")
+    df = biogrid_dataset.to_pandas()
+
+    # Normalize column names: remove spaces, replace with underscores
+    df.columns = [c.replace(" ", "_") for c in df.columns]
+    conn = sqlite3.connect("biogrid.db")
+    try:
+        df.to_sql("interactions", conn, if_exists="replace", index=False)
+        print(f"biogrid.db created. Rows stored: {len(df)}")
+    finally:
+        conn.close()
 
     # ------------------------
     # Load and format dataset
     # ------------------------
     dataset = load_dataset("qgallouedec/biogrid_qa", split="train")
+    dataset = dataset.filter(
+        lambda example: example["question"].startswith("Does the gene ")
+    )  # keep only simple questions for example
     dataset = dataset.map(format_example, remove_columns=["question"])
 
     train_dataset = dataset
@@ -251,7 +320,7 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tools=[query_biogrid],
-        reward_funcs=[correctness_reward, tool_usage_reward, structure_reward],
+        reward_funcs=[correctness_reward, structure_reward, query_reward],
         args=training_args,
     )
 
