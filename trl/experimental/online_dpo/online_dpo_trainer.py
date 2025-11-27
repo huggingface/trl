@@ -534,7 +534,9 @@ class OnlineDPOTrainer(BaseTrainer):
 
                     # Determine max_lora_rank from PEFT config and/or user setting
                     peft_rank = model.peft_config[model.active_adapter].r
-                    max_rank = max(peft_rank, self.vllm_max_lora_rank) if self.vllm_max_lora_rank is not None else peft_rank
+                    max_rank = (
+                        max(peft_rank, self.vllm_max_lora_rank) if self.vllm_max_lora_rank is not None else peft_rank
+                    )
 
                     vllm_kwargs["max_lora_rank"] = max_rank
                     logger.info(f"Setting vLLM max_lora_rank={max_rank}")
@@ -798,11 +800,17 @@ class OnlineDPOTrainer(BaseTrainer):
             # Prepare LoRA parameters if using LoRA
             lora_kwargs = {}
             if self.vllm_use_lora:
+                # Use step-specific lora_int_id to ensure vLLM reloads updated weights
+                # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
+                adapter_id = self.vllm_lora_adapter_id + self.state.global_step
                 lora_kwargs = {
                     "lora_adapter_name": self.vllm_lora_adapter_name,
-                    "lora_adapter_id": self.vllm_lora_adapter_id,
+                    "lora_adapter_id": adapter_id,
                     "lora_adapter_path": self._vllm_lora_path,
                 }
+                logger.debug(
+                    f"Using LoRA adapter: {self.vllm_lora_adapter_name} (ID={adapter_id}) from path: {self._vllm_lora_path}"
+                )
 
             completion_ids = self.vllm_client.generate(
                 prompts=ordered_set_of_prompts,
@@ -873,9 +881,13 @@ class OnlineDPOTrainer(BaseTrainer):
         # Prepare LoRA request if using LoRA
         lora_request = None
         if self.vllm_use_lora:
-            # Create LoRA request with adapter name and ID
-            # The path will be set during _move_model_to_vllm when we save the adapter
-            lora_request = LoRARequest(self.vllm_lora_adapter_name, self.vllm_lora_adapter_id, self._vllm_lora_path)
+            # Use step-specific lora_int_id to ensure vLLM reloads the adapter when weights are updated
+            # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
+            adapter_id = self.vllm_lora_adapter_id + self.state.global_step
+            lora_request = LoRARequest(self.vllm_lora_adapter_name, adapter_id, self._vllm_lora_path)
+            logger.debug(
+                f"Using LoRA adapter: {self.vllm_lora_adapter_name} (ID={adapter_id}) from path: {self._vllm_lora_path}"
+            )
 
         outputs = self.llm.generate(vllm_inputs, self.generation_config, lora_request=lora_request, use_tqdm=False)
 
@@ -901,10 +913,9 @@ class OnlineDPOTrainer(BaseTrainer):
             if self.vllm_use_lora:
                 import tempfile
 
-                # Create a temporary directory to save the LoRA adapter
-                if not hasattr(self, "_vllm_lora_temp_dir"):
-                    self._vllm_lora_temp_dir = tempfile.mkdtemp(prefix="trl_vllm_lora_")
-                    self._vllm_lora_path = self._vllm_lora_temp_dir
+                # Create a temporary directory to save the LoRA adapter (only once)
+                if not hasattr(self, "_vllm_lora_path"):
+                    self._vllm_lora_path = tempfile.mkdtemp(prefix="trl_vllm_lora_")
 
                 # Save the LoRA adapter weights
                 # For FSDP/DeepSpeed, we need to gather parameters first
