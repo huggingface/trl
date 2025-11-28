@@ -642,6 +642,7 @@ class TestDPOTrainer(TrlTestCase):
         except OSError:
             pytest.fail("Loading the saved peft adapter failed")
 
+    @require_bitsandbytes
     @require_peft
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_dpo_lora_bf16_autocast_llama(self):
