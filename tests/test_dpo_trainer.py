@@ -14,7 +14,6 @@
 
 import gc
 import re
-import sys
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -643,6 +642,7 @@ class TestDPOTrainer(TrlTestCase):
         except OSError:
             pytest.fail("Loading the saved peft adapter failed")
 
+    @require_bitsandbytes
     @require_peft
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_dpo_lora_bf16_autocast_llama(self):
@@ -1320,7 +1320,6 @@ class TestDPOTrainer(TrlTestCase):
         ],
     )
     @require_liger_kernel
-    @pytest.mark.skipif(not (sys.version_info >= (3, 10)), reason="Liger kernel is not supported on Python 3.9")
     def test_dpo_trainer_with_liger(self, beta, loss_type):
         """Test DPO trainer with Liger loss enabled across supported loss types.
 

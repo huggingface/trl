@@ -27,20 +27,20 @@ from transformers import AutoModelForCausalLM
 
 model = AutoModelForCausalLM.from_pretrained(
     "your-model-name",
-    attn_implementation="kernels-community/flash-attn"  # other options: kernels-community/vllm-flash-attn3, kernels-community/paged-attention
+    attn_implementation="kernels-community/flash-attn2"  # other options: kernels-community/vllm-flash-attn3, kernels-community/paged-attention
 )
 ```
 
 Or when running a TRL training script:
 
 ```bash
-python sft.py ... --attn_implementation kernels-community/flash-attn
+python sft.py ... --attn_implementation kernels-community/flash-attn2
 ```
 
 Or using the TRL CLI:
 
 ```bash
-trl sft ... --attn_implementation kernels-community/flash-attn
+trl sft ... --attn_implementation kernels-community/flash-attn2
 ```
 
 > [!TIP]
@@ -84,7 +84,7 @@ from trl import SFTConfig
 
 model = AutoModelForCausalLM.from_pretrained(
     "your-model-name",
-    attn_implementation="kernels-community/flash-attn"  # choose the desired FlashAttention variant
+    attn_implementation="kernels-community/flash-attn2"  # choose the desired FlashAttention variant
 )
 
 training_args = SFTConfig(
