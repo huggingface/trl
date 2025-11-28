@@ -54,6 +54,3 @@ The answer is 15
 
 Question: Adam has an orchard. Every day for 30 days he picks 4 apples from his orchard. After a month, Adam has collected all the remaining apples, which were 230. How many apples in total has Adam collected from his orchard?
 Let's think step by step
-During 30 days Adam picked 4 * 30 = 120 apples.
-So in total with all the remaining apples, he picked 120 + 230 = 350 apples from his orchard.
-The answer is 350

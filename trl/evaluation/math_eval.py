@@ -1,21 +1,22 @@
-import random
 import os
-import argparse
+import json
 import time
+import torch
+import random
+import argparse
+from tqdm import tqdm
 from vllm import LLM, SamplingParams
 from datetime import datetime
-from tqdm import tqdm
 
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer
 
-from evaluate import evaluate
-from utils import set_seed, load_jsonl, save_jsonl, construct_prompt
-from parser import *
-from trajectory import *
-from data_loader import load_data
-from python_executor import PythonExecutor
-from model_utils import load_hf_lm_and_tokenizer, generate_completions
+from trl.evaluation.evaluate import evaluate
+from trl.evaluation.utils import set_seed, load_jsonl, save_jsonl, construct_prompt
+from trl.evaluation.parser import *
+from trl.evaluation.trajectory import *
+from trl.evaluation.data_loader import load_data
+from trl.evaluation.python_executor import PythonExecutor
+from trl.evaluation.model_utils import load_hf_lm_and_tokenizer, generate_completions
 
 
 def parse_args():
@@ -51,6 +52,12 @@ def parse_args():
         action="store_true",
         help="Few shot for multiple-choice questions, zero shot for others.",
     )
+    parser.add_argument(
+        "--evaluate_max_workers",
+        type=int,
+        default=1,
+        help="Maximum number of workers for evaluation.",
+    )
     args = parser.parse_args()
     args.top_p = (
         1 if args.temperature == 0 else args.top_p
@@ -75,12 +82,9 @@ def prepare_data(data_name, args):
     examples = examples[args.start : len(examples) if args.end == -1 else args.end]
 
     # get out_file name
-    dt_string = datetime.now().strftime("%m-%d_%H-%M")
-    model_name = "/".join(args.model_name_or_path.split("/")[-2:])
     out_file_prefix = f"{args.split}_{args.prompt_type}_{args.num_test_sample}_seed{args.seed}_t{args.temperature}"
     output_dir = args.output_dir
-    if not os.path.exists(output_dir):
-        output_dir = f"outputs/{output_dir}"
+    os.makedirs(output_dir, exist_ok=True)
     out_file = f"{output_dir}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}.jsonl"
     os.makedirs(f"{output_dir}/{data_name}", exist_ok=True)
 
@@ -107,7 +111,10 @@ def prepare_data(data_name, args):
 
 def setup(args):
     # load model
-    available_gpus = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+    available_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
+    if len(available_gpus) == 0 or available_gpus[0] == "":
+        available_gpus = [str(i) for i in range(torch.cuda.device_count())]
+
     if args.use_vllm:
         llm = LLM(
             model=args.model_name_or_path,
@@ -235,6 +242,7 @@ def main(llm, tokenizer, data_name, args):
 
     if args.prompt_type in ["cot"]:
         stop_words.append("\n\nQuestion:")
+        stop_words.append("\nYou are an AI assistant")
     if args.prompt_type in ["pal", "tool-integrated", "jiuzhang_tora"]:
         stop_words.extend(["\n\n---", "```output"])
     elif args.prompt_type in ["wizard_zs", "platypus_fs"]:
@@ -257,6 +265,9 @@ def main(llm, tokenizer, data_name, args):
 
         # get all outputs
         prompts = [item[1] for item in current_prompts]
+        print("=== Prompts example ===")
+        print(prompts[0])
+        print("=======================")
         if args.use_vllm:
             outputs = llm.generate(
                 prompts,
@@ -288,7 +299,11 @@ def main(llm, tokenizer, data_name, args):
                 stop_id_sequences=stop_words,
             )
 
-        assert len(outputs) == len(current_prompts)
+        print("=== Outputs example ===")
+        print(outputs[0])
+        print("=======================")
+
+        assert len(outputs) == len(current_prompts), f"{len(outputs)=} vs {len(current_prompts)=}"
 
         # process all outputs
         remain_prompts = []
@@ -381,6 +396,7 @@ def main(llm, tokenizer, data_name, args):
         data_name=data_name,
         prompt_type=args.prompt_type,
         execute=True,
+        max_workers=args.evaluate_max_workers,
     )
 
     # save outputs

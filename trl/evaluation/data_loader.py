@@ -3,7 +3,7 @@ import json
 import random
 import datasets
 from datasets import load_dataset, Dataset, concatenate_datasets
-from utils import load_jsonl, lower_keys
+from trl.evaluation.utils import load_jsonl, lower_keys
 
 
 def load_data(data_name, split, data_dir="./data"):
@@ -19,7 +19,7 @@ def load_data(data_name, split, data_dir="./data"):
                 cache_dir=f"{data_dir}/temp",
             )
         elif data_name == "gsm8k":
-            dataset = load_dataset(data_name, split=split)
+            dataset = load_dataset(data_name, "main", split=split)
         elif data_name == "svamp":
             # evaluate on training set + test set
             dataset = load_dataset("ChilleD/SVAMP", split="train")

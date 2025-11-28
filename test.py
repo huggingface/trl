@@ -21,15 +21,30 @@
 # print(tokenizer.decode(processed["input_ids"]))
 # print(processed)
 
-with open("results/eval/qwen2.5-1.5B-instruct/gsm8k.jsonl") as f:
-    lines = f.readlines()
+# with open("results/eval/qwen2.5-1.5B-instruct/gsm8k.jsonl") as f:
+#     lines = f.readlines()
 
-import sys
-text = lines[int(sys.argv[1])]
-import json
-text = json.loads(text)
+# import sys
+# text = lines[int(sys.argv[1])]
+# import json
+# text = json.loads(text)
 
-print(text["prompt"])
-print(text["completion"])
-print("##############")
-print(text["answer"])
+# print(text["prompt"])
+# print(text["completion"])
+# print("##############")
+# print(text["answer"])
+
+
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-1.5B", trust_remote_code=True)
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B", trust_remote_code=True)
+
+with open("input.txt", "r") as f:
+    text = f.read()
+
+inputs = tokenizer(text, return_tensors="pt")
+outputs = model.generate(**inputs, max_new_tokens=512)
+
+print(tokenizer.decode(outputs[0], skip_special_tokens=True))

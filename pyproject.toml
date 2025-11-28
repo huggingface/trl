@@ -31,6 +31,10 @@ dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
     "transformers>=4.56.1",
+    "word2number",
+    "Pebble",
+    "timeout-decorator",
+    "latex2sympy2"
 ]
 dynamic = ["version"]
 

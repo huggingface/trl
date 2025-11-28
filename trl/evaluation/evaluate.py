@@ -4,14 +4,12 @@ from tqdm import tqdm
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError
 
-from grader import *
-
-from parser import *
-from utils import load_jsonl
-from python_executor import PythonExecutor
+from trl.evaluation.grader import *
+from trl.evaluation.parser import *
+from trl.evaluation.utils import load_jsonl
 
 
-def evaluate(data_name, prompt_type, samples: list=None, file_path: str=None, max_num_samples=None, execute=False):
+def evaluate(data_name, prompt_type, samples: list=None, file_path: str=None, max_num_samples=None, execute=False, max_workers=8):
     assert samples or file_path, "samples or file_path must be provided"
     if not samples:
         samples = list(load_jsonl(file_path))
@@ -33,7 +31,7 @@ def evaluate(data_name, prompt_type, samples: list=None, file_path: str=None, ma
     scores = []
     timeout_cnt = 0 
 
-    with ProcessPool(max_workers=1) as pool:
+    with ProcessPool(max_workers=max_workers) as pool:
         future = pool.map(math_equal_process, params, timeout=3)
         iterator = future.result()
         with tqdm(total=len(samples), desc="Evaluate") as progress_bar:

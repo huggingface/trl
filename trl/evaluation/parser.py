@@ -5,7 +5,9 @@ import sympy
 from latex2sympy2 import latex2sympy
 from typing import TypeVar, Iterable, List, Union, Any, Dict
 from word2number import w2n
-from utils import *
+
+from trl.evaluation.utils import *
+from trl.evaluation.trajectory import extract_program, extract_program_output
 
 
 def _fix_fracs(string):
