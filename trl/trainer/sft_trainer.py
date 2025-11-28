@@ -1071,6 +1071,11 @@ class SFTTrainer(BaseTrainer):
 
                 dataset = dataset.select_columns(columns)
 
+                # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
+                # packing as well to avoid correlations between sequences packed together.
+                if args.shuffle_dataset:
+                    dataset = dataset.shuffle(seed=args.seed)
+
                 # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
@@ -1082,6 +1087,9 @@ class SFTTrainer(BaseTrainer):
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
                 column_names = get_dataset_column_names(dataset)
                 dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
+
+        if args.shuffle_dataset:
+            dataset = dataset.shuffle(seed=args.seed)
 
         return dataset
 
@@ -1110,7 +1118,8 @@ class SFTTrainer(BaseTrainer):
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
-        labels = inputs["labels"]
+        # When using CP or SP, labels are pre-shifted, we must use shift_labels instead.
+        labels = inputs["labels"] if "shift_labels" not in inputs else None
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
@@ -1164,7 +1173,7 @@ class SFTTrainer(BaseTrainer):
             # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():
                 if "shift_labels" in inputs:
-                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # When using CP or SP, labels are pre-shifted. We must use these (and cannot manually shift) because:
                     # - The first discarded token from inputs["labels"] actually belongs to process n-1
                     # - The last logits require the label from process n+1
                     shift_logits = outputs.logits.contiguous()

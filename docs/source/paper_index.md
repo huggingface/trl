@@ -98,6 +98,44 @@ trainer = GRPOTrainer(
 )
 ```
 
+### Beyond the 80/20 Rule: High-Entropy Minority Tokens Drive Effective Reinforcement Learning for LLM Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2506.01939
+
+A minority of tokens with high entropy act as reasoning "forks" in the CoT path, driving exploration and performance gains for RLVR, while low-entropy majority tokens contribute little or even impede learning. RLVR mainly adjusts high-entropy tokens, largely preserving the base model’s overall entropy patterns. Thus landing on the 80/20 rule, training on only 20% of the tokens with the highest entropy is comparable or supasses full-gradient updates for Qwen3 models.
+
+The paper's main results use vanilla DAPO (⚠️ Dynamic Sampling is not supported in TRL). To replicate the main results, use the following configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+from trl.rewards import get_soft_overlong_punishment
+
+training_args = GRPOConfig(
+    # --- vanilla DAPO parameters (80/20 rule: section 5.2) --- #
+    # Overlong Filtering
+    mask_truncated_completions=True,
+    # Token-level Loss
+    loss_type="dapo",
+    # Clip-Higher
+    epsilon_high=0.28, # DAPO paper: section 4.1
+    epsilon=0.2, # DAPO paper: section 4.1
+    # Other parameters used
+    per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
+    num_generations=16, # number of sample responses in the paper, DAPO paper: section 4.1
+    max_completion_length=20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
+    beta=0.0, # section 2.3, DAPO paper
+    # --- Gradients on the highest entropy tokens --- #
+    top_entropy_quantile=0.2
+)
+# Soft Overlong Punishment
+sop_reward = get_soft_overlong_punishment(max_completion_len=20480, soft_punish_cache=4096) # DAPO paper: section 4.1
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+    reward_funcs=[..., sop_reward],
+)
+```
+
 ### Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective
 
 **📜 Paper**: https://huggingface.co/papers/2503.20783

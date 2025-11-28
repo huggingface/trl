@@ -135,94 +135,6 @@ The blog post performs GRPO on a range of models and datasets from the Hub, and 
 
 For reinforcement learning, the blog uses a math reasoning task that we can reproduce as a Python function.
 
-<details>
-<summary>Reward function</summary>
-
-```python
-def strip_reasoning_accuracy_reward(
-    completions: list[list[dict[str, str]]], solution: list[str], **kwargs
-) -> list[float | None]:
-    """Reward function that strips reasoning tags and checks mathematical accuracy.
-
-    This function:
-    1. Extracts the content from completions
-    2. Removes <think></think> tags (for reasoning that shouldn't be evaluated)
-    3. Parses both the gold solution and the predicted answer
-    4. Uses math_verify to check if they are mathematically equivalent
-
-    Args:
-        completions: List of model completions, each containing a list of messages
-        solution: List of ground truth solutions
-        **kwargs: Additional arguments (ignored but required for trainer compatibility)
-
-    Returns:
-        List of rewards where:
-        - 1.0 if the answer is correct
-        - 0.0 if the answer is incorrect
-        - None if the solution is not parseable (skips this example)
-    """
-    contents = [completion[0]["content"] for completion in completions]
-    rewards = []
-
-    for content, sol in zip(contents, solution):
-        # Strip reasoning tags from completion
-        while "<think>" in content and "</think>" in content:
-            start = content.find("<think>")
-            end = content.find("</think>", start)
-            if start != -1 and end != -1:
-                content = content[:start] + content[end + len("</think>") :]
-            else:
-                break
-
-        # Parse gold solution
-        gold_parsed = parse(
-            f"${sol}$",
-            extraction_config=[
-                LatexExtractionConfig(
-                    boxed_match_priority=0, try_extract_without_anchor=True
-                )
-            ],
-        )
-
-        if len(gold_parsed) != 0:
-            # We require the answer to be provided in correct latex (no malformed operators)
-            answer_parsed = parse(
-                content,
-                extraction_config=[
-                    LatexExtractionConfig(
-                        boxed_match_priority=0,
-                        normalization_config=NormalizationConfig(
-                            basic_latex=True,
-                            units=True,
-                            malformed_operators=False,
-                            nits=False,
-                            boxed=True,
-                        ),
-                        try_extract_without_anchor=False,
-                    )
-                ],
-                extraction_mode="first_match",
-            )
-
-            # Compute binary rewards if verifiable, `None` otherwise to skip this example
-            try:
-                reward = float(verify(gold_parsed, answer_parsed))
-            except Exception as e:
-                print(
-                    f"verify failed: {e}, answer: {answer_parsed}, gold: {gold_parsed}"
-                )
-                reward = None
-        else:
-            # If the gold solution is not parseable, we assign `None` to skip this example
-            reward = None
-
-        rewards.append(reward)
-
-    return rewards
-```
-
-</details>
-
 <hfoptions id="grpo">
 <hfoption id="python">
 
@@ -233,13 +145,9 @@ We can implement these recommendations with the TRL Python API like so:
 from datasets import load_dataset
 from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
+from trl.rewards import reasoning_accuracy_reward
 
 dataset = load_dataset("HuggingFaceH4/OpenR1-Math-220k-default-verified", split="train")
-
-def strip_reasoning_accuracy_reward(completions, **kwargs):
-    """Reward function that strips reasoning and accuracy scores from the model outputs."""
-
-    ... 
 
 peft_config = LoraConfig(
     r=1,
@@ -259,7 +167,7 @@ training_args = GRPOConfig(
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
-    reward_funcs=strip_reasoning_accuracy_reward,
+    reward_funcs=reasoning_accuracy_reward,
     args=training_args,
     train_dataset=dataset,
     peft_config=peft_config,
