@@ -1902,7 +1902,7 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss[advantages < 0] = self.get_sapo_token_loss(
                 coef_1[advantages < 0], self.sapo_temperature_neg
             )
-            per_token_loss = per_token_loss * (-advantages)
+            per_token_loss = -per_token_loss * advantages
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -1915,7 +1915,7 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        if self.loss_type == "grpo":
+        if self.loss_type in ["grpo", "sapo"]:
             loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "bnpo":
