@@ -4,8 +4,8 @@ This guide covers various methods to accelerate training in TRL. Each technique 
 
 ## vLLM for fast generation in online methods
 
-Online methods such as GRPO or Online DPO require the model to generate completions, which is often a slow process and can significantly impact training time.
-To speed up generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation through, among other things, PagedAttention. TRL's online trainers support vLLM, greatly improving training speed.
+[Online methods](index#online-methods) such as GRPO or Online DPO require the model to generate completions, which is often a slow process and can significantly impact training time.
+To speed up generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation through, among other things, PagedAttention. TRL's online trainers support vLLM, greatly improving training speed. For more details, see [vLLM Integration](vllm_integration).
 
 To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
 
@@ -16,7 +16,13 @@ pip install trl[vllm]
 <hfoptions id="vllm examples">
 <hfoption id="Online DPO">
 
-Then, enable it by passing `use_vllm=True` in the training arguments.
+First, start a vLLM server by running:
+
+```bash
+trl vllm-serve --model <model_name>
+```
+
+Then, run the training script and pass `use_vllm=True` in the training arguments.
 
 ```python
 from trl.experimental.online_dpo import OnlineDPOConfig
@@ -95,26 +101,42 @@ You can customize the server configuration by passing additional arguments. For 
 </hfoption>
 </hfoptions>
 
-## Flash Attention 2 for faster attention computation
+## Optimized attention implementations
 
-Flash Attention 2 is an optimized implementation of the attention mechanism that can significantly speed up training while reducing memory usage. It's particularly effective for long sequences.
+TRL supports various optimized attention implementations that can significantly speed up training while reducing memory usage. You can use either locally installed backends (like Flash Attention 2) or pull pre-optimized kernels directly from the [Kernels Hub](kernels_hub).
+
+<hfoptions id="attention examples">
+<hfoption id="Flash Attention 2">
 
 To enable Flash Attention 2, pass `attn_implementation="flash_attention_2"` in the model initialization arguments:
 
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(
-    ...,
-    model_init_kwargs={"attn_implementation": "flash_attention_2"}
-)
+training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "flash_attention_2"})
 ```
 
-Flash Attention 2 works across all TRL trainers. For padding-free batching with Flash Attention, see [Reducing Memory Usage](reducing_memory_usage#padding-free).
+</hfoption>
+<hfoption id="Kernels from Hub">
+
+You can use pre-optimized attention kernels from the Hub without manual compilation:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
+```
+
+Other options include `kernels-community/vllm-flash-attn3` and `kernels-community/paged-attention`.
+
+</hfoption>
+</hfoptions>
+
+Optimized attention works across all TRL trainers. For more details, see [Kernels Hub Integration](kernels_hub) and [Reducing Memory Usage](reducing_memory_usage#padding-free).
 
 ## PEFT for parameter-efficient training
 
-PEFT (Parameter-Efficient Fine-Tuning) methods like LoRA significantly reduce memory usage and training time by only training a small number of adapter parameters instead of the full model.
+[PEFT](https://huggingface.co/docs/peft/index) (Parameter-Efficient Fine-Tuning) methods like LoRA significantly reduce memory usage and training time by only training a small number of adapter parameters instead of the full model.
 
 ```python
 from peft import LoraConfig
@@ -140,13 +162,46 @@ For more details, see [PEFT Integration](peft_integration).
 
 Liger Kernel is a collection of Triton kernels designed for LLM training that can increase throughput by 20% and reduce memory usage by 60%.
 
+<hfoptions id="liger examples">
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="DPO">
+
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(..., use_liger_kernel=True)
 ```
 
-Liger Kernel is supported across multiple trainers (SFT, DPO, GRPO, KTO, GKD). For more information, see [Liger Kernel Integration](liger_kernel_integration).
+</hfoption>
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```python
+from trl import KTOConfig
+
+training_args = KTOConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
+</hfoptions>
+
+For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ## Gradient checkpointing for memory savings
 
