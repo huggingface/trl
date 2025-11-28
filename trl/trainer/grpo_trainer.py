@@ -425,7 +425,7 @@ class GRPOTrainer(BaseTrainer):
             )
 
         if args.loss_type == "sapo" and (
-            self.args.sapo_temperature_neg is None or self.args.sapo_temperature_pos is None
+            args.sapo_temperature_neg is None or args.sapo_temperature_pos is None
         ):
             raise ValueError(
                 "When using `sapo` loss, both `sapo_temperature_neg` and `sapo_temperature_pos` must be set."

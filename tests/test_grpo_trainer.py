@@ -36,7 +36,6 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 from trl.rewards.accuracy_rewards import accuracy_reward
 from trl.trainer.utils import get_kbit_device_map
 
