@@ -252,6 +252,24 @@ config = GRPOConfig(
 )
 ```
 
+### Soft Adaptive Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2511.20347
+
+Soft Adaptive Policy Optimization (SAPO), replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful learning signals. Compared with GSPO and GRPO, SAPO is both sequence-coherent and token-adaptive. Like GSPO, SAPO maintains sequence-level coherence, but its soft gating forms a continuous trust region that avoids the brittle hard clipping band used in GSPO.
+
+To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+config = GRPOConfig(
+    loss_type="sapo",
+    sapo_temperature_pos=1.0,  # default value
+    sapo_temperature_neg=1.05,  # default value
+    ...
+)
+```
 
 
 ## Direct Policy Optimization
