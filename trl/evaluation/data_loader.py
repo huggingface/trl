@@ -1,22 +1,28 @@
 import os
-import json
-import random
-import datasets
 from datasets import load_dataset, Dataset, concatenate_datasets
 from trl.evaluation.utils import load_jsonl, lower_keys
 
 
-def load_data(data_name, split, data_dir="./data"):
+def load_data(data_name, split, data_dir="trl/evaluation/data"):
     data_file = f"{data_dir}/{data_name}/{split}.jsonl"
     if os.path.exists(data_file):
         examples = list(load_jsonl(data_file))
     else:
         if data_name == "math":
             dataset = load_dataset(
-                "competition_math",
-                split=split,
-                name="main",
-                cache_dir=f"{data_dir}/temp",
+                "qwedsacf/competition_math",
+                split="train",
+                name="default",
+            )
+        elif data_name == "eleuther_math":
+            dataset = load_dataset(
+                "jet-ai/MATH",
+                split="train",
+            )
+        elif data_name == "math500":
+            dataset = load_dataset(
+                "HuggingFaceH4/MATH-500",
+                split="test",
             )
         elif data_name == "gsm8k":
             dataset = load_dataset(data_name, "main", split=split)
