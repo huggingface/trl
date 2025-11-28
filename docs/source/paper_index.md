@@ -267,6 +267,7 @@ config = GRPOConfig(
     loss_type="sapo",
     sapo_temperature_pos=1.0,  # default value
     sapo_temperature_neg=1.05,  # default value
+    scale_rewards="group",
     ...
 )
 ```
