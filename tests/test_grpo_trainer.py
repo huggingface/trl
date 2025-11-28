@@ -184,6 +184,7 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
+            fp16=True,
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
