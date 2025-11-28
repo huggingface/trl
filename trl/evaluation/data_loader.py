@@ -5,6 +5,7 @@ from trl.evaluation.utils import load_jsonl, lower_keys
 
 def load_data(data_name, split, data_dir="trl/evaluation/data"):
     data_file = f"{data_dir}/{data_name}/{split}.jsonl"
+    print(data_file)
     if os.path.exists(data_file):
         examples = list(load_jsonl(data_file))
     else:
@@ -73,6 +74,8 @@ def load_data(data_name, split, data_dir="trl/evaluation/data"):
             dataset = dataset.filter(lambda x: x["type"] in stem_subjects)
         elif data_name == "carp_en":
             dataset = load_jsonl(f"{data_dir}/carp_en/test.jsonl")
+        elif data_name == "aime24":
+            dataset = load_jsonl(f"{data_dir}/aime24/test.jsonl")
         else:
             raise NotImplementedError(data_name)
 
