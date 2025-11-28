@@ -265,7 +265,7 @@ training_args = GRPOConfig(..., ds3_gather_for_generation=False)
 <hfoption id="Online DPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
 ```
@@ -274,7 +274,7 @@ training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
 <hfoption id="PPO">
 
 ```python
-from trl import PPOConfig
+from trl.experimental.ppo import PPOConfig
 
 training_args = PPOConfig(..., ds3_gather_for_generation=False)
 ```

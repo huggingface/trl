@@ -20,7 +20,12 @@ from transformers.utils import is_peft_available
 
 from trl import AutoModelForCausalLMWithValueHead
 
-from .testing_utils import TrlTestCase, require_peft, require_torch_gpu_if_bnb_not_multi_backend_enabled
+from .testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_peft,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+)
 
 
 if is_peft_available():
@@ -95,6 +100,7 @@ class TestPeftModel(TrlTestCase):
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
         assert nb_trainable_params == 905
 
+    @require_bitsandbytes
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_create_bnb_peft_model_from_config(self):
         r"""

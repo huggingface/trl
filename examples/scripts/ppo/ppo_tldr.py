@@ -34,15 +34,8 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import (
-    ModelConfig,
-    PPOConfig,
-    PPOTrainer,
-    ScriptArguments,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ModelConfig, ScriptArguments, get_kbit_device_map, get_peft_config, get_quantization_config
+from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
 # Enable logging in a Hugging Face Space
@@ -51,7 +44,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 """
 python examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
     --learning_rate 3e-6 \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \
@@ -69,7 +62,7 @@ python examples/scripts/ppo/ppo_tldr.py \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \
     --learning_rate 3e-6 \
@@ -141,11 +134,7 @@ if __name__ == "__main__":
         """pre-tokenize the dataset before training; only collate during training"""
 
         def tokenize(element):
-            input_ids = tokenizer.apply_chat_template(
-                element["messages"][:1],
-                padding=False,
-                add_generation_prompt=True,
-            )
+            input_ids = tokenizer(element["prompt"], padding=False)["input_ids"]
             return {"input_ids": input_ids, "lengths": len(input_ids)}
 
         return dataset.map(

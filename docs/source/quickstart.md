@@ -24,15 +24,12 @@ trainer.train()
 ```python
 from trl import GRPOTrainer
 from datasets import load_dataset
-
-# Define a simple reward function (count unique chars as example)
-def reward_function(completions, **kwargs):
-    return [len(set(completion.lower())) for completion in completions]
+from trl.rewards import accuracy_reward
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",  # Start from SFT model
-    train_dataset=load_dataset("trl-lib/tldr", split="train"),
-    reward_funcs=reward_function,
+    train_dataset=load_dataset("trl-lib/DeepMath-103K", split="train"),
+    reward_funcs=accuracy_reward,
 )
 trainer.train()
 ```
