@@ -1,0 +1,8 @@
+-r requirements.txt
+# Development
+pip-tools
+pytest
+pytest-cov
+pycodestyle
+autopep8
+-e .

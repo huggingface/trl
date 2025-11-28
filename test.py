@@ -21,7 +21,7 @@
 # print(tokenizer.decode(processed["input_ids"]))
 # print(processed)
 
-with open("results/eval/qwen2.5-1.5B/gsm8k_fix3.jsonl") as f:
+with open("results/eval/qwen2.5-1.5B-instruct/gsm8k.jsonl") as f:
     lines = f.readlines()
 
 import sys

@@ -1,0 +1,28 @@
+#!/bin/sh
+
+# Get relative path of the root directory of the project
+rdir=`git rev-parse --git-dir`
+rel_path="$(dirname "$rdir")"
+
+# Change to that path and run the file
+cd $rel_path
+
+echo "pre-push hook started..."
+
+# Activate virtual environment
+echo "activating venv..."
+if test -f .env/bin/activate
+then source .env/bin/activate && echo "venv activated."
+elif test -f .env/Scripts/activate
+then source .env/Scripts/activate && echo "venv activated."
+else exit 1
+fi
+
+# Run unit tests
+echo "starting tests..."
+# if pytest tests
+# then echo "tests finished."
+# else exit 1
+# fi
+
+exit 0
