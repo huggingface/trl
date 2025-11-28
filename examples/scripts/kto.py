@@ -63,7 +63,8 @@ import os
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, ScriptArguments, get_peft_config
+from trl import ModelConfig, ScriptArguments, get_peft_config
+from trl.experimental.kto import KTOConfig, KTOTrainer
 
 
 # Enable logging in a Hugging Face Space

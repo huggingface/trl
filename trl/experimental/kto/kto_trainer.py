@@ -13,10 +13,8 @@
 # limitations under the License.
 
 import inspect
-import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -50,12 +48,11 @@ from transformers import (
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
-from ..import_utils import is_liger_kernel_available
-from ..models import create_reference_model, prepare_deepspeed
-from .base_trainer import BaseTrainer
-from .kto_config import KTOConfig
-from .utils import (
+from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
+from ...import_utils import is_liger_kernel_available
+from ...models import create_reference_model, prepare_deepspeed
+from ...trainer.base_trainer import BaseTrainer
+from ...trainer.utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
@@ -63,6 +60,7 @@ from .utils import (
     peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from .kto_config import KTOConfig
 
 
 if is_liger_kernel_available():
@@ -360,13 +358,6 @@ class KTOTrainer(BaseTrainer):
         model_adapter_name: str | None = None,
         ref_adapter_name: str | None = None,
     ):
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
         if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
 
