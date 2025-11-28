@@ -1899,8 +1899,8 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss[advantages > 0] = self.get_sapo_token_loss(
                 coef_1[advantages > 0], self.sapo_temperature_pos
             )
-            per_token_loss[advantages < 0] = self.get_sapo_token_loss(
-                coef_1[advantages < 0], self.sapo_temperature_neg
+            per_token_loss[advantages <= 0] = self.get_sapo_token_loss(
+                coef_1[advantages <= 0], self.sapo_temperature_neg
             )
             per_token_loss = -per_token_loss * advantages
         else:
