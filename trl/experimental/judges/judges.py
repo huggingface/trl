@@ -24,13 +24,6 @@ from transformers.utils import is_openai_available
 from ...import_utils import is_llm_blender_available
 
 
-if is_llm_blender_available():
-    import llm_blender
-
-if is_openai_available():
-    from openai import OpenAI
-
-
 DEFAULT_PAIRWISE_SYSTEM_PROMPT = '''I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding outputs. Your task is to assess these responses, and select the model that produces the best output from a human perspective.
 
 ## Instruction
@@ -213,6 +206,8 @@ class PairRMJudge(BasePairwiseJudge):
     def __init__(self):
         if not is_llm_blender_available():
             raise ValueError("llm-blender is not installed. Please install it with `pip install llm-blender`.")
+        import llm_blender
+
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
@@ -362,6 +357,8 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
+        from openai import OpenAI
+
         self.client = OpenAI()
         self.model = model
         self.system_prompt = system_prompt or DEFAULT_PAIRWISE_SYSTEM_PROMPT
