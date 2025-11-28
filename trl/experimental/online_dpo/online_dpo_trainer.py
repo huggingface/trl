@@ -346,7 +346,7 @@ class OnlineDPOTrainer(BaseTrainer):
         # get the ref model, as it's just the model with a disabled adapter. When not using PEFT, we need to create
         # the ref model from the model by copying it and disable the gradients and set it in evaluation mode.
         #
-        # Special case: When using vLLM with LoRA (vllm_enable_lora=True), we need to handle the reference model
+        # Special case: When using vLLM with LoRA (vllm_use_lora=True), we need to handle the reference model
         # differently:
         # - The base model (without adapter) is loaded into vLLM and serves as the reference model
         # - During generation, vLLM uses the base model with the current LoRA adapter weights
