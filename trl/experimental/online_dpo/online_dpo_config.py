@@ -355,6 +355,26 @@ class OnlineDPOConfig(TrainingArguments):
             "launching the vLLM server via the `--vllm_tensor_parallel_size` flag.",
         },
     )
+    vllm_lora_adapter_name: str = field(
+        default="trl-online-dpo",
+        metadata={
+            "help": "Name used when registering the LoRA adapter inside vLLM. Only used when training with PEFT and vLLM.",
+        },
+    )
+    vllm_lora_adapter_id: int = field(
+        default=1,
+        metadata={
+            "help": "Integer identifier used by vLLM to track the LoRA adapter. Change only if you need to coordinate "
+            "with other adapters. Only used when training with PEFT and vLLM.",
+        },
+    )
+    vllm_max_lora_rank: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum LoRA rank to support in vLLM. Should match the highest rank among your adapters. "
+            "Only used when training with PEFT and vLLM. If None, vLLM will infer from the adapter.",
+        },
+    )
     ds3_gather_for_generation: bool = field(
         default=True,
         metadata={
