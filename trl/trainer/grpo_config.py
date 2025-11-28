@@ -172,6 +172,14 @@ class GRPOConfig(TrainingArguments):
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
             When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
             paper](https://arxiv.org/pdf/2510.13786) and the recommended value is `5.0`.
+        sapo_temperature_neg (`float`, *optional*):
+            Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. If not
+            specified, it defaults to `1.05`. This parameter is introduced in the [Soft Adaptive Policy Optimization
+            paper](https://huggingface.co/papers/2511.20347).
+        sapo_temperature_pos (`float`, *optional*):
+            Temperature for tokens with positive advantage scores used in the `sapo` loss function. If not specified,
+            it defaults to `1.0`. This parameter is introduced in the [Soft Adaptive Policy Optimization
+            paper](https://huggingface.co/papers/2511.20347).
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -211,6 +219,10 @@ class GRPOConfig(TrainingArguments):
               clipped weights are then multiplied with the advantages and policy model's log probs. Individual token
               losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
               This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
+            - `"sapo"`: Soft Adaptive Policy Optimization loss, as introduced in the [Soft Adaptive Policy Optimization
+              paper](https://huggingface.co/papers/2506.13585). Replaces hard clipping with a smooth,
+              temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
+              learning signals.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -576,6 +588,22 @@ class GRPOConfig(TrainingArguments):
             "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
         },
     )
+    sapo_temperature_neg: float | None = field(
+        default=1.05,
+        metadata={
+            "help": "Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. "
+            "If not specified, it defaults to `1.05`. This parameter is introduced in the "
+            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
+    sapo_temperature_pos: float | None = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature for tokens with positive advantage scores used in the `sapo` loss function. "
+            "If not specified, it defaults to `1.0`. This parameter is introduced in the "
+            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
     importance_sampling_level: str = field(
         default="token",
         metadata={
@@ -627,6 +655,10 @@ class GRPOConfig(TrainingArguments):
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
             "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
+            "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
+            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
+            "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
+            "off-policy updates while preserving useful learning signals."
         },
     )
     mask_truncated_completions: bool = field(

@@ -424,6 +424,13 @@ class GRPOTrainer(BaseTrainer):
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 
+        if args.loss_type == "sapo" and (
+            self.args.sapo_temperature_neg is None or self.args.sapo_temperature_pos is None
+        ):
+            raise ValueError(
+                "When using `sapo` loss, both `sapo_temperature_neg` and `sapo_temperature_pos` must be set."
+            )
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
@@ -1803,6 +1810,13 @@ class GRPOTrainer(BaseTrainer):
         else:
             return self._compute_loss(model, inputs)
 
+    @staticmethod
+    def get_sapo_token_loss(unclipped_token_loss: torch.Tensor, temperature: float) -> torch.Tensor:
+        sigmoid_input = temperature * (unclipped_token_loss - 1)
+        sigmoid_smoothed_loss = torch.nn.functional.sigmoid(sigmoid_input)
+        sapo_token_loss = sigmoid_smoothed_loss * 4 / temperature
+        return sapo_token_loss
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1880,6 +1894,15 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss1 = coef_1 * advantages
             per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        elif self.loss_type == "sapo":
+            per_token_loss = torch.zeros_like(coef_1)
+            per_token_loss[advantages > 0] = self.get_sapo_token_loss(
+                coef_1[advantages > 0], self.sapo_temperature_pos
+            )
+            per_token_loss[advantages < 0] = self.get_sapo_token_loss(
+                coef_1[advantages < 0], self.sapo_temperature_neg
+            )
+            per_token_loss = per_token_loss * (-advantages)
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
