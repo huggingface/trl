@@ -108,6 +108,7 @@ The paper's main results use vanilla DAPO (⚠️ Dynamic Sampling is not suppor
 
 ```python
 from trl import GRPOConfig, GRPOTrainer
+from trl.rewards import get_soft_overlong_punishment
 
 training_args = GRPOConfig(
     # --- vanilla DAPO parameters (80/20 rule: section 5.2) --- #
