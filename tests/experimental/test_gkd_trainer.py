@@ -62,7 +62,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
         )
 
-        new_input_ids, new_attention_mask, new_labels = outputs
+        new_input_ids, new_attention_mask, new_labels, _, _ = outputs
 
         # Decode the generated outputs
         generated_texts = self.tokenizer.batch_decode(new_input_ids, skip_special_tokens=True)
@@ -78,7 +78,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
         )
 
-        new_input_ids2, new_attention_mask2, new_labels2 = outputs2
+        new_input_ids2, new_attention_mask2, new_labels2, _, _ = outputs2
 
         # Check if the two generations are identical
         assert torch.all(new_input_ids.eq(new_input_ids2)), "Deterministic generations are not identical"
@@ -100,11 +100,11 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             self.model, inputs, self.generation_config, self.tokenizer.pad_token_id
         )
 
-        # Check that outputs is a tuple of three tensors
+        # Check that outputs is a tuple of five elements (3 tensors + 2 lists)
         assert isinstance(outputs, tuple)
-        assert len(outputs) == 3
+        assert len(outputs) == 5
 
-        new_input_ids, new_attention_mask, new_labels = outputs
+        new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = outputs
 
         # Check shapes
         batch_size = len(prompts)
@@ -279,3 +279,38 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == training_args.max_new_tokens
         assert trainer.generation_config.temperature == training_args.temperature
         assert trainer.generation_config.top_k == 0
+
+
+def test_teacher_tokenizer_config():
+    """Test that teacher_tokenizer_name_or_path parameter works correctly"""
+    config = GKDConfig(
+        output_dir="/tmp/test",
+        teacher_tokenizer_name_or_path="gpt2",
+        max_steps=1,
+    )
+    assert config.teacher_tokenizer_name_or_path == "gpt2"
+
+
+def test_build_teacher_inputs_from_texts():
+    """Test the build_teacher_inputs_from_texts utility function"""
+    from trl.experimental.gkd.gkd_trainer import build_teacher_inputs_from_texts
+
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    prompt_texts = ["Hello", "How are you?"]
+    completion_texts = [" world", " I'm fine"]
+
+    teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length = (
+        build_teacher_inputs_from_texts(tokenizer, prompt_texts, completion_texts)
+    )
+
+    # Check shapes
+    assert teacher_input_ids.shape[0] == 2  # batch size
+    assert teacher_labels.shape == teacher_input_ids.shape
+    assert teacher_attention_mask.shape == teacher_input_ids.shape
+    assert teacher_prompt_length > 0
+
+    # Check that labels contain -100 for masked positions (prompts)
+    # Note: teacher_prompt_length is the max across batch, so some items may have shorter prompts
+    assert (teacher_labels == -100).any()  # At least some positions should be masked

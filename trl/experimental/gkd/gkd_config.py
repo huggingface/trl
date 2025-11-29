@@ -45,6 +45,11 @@ class GKDConfig(SFTConfig):
         teacher_model_init_kwargs (`dict[str, Any]]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
+        teacher_tokenizer_name_or_path (`str`, *optional*):
+            Tokenizer name or path for the teacher model. If `None`, will use the same tokenizer as the student model.
+            This parameter is required for cross-tokenizer distillation where the student and teacher models use
+            different tokenizers and chat templates. When set, the trainer will re-tokenize student-generated rollouts
+            using the teacher's tokenizer before computing teacher logprobs, ensuring correct probability distributions.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         seq_kd (`bool`, *optional*, defaults to `False`):
@@ -89,6 +94,14 @@ class GKDConfig(SFTConfig):
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
             "teacher model from a string."
+        },
+    )
+    teacher_tokenizer_name_or_path: str | None = field(
+        default=None,
+        metadata={
+            "help": "Tokenizer name or path for the teacher model. If None, will use the same tokenizer as the "
+            "student model. This parameter is required for cross-tokenizer distillation where the student and "
+            "teacher models use different tokenizers and chat templates."
         },
     )
     disable_dropout: bool = field(
