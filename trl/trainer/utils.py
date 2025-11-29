@@ -2033,5 +2033,4 @@ def get_config_model_id(config: PretrainedConfig) -> str:
         `str`:
             The model identifier associated with the model configuration.
     """
-    # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing: Qwen2-VL and Qwen2.5-VL. See GH-4323
-    return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")
+    return getattr(config, "_name_or_path", "")
