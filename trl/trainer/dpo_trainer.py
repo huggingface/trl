@@ -359,7 +359,7 @@ class DPOTrainer(BaseTrainer):
                 )
 
         # PEFT configuration and model wrapping
-        model = self._prepare_model(model, ref_model, peft_config, args)
+        model = self._prepare_peft_model(model, ref_model, peft_config, args)
 
         if args.generate_during_eval and not (is_wandb_available() or is_comet_available() or is_mlflow_available()):
             raise ValueError(
@@ -574,7 +574,7 @@ class DPOTrainer(BaseTrainer):
         )
         self.pad_token_id = value
 
-    def _prepare_model(
+    def _prepare_peft_model(
         self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig
     ) -> PreTrainedModel:
         """Prepares a model for PEFT training."""

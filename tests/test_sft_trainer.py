@@ -1610,18 +1610,18 @@ class TestSFTTrainer(TrlTestCase):
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
         )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id, quantization_config=quantization_config
-        )
+        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
 
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer with the already configured PeftModel
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")#, gradient_checkpointing_kwargs={"use_reentrant": False})
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, report_to="none"
+        )  # , gradient_checkpointing_kwargs={"use_reentrant": False})
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
 
-                # Save initial parameters to check they change during training
+        # Save initial parameters to check they change during training
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
@@ -2171,5 +2171,3 @@ class TestSFTTrainerSlow(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)
-
-        https://huggingface.co/papers/2212.04089 The task adapters will be more focused and isolated, enhancing the performance

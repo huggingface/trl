@@ -478,9 +478,9 @@ class GRPOTrainer(BaseTrainer):
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
             model_init_kwargs = args.model_init_kwargs or {}
             # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if args.distributed_state.distributed_type == "DEEPSPEED":
+            if self.args.distributed_state.distributed_type == "DEEPSPEED":
                 model_init_kwargs["device_map"] = None
-            self.ref_model = create_model_from_path(get_config_model_id(model.config), **model_init_kwargs)
+            self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:

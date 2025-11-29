@@ -278,7 +278,6 @@ class RewardTrainer(BaseTrainer):
             args = RewardConfig(f"{model_name}-Reward")
 
         # Model
-
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Special case for DeepSpeed: requires device_map=None ("auto" fails)
