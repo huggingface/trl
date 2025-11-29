@@ -25,7 +25,6 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
@@ -42,14 +41,14 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational
-from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_model
+from ..models import clone_chat_template, get_act_offloading_ctx_manager
 from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
-from .utils import disable_dropout_in_model, get_config_model_id, pad, remove_none_values
+from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad, remove_none_values
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 logger = get_logger(__name__)
@@ -279,24 +278,14 @@ class RewardTrainer(BaseTrainer):
             args = RewardConfig(f"{model_name}-Reward")
 
         # Model
-        model_init_kwargs = args.model_init_kwargs or {}
+
         if isinstance(model, str):
-            model_id = model
-            dtype = model_init_kwargs.get("dtype", "auto")
-            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-                pass  # dtype is already a torch.dtype or "auto" or None
-            elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
-                model_init_kwargs["dtype"] = getattr(torch, dtype)
-            else:
-                raise ValueError(
-                    "Invalid `dtype` passed to `RewardConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
-                )
-            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
-            with suppress_from_pretrained_warning(transformers.modeling_utils.logger):
-                model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1, **model_init_kwargs)
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, AutoModelForSequenceClassification, **model_init_kwargs)
         else:
-            model_id = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
@@ -305,7 +294,7 @@ class RewardTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_id)
+            processing_class = AutoTokenizer.from_pretrained(get_config_model_id(model.config))
 
         # Handle pad token for processors or tokenizers
         if args.eos_token is not None:
@@ -356,8 +345,19 @@ class RewardTrainer(BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_model(model, peft_config, args)
+        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+            # If the model is already a PeftModel, we need to merge and unload it.
+            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+            model = model.merge_and_unload()
+
+        # Create PEFT model
+        if peft_config is not None:
+            model = get_peft_model(model, peft_config)
+
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
 
         # Disable dropout in the model
         if args.disable_dropout:

@@ -25,15 +25,14 @@ import torch
 import torch.nn as nn
 from accelerate.utils import is_peft_model
 from packaging import version
-from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, TrainingArguments
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 from transformers.utils import is_peft_available
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
 
 if is_peft_available():
-    import peft
-    from peft import PeftConfig, PeftModel, get_peft_model
+    from peft import PeftModel
 
 
 if TYPE_CHECKING:
@@ -566,20 +565,11 @@ def prepare_model(
 
     # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the original
     # paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by passing
-    # `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for quantized models. 
+    # `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for quantized models.
     # See: https://github.com/huggingface/peft/issues/2889
     if is_qlora:
         for param in model.parameters():
             if param.requires_grad:
                 param.data = param.data.to(torch.bfloat16)
-
-    # 
-    normalization_layers = (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d, nn.GroupNorm)
-    for name, param in model.named_parameters():
-        # Some normalization layers may not use one of the standard classes, example: Qwen uses input_layernorm as a nn.Parameter
-        if isinstance(param, normalization_layers):
-            param.data = param.data.to(torch.float32)
-        elif "layernorm" in name:
-            param.data = param.data.to(torch.float32)
 
     return model

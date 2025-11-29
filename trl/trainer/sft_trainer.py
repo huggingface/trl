@@ -48,7 +48,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
     truncate_dataset,
 )
-from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_model
+from ..models import clone_chat_template, get_act_offloading_ctx_manager
 from .base_trainer import BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
@@ -702,13 +702,15 @@ class SFTTrainer(BaseTrainer):
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
 
-        model = prepare_model(model, args.gradient_checkpointing, args.gradient_checkpointing_kwargs)
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
 
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
         # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
         self.num_virtual_tokens = 0
-
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+        if is_peft_available() and isinstance(model, PeftModel):
             if model.active_adapter in model.peft_config:
                 peft_model_config = model.peft_config[model.active_adapter]
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
