@@ -1616,9 +1616,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer with the already configured PeftModel
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir, report_to="none"
-        )  # , gradient_checkpointing_kwargs={"use_reentrant": False})
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
 
         # Save initial parameters to check they change during training
