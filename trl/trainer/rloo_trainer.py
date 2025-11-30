@@ -370,6 +370,7 @@ class RLOOTrainer(BaseTrainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
+        self.num_generations_eval = args.num_generations_eval or args.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -691,7 +692,7 @@ class RLOOTrainer(BaseTrainer):
         # See _get_train_sampler for an explanation of the sampler.
         return RepeatSampler(
             data_source=eval_dataset,
-            mini_repeat_count=self.num_generations,
+            mini_repeat_count=self.num_generations_eval,
             seed=self.args.seed,
         )
 
@@ -997,6 +998,7 @@ class RLOOTrainer(BaseTrainer):
 
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1004,6 +1006,8 @@ class RLOOTrainer(BaseTrainer):
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
                 self.llm.wake_up(tags=["weights"])
+                # Work around for https://github.com/vllm-project/vllm/issues/29341
+                self.llm.collective_rpc("reload_weights")
 
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -1015,15 +1019,16 @@ class RLOOTrainer(BaseTrainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts = gather_object(prompts)
+                num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
-                    ordered_set_of_prompts = all_prompts[:: self.num_generations]
+                    ordered_set_of_prompts = all_prompts[::num_generations]
 
                     sampling_params = {
-                        "n": self.num_generations,
+                        "n": num_generations,
                         "repetition_penalty": self.repetition_penalty,
                         "temperature": self.temperature,
                         "top_p": self.top_p,
@@ -1053,7 +1058,7 @@ class RLOOTrainer(BaseTrainer):
                 all_prompt_ids, all_completion_ids, _ = obj_list[0]
 
                 # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
@@ -1395,14 +1400,15 @@ class RLOOTrainer(BaseTrainer):
             kl = gather(kl)  # rewards are gathered, so kl must be too
             rewards = rewards - self.beta * kl
 
-        grouped_rewards = rewards.view(-1, self.num_generations)
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        grouped_rewards = rewards.view(-1, num_generations)
         mean_grouped_rewards = grouped_rewards.mean(dim=1)
         std_rewards = grouped_rewards.std(dim=1)
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
 
         # RLOO advantages computation
         grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
-        baselines = (grouped_sum - grouped_rewards) / (self.num_generations - 1)  # (num_prompts, num_generations)
+        baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
         baselines = baselines.view(-1)  # Flatten back to match rewards shape
         advantages = rewards - baselines
 

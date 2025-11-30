@@ -695,6 +695,7 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
         task_type=model_args.lora_task_type,
         r=model_args.lora_r,
         target_modules=model_args.lora_target_modules,
+        target_parameters=model_args.lora_target_parameters,
         lora_alpha=model_args.lora_alpha,
         lora_dropout=model_args.lora_dropout,
         bias="none",
@@ -2025,5 +2026,4 @@ def get_config_model_id(config: PretrainedConfig) -> str:
         `str`:
             The model identifier associated with the model configuration.
     """
-    # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing: Qwen2-VL and Qwen2.5-VL. See GH-4323
-    return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")
+    return getattr(config, "_name_or_path", "")
