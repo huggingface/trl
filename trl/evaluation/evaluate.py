@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
 from tqdm import tqdm
+import multiprocessing as mp
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError
 
@@ -31,6 +32,7 @@ def evaluate(data_name, prompt_type, samples: list=None, file_path: str=None, ma
     scores = []
     timeout_cnt = 0 
 
+    ctx = mp.get_context('spawn')
     with ProcessPool(max_workers=max_workers) as pool:
         future = pool.map(math_equal_process, params, timeout=3)
         iterator = future.result()

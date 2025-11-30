@@ -2,13 +2,14 @@ accelerate launch --config_file=trl/accelerate_configs/zero1.yaml --num_processe
     --model_name_or_path Qwen/Qwen2.5-1.5B \
     --dataset_name /mnt/users/hcai/dataset/llm_rl/OpenR1-Math-220k \
     --learning_rate 2.0e-5 \
-    --num_train_epochs 1 \
+    --num_train_epochs 5 \
     --packing \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eos_token '<|im_end|>' \
     --eval_strategy no \
+    --save_strategy epoch \
     --eval_steps 100 \
     --output_dir results/sft/openr1-math-220k/qwen2.5-1.5B \
     --attn_implementation flash_attention_2 \

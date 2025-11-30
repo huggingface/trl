@@ -1,12 +1,15 @@
+import gc
 import os
 import json
 import time
-import torch
 import random
 import argparse
 from tqdm import tqdm
-from vllm import LLM, SamplingParams
 from datetime import datetime
+from functools import partial
+
+import torch
+import torch.distributed as dist
 
 from transformers import AutoTokenizer
 
@@ -17,6 +20,21 @@ from trl.evaluation.trajectory import *
 from trl.evaluation.data_loader import load_data
 from trl.evaluation.python_executor import PythonExecutor
 from trl.evaluation.model_utils import load_hf_lm_and_tokenizer, generate_completions
+from vllm.distributed.parallel_state import (
+    destroy_model_parallel,
+    destroy_distributed_environment,
+)
+
+local_rank = int(os.environ.get("LOCAL_RANK", 0))
+rank = int(os.environ.get("RANK", 0))
+world_size = int(os.environ.get("WORLD_SIZE", 1))
+os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
+
+if rank != 0:
+    os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
+from vllm import LLM, SamplingParams
 
 
 def parse_args():
@@ -24,13 +42,16 @@ def parse_args():
     parser.add_argument("--data_names", default="gsm8k,math", type=str)
     parser.add_argument("--data_dir", default="trl/evaluation/data", type=str)
     parser.add_argument("--model_name_or_path", default="gpt-4", type=str)
+    parser.add_argument("--ckpt_step_start", default=None, type=int)
+    parser.add_argument("--ckpt_step_end", default=None, type=int)
+    parser.add_argument("--ckpt_step_interval", default=None, type=int)
     parser.add_argument("--output_dir", default="./output", type=str)
     parser.add_argument("--prompt_type", default="tool-integrated", type=str)
     parser.add_argument("--split", default="test", type=str)
     parser.add_argument("--num_test_sample", default=-1, type=int)  # -1 for full data
     parser.add_argument("--seed", default=0, type=int)
-    parser.add_argument("--start", default=0, type=int)
-    parser.add_argument("--end", default=-1, type=int)
+    parser.add_argument("--example_start", default=0, type=int)
+    parser.add_argument("--example_end", default=-1, type=int)
     parser.add_argument("--temperature", default=0, type=float)
     parser.add_argument("--n_sampling", default=1, type=int)
     parser.add_argument("--top_p", default=1, type=float)
@@ -79,13 +100,13 @@ def prepare_data(data_name, args):
         random.shuffle(examples)
 
     # select start and end
-    examples = examples[args.start : len(examples) if args.end == -1 else args.end]
+    examples = examples[args.example_start : len(examples) if args.example_end == -1 else args.example_end]
 
     # get out_file name
     out_file_prefix = f"{args.split}_{args.prompt_type}_{args.num_test_sample}_seed{args.seed}_t{args.temperature}"
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    out_file = f"{output_dir}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}.jsonl"
+    out_file = f"{output_dir}/{data_name}/{out_file_prefix}_s{args.example_start}_e{args.example_end}.jsonl"
     os.makedirs(f"{output_dir}/{data_name}", exist_ok=True)
 
     # load all processed samples
@@ -141,18 +162,30 @@ def setup(args):
     for data_name in data_list:
         results.append(main(llm, tokenizer, data_name, args))
 
-    # add "avg" result to data_list and results
-    data_list.append("avg")
-    results.append(
-        {
-            "acc": sum([result["acc"] for result in results]) / len(results),
-        }
-    )
+    if rank == 0:
+        # add "avg" result to data_list and results
+        data_list.append("avg")
+        results.append(
+            {
+                "acc": sum([result["acc"] for result in results]) / len(results),
+            }
+        )
 
-    # print all results
-    pad = max([len(data_name) for data_name in data_list])
-    print("\t".join(data_name.ljust(pad, " ") for data_name in data_list))
-    print("\t".join([f"{result['acc']:.1f}".ljust(pad, " ") for result in results]))
+        # print all results
+        pad = max([len(data_name) for data_name in data_list])
+        print("\t".join(data_name.ljust(pad, " ") for data_name in data_list))
+        print("\t".join([f"{result['acc']:.1f}".ljust(pad, " ") for result in results]))
+
+    # free gpu memory
+    if args.use_vllm:
+        destroy_model_parallel()
+        destroy_distributed_environment()
+        del llm
+        gc.collect()
+        torch.cuda.empty_cache()
+    else:
+        del llm
+        torch.cuda.empty_cache()
 
 
 def is_multi_choice(answer):
@@ -164,10 +197,17 @@ def is_multi_choice(answer):
 
 def main(llm, tokenizer, data_name, args):
     examples, processed_samples, out_file = prepare_data(data_name, args)
-    print("=" * 50)
-    print("data:", data_name, " ,remain samples:", len(examples))
-    if len(examples) > 0:
-        print(examples[0])
+
+    if rank == 0:
+        print("=" * 50)
+        print("data:", data_name, " ,remain samples:", len(examples))
+
+        if len(examples) > 0:
+            print(examples[0])
+
+    examples_w_ids = [(example, i) for i, example in enumerate(examples)]
+    examples_w_ids = examples_w_ids[rank::world_size]
+    examples, ids = zip(*examples_w_ids) if len(examples_w_ids) > 0 else ([], [])
 
     # init python executor
     if "pal" in args.prompt_type:
@@ -187,7 +227,7 @@ def main(llm, tokenizer, data_name, args):
         example["gt_ans"] = gt_ans
         full_prompt = construct_prompt(example, data_name, args)
 
-        if idx == args.start:
+        if idx == args.example_start and rank == 0:
             print(full_prompt)
 
         sample = {
@@ -258,16 +298,18 @@ def main(llm, tokenizer, data_name, args):
     # measure time use
     start_time = time.time()
     for epoch in range(max_func_call):
-        print("-" * 20, "Epoch", epoch)
+        if rank == 0:
+            print("-" * 20, "Epoch", epoch)
         current_prompts = remain_prompts
         if len(current_prompts) == 0:
             break
 
         # get all outputs
         prompts = [item[1] for item in current_prompts]
-        print("=== Prompts example ===")
-        print(prompts[0])
-        print("=======================")
+        if rank == 0:
+            print("=== Prompts example ===")
+            print(prompts[0])
+            print("=======================")
         if args.use_vllm:
             outputs = llm.generate(
                 prompts,
@@ -299,9 +341,10 @@ def main(llm, tokenizer, data_name, args):
                 stop_id_sequences=stop_words,
             )
 
-        print("=== Outputs example ===")
-        print(outputs[0])
-        print("=======================")
+        if rank == 0:
+            print("=== Outputs example ===")
+            print(outputs[0])
+            print("=======================")
 
         assert len(outputs) == len(current_prompts), f"{len(outputs)=} vs {len(current_prompts)=}"
 
@@ -341,7 +384,7 @@ def main(llm, tokenizer, data_name, args):
             remain_prompts[k] = (i, query)
 
     # unsolved samples
-    print("Unsolved samples:", len(remain_prompts))
+    print(f"Unsolved samples on rank {rank}: {len(remain_prompts)}")
     end_prompts.extend(remain_prompts)
     # sort by idx
     end_prompts = sorted(end_prompts, key=lambda x: x[0])
@@ -361,7 +404,6 @@ def main(llm, tokenizer, data_name, args):
     results = [
         run_execute(executor, code, args.prompt_type, data_name) for code in codes
     ]
-    time_use = time.time() - start_time
 
     # put results back to examples
     all_samples = []
@@ -389,33 +431,74 @@ def main(llm, tokenizer, data_name, args):
         sample.update({"code": code, "pred": preds, "report": reports})
         all_samples.append(sample)
 
-    # add processed samples
-    all_samples.extend(processed_samples)
-    all_samples, result_json = evaluate(
-        samples=all_samples,
-        data_name=data_name,
-        prompt_type=args.prompt_type,
-        execute=True,
-        max_workers=args.evaluate_max_workers,
-    )
+    torch.cuda.synchronize()
+    dist.barrier()
+    time_use = time.time() - start_time
 
-    # save outputs
-    if len(processed_samples) < len(all_samples) and args.save_outputs:
-        save_jsonl(all_samples, out_file)
+    assert len(all_samples) == len(ids)
+    # all gather samples
+    all_samples_with_ids = list(zip(all_samples, ids))
+    gathered_all_samples_w_ids = [None for _ in range(world_size)] if rank == 0 else None
+    dist.gather_object(all_samples_with_ids, gathered_all_samples_w_ids, dst=0)
+    # reorder samples because 
 
-    result_json["time_use_in_second"] = time_use
-    result_json["time_use_in_minite"] = (
-        f"{int(time_use // 60)}:{int(time_use % 60):02d}"
-    )
+    result_json = None
+    if rank == 0:
+        all_samples = []
+        for part in gathered_all_samples_w_ids:
+            all_samples.extend(part)
+        all_samples = sorted(all_samples, key=lambda x: x[1])
+        all_samples = [item[0] for item in all_samples]
 
-    with open(
-        out_file.replace(".jsonl", f"_{args.prompt_type}_metrics.json"), "w"
-    ) as f:
-        json.dump(result_json, f, indent=4)
+        # add processed samples
+        all_samples.extend(processed_samples)
+        all_samples, result_json = evaluate(
+            samples=all_samples,
+            data_name=data_name,
+            prompt_type=args.prompt_type,
+            execute=True,
+            max_workers=args.evaluate_max_workers,
+        )
+
+        # save outputs
+        if len(processed_samples) < len(all_samples) and args.save_outputs:
+            save_jsonl(all_samples, out_file)
+
+        result_json["time_use_in_second"] = time_use
+        result_json["time_use_in_minite"] = (
+            f"{int(time_use // 60)}:{int(time_use % 60):02d}"
+        )
+
+        with open(
+            out_file.replace(".jsonl", f"_{args.prompt_type}_metrics.json"), "w"
+        ) as f:
+            json.dump(result_json, f, indent=4)
+
+    dist.barrier()
+
     return result_json
 
 
 if __name__ == "__main__":
+
+    dist.init_process_group(backend="gloo", init_method="env://")
+
     args = parse_args()
     set_seed(args.seed)
-    setup(args)
+    ckpt_start = args.ckpt_step_start
+    ckpt_end = args.ckpt_step_end
+    ckpt_interval = args.ckpt_step_interval
+    original_model_name = args.model_name_or_path
+    original_output_dir = args.output_dir
+    if (
+        ckpt_start is not None
+        and ckpt_end is not None
+        and ckpt_interval is not None
+    ):
+        for step in range(ckpt_start, ckpt_end + 1, ckpt_interval):
+            args.model_name_or_path = f"{original_model_name}/checkpoint-{step}"
+            args.output_dir = os.path.join(original_output_dir, f"checkpoint-{step}")
+            print(f"Evaluating checkpoint at step {step}: {args.model_name_or_path}. Saving to {args.output_dir}")
+            setup(args)
+    else:
+        setup(args)
