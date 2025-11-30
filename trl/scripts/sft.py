@@ -145,6 +145,8 @@ def main(script_args, training_args, model_args, dataset_args):
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         peft_config=get_peft_config(model_args),
     )
+    trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
 
     # Train the model
     trainer.train()

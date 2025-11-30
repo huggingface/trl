@@ -37,13 +37,17 @@ fi
 echo "Available GPU count: $gpu_count"
 
 PROMPT_TYPE="qwen25-math-cot"
-MODEL_TAG="sft/openr1-math-220k/qwen2.5-1.5B/checkpoint-500"
+MODEL_TAG="sft/openr1-math-220k/qwen2.5-1.5B/"
 MODEL_NAME_OR_PATH="results/${MODEL_TAG}"
 OUTPUT_DIR=results/eval/${MODEL_TAG}
 
 DATA_NAME="gsm8k"
 SPLIT="test"
 NUM_TEST_SAMPLE=-1
+
+CKPT_STEP_START=500
+CKPT_STEP_INTERVAL=500
+CKPT_STEP_END=2500
 
 read -r -d '' cmd <<EOF
 torchrun --nnodes $SLURM_NNODES --nproc_per_node=$gpu_count --rdzv_id $RANDOM --rdzv_backend c10d --rdzv_endpoint $head_node_ip:29500 \
@@ -61,7 +65,10 @@ trl/evaluation/math_eval.py \
     --use_vllm \
     --save_outputs \
     --overwrite \
-    --evaluate_max_workers 32
+    --evaluate_max_workers 32 \
+    --ckpt_step_start ${CKPT_STEP_START} \
+    --ckpt_step_end ${CKPT_STEP_END} \
+    --ckpt_step_interval ${CKPT_STEP_INTERVAL}
 EOF
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then
