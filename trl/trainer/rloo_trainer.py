@@ -808,6 +808,11 @@ class RLOOTrainer(BaseTrainer):
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
+            # Fix FSDP2 + LoRA parameter naming issue with vLLM
+            if 'lora_' in name:
+                continue  # skip LoRA parameters
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            
             if param.is_cpu:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
