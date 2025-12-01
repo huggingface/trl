@@ -1,4 +1,4 @@
-GROUP_NAME=openr1-math-220k/qwen2.5-1.5B_test3
+GROUP_NAME=openr1-math-220k/qwen2.5-1.5B/lr4e-5
 JOB_TYPE=sft
 RUN_NAME=${JOB_TYPE}/${GROUP_NAME}
 OUTPUT_DIR=results/${RUN_NAME}
@@ -7,7 +7,7 @@ OUTPUT_DIR=results/${RUN_NAME}
 accelerate launch --config_file=trl/accelerate_configs/zero1.yaml --num_processes 4 trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2.5-1.5B \
     --dataset_name dataset/llm_rl/OpenR1-Math-220k \
-    --learning_rate 2.0e-5 \
+    --learning_rate 4.0e-5 \
     --num_train_epochs 5 \
     --packing \
     --per_device_train_batch_size 1 \
