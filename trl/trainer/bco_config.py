@@ -24,6 +24,8 @@ class BCOConfig(_BCOConfig):
         warnings.warn(
             "The `BCOConfig` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.bco import BCOConfig`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__post_init__()
