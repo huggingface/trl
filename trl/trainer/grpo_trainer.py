@@ -1745,10 +1745,7 @@ class GRPOTrainer(BaseTrainer):
             model_inputs["logits_to_keep"] = logits_to_keep + 1
 
         logits = model(**model_inputs).logits
-        # Exclude the last value: it corresponds to the next token pred
-        logits = logits[:, :-1, :]
-        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-        logits = logits[:, -logits_to_keep:, :].contiguous()
+        logits = logits[:, -(logits_to_keep + 1) :, :].contiguous()
 
         loss, metrics = triton_grpo_loss(
             logits=logits,
