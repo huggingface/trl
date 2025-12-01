@@ -49,7 +49,6 @@ _import_structure = {
         "PreTrainedModelWrapper",
         "clone_chat_template",
         "create_reference_model",
-        "setup_chat_format",
     ],
     "trainer": [
         "AllTrueJudge",
