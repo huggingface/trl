@@ -1046,15 +1046,22 @@ class SFTTrainer(BaseTrainer):
                         )
                     return output
 
-                dataset = dataset.map(
-                    tokenize_fn,
-                    fn_kwargs={
-                        "processing_class": processing_class,
-                        "dataset_text_field": args.dataset_text_field,
-                        "assistant_only_loss": args.assistant_only_loss,
-                    },
-                    **map_kwargs,
-                )
+            dataset = dataset.map(
+                tokenize_fn,
+                fn_kwargs={
+                    "processing_class": processing_class,
+                    "dataset_text_field": args.dataset_text_field,
+                    "assistant_only_loss": args.assistant_only_loss,
+                },
+                **map_kwargs,
+            )
+            
+            if PartialState().is_main_process:
+                # print data example
+                first_example = dataset[0]
+                print("\n\n########## First example in dataset: ##########")
+                print("Inputs:", processing_class.decode(first_example["input_ids"]))
+                print("#" * 50 + "\n\n")
 
             # Pack or truncate
             if packing:
