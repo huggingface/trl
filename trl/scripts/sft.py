@@ -120,7 +120,13 @@ class WandbArguments:
     wandb_group: str = None
 
 
-def main(script_args, training_args: TrainingArguments, model_args, dataset_args, wandb_args: WandbArguments):
+def main(
+        script_args: ScriptArguments, 
+        training_args: SFTConfig, 
+        model_args: ModelConfig, 
+        dataset_args: DatasetMixtureConfig, 
+        wandb_args: WandbArguments
+    ):
     ################
     # Model init kwargs
     ################
