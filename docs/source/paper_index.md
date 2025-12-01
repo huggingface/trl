@@ -98,6 +98,44 @@ trainer = GRPOTrainer(
 )
 ```
 
+### Beyond the 80/20 Rule: High-Entropy Minority Tokens Drive Effective Reinforcement Learning for LLM Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2506.01939
+
+A minority of tokens with high entropy act as reasoning "forks" in the CoT path, driving exploration and performance gains for RLVR, while low-entropy majority tokens contribute little or even impede learning. RLVR mainly adjusts high-entropy tokens, largely preserving the base model’s overall entropy patterns. Thus landing on the 80/20 rule, training on only 20% of the tokens with the highest entropy is comparable or supasses full-gradient updates for Qwen3 models.
+
+The paper's main results use vanilla DAPO (⚠️ Dynamic Sampling is not supported in TRL). To replicate the main results, use the following configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+from trl.rewards import get_soft_overlong_punishment
+
+training_args = GRPOConfig(
+    # --- vanilla DAPO parameters (80/20 rule: section 5.2) --- #
+    # Overlong Filtering
+    mask_truncated_completions=True,
+    # Token-level Loss
+    loss_type="dapo",
+    # Clip-Higher
+    epsilon_high=0.28, # DAPO paper: section 4.1
+    epsilon=0.2, # DAPO paper: section 4.1
+    # Other parameters used
+    per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
+    num_generations=16, # number of sample responses in the paper, DAPO paper: section 4.1
+    max_completion_length=20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
+    beta=0.0, # section 2.3, DAPO paper
+    # --- Gradients on the highest entropy tokens --- #
+    top_entropy_quantile=0.2
+)
+# Soft Overlong Punishment
+sop_reward = get_soft_overlong_punishment(max_completion_len=20480, soft_punish_cache=4096) # DAPO paper: section 4.1
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+    reward_funcs=[..., sop_reward],
+)
+```
+
 ### Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective
 
 **📜 Paper**: https://huggingface.co/papers/2503.20783
@@ -188,7 +226,7 @@ $$
 }
 $$
 
-where  \\( C \\) is a hyper-parameter. In TRL, TIS is implemented for GRPO, and enabled by default when vLLM is used for generation (`use_vllm=True`)
+where  \\( C \\) is a hyper-parameter. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
 
 ```python
 from trl import GRPOConfig
@@ -197,9 +235,86 @@ training_args = GRPOConfig(
     ...
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
+    vllm_importance_sampling_mode="sequence_truncate", # or "token_truncate"
     vllm_importance_sampling_cap=2.0, # hyper-parameter C
 )
 ```
+
+### Masked Importance Sampling
+
+**📰 Blog**: https://ringtech.notion.site/icepop
+
+**📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
+
+Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy exceeds a threshold  \\( C \\). We apply upper-side masking, so any ratio above  \\( C \\) is removed from the update.
+
+
+$$
+\small{
+\mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
+\Bigl[
+\underbrace{\mathbf{1}\left[
+\frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
+{\pi_{\text{inference}}(a, \theta_{\mathrm{old}})}
+\le C
+\right]
+\cdot
+\frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
+{\pi_{\text{inference}}(a, \theta_{\mathrm{old}})}}_{\text{masked importance ratio}} \cdot
+\nabla_\theta
+\min\Bigl(
+\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta)}{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}\,\hat A,
+\;\mathrm{clip}\bigl(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta)}{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})},\,1-\epsilon,\,1+\epsilon\bigr)\,\hat A
+\Bigr)
+\Bigr]
+}
+$$
+
+MIS is implemented for GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `"mask"`, such as `"sequence_mask"` or `"token_mask"`.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...
+    use_vllm=True,
+    vllm_importance_sampling_correction=True, # default True
+    vllm_importance_sampling_mode="sequence_mask", # or "token_mask"
+    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+)
+```
+
+### Sequence-level Importance Sampling
+
+**📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
+
+The theoretically principled way to correct for the training-inference distribution shift is importance sampling, as introduced in the two papers above [Truncated Importance Sampling](#truncated-importance-sampling) and [Masked Importance Sampling](#masked-importance-sampling). However, the choice of formulation is crucial for keeping the gradient unbiased and ensuring stable training.
+
+This work shows that sequence-level importance sampling is the sound approach for addressing the training–inference mismatch. Although token-level importance sampling achieves lower variance than a sequence-level ratio, it introduces bias and is therefore argued to be unsuitable for autoregressive models. The token-level gradient estimator is
+
+$$
+\mathbb{E}_{x\sim\mathcal{D},\, y\sim \pi^{\text{inference}}_\theta(\cdot|x)}
+\Bigg[
+  R(x,y)\,\cdot\,
+  \sum_{t=0}^{|y|-1}
+    \frac{\pi^{\text{training}}_\theta(y_t\,|\,x, y_{<t})}
+         {\pi^{\text{inference}}_\theta(y_t\,|\,x, y_{<t})}
+    \,\nabla_\theta \log \pi^{\text{training}}_\theta(y_t\,|\,x, y_{<t})
+\Bigg]
+$$
+The correct, unbiased policy gradient estimator applies a single importance ratio over the entire generated sequence (trajectory)  \\( y \\), The Sequence-Level IS estimator looks like:
+
+$$
+\mathbb{E}_{x\sim\mathcal{D},\, y\sim \pi^{\text{inference}}_\theta(\cdot|x)}
+\Bigg[
+  \frac{\pi^{\text{training}}_\theta(y|x)}
+       {\pi^{\text{inference}}_\theta(y|x)}
+  \, R(x,y)\,
+  \nabla_\theta \log \pi^{\text{training}}_\theta(y|x)
+\Bigg]
+$$
+
+TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
 
 ### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
 
