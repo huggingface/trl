@@ -15,7 +15,11 @@
 import warnings
 from dataclasses import dataclass
 
-from ..experimental.bco import BCOConfig as _BCOConfig
+from ..import_utils import temporary_env
+
+
+with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+    from ..experimental.bco import BCOConfig as _BCOConfig
 
 
 @dataclass
