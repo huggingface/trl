@@ -1616,7 +1616,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer with the already configured PeftModel
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
 
         # Save initial parameters to check they change during training
@@ -1631,6 +1631,18 @@ class TestSFTTrainer(TrlTestCase):
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
+            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
+            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
+            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
+            # We still need to investigate why the compute dtype ends up being different than for these parameters.
+            if n in [
+                "base_model.model.model.layers.1.self_attn.k_proj.bias",
+                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+            ]:
+                param = param.float()
+
             if "lora" not in n:  # We expect the base model parameters to be the same
                 assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "lora" in n:  # We expect the peft parameters to be different

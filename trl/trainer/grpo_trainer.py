@@ -324,6 +324,10 @@ class GRPOTrainer(BaseTrainer):
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
+                model_init_kwargs = args.model_init_kwargs or {}
+                # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+                if args.distributed_state.distributed_type == "DEEPSPEED":
+                    model_init_kwargs["device_map"] = None
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
