@@ -129,7 +129,6 @@ if TYPE_CHECKING:
         PreTrainedModelWrapper,
         clone_chat_template,
         create_reference_model,
-        setup_chat_format,
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
