@@ -32,8 +32,10 @@ JOB_TYPE=sft
 RUN_NAME=${JOB_TYPE}/${GROUP_NAME}
 OUTPUT_DIR=results/${RUN_NAME}
 
+NUM_PROCESS=$((gpu_count * SLURM_NNODES))
+
 read -r -d '' cmd <<EOF
-accelerate launch --config_file=trl/accelerate_configs/zero1.yaml --num_processes $gpu_count \
+accelerate launch --config_file=trl/accelerate_configs/zero1.yaml --num_processes $NUM_PROCESS \
 --num_machines $SLURM_NNODES --rdzv_backend c10d --main_process_ip $head_node_ip --main_process_port 29500 \
 trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2.5-1.5B \
