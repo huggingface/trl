@@ -15,7 +15,11 @@
 import warnings
 from dataclasses import dataclass
 
-from ..experimental.online_dpo import OnlineDPOTrainer as _OnlineDPOTrainer
+from ..import_utils import temporary_env
+
+
+with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+    from ..experimental.online_dpo import OnlineDPOTrainer as _OnlineDPOTrainer
 
 
 @dataclass

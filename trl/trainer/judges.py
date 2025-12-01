@@ -14,14 +14,18 @@
 
 import warnings
 
-from ..experimental.judges import AllTrueJudge as _AllTrueJudge
-from ..experimental.judges import BaseBinaryJudge as _BaseBinaryJudge
-from ..experimental.judges import BaseJudge as _BaseJudge
-from ..experimental.judges import BasePairwiseJudge as _BasePairwiseJudge
-from ..experimental.judges import BaseRankJudge as _BaseRankJudge
-from ..experimental.judges import HfPairwiseJudge as _HfPairwiseJudge
-from ..experimental.judges import OpenAIPairwiseJudge as _OpenAIPairwiseJudge
-from ..experimental.judges import PairRMJudge as _PairRMJudge
+from ..import_utils import temporary_env
+
+
+with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+    from ..experimental.judges import AllTrueJudge as _AllTrueJudge
+    from ..experimental.judges import BaseBinaryJudge as _BaseBinaryJudge
+    from ..experimental.judges import BaseJudge as _BaseJudge
+    from ..experimental.judges import BasePairwiseJudge as _BasePairwiseJudge
+    from ..experimental.judges import BaseRankJudge as _BaseRankJudge
+    from ..experimental.judges import HfPairwiseJudge as _HfPairwiseJudge
+    from ..experimental.judges import OpenAIPairwiseJudge as _OpenAIPairwiseJudge
+    from ..experimental.judges import PairRMJudge as _PairRMJudge
 
 
 class AllTrueJudge(_AllTrueJudge):

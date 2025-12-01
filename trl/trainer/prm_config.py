@@ -14,7 +14,11 @@
 
 import warnings
 
-from ..experimental.prm import PRMConfig as _PRMConfig
+from ..import_utils import temporary_env
+
+
+with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+    from ..experimental.prm import PRMConfig as _PRMConfig
 
 
 class PRMConfig(_PRMConfig):

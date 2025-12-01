@@ -14,7 +14,11 @@
 
 import warnings
 
-from ..experimental.xpo import XPOConfig as _XPOConfig
+from ..import_utils import temporary_env
+
+
+with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+    from ..experimental.xpo import XPOConfig as _XPOConfig
 
 
 class XPOConfig(_XPOConfig):
