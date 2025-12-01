@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# load run_single and run_loop functions
-
-
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then
     # on nv cluster
     nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )
@@ -74,6 +71,7 @@ cmd_math="${cmd_prefix} \
     --max_tokens_per_call 32768
 "
 
+# load run_single and run_loop functions
 setup_cmd="source scripts/eval/setup.sh"
 
 cmds=(

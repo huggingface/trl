@@ -1,3 +1,5 @@
+#!/bin/bash
+
 GROUP_NAME=openr1-math-220k/qwen2.5-1.5B/lr5e-6
 JOB_TYPE=sft
 RUN_NAME=${JOB_TYPE}/${GROUP_NAME}
