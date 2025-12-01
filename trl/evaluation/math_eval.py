@@ -150,7 +150,7 @@ def prepare_data(data_name, args):
 
 
 def main(args):
-    if os.path.exists(os.path.join(args.output_dir, "complete.txt")) and args.resume:
+    if os.path.exists(os.path.join(args.output_dir, f"complete_{args.data_names}.txt")) and args.resume:
         if rank == 0:
             print(f"Evaluation already completed in {args.output_dir}. Exiting...")
         return
@@ -253,8 +253,8 @@ def main(args):
     gc.collect()
     torch.cuda.empty_cache()
 
-    if rank == 0 and not os.path.exists(os.path.join(args.output_dir, "complete.txt")):
-        with open(os.path.join(args.output_dir, "complete.txt"), "w") as f:
+    if rank == 0 and not os.path.exists(os.path.join(args.output_dir, f"complete_{args.data_names}.txt")):
+        with open(os.path.join(args.output_dir, f"complete_{args.data_names}.txt"), "w") as f:
             f.write("Evaluation completed.\n")
 
 
