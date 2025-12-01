@@ -103,20 +103,9 @@ You can customize the server configuration by passing additional arguments. For 
 
 ## Optimized attention implementations
 
-TRL supports various optimized attention implementations that can significantly speed up training while reducing memory usage. You can use either locally installed backends (like Flash Attention 2) or pull pre-optimized kernels directly from the [Kernels Hub](kernels_hub).
+TRL supports various optimized attention implementations that can significantly speed up training while reducing memory usage. You can use either a pre-optimized kernels directly from the [Kernels Hub](kernels_hub) or a manually built attention backend.
 
 <hfoptions id="attention examples">
-<hfoption id="Flash Attention 2">
-
-To enable Flash Attention 2, pass `attn_implementation="flash_attention_2"` in the model initialization arguments:
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "flash_attention_2"})
-```
-
-</hfoption>
 <hfoption id="Kernels from Hub">
 
 You can use pre-optimized attention kernels from the Hub without manual compilation:
@@ -129,40 +118,30 @@ training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "kernel
 
 Other options include `kernels-community/vllm-flash-attn3` and `kernels-community/paged-attention`.
 
+Optimized attention works across all TRL trainers. For more details, see [Kernels Hub Integration](kernels_hub).
+
 </hfoption>
-</hfoptions>
+<hfoption id="Manual build">
 
-Optimized attention works across all TRL trainers. For more details, see [Kernels Hub Integration](kernels_hub) and [Reducing Memory Usage](reducing_memory_usage#padding-free).
+> [!WARNING]
+> Manually building optimized attention backends is complex and time-consuming. It's never recommended unless absolutely necessary. Consider using Kernels from the Hub instead, as described in the previous section.
 
-## PEFT for parameter-efficient training
-
-[PEFT](https://huggingface.co/docs/peft/index) (Parameter-Efficient Fine-Tuning) methods like LoRA significantly reduce memory usage and training time by only training a small number of adapter parameters instead of the full model.
+If you have manually installed an optimized attention backend like Flash Attention 2, you can specify it in the training arguments:
 
 ```python
-from peft import LoraConfig
-from trl import SFTConfig, SFTTrainer
+from trl import SFTConfig
 
-peft_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    target_modules=["q_proj", "v_proj"],
-)
-
-trainer = SFTTrainer(
-    model="Qwen/Qwen2.5-0.5B",
-    peft_config=peft_config,
-    args=training_args,
-)
+training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "flash_attention_2"})
 ```
 
-For more details, see [PEFT Integration](peft_integration).
+</hfoption>
+</hfoptions>
 
 ## Liger Kernel for memory optimization
 
 Liger Kernel is a collection of Triton kernels designed for LLM training that can increase throughput by 20% and reduce memory usage by 60%.
 
-<hfoptions id="liger examples">
+<hfoptions id="liger">
 <hfoption id="SFT">
 
 ```python
@@ -199,21 +178,18 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
+<hfoption id="GKD">
+
+```python
+from trl.experimental.gkd import GKDConfig
+
+training_args = GKDConfig(..., use_liger_kernel=True)
+```
+
+</hfoption>
 </hfoptions>
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
-
-## Gradient checkpointing for memory savings
-
-Gradient checkpointing trades compute for memory by not storing all intermediate activations during the forward pass, recomputing them during the backward pass instead.
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., gradient_checkpointing=True)
-```
-
-Gradient checkpointing is available across all TRL trainers. For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
 
 ## Mixed precision training
 
