@@ -244,10 +244,10 @@ class GRPOConfig(TrainingArguments):
 
             </Deprecated>
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
-            Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM
-            completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied
-            regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines
-            how the IS ratios are computed and constrained.
+            Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
+            recomputed training logprobs. If set to `False`, no IS is applied regardless of
+            `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
+            and constrained.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -258,9 +258,8 @@ class GRPOConfig(TrainingArguments):
                   C and applied to all tokens in the sequence.
                 - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
-            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
-            importance ratios are clipped from above at C. For `*_mask` modes, ratios larger than C
-            are set to zero.
+            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
+            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
 
         > Parameters that control the logging
 
