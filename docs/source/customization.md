@@ -61,7 +61,7 @@ trainer = DPOTrainer(..., ref_model=ref_model)
 
 Since `trl` supports all keyword arguments when loading a model from `transformers` using `from_pretrained`, you can also leverage `load_in_8bit` from `transformers` for more memory efficient fine-tuning.
 
-Read more about 8-bit model loading in `transformers` [Load in 8bit or 4bit](https://huggingface.co/docs/transformers/en/peft#load-in-8bit-or-4bit).
+Read more about 8-bit model loading in `transformers` [Load in 8bit or 4bit](https://huggingface.co/docs/transformers/en/peft).
 
 ```python
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
