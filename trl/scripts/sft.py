@@ -64,10 +64,12 @@ python trl/scripts/sft.py \
 
 import argparse
 import os
+from dataclasses import dataclass
 
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, TrainerCallback, TrainingArguments
+from transformers.trainer_utils import get_last_checkpoint
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
 from trl import (
@@ -83,14 +85,42 @@ from trl import (
     get_quantization_config,
 )
 
+from trl.wandb_utils import setup_wandb
+
 
 logger = logging.get_logger(__name__)
 
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+class SaveStep0CallBack(TrainerCallback):
+    def __init__(self, trainer: SFTTrainer, trial=None):
+        self.trainer = trainer
+        self.trial = trial
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.trainer._save_checkpoint(self.trainer.model_wrapped, self.trial)
 
 
-def main(script_args, training_args, model_args, dataset_args):
+class WandbLoggingCallback(TrainerCallback):
+    def __init__(self, wandb_logger):
+        self.wandb_logger = wandb_logger
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        wandb_logs = {f"train/{key}": value for key, value in logs.items()}
+        if self.wandb_logger is not None:
+            self.wandb_logger.log(wandb_logs, step=state.global_step, commit=True)
+
+
+@dataclass
+class WandbArguments:
+    wandb_entity: str = "gyxthu17"
+    wandb_project: str = "minillm-trl"
+    wandb_run_name: str = None
+    wandb_mode: str = "disabled"
+    wandb_job_type: str = "sft"
+    wandb_group: str = None
+
+
+def main(script_args, training_args: TrainingArguments, model_args, dataset_args, wandb_args: WandbArguments):
     ################
     # Model init kwargs
     ################
@@ -145,18 +175,39 @@ def main(script_args, training_args, model_args, dataset_args):
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         peft_config=get_peft_config(model_args),
     )
-    trainer.save_model(training_args.output_dir)
-    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
-
+    trainer.add_callback(SaveStep0CallBack(trainer))
     # Train the model
-    trainer.train()
+    try:
+        resume_from_checkpoint = eval(training_args.resume_from_checkpoint)
+    except Exception:
+        pass
+    if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+        resume_from_checkpoint = get_last_checkpoint(training_args.output_dir)
+
+    if resume_from_checkpoint is not None:
+        trainer.accelerator.print(f"Resuming training from checkpoint: {resume_from_checkpoint}")
+
+    wandb_config = {
+        "entity": wandb_args.wandb_entity,
+        "project": wandb_args.wandb_project,
+        "name": wandb_args.wandb_run_name,
+        "mode": wandb_args.wandb_mode,
+        "job_type": wandb_args.wandb_job_type,
+        "group": wandb_args.wandb_group,
+    }
+    if trainer.accelerator.is_main_process:
+        wandb_logger = setup_wandb(wandb_config, wandb_dir=os.path.join(training_args.output_dir, "wandb"), resume=(resume_from_checkpoint is not None))
+    else:
+        wandb_logger = None
+    trainer.add_callback(WandbLoggingCallback(wandb_logger))
+
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     # Log training complete
     trainer.accelerator.print("✅ Training completed.")
 
-    # Save and push to Hub
-    trainer.save_model(training_args.output_dir)
-    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+    if wandb_logger is not None:
+        wandb_logger.finish()
 
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
@@ -164,7 +215,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None):
-    dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig)
+    dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig, WandbArguments)
     if subparsers is not None:
         parser = subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)
     else:
@@ -177,7 +228,8 @@ if __name__ == "__main__":
     # When using the trl cli, this script may be run with additional arguments, corresponding accelerate arguments.
     # To ensure that their parsing does not interfere with the script arguments, parse the arguments with
     # `return_remaining_strings=True`, then ignore the remaining strings.
-    script_args, training_args, model_args, dataset_args, _ = parser.parse_args_and_config(
+    script_args, training_args, model_args, dataset_args, wandb_args, additional_args = parser.parse_args_and_config(
         return_remaining_strings=True
     )
-    main(script_args, training_args, model_args, dataset_args)
+    print(additional_args)
+    main(script_args, training_args, model_args, dataset_args, wandb_args)
