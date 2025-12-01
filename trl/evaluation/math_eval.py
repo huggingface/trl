@@ -42,9 +42,6 @@ def parse_args():
     parser.add_argument("--data_names", default="gsm8k,math", type=str)
     parser.add_argument("--data_dir", default="trl/evaluation/data", type=str)
     parser.add_argument("--model_name_or_path", default="gpt-4", type=str)
-    parser.add_argument("--ckpt_step_start", default=None, type=int)
-    parser.add_argument("--ckpt_step_end", default=None, type=int)
-    parser.add_argument("--ckpt_step_interval", default=None, type=int)
     parser.add_argument("--output_dir", default="./output", type=str)
     parser.add_argument("--prompt_type", default="tool-integrated", type=str)
     parser.add_argument("--split", default="test", type=str)
@@ -180,12 +177,10 @@ def setup(args):
     if args.use_vllm:
         destroy_model_parallel()
         destroy_distributed_environment()
-        del llm
-        gc.collect()
-        torch.cuda.empty_cache()
-    else:
-        del llm
-        torch.cuda.empty_cache()
+
+    del llm
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def is_multi_choice(answer):
@@ -485,20 +480,4 @@ if __name__ == "__main__":
 
     args = parse_args()
     set_seed(args.seed)
-    ckpt_start = args.ckpt_step_start
-    ckpt_end = args.ckpt_step_end
-    ckpt_interval = args.ckpt_step_interval
-    original_model_name = args.model_name_or_path
-    original_output_dir = args.output_dir
-    if (
-        ckpt_start is not None
-        and ckpt_end is not None
-        and ckpt_interval is not None
-    ):
-        for step in range(ckpt_start, ckpt_end + 1, ckpt_interval):
-            args.model_name_or_path = f"{original_model_name}/checkpoint-{step}"
-            args.output_dir = os.path.join(original_output_dir, f"checkpoint-{step}")
-            print(f"Evaluating checkpoint at step {step}: {args.model_name_or_path}. Saving to {args.output_dir}")
-            setup(args)
-    else:
-        setup(args)
+    setup(args)

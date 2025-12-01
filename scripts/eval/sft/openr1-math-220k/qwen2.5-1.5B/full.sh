@@ -1,12 +1,7 @@
 #!/bin/bash
-#SBATCH -A nvr_elm_llm                      #account
-#SBATCH -p batch_large,batch,batch_short    #partition
-#SBATCH -t 02:00:00                         #wall time limit, hr:min:sec
-#SBATCH -N 4                                #number of nodes
-#SBATCH -J nvr_elm_llm-ellm:pretrain        #job name
-#SBATCH --array=1-10%1
-#SBATCH --gpus-per-node 8
-#SBATCH --exclusive
+
+# load run_single and run_loop functions
+
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then
     # on nv cluster
@@ -41,7 +36,6 @@ MODEL_TAG="sft/openr1-math-220k/qwen2.5-1.5B/"
 MODEL_NAME_OR_PATH="results/${MODEL_TAG}"
 OUTPUT_DIR=results/eval/${MODEL_TAG}
 
-DATA_NAME="gsm8k"
 SPLIT="test"
 NUM_TEST_SAMPLE=-1
 
@@ -49,12 +43,9 @@ CKPT_STEP_START=500
 CKPT_STEP_INTERVAL=500
 CKPT_STEP_END=2500
 
-read -r -d '' cmd <<EOF
+read -r -d '' cmd_prefix <<EOF
 torchrun --nnodes $SLURM_NNODES --nproc_per_node=$gpu_count --rdzv_id $RANDOM --rdzv_backend c10d --rdzv_endpoint $head_node_ip:29500 \
 trl/evaluation/math_eval.py \
-    --model_name_or_path ${MODEL_NAME_OR_PATH} \
-    --data_name ${DATA_NAME} \
-    --output_dir ${OUTPUT_DIR} \
     --split ${SPLIT} \
     --prompt_type ${PROMPT_TYPE} \
     --num_test_sample ${NUM_TEST_SAMPLE} \
@@ -65,18 +56,38 @@ trl/evaluation/math_eval.py \
     --use_vllm \
     --save_outputs \
     --overwrite \
-    --evaluate_max_workers 32 \
-    --ckpt_step_start ${CKPT_STEP_START} \
-    --ckpt_step_end ${CKPT_STEP_END} \
-    --ckpt_step_interval ${CKPT_STEP_INTERVAL}
+    --evaluate_max_workers 32
 EOF
+
+
+cmd_gsm8k="${cmd_prefix} \
+    --data_names gsm8k
+"
+
+cmd_math="${cmd_prefix} \
+    --data_names math
+"
+
+setup_cmd="source scripts/eval/setup.sh"
+
+cmds=(
+    "run_loop \"${cmd_gsm8k}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
+    "run_loop \"${cmd_math}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
+)
+
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then
     # on nv cluster
-    echo ${cmd}
-    srun bash -c "${cmd}"
+    # loop over cmds and run each sequentially
+    for cmd in "${cmds[@]}"; do
+        echo $cmd
+        srun bash -c "${setup_cmd}; ${cmd}"
+    done
 else
     # on local machine
-    echo ${cmd}
-    bash -c "${cmd}"
+    # loop over cmds and run each sequentially
+    for cmd in "${cmds[@]}"; do
+        echo $cmd
+        bash -c "${setup_cmd}; ${cmd}"
+    done
 fi
