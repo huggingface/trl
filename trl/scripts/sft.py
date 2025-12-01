@@ -112,7 +112,7 @@ class WandbLoggingCallback(TrainerCallback):
 
 @dataclass
 class WandbArguments:
-    wandb_entity: str = "gyxthu17"
+    wandb_entity: str = "eLLM-han2024"
     wandb_project: str = "minillm-trl"
     wandb_run_name: str = None
     wandb_mode: str = "disabled"
@@ -190,10 +190,10 @@ def main(script_args, training_args: TrainingArguments, model_args, dataset_args
     wandb_config = {
         "entity": wandb_args.wandb_entity,
         "project": wandb_args.wandb_project,
-        "name": wandb_args.wandb_run_name,
+        "name": wandb_args.wandb_run_name.strip("/") if wandb_args.wandb_run_name else None,
         "mode": wandb_args.wandb_mode,
         "job_type": wandb_args.wandb_job_type,
-        "group": wandb_args.wandb_group,
+        "group": wandb_args.wandb_group.strip("/") if wandb_args.wandb_group else None,
     }
     if trainer.accelerator.is_main_process:
         wandb_logger = setup_wandb(wandb_config, wandb_dir=os.path.join(training_args.output_dir, "wandb"), resume=(resume_from_checkpoint is not None))

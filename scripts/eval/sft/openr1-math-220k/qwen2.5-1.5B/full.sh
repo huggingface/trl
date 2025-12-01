@@ -32,14 +32,15 @@ fi
 echo "Available GPU count: $gpu_count"
 
 PROMPT_TYPE="qwen25-math-cot"
-MODEL_TAG="sft/openr1-math-220k/qwen2.5-1.5B/"
-MODEL_NAME_OR_PATH="results/${MODEL_TAG}"
-OUTPUT_DIR=results/eval/${MODEL_TAG}
+MODEL_TAG="openr1-math-220k/qwen2.5-1.5B/"
+MODEL_NAME_OR_PATH="results/sft/${MODEL_TAG}"
+JOB_TYPE=eval
+OUTPUT_DIR=results/${JOB_TYPE}/${MODEL_TAG}
 
 SPLIT="test"
 NUM_TEST_SAMPLE=-1
 
-CKPT_STEP_START=500
+CKPT_STEP_START=0
 CKPT_STEP_INTERVAL=500
 CKPT_STEP_END=2500
 
@@ -55,8 +56,12 @@ trl/evaluation/math_eval.py \
     --top_p 1 \
     --use_vllm \
     --save_outputs \
-    --overwrite \
-    --evaluate_max_workers 32
+    --resume \
+    --evaluate_max_workers 32 \
+    --wandb_mode online \
+    --wandb_group ${MODEL_TAG} \
+    --wandb_run_name ${JOB_TYPE}/${MODEL_TAG} \
+    --wandb_job_type ${JOB_TYPE}
 EOF
 
 
@@ -65,7 +70,8 @@ cmd_gsm8k="${cmd_prefix} \
 "
 
 cmd_math="${cmd_prefix} \
-    --data_names math
+    --data_names math \
+    --max_tokens_per_call 32768
 "
 
 setup_cmd="source scripts/eval/setup.sh"

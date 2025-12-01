@@ -1,18 +1,19 @@
 import gc
 import os
+import re
 import json
 import time
 import random
 import argparse
 from tqdm import tqdm
 from datetime import datetime
-from functools import partial
 
 import torch
 import torch.distributed as dist
 
 from transformers import AutoTokenizer
 
+from trl.wandb_utils import setup_wandb
 from trl.evaluation.evaluate import evaluate
 from trl.evaluation.utils import set_seed, load_jsonl, save_jsonl, construct_prompt
 from trl.evaluation.parser import *
@@ -56,7 +57,7 @@ def parse_args():
     parser.add_argument("--shuffle", action="store_true")
     parser.add_argument("--use_vllm", action="store_true")
     parser.add_argument("--save_outputs", action="store_true")
-    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--use_safetensors", action="store_true")
     parser.add_argument("--num_shots", type=int, default=0)
     parser.add_argument(
@@ -75,6 +76,27 @@ def parse_args():
         type=int,
         default=1,
         help="Maximum number of workers for evaluation.",
+    )
+    parser.add_argument(
+        "--wandb_mode", type=str, default="disabled", help="wandb mode"
+    )
+    parser.add_argument(
+        "--wandb_group", type=str, default="eval_math", help="wandb group"
+    )
+    parser.add_argument(
+        "--wandb_project", type=str, default="minillm-trl", help="wandb project"
+    )
+    parser.add_argument(
+        "--wandb_run_name", type=str, default=None, help="wandb run name"
+    )
+    parser.add_argument(
+        "--wandb_logging_step", type=int, default=0, help="logging step on wandb"
+    )
+    parser.add_argument(
+        "--wandb_job_type", type=str, default="eval", help="wandb job type"
+    )
+    parser.add_argument(
+        "--wandb_entity", type=str, default="eLLM-han2024", help="wandb entity"
     )
     args = parser.parse_args()
     args.top_p = (
@@ -108,7 +130,7 @@ def prepare_data(data_name, args):
 
     # load all processed samples
     processed_samples = []
-    if not args.overwrite:
+    if args.resume:
         processed_files = [
             f
             for f in os.listdir(f"{output_dir}/{data_name}/")
@@ -127,38 +149,76 @@ def prepare_data(data_name, args):
     return examples, processed_samples, out_file
 
 
-def setup(args):
-    # load model
+def main(args):
+    if os.path.exists(os.path.join(args.output_dir, "complete.txt")) and args.resume:
+        if rank == 0:
+            print(f"Evaluation already completed in {args.output_dir}. Exiting...")
+        return
+
     available_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
     if len(available_gpus) == 0 or available_gpus[0] == "":
         available_gpus = [str(i) for i in range(torch.cuda.device_count())]
 
-    if args.use_vllm:
-        llm = LLM(
-            model=args.model_name_or_path,
-            tensor_parallel_size=len(available_gpus) // args.pipeline_parallel_size,
-            pipeline_parallel_size=args.pipeline_parallel_size,
-            trust_remote_code=True,
-        )
-        tokenizer = None
-        if args.apply_chat_template:
-            tokenizer = AutoTokenizer.from_pretrained(
-                args.model_name_or_path, trust_remote_code=True
-            )
-    else:
-        llm, tokenizer = load_hf_lm_and_tokenizer(
-            model_name_or_path=args.model_name_or_path,
-            load_in_half=True,
-            use_fast_tokenizer=True,
-            use_safetensors=args.use_safetensors,
-        )
+    # setup wandb
+    if rank == 0:
+        wandb_cfg = {
+            "project": args.wandb_project,
+            "name": args.wandb_run_name.strip("/") + f"_{args.data_names}" if args.wandb_run_name else None,
+            "group": args.wandb_group.strip("/") if args.wandb_group else None,
+            "mode": args.wandb_mode,
+            "entity": args.wandb_entity,
+            "job_type": args.wandb_job_type,
+        }
+        if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)):
+            wandb_dir = os.path.join(os.path.dirname(args.output_dir), f"wandb_{args.data_names}")
+        else:
+            wandb_dir = os.path.join(args.output_dir, f"wandb_{args.data_names}")
 
-    # infer & eval
+        wandb_logger = setup_wandb(
+            wandb_cfg=wandb_cfg,
+            wandb_dir=wandb_dir,
+            config=vars(args),
+            resume=args.resume,
+        )
+    else:
+        wandb_logger = None
+
+    # infer and evaluate
     data_list = args.data_names.split(",")
+    llm, tokenizer = None, None
     results = []
     for data_name in data_list:
-        results.append(main(llm, tokenizer, data_name, args))
+        samples, ids, processed_samples, out_file = setup_data(data_name, args)
+    
+        if len(samples) > 0 and llm is None and tokenizer is None:
+            if args.use_vllm:
+                llm = LLM(
+                    model=args.model_name_or_path,
+                    tensor_parallel_size=len(available_gpus) // args.pipeline_parallel_size,
+                    pipeline_parallel_size=args.pipeline_parallel_size,
+                    trust_remote_code=True,
+                )
+                tokenizer = None
+                if args.apply_chat_template:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        args.model_name_or_path, trust_remote_code=True
+                    )
+            else:
+                llm, tokenizer = load_hf_lm_and_tokenizer(
+                    model_name_or_path=args.model_name_or_path,
+                    load_in_half=True,
+                    use_fast_tokenizer=True,
+                    use_safetensors=args.use_safetensors,
+                )
+            
+            all_samples, time_use = run_generation(llm, tokenizer, data_name, args, samples)
+        else:
+            all_samples, time_use = [], 0
+        
+        result_json = postprocess_and_evaluate(all_samples, ids, processed_samples, out_file, data_name, args, time_use)
+        results.append(result_json)
 
+    # log results
     if rank == 0:
         # add "avg" result to data_list and results
         data_list.append("avg")
@@ -172,6 +232,17 @@ def setup(args):
         pad = max([len(data_name) for data_name in data_list])
         print("\t".join(data_name.ljust(pad, " ") for data_name in data_list))
         print("\t".join([f"{result['acc']:.1f}".ljust(pad, " ") for result in results]))
+        wandb_logging_dict = {f"math_eval/{data_name}": result["acc"] for data_name, result in zip(data_list, results)}
+        if wandb_logger is not None:
+            if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)):
+                step = int(re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)).group(1))
+            else:
+                step = args.wandb_logging_step
+            wandb_logger.log(wandb_logging_dict, step=step)
+    
+    # clean up
+    if wandb_logger is not None:
+        wandb_logger.finish()
 
     # free gpu memory
     if args.use_vllm:
@@ -182,6 +253,10 @@ def setup(args):
     gc.collect()
     torch.cuda.empty_cache()
 
+    if rank == 0 and not os.path.exists(os.path.join(args.output_dir, "complete.txt")):
+        with open(os.path.join(args.output_dir, "complete.txt"), "w") as f:
+            f.write("Evaluation completed.\n")
+
 
 def is_multi_choice(answer):
     for c in answer:
@@ -190,7 +265,7 @@ def is_multi_choice(answer):
     return True
 
 
-def main(llm, tokenizer, data_name, args):
+def setup_data(data_name, args):
     examples, processed_samples, out_file = prepare_data(data_name, args)
 
     if rank == 0:
@@ -203,12 +278,6 @@ def main(llm, tokenizer, data_name, args):
     examples_w_ids = [(example, i) for i, example in enumerate(examples)]
     examples_w_ids = examples_w_ids[rank::world_size]
     examples, ids = zip(*examples_w_ids) if len(examples_w_ids) > 0 else ([], [])
-
-    # init python executor
-    if "pal" in args.prompt_type:
-        executor = PythonExecutor(get_answer_expr="solution()")
-    else:
-        executor = PythonExecutor(get_answer_from_stdout=True)
 
     samples = []
     for example in tqdm(examples, total=len(examples)):
@@ -253,6 +322,16 @@ def main(llm, tokenizer, data_name, args):
             if key in example:
                 sample[key] = example[key]
         samples.append(sample)
+
+    return samples, ids, processed_samples, out_file
+
+
+def run_generation(llm, tokenizer, data_name, args, samples):
+    # init python executor
+    if "pal" in args.prompt_type:
+        executor = PythonExecutor(get_answer_expr="solution()")
+    else:
+        executor = PythonExecutor(get_answer_from_stdout=True)
 
     # repeat n times
     input_prompts = [
@@ -430,6 +509,12 @@ def main(llm, tokenizer, data_name, args):
     dist.barrier()
     time_use = time.time() - start_time
 
+    return all_samples, time_use
+
+
+def postprocess_and_evaluate(
+    all_samples, ids, processed_samples, out_file, data_name, args, time_use
+):
     assert len(all_samples) == len(ids)
     # all gather samples
     all_samples_with_ids = list(zip(all_samples, ids))
@@ -473,11 +558,10 @@ def main(llm, tokenizer, data_name, args):
 
     return result_json
 
-
 if __name__ == "__main__":
 
     dist.init_process_group(backend="gloo", init_method="env://")
 
     args = parse_args()
     set_seed(args.seed)
-    setup(args)
+    main(args)
