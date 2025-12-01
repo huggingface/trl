@@ -34,6 +34,10 @@ OUTPUT_DIR=results/${RUN_NAME}
 
 NUM_PROCESS=$((gpu_count * SLURM_NNODES))
 
+BATCH_SIZE=32
+MICRO_BATCH_SIZE=1
+GRAD_ACC=$((BATCH_SIZE / MICRO_BATCH_SIZE))
+
 read -r -d '' cmd <<EOF
 accelerate launch --config_file=trl/accelerate_configs/zero1.yaml --num_processes $NUM_PROCESS \
 --num_machines $SLURM_NNODES --rdzv_backend c10d --main_process_ip $head_node_ip --main_process_port 29500 \
@@ -43,8 +47,8 @@ trl/scripts/sft.py \
     --learning_rate 1.0e-5 \
     --num_train_epochs 5 \
     --packing \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 8 \
+    --per_device_train_batch_size $MICRO_BATCH_SIZE \
+    --gradient_accumulation_steps $GRAD_ACC \
     --gradient_checkpointing \
     --eos_token '<|im_end|>' \
     --eval_strategy no \
