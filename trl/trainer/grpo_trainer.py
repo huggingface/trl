@@ -1713,6 +1713,7 @@ class GRPOTrainer(BaseTrainer):
                 model_inputs[key] = inputs[key]
         model_inputs["use_cache"] = False
         if "logits_to_keep" in self.model_kwarg_keys:
+            # Add 1 because the last logits of the sequence is later excluded
             model_inputs["logits_to_keep"] = logits_to_keep + 1
 
         logits = model(**model_inputs).logits
