@@ -226,7 +226,7 @@ $$
 }
 $$
 
-where  \\( C \\) is a hyper-parameter. In TRL, TIS is implemented for GRPO, and enabled by default when vLLM is used for generation (`use_vllm=True`)
+where  \\( C \\) is a hyper-parameter. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
 
 ```python
 from trl import GRPOConfig
@@ -235,9 +235,86 @@ training_args = GRPOConfig(
     ...
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
+    vllm_importance_sampling_mode="sequence_truncate", # or "token_truncate"
     vllm_importance_sampling_cap=2.0, # hyper-parameter C
 )
 ```
+
+### Masked Importance Sampling
+
+**📰 Blog**: https://ringtech.notion.site/icepop
+
+**📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
+
+Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy exceeds a threshold  \\( C \\). We apply upper-side masking, so any ratio above  \\( C \\) is removed from the update.
+
+
+$$
+\small{
+\mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
+\Bigl[
+\underbrace{\mathbf{1}\left[
+\frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
+{\pi_{\text{inference}}(a, \theta_{\mathrm{old}})}
+\le C
+\right]
+\cdot
+\frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
+{\pi_{\text{inference}}(a, \theta_{\mathrm{old}})}}_{\text{masked importance ratio}} \cdot
+\nabla_\theta
+\min\Bigl(
+\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta)}{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}\,\hat A,
+\;\mathrm{clip}\bigl(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta)}{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})},\,1-\epsilon,\,1+\epsilon\bigr)\,\hat A
+\Bigr)
+\Bigr]
+}
+$$
+
+MIS is implemented for GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `"mask"`, such as `"sequence_mask"` or `"token_mask"`.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...
+    use_vllm=True,
+    vllm_importance_sampling_correction=True, # default True
+    vllm_importance_sampling_mode="sequence_mask", # or "token_mask"
+    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+)
+```
+
+### Sequence-level Importance Sampling
+
+**📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
+
+The theoretically principled way to correct for the training-inference distribution shift is importance sampling, as introduced in the two papers above [Truncated Importance Sampling](#truncated-importance-sampling) and [Masked Importance Sampling](#masked-importance-sampling). However, the choice of formulation is crucial for keeping the gradient unbiased and ensuring stable training.
+
+This work shows that sequence-level importance sampling is the sound approach for addressing the training–inference mismatch. Although token-level importance sampling achieves lower variance than a sequence-level ratio, it introduces bias and is therefore argued to be unsuitable for autoregressive models. The token-level gradient estimator is
+
+$$
+\mathbb{E}_{x\sim\mathcal{D},\, y\sim \pi^{\text{inference}}_\theta(\cdot|x)}
+\Bigg[
+  R(x,y)\,\cdot\,
+  \sum_{t=0}^{|y|-1}
+    \frac{\pi^{\text{training}}_\theta(y_t\,|\,x, y_{<t})}
+         {\pi^{\text{inference}}_\theta(y_t\,|\,x, y_{<t})}
+    \,\nabla_\theta \log \pi^{\text{training}}_\theta(y_t\,|\,x, y_{<t})
+\Bigg]
+$$
+The correct, unbiased policy gradient estimator applies a single importance ratio over the entire generated sequence (trajectory)  \\( y \\), The Sequence-Level IS estimator looks like:
+
+$$
+\mathbb{E}_{x\sim\mathcal{D},\, y\sim \pi^{\text{inference}}_\theta(\cdot|x)}
+\Bigg[
+  \frac{\pi^{\text{training}}_\theta(y|x)}
+       {\pi^{\text{inference}}_\theta(y|x)}
+  \, R(x,y)\,
+  \nabla_\theta \log \pi^{\text{training}}_\theta(y|x)
+\Bigg]
+$$
+
+TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
 
 ### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
 
