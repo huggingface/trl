@@ -98,6 +98,12 @@ def parse_args():
     parser.add_argument(
         "--wandb_entity", type=str, default="eLLM-han2024", help="wandb entity"
     )
+    parser.add_argument(
+        "--dummy_output_steps", type=str, default="", help="Steps to output dummy results"
+    )
+    parser.add_argument(
+        "--log_avg", action="store_true", help="Whether to log average accuracy"
+    )
     args = parser.parse_args()
     args.top_p = (
         1 if args.temperature == 0 else args.top_p
@@ -187,10 +193,15 @@ def main(args):
     data_list = args.data_names.split(",")
     llm, tokenizer = None, None
     results = []
+    dummy_output_steps = list(map(int, args.dummy_output_steps.split(","))) if args.dummy_output_steps else []
+    is_dummy_step = False
+    if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)) is not None:
+        is_dummy_step = int(re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)).group(1)) in dummy_output_steps
+
     for data_name in data_list:
         samples, ids, processed_samples, out_file = setup_data(data_name, args)
     
-        if len(samples) > 0 and llm is None and tokenizer is None:
+        if len(samples) > 0 and llm is None and tokenizer is None and not is_dummy_step:
             if args.use_vllm:
                 llm = LLM(
                     model=args.model_name_or_path,
@@ -215,18 +226,19 @@ def main(args):
         else:
             all_samples, time_use = [], 0
         
-        result_json = postprocess_and_evaluate(all_samples, ids, processed_samples, out_file, data_name, args, time_use)
+        if not is_dummy_step:
+            result_json = postprocess_and_evaluate(all_samples, ids, processed_samples, out_file, data_name, args, time_use)
+        else:
+            result_json = {"acc": 0.0}
         results.append(result_json)
 
     # log results
     if rank == 0:
         # add "avg" result to data_list and results
-        data_list.append("avg")
-        results.append(
-            {
-                "acc": sum([result["acc"] for result in results]) / len(results),
-            }
-        )
+        if args.log_avg:
+            data_list.append("avg")
+            avg_acc = sum([result["acc"] for result in results]) / len(results)
+            results.append({"acc": avg_acc})
 
         # print all results
         pad = max([len(data_name) for data_name in data_list])
@@ -234,7 +246,7 @@ def main(args):
         print("\t".join([f"{result['acc']:.1f}".ljust(pad, " ") for result in results]))
         wandb_logging_dict = {f"math_eval/{data_name}": result["acc"] for data_name, result in zip(data_list, results)}
         if wandb_logger is not None:
-            if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)):
+            if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)) is not None:
                 step = int(re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)).group(1))
             else:
                 step = args.wandb_logging_step
