@@ -14,10 +14,10 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [UltraFeedback prompts dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -28,21 +28,14 @@ Below is the script to train the model.
 ```python
 # train_grpo.py
 from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-# Dummy reward function for demonstration purposes
-def reward_num_unique_letters(completions, **kwargs):
-    """Reward function that rewards completions with more unique letters."""
-    completion_contents = [completion[0]["content"] for completion in completions]
-    return [float(len(set(content))) for content in completion_contents]
-
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_num_unique_letters,
-    args=training_args,
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 trainer.train()
@@ -149,6 +142,7 @@ This constant is recommended to be the maximum completion length. To use this fo
 While training and evaluating, we record the following reward metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `step_time`: The average time (in seconds) taken per training step (including generation).
 - `completions/mean_length`: The average length of generated completions.
 - `completions/min_length`: The minimum length of generated completions.
 - `completions/max_length`: The maximum length of generated completions.
@@ -245,6 +239,38 @@ training_args = GRPOConfig(
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
+
+#### Dealing with the Training-Inference Mismatch
+While vLLM greatly accelerates inference, it also decouples the inference engine from the training engine. In theory these engines are mathematically identical, in practice however they can produce different outputs due to precision effects and hardware specific optimizations. This divergence reflects the different optimization objectives of the two systems. This divergence reflects the distinct optimization goals of the two systems. Inference engines aim to maximize sampling throughput, typically measured in tokens per second, while maintaining acceptable sampling fidelity. Training frameworks instead focus on numerical stability and precision for gradient computation, often using higher precision formats like FP32 for master weights and optimizer states. These differing priorities and constraints introduce an inevitable, albeit subtle, mismatch between training and inference.
+
+This mismatch leads to a biased gradient update which has been observed to destabilize training ([[1]](https://fengyao.notion.site/off-policy-rl)[[2]](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)[[3]](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/#true-on-policy-rl)[[4]](https://arxiv.org/abs/2510.26788)[[5]](https://arxiv.org/abs/2510.18855)). For simplicity, consider the REINFORCE policy gradient:
+
+$$
+\nabla_\theta \mathcal{J}(x,\theta)
+= \mathbb{E}_{y \sim \pi^\text{train}(\cdot \mid x,\theta)}
+\left[ \nabla_\theta \log \pi^\text{train}(y \mid x,\theta) \cdot R(x,y) \right]
+$$
+
+Here  \\( x \\) denotes prompts sampled from some data distribution, and  \\( \pi^\text{train} \\) is the policy implemented by the training engine. With vLLM in the loop we obtain a separate inference policy  \\( \pi^\text{inference} \\), so the effective policy gradient becomes
+
+$$
+\nabla_\theta \mathcal{J}_{\text{biased}}(x,\theta)
+= \mathbb{E}_{y \sim \pi^\text{inference}(\cdot \mid x,\theta)}
+\left[ \nabla_\theta \log \pi^\text{train}(y \mid x,\theta) \cdot R(x,y) \right].
+$$
+
+This turns an otherwise on policy RL problem into an off policy one.
+
+The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: [Truncated Importance Sampling (TIS)](paper_index#truncated-importance-sampling) and [Masked Importance Sampling (MIS)](paper_index#masked-importance-sampling). Both variants can be applied either at the token level or at the sequence level.Let  \\( \rho \\) denote the importance weight, for example  \\( \rho_t \\) per token or  \\( \rho_{\text{seq}} \\) per sequence. Under TIS, ratios larger than `vllm_importance_sampling_cap` are clipped,
+
+$$
+\rho \leftarrow \min(\rho, C).
+$$
+
+Under MIS, ratios larger than `vllm_importance_sampling_cap` are set to zero, so those samples do not contribute to the gradient. In other words, large ratio samples are downweighted under TIS and discarded under MIS. The configuration flag `vllm_importance_sampling_mode` chooses both the IS variant (masking or truncation) and the granularity (token level or sequence level).
+
+Importance sampling is the principled algorithmic response to the training–inference mismatch. However, there are also more direct approaches that attempt to reduce the mismatch between the two engines themselves. Most of these are engineering solutions. For example, [MiniMax M1 uses an FP32 language model head](https://arxiv.org/abs/2506.13585) in the inference engine. Thinking Machines has explored [deterministic inference kernels](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/), although this comes with a significant efficiency cost. vLLM has shown [bitwise consistent policies](https://blog.vllm.ai/2025/11/10/bitwise-consistent-train-inference.html) by building on the batch invariant deterministic kernels from Thinking Machines, but as of November 2025 there remains a substantial throughput penalty relative to standard vLLM inference.
+
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
@@ -289,29 +315,27 @@ import argparse
 
 from datasets import load_dataset
 from trl import GRPOTrainer, GRPOConfig
+from trl.rewards import accuracy_reward
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
     args = parser.parse_args()
 
-    # Example dataset from TLDR
-    dataset = load_dataset("trl-lib/tldr", split="train")
-
-    # Dummy reward function: count the number of unique characters in the completions
-    def reward_num_unique_chars(completions, **kwargs):
-        return [len(set(c)) for c in completions]
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
     training_args = GRPOConfig(
-        output_dir="Qwen2.5-72B-GRPO",
         per_device_train_batch_size=4,
-        bf16=True,
-        gradient_checkpointing=True,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 
-    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer = GRPOTrainer(
+        model="Qwen/Qwen2.5-72B",
+        args=training_args,
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset
+    )
     trainer.train()
 
 if __name__=="__main__":

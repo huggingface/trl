@@ -8,10 +8,6 @@
 
 [[autodoc]] RichProgressCallback
 
-## WinRateCallback
-
-[[autodoc]] WinRateCallback
-
 ## LogCompletionsCallback
 
 [[autodoc]] LogCompletionsCallback

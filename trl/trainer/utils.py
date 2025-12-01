@@ -662,7 +662,7 @@ def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | Non
             bnb_4bit_compute_dtype=model_args.dtype,  # For consistency with model weights, we use the same value as `dtype`
             bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_args.dtype,
+            bnb_4bit_quant_storage=model_args.bnb_4bit_quant_storage,
         )
     elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -695,6 +695,7 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
         task_type=model_args.lora_task_type,
         r=model_args.lora_r,
         target_modules=model_args.lora_target_modules,
+        target_parameters=model_args.lora_target_parameters,
         lora_alpha=model_args.lora_alpha,
         lora_dropout=model_args.lora_dropout,
         bias="none",
@@ -845,6 +846,16 @@ class OnPolicyConfig(TrainingArguments):
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
             "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
             "`fp16` is not set."
+        },
+    )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
         },
     )
 
@@ -1986,7 +1997,7 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
-    dtype = kwargs.get("dtype")
+    dtype = kwargs.get("dtype", "auto")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
     elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
@@ -1996,6 +2007,7 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    kwargs["device_map"] = kwargs.get("device_map", "auto")
     config = AutoConfig.from_pretrained(model_id)
     architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
@@ -2014,5 +2026,4 @@ def get_config_model_id(config: PretrainedConfig) -> str:
         `str`:
             The model identifier associated with the model configuration.
     """
-    # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing: Qwen2-VL and Qwen2.5-VL. See GH-4323
-    return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")
+    return getattr(config, "_name_or_path", "")

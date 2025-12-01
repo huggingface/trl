@@ -17,9 +17,9 @@ import time
 
 import pytest
 
-from trl import AllTrueJudge, HfPairwiseJudge, PairRMJudge
+from trl.experimental.judges import AllTrueJudge, HfPairwiseJudge, PairRMJudge
 
-from .testing_utils import RandomBinaryJudge, TrlTestCase, require_llm_blender
+from ..testing_utils import RandomBinaryJudge, TrlTestCase, require_llm_blender
 
 
 class TestJudges(TrlTestCase):

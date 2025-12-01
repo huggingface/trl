@@ -17,16 +17,16 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
-from trl import XPOConfig, XPOTrainer
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 
-from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
+from ..testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-class TestXPOTrainer(TrlTestCase):
+class TestNashMDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -36,8 +36,8 @@ class TestXPOTrainer(TrlTestCase):
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
-    def test_xpo_trainer_training(self, config_name):
-        training_args = XPOConfig(
+    def test_nash_md_trainer_training(self, config_name):
+        training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
@@ -49,7 +49,7 @@ class TestXPOTrainer(TrlTestCase):
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-        trainer = XPOTrainer(
+        trainer = NashMDTrainer(
             model=self.model,
             ref_model=self.ref_model,
             reward_funcs=self.reward_model,
@@ -67,7 +67,7 @@ class TestXPOTrainer(TrlTestCase):
     @require_peft
     def test_training_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        training_args = XPOConfig(
+        training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
@@ -77,7 +77,7 @@ class TestXPOTrainer(TrlTestCase):
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-        trainer = XPOTrainer(
+        trainer = NashMDTrainer(
             model=self.model,
             reward_funcs=self.reward_model,
             args=training_args,
@@ -95,7 +95,7 @@ class TestXPOTrainer(TrlTestCase):
     @require_peft
     def test_training_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        training_args = XPOConfig(
+        training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
@@ -105,7 +105,7 @@ class TestXPOTrainer(TrlTestCase):
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-        trainer = XPOTrainer(
+        trainer = NashMDTrainer(
             model=self.model,
             ref_model=self.ref_model,
             reward_funcs=self.reward_model,
@@ -127,7 +127,7 @@ class TestXPOTrainer(TrlTestCase):
         model = get_peft_model(self.model, model_lora_config)
         # we want only the "train adapter" to be trained
         lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        training_args = XPOConfig(
+        training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
@@ -137,7 +137,7 @@ class TestXPOTrainer(TrlTestCase):
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-        trainer = XPOTrainer(
+        trainer = NashMDTrainer(
             model=model,
             reward_funcs=self.reward_model,
             args=training_args,
@@ -153,28 +153,30 @@ class TestXPOTrainer(TrlTestCase):
         assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
-    def test_training_pre_pefted_model_implicit_ref(self):
+    def test_training_pre_pefted_model_implicit_ref_with_reward_model(self):
         lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
+        # self.model from setUp is a base AutoModelForCausalLM
         peft_model_instance = get_peft_model(self.model, lora_config)
 
-        training_args = XPOConfig(
+        training_args = NashMDConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,
-            max_steps=2,
+            per_device_train_batch_size=1,  # Keep small for quick test
+            max_steps=2,  # Few steps
             learning_rate=5.0e-7,
             eval_strategy="no",
             report_to="none",
-            remove_unused_columns=False,
+            remove_unused_columns=False,  # Important for the dummy dataset
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
 
-        trainer = XPOTrainer(
-            model=peft_model_instance,
-            ref_model=None,
-            reward_funcs=self.reward_model,  # Using reward_model to ensure _generate_completions is used as expected
+        trainer = NashMDTrainer(
+            model=peft_model_instance,  # Pass the already PEFT model
+            ref_model=None,  # Implicit reference from peft_model_instance's base
+            reward_funcs=self.reward_model,  # To trigger GeometricMixtureWrapper path
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset,
+            # peft_config is not passed, as model is already PEFT
         )
 
         trainer.train()
@@ -183,8 +185,8 @@ class TestXPOTrainer(TrlTestCase):
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
-    def test_xpo_trainer_judge_training(self, config_name):
-        training_args = XPOConfig(
+    def test_nash_md_trainer_judge_training(self, config_name):
+        training_args = NashMDConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=3,
@@ -197,7 +199,7 @@ class TestXPOTrainer(TrlTestCase):
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
         judge = RandomPairwiseJudge()
 
-        trainer = XPOTrainer(
+        trainer = NashMDTrainer(
             model=self.model,
             ref_model=self.ref_model,
             judge=judge,

@@ -15,6 +15,7 @@
 import importlib
 import os
 import warnings
+from contextlib import contextmanager
 from itertools import chain
 from types import ModuleType
 from typing import Any
@@ -23,7 +24,7 @@ from packaging import version
 from transformers.utils.import_utils import _is_package_available
 
 
-LIGER_KERNEL_MIN_VERSION = "0.5.8"
+LIGER_KERNEL_MIN_VERSION = "0.6.4"
 
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
@@ -102,6 +103,25 @@ def is_vllm_ascend_available() -> bool:
 
 def is_weave_available() -> bool:
     return _weave_available
+
+
+@contextmanager
+def temporary_env(var, value):
+    """
+    Temporarily set an environment variable. Restores the original value (if any) when done.
+    """
+    # Save original value (or None if not set)
+    original = os.environ.get(var)
+    os.environ[var] = value
+    try:
+        yield
+    finally:
+        if original is None:
+            # Variable wasn't set before → remove it
+            os.environ.pop(var, None)
+        else:
+            # Variable was set → restore original value
+            os.environ[var] = original
 
 
 class _LazyModule(ModuleType):

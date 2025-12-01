@@ -47,14 +47,18 @@ class GRPOConfig(TrainingArguments):
             is False.
 
         > Parameters that control the data preprocessing
+
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
-        num_generations (`int` or `None`, *optional*, defaults to `8`):
+        num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
+        num_generations_eval (`int` or `None`, *optional*):
+            Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
+            save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -147,8 +151,8 @@ class GRPOConfig(TrainingArguments):
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
-            for weight sync and generation.
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
 
         > Parameters that control the training
 
@@ -166,6 +170,8 @@ class GRPOConfig(TrainingArguments):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+            When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
+            paper](https://arxiv.org/pdf/2510.13786) and the recommended value is `5.0`.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -201,6 +207,10 @@ class GRPOConfig(TrainingArguments):
               batch. Note that normalization is performed over the local batch only, so results may slightly vary
               depending on the local batch size, despite a constant effective batch size. When using
               `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+            - `"cispo"`: Clips the importance sampling weights instead of the advantage scaled importance weights. The
+              clipped weights are then multiplied with the advantages and policy model's log probs. Individual token
+              losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
+              This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -233,16 +243,23 @@ class GRPOConfig(TrainingArguments):
             instead.
 
             </Deprecated>
-
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
-            Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
-            logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
-            Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
-            (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
-            and training backends. TIS is proposed as a remedy for this issue.
-        vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
-            Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
-            sampling ratio, improving training stability.
+            Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
+            recomputed training logprobs. If set to `False`, no IS is applied regardless of
+            `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
+            and constrained.
+        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
+            Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
+            values are:
+
+                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped from above at C.
+                - `"token_mask"`: Token-level masked IS. Per-token ratios above C are set to zero.
+                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
+                  C and applied to all tokens in the sequence.
+                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
+        vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
+            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
+            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
 
         > Parameters that control the logging
 
@@ -252,9 +269,20 @@ class GRPOConfig(TrainingArguments):
             `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
-        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
-            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
-            are logged.
+        log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
+            logged.
+
+        > Deprecated arguments
+
+        wandb_log_unique_prompts (`bool`, *optional*):
+
+            <Deprecated version="0.26.0">
+
+            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.27.0. Use
+            `log_unique_prompts` instead.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -283,6 +311,16 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
             "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
             "`fp16` is not set."
+        },
+    )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
         },
     )
 
@@ -331,6 +369,13 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
             "* gradient_accumulation_steps) must be evenly divisible by this value."
+        },
+    )
+    num_generations_eval: int | None = field(
+        default=None,
+        metadata={
+            "help": "Number of generations to sample during evaluation. This allows using fewer generations during "
+            "evaluation to save computation. If `None`, uses the value of `num_generations`."
         },
     )
     max_completion_length: int | None = field(
@@ -454,8 +499,8 @@ class GRPOConfig(TrainingArguments):
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={
-            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
-            "and woken for weight sync and generation."
+            "help": "Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory "
+            "usage low, but waking the engine adds host–device transfer latency."
         },
     )
     vllm_guided_decoding_regex: str | None = field(
@@ -533,7 +578,9 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
-            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
+            "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the"
+            "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
         },
     )
     importance_sampling_level: str = field(
@@ -582,6 +629,11 @@ class GRPOConfig(TrainingArguments):
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
             "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
+            "'cispo': Clips the importance sampling weights instead of the advantage scaled importance weights. "
+            "The clipped weights are then multiplied with the advantages and policy model's log probs. "
+            "Individual token losses are aggregated by normalizing with the number of active tokens in "
+            "the global accumulated batch. This method was introduced in the "
+            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
         },
     )
     mask_truncated_completions: bool = field(
@@ -631,18 +683,32 @@ class GRPOConfig(TrainingArguments):
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
-            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
-            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
-            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
-            "effects due to subtle implementation differences between generation and training backends. TIS is "
-            "proposed as a remedy for this issue."
+            "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
+            "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
+            "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
+            "IS ratios are computed and constrained."
         },
     )
-    vllm_importance_sampling_cap: float = field(
-        default=2.0,
+
+    vllm_importance_sampling_mode: str = field(
+        default="sequence_mask",
         metadata={
-            "help": "Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the "
-            "importance sampling ratio, improving training stability."
+            "help": "Specifies how Importance Sampling (IS) is performed when "
+            "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
+            "dimensions: (1) constraint, which determines how to handle ratios above "
+            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
+            "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+            "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
+            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
+            "'sequence_mask'."
+        },
+    )
+
+    vllm_importance_sampling_cap: float = field(
+        default=3.0,
+        metadata={
+            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
 
@@ -658,12 +724,18 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_log_unique_prompts: bool | None = field(
+    log_unique_prompts: bool = field(
         default=False,
         metadata={
-            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
-            "all prompts are logged."
+            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all "
+            "prompts are logged."
         },
+    )
+
+    # Deprecated arguments
+    wandb_log_unique_prompts: bool | None = field(
+        default=None,
+        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
     )
 
     def __post_init__(self):
@@ -728,3 +800,12 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.wandb_log_unique_prompts is not None:
+            warnings.warn(
+                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.27.0. Please "
+                "use `log_unique_prompts` instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.log_unique_prompts = self.wandb_log_unique_prompts

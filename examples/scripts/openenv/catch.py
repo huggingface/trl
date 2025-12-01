@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Simple script to run GRPO training with OpenEnv's Catch environment (OpenSpiel) and a vLLM server. The reward function
+Simple script to run GRPO training with OpenEnv's Catch environment (OpenSpiel) and vLLM. The reward function
 is based on the catch game where the agent tries to catch falling balls.
 
 Setup:
@@ -22,23 +22,28 @@ Setup:
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 ```
 
-Usage (2 GPUs required):
+Usage:
 
-# Start the docker container for the Catch environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
+# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
 ```sh
 docker run -d -p 8001:8001 registry.hf.space/openenv-openspiel-env:latest
 ```
 
-# Spin up vLLM server
+# Option 1: Colocated vLLM (1 GPU required)
+```sh
+python examples/scripts/openenv/catch.py --vllm-mode colocate
+```
 
+# Option 2: Separate vLLM server (2 GPUs required)
+
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 ```
 
-# Run training
-
+# Run training (Terminal 2)
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/catch.py
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/catch.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 """
 
@@ -57,6 +62,7 @@ from envs.openspiel_env import OpenSpielEnv
 from envs.openspiel_env.models import OpenSpielAction
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback, apply_chat_template
+from trl.experimental.openenv import generate_rollout_completions
 
 
 def parse_args():
@@ -67,17 +73,11 @@ def parse_args():
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the environment server.")
     parser.add_argument(
         "--env-mode",
-        choices=["local", "docker", "space"],
-        default="docker",
-        help="Where to run the environment: 'local', 'docker', or 'space'.",
+        choices=["local", "docker-local", "docker-image", "docker-hub", "space"],
+        default="docker-image",
+        help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
     # --- Generation and model config ---
-    parser.add_argument(
-        "--gen-url",
-        type=str,
-        default="http://0.0.0.0:8000/generate/",
-        help="vLLM generation endpoint URL.",
-    )
     parser.add_argument(
         "--model",
         type=str,
@@ -89,6 +89,21 @@ def parse_args():
         type=int,
         default=1000,
         help="Number of prompts to use for training dataset.",
+    )
+    parser.add_argument(
+        "--env-image", type=str, default="openspiel-env:latest", help="Docker image for the OpenSpiel environment."
+    )
+    parser.add_argument(
+        "--vllm-mode",
+        choices=["colocate", "server"],
+        default="colocate",
+        help="vLLM execution mode: 'colocate' or 'server'.",
+    )
+    parser.add_argument(
+        "--vllm-server-url",
+        type=str,
+        default="http://localhost:8000",
+        help="URL for the vLLM server (only used when --vllm-mode=server).",
     )
 
     return parser.parse_args()
@@ -159,62 +174,6 @@ Respond **only** with one integer: `0`, `1`, or `2`.
 """
 
 
-def rollout_func(
-    prompts: list[str], args: GRPOConfig, processing_class, client: OpenSpielEnv, gen_url: str
-) -> dict[str, list]:
-    """Generate completions via vLLM and compute environment rewards."""
-    env_rewards = []
-    all_prompt_ids, all_completion_ids, all_logprobs = [], [], []
-
-    for base_prompt in prompts:
-        for _ in range(args.num_generations):
-            env_result = client.reset()
-            obs = env_result.observation
-            total_reward = 0.0
-
-            episode_prompt_ids, episode_completion_ids, episode_logprobs = [], [], []
-
-            while not obs.done:
-                episode_msg = {"prompt": [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]}
-                episode_prompt = apply_chat_template(episode_msg, processing_class)
-
-                payload = {
-                    "prompts": [episode_prompt["prompt"]],
-                    "n": 1,
-                    "temperature": args.temperature,
-                    "top_p": args.top_p,
-                    "max_tokens": args.max_completion_length,
-                }
-                response = requests.post(gen_url, json=payload)
-                response.raise_for_status()
-                result = response.json()
-
-                episode_prompt_ids.extend(result["prompt_ids"][0])
-                episode_completion_ids.extend(result["completion_ids"][0])
-                episode_logprobs.extend(result["logprobs"][0])
-
-                completion_text = processing_class.batch_decode(result["completion_ids"], skip_special_tokens=True)[0]
-
-                numbers = re.findall(r"\b([0-2])\b", completion_text)
-                action_id = int(numbers[0]) if numbers else obs.legal_actions[0]
-
-                env_result = client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
-                total_reward += env_result.reward or 0.0
-                obs = env_result.observation
-
-            env_rewards.append(total_reward)
-            all_prompt_ids.append(episode_prompt_ids)
-            all_completion_ids.append(episode_completion_ids)
-            all_logprobs.append(episode_logprobs)
-
-    return {
-        "prompt_ids": all_prompt_ids,
-        "completion_ids": all_completion_ids,
-        "logprobs": all_logprobs,
-        "env_reward": env_rewards,
-    }
-
-
 def reward_from_env(completions, **kwargs):
     rewards = kwargs.get("env_reward", [])
     return [float(r) for r in rewards] if rewards else [0.0] * len(completions)
@@ -227,25 +186,34 @@ def main():
     if args.env_mode == "local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = start_env_server(args.env_host, args.env_port)
-    elif args.env_mode == "docker":
+    elif args.env_mode == "docker-local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = None
-        print(f"🌍 Using existing Docker environment at {env_url}")
+        print(f"🌍 Using existing OpenSpiel Environment (Docker) at: {env_url}")
+    elif args.env_mode == "docker-image":
+        client = OpenSpielEnv.from_docker_image(args.env_image)
+        server_process = None
+        print("🌍 Using OpenSpiel Environment (Docker) from local Image")
+    elif args.env_mode == "docker-hub":
+        client = OpenSpielEnv.from_hub(args.env_image)
+        server_process = None
+        print("🌍 Using existing OpenSpiel Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
         server_process = None
-        print(f"🚀 Using Hugging Face Space environment at {env_url}")
+        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
     else:
-        raise ValueError(f"Unknown env mode: {args.env_mode}")
+        raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
-    gen_url = args.gen_url
-    client = OpenSpielEnv(base_url=env_url)
+    if args.env_mode != "docker-hub" and args.env_mode != "docker-image":
+        client = OpenSpielEnv(base_url=env_url)
     dataset = Dataset.from_dict({"prompt": [BASE_PROMPT] * args.dataset_size})
 
     training_args = GRPOConfig(
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Catch",
-        vllm_mode="server",
         use_vllm=True,
+        vllm_mode=args.vllm_mode,
+        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         logging_steps=1,
         report_to="trackio",
         num_train_epochs=1,
@@ -253,12 +221,60 @@ def main():
         gradient_accumulation_steps=4,
     )
 
+    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+        """Generate completions via vLLM (colocated or server) and compute environment rewards."""
+        env_rewards: list[float] = []
+        all_prompt_ids: list[list[int]] = []
+        all_completion_ids: list[list[int]] = []
+        all_logprobs: list[list[float]] = []
+        tokenizer = trainer.processing_class
+
+        for base_prompt in prompts:
+            env_result = client.reset()
+            obs = env_result.observation
+            total_reward = 0.0
+
+            episode_prompt_ids: list[int] = []
+            episode_completion_ids: list[int] = []
+            episode_logprobs: list[float] = []
+
+            while not obs.done:
+                episode_msg = {"prompt": [{"role": "user", "content": f"{base_prompt}\n\n{obs.info_state}\n"}]}
+                episode_prompt = apply_chat_template(episode_msg, tokenizer)
+                rollout_output = generate_rollout_completions(trainer, [episode_prompt["prompt"]])[0]
+
+                episode_prompt_ids.extend(rollout_output["prompt_ids"])
+                episode_completion_ids.extend(rollout_output["completion_ids"])
+                episode_logprobs.extend(rollout_output["logprobs"])
+
+                completion_text = tokenizer.batch_decode([rollout_output["completion_ids"]], skip_special_tokens=True)[
+                    0
+                ]
+                numbers = re.findall(r"\b([0-2])\b", completion_text)
+                action_id = int(numbers[0]) if numbers else obs.legal_actions[0]
+
+                env_result = client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
+                total_reward += env_result.reward or 0.0
+                obs = env_result.observation
+
+            env_rewards.append(total_reward)
+            all_prompt_ids.append(episode_prompt_ids)
+            all_completion_ids.append(episode_completion_ids)
+            all_logprobs.append(episode_logprobs)
+
+        return {
+            "prompt_ids": all_prompt_ids,
+            "completion_ids": all_completion_ids,
+            "logprobs": all_logprobs,
+            "env_reward": env_rewards,
+        }
+
     trainer = GRPOTrainer(
         model=args.model,
         reward_funcs=reward_from_env,
         args=training_args,
         train_dataset=dataset,
-        rollout_func=lambda p, a, pc: rollout_func(p, a, pc, client, gen_url),
+        rollout_func=rollout_func,
         callbacks=[RichProgressCallback()],
     )
 

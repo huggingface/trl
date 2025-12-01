@@ -222,7 +222,7 @@ def clone_chat_template(
     # Set the EOS token from the source tokenizer (important for generation)
     tokenizer.eos_token = tokenizer_source.eos_token
     model.config.eos_token_id = tokenizer.eos_token_id
-    if model.generation_config is not None:  # for SequenceClassification models, generation_config is None
+    if model.can_generate():  # Non-generative models (e.g. SequenceClassification) may not have a generation_config
         model.generation_config.eos_token_id = tokenizer.eos_token_id
 
     # Resize model embeddings to include any new tokens, optionally rounding up to a multiple
@@ -485,17 +485,9 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
     if gradient_checkpointing_kwargs is None:
         gradient_checkpointing_kwargs = {}
 
-    n_upcasted = 0
-    for name, param in model.named_parameters():
+    for _, param in model.named_parameters():
         # freeze all parameters
         param.requires_grad = False
-
-        # upcast LayerNorm / Norm to float32 for numerical stability
-        if (param.dtype in [torch.float16, torch.bfloat16]) and (
-            "norm" in name.lower() or "layernorm" in name.lower()
-        ):
-            param.data = param.data.to(torch.float32)
-            n_upcasted += 1
 
     # Enable gradient checkpointing if needed
     if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
