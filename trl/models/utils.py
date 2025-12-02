@@ -14,12 +14,11 @@
 
 import inspect
 import itertools
-import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -83,82 +82,6 @@ class ChatMlSpecialTokens:
 
 
 FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
-
-
-def setup_chat_format(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
-    format: Literal["chatml"] | None = "chatml",
-    resize_to_multiple_of: int | None = None,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
-    # docstyle-ignore
-    """
-    Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
-    embedding layer of the model based on the new special tokens.
-
-    > [!WARNING]
-    > This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
-
-    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set
-    `tokenizer.chat_template` to `None`.
-
-    Args:
-        model ([`~transformers.PreTrainedModel`]): The model to be modified.
-        tokenizer ([`~transformers.PreTrainedTokenizer`]): The tokenizer to be modified.
-        format (`Literal["chatml"] | None`): The format to be set. Defaults to "chatml".
-        resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
-
-    Returns:
-        model ([`~transformers.PreTrainedModel`]):
-            The modified model.
-        tokenizer ([`~transformers.PreTrainedTokenizer`]):
-            The modified tokenizer.
-    """
-    warnings.warn(
-        "The `setup_chat_format` function is deprecated and will be removed in version 0.26.0. Please use "
-        "`clone_chat_template` instead.",
-        FutureWarning,
-    )
-    # check if model already had a chat template
-    if tokenizer.chat_template is not None:
-        raise ValueError(
-            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None"
-        )
-
-    # check if format available and retrieve
-    if format not in FORMAT_MAPPING:
-        raise ValueError(f"Format {format} not available. Please use one of {FORMAT_MAPPING.keys()}")
-
-    chat_format = FORMAT_MAPPING[format]()
-
-    # set special tokens and them
-    tokenizer.eos_token = chat_format.eos_token
-    tokenizer.pad_token = chat_format.pad_token
-    tokenizer.bos_token = chat_format.bos_token
-    tokenizer.add_special_tokens({"additional_special_tokens": [chat_format.bos_token, chat_format.eos_token]})
-    # set chat format for tokenizer
-    tokenizer.chat_template = chat_format.chat_template
-
-    # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
-    model.resize_token_embeddings(
-        # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
-        # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
-        # as handling of special and added tokens varies across tokenizers.
-        new_num_tokens=len(tokenizer.vocab),
-        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
-    )
-    # Update the model config to use the new eos & bos tokens
-    if getattr(model, "config", None) is not None:
-        model.config.pad_token_id = tokenizer.pad_token_id
-        model.config.bos_token_id = tokenizer.bos_token_id
-        model.config.eos_token_id = tokenizer.eos_token_id
-    # Update the generation config to use the new eos & bos token
-    if getattr(model, "generation_config", None) is not None:
-        model.generation_config.bos_token_id = tokenizer.bos_token_id
-        model.generation_config.eos_token_id = tokenizer.eos_token_id
-        model.generation_config.pad_token_id = tokenizer.pad_token_id
-
-    return model, tokenizer
 
 
 def clone_chat_template(
