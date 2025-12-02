@@ -40,7 +40,7 @@ class MergeConfig(_MergeConfig):
         warnings.warn(
             "`MergeConfig` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.merge_model_callback import MergeConfig`. The current import path will be "
-            "removed and no longer supported in TRL 0.27. For more information, see "
+            "removed and no longer supported in TRL 0.29. For more information, see "
             "https://github.com/huggingface/trl/issues/4223."
         )
 
