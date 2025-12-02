@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import os
 import warnings
 
 import pandas as pd
@@ -35,10 +34,9 @@ from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
-from ..import_utils import is_mergekit_available, is_weave_available, temporary_env
-from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
+from ..import_utils import is_weave_available, temporary_env
 from ..models.utils import unwrap_model_for_generation
-from .utils import get_config_model_id, log_table_to_comet_experiment
+from .utils import log_table_to_comet_experiment
 
 
 if is_rich_available():
@@ -58,6 +56,7 @@ if is_weave_available():
     from weave.trace.context import weave_client_context
 
 with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+    from ..experimental.merge_model_callback import MergeModelCallback as _MergeModelCallback
     from ..experimental.winrate_callback import WinRateCallback as _WinRateCallback
 
 # Logger for module-level logging
@@ -599,65 +598,14 @@ class WeaveCallback(TrainerCallback):
         self._last_logged_step = state.global_step
 
 
-class MergeModelCallback(TrainerCallback):
-    r"""
-    A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based
-    on a merge configuration.
-
-    Args:
-        merge_config ([`MergeConfig`], *optional*):
-            Configuration used for the merging process. If not provided, the default [`MergeConfig`] is used.
-        merge_at_every_checkpoint (`bool`, *optional*, defaults to `False`):
-            Whether to merge the model at every checkpoint.
-        push_to_hub (`bool`, *optional*, defaults to `False`):
-            Whether to push the merged model to the Hub after merging.
-
-    Example:
-
-    ```python
-    from trl.mergekit_utils import MergeConfig
-    from trl import MergeModelCallback
-
-    config = MergeConfig()
-    merge_callback = MergeModelCallback(config)
-    trainer = DPOTrainer(..., callbacks=[merge_callback])
-    ```
-    """
-
-    def __init__(
-        self,
-        merge_config: "MergeConfig | None" = None,
-        merge_at_every_checkpoint: bool = False,
-        push_to_hub: bool = False,
-    ):
-        if not is_mergekit_available():
-            raise ImportError(
-                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install mergekit`."
-            )
-        self.merge_config = merge_config or MergeConfig()
-        self.merge_at_every_checkpoint = merge_at_every_checkpoint
-        self.push_to_hub = push_to_hub
-
-    def _merge_and_maybe_push(self, output_dir, global_step, model):
-        checkpoint_path = os.path.join(output_dir, f"checkpoint-{global_step}")
-        self.merge_config.policy_model_path = checkpoint_path
-        if self.merge_config.target_model_path is None:
-            self.merge_config.target_model_path = get_config_model_id(model.config)
-        merge_path = os.path.join(checkpoint_path, "merged")
-
-        merge_models(self.merge_config.create(), merge_path)
-
-        if self.push_to_hub:
-            repo_name = f"{output_dir}_checkpoint-{global_step}_merged"
-            upload_model_to_hf(merge_path, repo_name)
-
-    def on_save(self, args, state, control, model=None, **kwargs):
-        if self.merge_at_every_checkpoint:
-            self._merge_and_maybe_push(args.output_dir, state.global_step, model)
-
-    def on_train_end(self, args, state, control, model=None, **kwargs):
-        if not self.merge_at_every_checkpoint:
-            self._merge_and_maybe_push(args.output_dir, state.global_step, model)
+class MergeModelCallback(_MergeModelCallback):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "The `MergeModelCallback` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.merge_model_callback import MergeModelCallback`. The current import path will be "
+            "removed and no longer supported in TRL 0.27. For more information, see "
+            "https://github.com/huggingface/trl/issues/4223.",
+        )
 
 
 class BEMACallback(TrainerCallback):
