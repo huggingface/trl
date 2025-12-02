@@ -107,6 +107,8 @@
     title: Judges
   - local: kto_trainer
     title: KTO
+  - local: merge_model_callback
+    title: MergeModelCallback
   - local: minillm_trainer
     title: MiniLLM
   - local: nash_md_trainer
