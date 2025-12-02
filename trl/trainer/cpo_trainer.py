@@ -15,7 +15,11 @@
 import warnings
 from dataclasses import dataclass
 
-from ..experimental.cpo import CPOTrainer as _CPOTrainer
+from ..import_utils import temporary_env
+
+
+with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+    from ..experimental.cpo import CPOTrainer as _CPOTrainer
 
 
 @dataclass
