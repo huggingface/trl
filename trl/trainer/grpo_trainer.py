@@ -392,6 +392,7 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
+        self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
@@ -1641,10 +1642,33 @@ class GRPOTrainer(BaseTrainer):
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
-                importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
-                importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
-                )
+                per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * completion_mask
+
+                sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
+                if sequence_level_is:
+                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                    logps_diff = per_sequence_logps_diff
+                else:
+                    logps_diff = per_token_logps_diff
+
+                vllm_importance_sampling_ratio = torch.exp(logps_diff)
+
+                # vllm_importance_sampling_ratio.shape:
+                #   token_* modes:     (B, T)  (per-token ratio)
+                #   sequence_* modes:  (B, 1)  (per-sequence ratio)
+
+                if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
+                    vllm_importance_sampling_ratio = torch.clamp(
+                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    )
+                elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
+                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown vLLM importance sampling level: {self.vllm_importance_sampling_mode}. Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', and 'sequence_mask'."
+                    )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1767,7 +1791,11 @@ class GRPOTrainer(BaseTrainer):
                 self.accelerator.gather(max_delta).max().item()
             )
 
-            flat_is_ratio = importance_sampling_ratio[completion_mask.bool()]
+            if sequence_level_is:
+                flat_is_ratio = vllm_importance_sampling_ratio.flatten()
+            else:
+                flat_is_ratio = vllm_importance_sampling_ratio[completion_mask.bool()]
+
             min_importance_sampling_ratio = (
                 torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
             )
@@ -1798,7 +1826,7 @@ class GRPOTrainer(BaseTrainer):
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
         if self.use_vllm and self.vllm_importance_sampling_correction:
-            output["importance_sampling_ratio"] = importance_sampling_ratio
+            output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in forward_kwargs:
