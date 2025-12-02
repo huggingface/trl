@@ -52,6 +52,8 @@ def merge_models(*args, **kwargs):
         "`merge_models` is now located in `trl.experimental`. Please update your imports to "
         "`from trl.experimental.merge_model_callback import merge_models`. The current import path will be "
         "removed and no longer supported in TRL 0.29. For more information, see "
-        "https://github.com/huggingface/trl/issues/4223."
+        "https://github.com/huggingface/trl/issues/4223.",
+        FutureWarning,
+        stacklevel=2,
     )
     return _merge_models(*args, **kwargs)
