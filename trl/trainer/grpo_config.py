@@ -339,6 +339,10 @@ class GRPOConfig(TrainingArguments):
             "it prevents the model from generating different logprobs for the same input."
         },
     )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={"help": "Whether to trust remote code when loading custom models e.g. from the Hugging Face Hub."},
+    )
     cast_lm_head_to_fp32: bool = field(
         default=False,
         metadata={

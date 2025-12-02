@@ -37,6 +37,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoConfig,
+    AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
@@ -271,9 +272,13 @@ class GRPOTrainer(BaseTrainer):
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
+            if architecture := getattr(transformers, config.architectures[0], None):
+                model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            else:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_id, trust_remote_code=args.trust_remote_code, **model_init_kwargs
+                )
         else:
             model_id = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
@@ -295,7 +300,9 @@ class GRPOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config), truncation_side="left")
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code, truncation_side="left"
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -471,9 +478,13 @@ class GRPOTrainer(BaseTrainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
+            if architecture := getattr(transformers, config.architectures[0], None):
+                self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            else:
+                self.ref_model = AutoModelForCausalLM.from_pretrained(
+                    model_id, trust_remote_code=args.trust_remote_code, **model_init_kwargs
+                )
 
         # Disable dropout in the models
         if args.disable_dropout:
@@ -619,6 +630,7 @@ class GRPOTrainer(BaseTrainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
+                    trust_remote_code=self.args.trust_remote_code,
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
                     quantization=vllm_quantization,
