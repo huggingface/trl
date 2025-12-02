@@ -1894,12 +1894,12 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         elif self.loss_type == "sapo":
             per_token_loss = torch.empty_like(coef_1)
-            pos_advantages_mask = advantages.repeat([1, coef_1.shape[1]]) > 0
-            per_token_loss[pos_advantages_mask] = self.get_sapo_token_loss(
-                coef_1[pos_advantages_mask], self.args.sapo_temperature_pos
+            positive_advantages_mask = advantages.repeat([1, coef_1.shape[1]]) > 0
+            per_token_loss[positive_advantages_mask] = self.get_sapo_token_loss(
+                coef_1[positive_advantages_mask], self.args.sapo_temperature_pos
             )
-            per_token_loss[~pos_advantages_mask] = self.get_sapo_token_loss(
-                coef_1[~pos_advantages_mask], self.args.sapo_temperature_neg
+            per_token_loss[~positive_advantages_mask] = self.get_sapo_token_loss(
+                coef_1[~positive_advantages_mask], self.args.sapo_temperature_neg
             )
             per_token_loss = -per_token_loss * advantages
         else:

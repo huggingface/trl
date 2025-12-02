@@ -172,14 +172,12 @@ class GRPOConfig(TrainingArguments):
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
             When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
             paper](https://arxiv.org/pdf/2510.13786) and the recommended value is `5.0`.
-        sapo_temperature_neg (`float`, *optional*):
-            Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. If not
-            specified, it defaults to `1.05`. This parameter is introduced in the [Soft Adaptive Policy Optimization
-            paper](https://huggingface.co/papers/2511.20347).
-        sapo_temperature_pos (`float`, *optional*):
-            Temperature for tokens with positive advantage scores used in the `sapo` loss function. If not specified,
-            it defaults to `1.0`. This parameter is introduced in the [Soft Adaptive Policy Optimization
-            paper](https://huggingface.co/papers/2511.20347).
+        sapo_temperature_neg (`float`, *optional*, defaults to `1.05`):
+            Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. This parameter
+            is introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
+        sapo_temperature_pos (`float`, *optional*, defaults to `1.0`):
+            Temperature for tokens with positive advantage scores used in the `sapo` loss function. This parameter is
+            introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -588,20 +586,20 @@ class GRPOConfig(TrainingArguments):
             "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
         },
     )
-    sapo_temperature_neg: float | None = field(
+    sapo_temperature_neg: float = field(
         default=1.05,
         metadata={
             "help": "Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. "
-            "If not specified, it defaults to `1.05`. This parameter is introduced in the "
-            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347)."
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
         },
     )
-    sapo_temperature_pos: float | None = field(
+    sapo_temperature_pos: float = field(
         default=1.0,
         metadata={
             "help": "Temperature for tokens with positive advantage scores used in the `sapo` loss function. "
-            "If not specified, it defaults to `1.0`. This parameter is introduced in the "
-            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347)."
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
         },
     )
     importance_sampling_level: str = field(

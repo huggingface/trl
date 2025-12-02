@@ -36,7 +36,6 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.rewards.accuracy_rewards import accuracy_reward
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -169,12 +168,8 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_get_sapo_token_loss(self):
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[accuracy_reward],
-        )
         sample_token_importance_ratio = torch.ones((2, 4))
-        sapo_token_loss = trainer.get_sapo_token_loss(sample_token_importance_ratio, 1.0)
+        sapo_token_loss = GRPOTrainer.get_sapo_token_loss(sample_token_importance_ratio, 1.0)
         # sigmoid(temp * (1-1)) * 4/temp = 0.5 * 4 = 2
         expected_sapo_token_loss = torch.full_like(sample_token_importance_ratio, 2.0)
         torch.testing.assert_close(sapo_token_loss, expected_sapo_token_loss)
@@ -184,7 +179,6 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
-            fp16=True,
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage

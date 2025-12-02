@@ -281,7 +281,7 @@ You can partially reproduce the ScaleRL recipe using the [`GRPOTrainer`] with th
 ```python
 from trl import GRPOConfig
 
-config = GRPOConfig(
+training_args = GRPOConfig(
     loss_type="cispo",
     epsilon_high=5.0,
     num_generations=16,
@@ -301,7 +301,7 @@ To reproduce the paper's setting, use this configuration:
 ```python
 from trl import GRPOConfig
 
-config = GRPOConfig(
+training_args = GRPOConfig(
     loss_type="sapo",
     sapo_temperature_pos=1.0,  # default value
     sapo_temperature_neg=1.05,  # default value
