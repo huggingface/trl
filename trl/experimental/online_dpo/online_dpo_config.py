@@ -347,6 +347,13 @@ class OnlineDPOConfig(TrainingArguments):
             "after the timeout, a `ConnectionError` is raised.",
         },
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group."
+            "This is used to communicate with the vllm server. Unless the port is occupied, there is no need to modify it by default."
+        },
+    )
     vllm_tensor_parallel_size: int = field(
         default=1,
         metadata={
