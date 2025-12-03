@@ -176,3 +176,11 @@ class MiniLLMConfig(GRPOConfig):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        import torch.distributed as dist
+        if dist.get_rank() == 0:
+            print(f"Per-device train batch size: {self.per_device_train_batch_size}")
+            print(f"Global train batch size: {self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps}")
+            print(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
+            print(f"Generation batch size: {self.generation_batch_size}")
+            print(f"Steps per generation: {self.steps_per_generation}")

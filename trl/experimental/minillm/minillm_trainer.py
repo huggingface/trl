@@ -15,6 +15,7 @@
 import textwrap
 
 import os
+import time
 import torch
 import torch.nn as nn
 from accelerate import PartialState, logging
@@ -309,6 +310,10 @@ class MiniLLMTrainer(GRPOTrainer):
         self.gamma = args.gamma
         self.length_normalization = args.length_normalization
 
+        self._current_rkl_advantange_time = 0.0
+        self._current_single_step_loss_time = 0.0
+        self._current_rl_loss_time = 0.0
+
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -572,7 +577,9 @@ class MiniLLMTrainer(GRPOTrainer):
         # Logging Meitrcs
         mode = "train" if self.model.training else "eval"
 
+        # Compute advantage for Reverse KL
         if self.rkl_advantage:
+            rkl_advantage_time = time.perf_counter()
             reverse_kl_advantage = self._compute_advantage(
                 student_log_probs_on_labels=student_log_probs_on_labels,
                 teacher_log_probs_on_labels=teacher_log_probs_on_labels,
@@ -580,14 +587,26 @@ class MiniLLMTrainer(GRPOTrainer):
             )
 
             inputs["advantages"] = inputs["advantages"].unsqueeze(1) + reverse_kl_advantage
-            mean_advantange = (inputs["advantages"] * mask).sum() / mask.sum()
-            self._metrics[mode]["minillm/mean_advantage"].append(mean_advantange.item())
+            mean_advantage = (inputs["advantages"] * mask).sum() / mask.sum()
+            self._metrics[mode]["minillm/mean_advantage"].append(mean_advantage.item())
+            rkl_advantage_time_after = time.perf_counter()
+            self._current_rkl_advantange_time += rkl_advantage_time_after - rkl_advantage_time
+            if self._step % self.current_gradient_accumulation_steps == 0:
+                self._metrics[mode]["rkl_advantage_time"].append(self._current_rkl_advantange_time)
+                self._current_rkl_advantange_time = 0.0
 
         # Compute GRPO loss on verifiable reward
+        rl_loss_time = time.perf_counter()
         loss = self._compute_loss(model, inputs)
+        rl_loss_time_after = time.perf_counter()
+        self._current_rl_loss_time += rl_loss_time_after - rl_loss_time
+        if self._step % self.current_gradient_accumulation_steps == 0:
+            self._metrics[mode]["rl_loss_time"].append(self._current_rl_loss_time)
+            self._current_rl_loss_time = 0.0
 
         # Compute loss
         if self.single_step_decomposition:
+            single_step_loss_time = time.perf_counter()
             single_step_decomposition_loss = self._single_step_decomposition_loss(
                 student_log_probs=student_log_probs,
                 teacher_log_probs=teacher_log_probs,
@@ -596,6 +615,11 @@ class MiniLLMTrainer(GRPOTrainer):
 
             self._metrics[mode]["minillm/single_step_decomposition_loss"].append(single_step_decomposition_loss.item())
             loss += single_step_decomposition_loss
+            single_step_loss_time_after = time.perf_counter()
+            self._current_single_step_loss_time += single_step_loss_time_after - single_step_loss_time
+            if self._step % self.current_gradient_accumulation_steps == 0:
+                self._metrics[mode]["single_step_loss_time"].append(self._current_single_step_loss_time)
+                self._current_single_step_loss_time = 0.0
 
         # Compute Reverse KL for logging
         with torch.no_grad():

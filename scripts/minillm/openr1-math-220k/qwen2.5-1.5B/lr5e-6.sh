@@ -66,9 +66,12 @@ trl/scripts/minillm.py \
     --logging_steps 1 \
     --logging_first_step true \
     --dataset_num_proc 64 \
-    --max_completion_length 32768 \
+    --max_completion_length 8192 \
     --use_vllm \
-    --vllm_mode colocate
+    --vllm_mode colocate \
+    --vllm_gpu_memory_utilization 0.05 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8
 EOF
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then

@@ -1492,14 +1492,18 @@ class GRPOTrainer(BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
+        genenate_time_before = time.perf_counter()
         prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
             self._generate(prompts)
         )
+        genenate_time_after = time.perf_counter()
+        self._metrics[mode]["generation_time"].append(genenate_time_after - genenate_time_before)
 
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and self.state.global_step % 10:
             print("#### Sample generation output ####")
             print("#### Prompt:\n", self.processing_class.decode(prompt_ids_list[0]))
             print("#### Completion:\n", self.processing_class.decode(completion_ids_list[0]))
+            print("#### Completion lengths:", [len(ids) for ids in completion_ids_list])
             print("##################################")
 
         # Convert lists of token IDs to padded tensors

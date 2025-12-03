@@ -64,12 +64,12 @@ EOF
 
 cmd_gsm8k="${cmd_prefix} \
     --data_names gsm8k \
-    --max_tokens_per_call 32768
+    --max_tokens_per_call 8192
 "
 
 cmd_math500="${cmd_prefix} \
     --data_names math500 \
-    --max_tokens_per_call 32768
+    --max_tokens_per_call 8192
 "
 
 # load run_single and run_loop functions
