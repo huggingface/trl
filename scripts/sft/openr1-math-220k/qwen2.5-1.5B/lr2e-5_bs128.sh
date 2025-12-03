@@ -36,7 +36,7 @@ NUM_PROCESS=$((gpu_count * SLURM_NNODES))
 
 BATCH_SIZE=128
 MICRO_BATCH_SIZE=1
-GRAD_ACC=$((BATCH_SIZE / MICRO_BATCH_SIZE))
+GRAD_ACC=$((BATCH_SIZE / MICRO_BATCH_SIZE / NUM_PROCESS))
 
 read -r -d '' cmd <<EOF
 accelerate launch --config_file=trl/accelerate_configs/zero1.yaml --num_processes $NUM_PROCESS \
