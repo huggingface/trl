@@ -65,7 +65,10 @@ trl/scripts/minillm.py \
     --wandb_group $GROUP_NAME \
     --logging_steps 1 \
     --logging_first_step true \
-    --dataset_num_proc 64
+    --dataset_num_proc 64 \
+    --max_completion_length 32768 \
+    --use_vllm \
+    --vllm_mode colocate
 EOF
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then

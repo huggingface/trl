@@ -1496,6 +1496,12 @@ class GRPOTrainer(BaseTrainer):
             self._generate(prompts)
         )
 
+        if self.accelerator.is_main_process:
+            print("#### Sample generation output ####")
+            print("#### Prompt:\n", self.processing_class.decode(prompt_ids_list[0]))
+            print("#### Completion:\n", self.processing_class.decode(completion_ids_list[0]))
+            print("##################################")
+
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
