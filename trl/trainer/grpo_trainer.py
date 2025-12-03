@@ -1556,7 +1556,7 @@ class GRPOTrainer(BaseTrainer):
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
             if self.args.gradient_accumulation_steps % generate_every != 0 or (
                 self.use_vllm and self.vllm_importance_sampling_correction
-            ):
+            ) or self.args.always_track_old_logps:
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,

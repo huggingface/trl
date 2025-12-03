@@ -82,6 +82,39 @@ class MiniLLMConfig(GRPOConfig):
         default=True,
         metadata={"help": "Whether to apply length normalization to the rewards."},
     )
+    on_policy_logq: bool = field(
+        default=False,
+        metadata={"help": "Whether to use on-policy log Q_{\theta} values for computing reverse KL."
+                  "If False, the student log probs will be the 'old' log probs computed using the rollout policy."},
+    )
+    chat_template_path: str | None = field(
+        default=None,
+        metadata={
+            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
+            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
+            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
+            "that the model's embedding layer is resized accordingly."
+        },
+    )
+    dataset_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={
+            "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
+            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
+            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
+            "since preprocessing is done on the fly."
+        },
+    )
+    dataset_num_proc: int | None = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    eos_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
+        },
+    )
 
     def __post_init__(self):
         # We do not use the post_init of GRPOConfig because:

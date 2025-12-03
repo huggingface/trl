@@ -575,6 +575,13 @@ class GRPOConfig(TrainingArguments):
             "sequence-level rewards."
         },
     )
+    always_track_old_logps: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to always track old logprobs during training, even when not using vLLM generation. This is "
+            "useful when logprobs are needed to compute reward or entropy-based metrics."
+        },
+    )
     reward_weights: list[float] | None = field(
         default=None,
         metadata={

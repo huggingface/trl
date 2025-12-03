@@ -45,7 +45,6 @@ from trl.experimental.minillm.minillm_trainer import MiniLLMTrainer, MiniLLMConf
 logger = logging.get_logger(__name__)
 
 
-
 class SaveStep0CallBack(TrainerCallback):
     def __init__(self, trainer: MiniLLMTrainer, trial=None):
         self.trainer = trainer
@@ -73,7 +72,6 @@ class WandbArguments:
     wandb_mode: str = "disabled"
     wandb_job_type: str = "sft"
     wandb_group: str = None
-
 
 
 @dataclass
@@ -107,7 +105,6 @@ def load_model(model_name_or_path, model_revision, trust_remote_code, attn_imple
     )
 
     # Create model
-    config = AutoConfig.from_pretrained(model_name_or_path)
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path, **model_kwargs)
     return model
 
@@ -117,7 +114,8 @@ def main(
         script_args: ScriptArguments, 
         training_args: MiniLLMConfig,
         model_args: ModelConfig, 
-        dataset_args: DatasetMixtureConfig
+        dataset_args: DatasetMixtureConfig,
+        wandb_args: WandbArguments
     ):
     # Get the reward models and functions
 
@@ -182,7 +180,7 @@ def main(
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None):
-    dataclass_types = (TeacherArguments, ScriptArguments, MiniLLMConfig, ModelConfig, DatasetMixtureConfig)
+    dataclass_types = (TeacherArguments, ScriptArguments, MiniLLMConfig, ModelConfig, DatasetMixtureConfig, WandbArguments)
     if subparsers is not None:
         parser = subparsers.add_parser("minillm", help="Run the MiniLLM training script", dataclass_types=dataclass_types)
     else:
@@ -195,7 +193,7 @@ if __name__ == "__main__":
     # When using the trl cli, this script may be run with additional arguments, corresponding accelerate arguments.
     # To ensure that their parsing does not interfere with the script arguments, parse the arguments with
     # `return_remaining_strings=True`, then ignore the remaining strings.
-    teacher_args, script_args, training_args, model_args, dataset_args, additional_args = \
+    teacher_args, script_args, training_args, model_args, dataset_args, wandb_args, additional_args = \
         parser.parse_args_and_config(return_remaining_strings=True)
     print(additional_args)
-    main(teacher_args, script_args, training_args, model_args, dataset_args)
+    main(teacher_args, script_args, training_args, model_args, dataset_args, wandb_args)
