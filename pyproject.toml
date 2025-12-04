@@ -58,6 +58,9 @@ kernels = [
 liger = [
     "liger-kernel>=0.6.4"
 ]
+mergekit = [
+    "mergekit",
+]
 peft = [
     "peft>=0.8.0"
 ]
@@ -105,6 +108,8 @@ dev = [
     "kernels",
     # liger
     "liger-kernel>=0.6.4",
+    # mergekit
+    "mergekit",
     # peft
     "peft>=0.8.0",
     # quality
