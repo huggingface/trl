@@ -268,12 +268,12 @@ class MergeConfig:
             return self.create_merge_config_slerp()
 
 
-def merge_models(config: MergeConfig, out_path: str):
+def merge_models(config: "MergeConfiguration", out_path: str):
     """
     Merge two models using mergekit
 
     Args:
-        config ([`MergeConfig`]): The merge configuration.
+        config ([`MergeConfiguration`]): The merge configuration.
         out_path (`str`): The output path for the merged model.
     """
     if not is_mergekit_available():
