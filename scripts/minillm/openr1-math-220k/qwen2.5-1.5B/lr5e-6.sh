@@ -34,7 +34,7 @@ OUTPUT_DIR=results/${RUN_NAME}
 
 NUM_PROCESS=$((gpu_count * SLURM_NNODES))
 
-BATCH_SIZE=32
+BATCH_SIZE=128
 MICRO_BATCH_SIZE=1
 GRAD_ACC=$((BATCH_SIZE / MICRO_BATCH_SIZE / NUM_PROCESS))
 
@@ -48,7 +48,7 @@ trl/scripts/minillm.py \
     --teacher_dtype bfloat16 \
     --dataset_name dataset/llm_rl/OpenR1-Math-220k \
     --learning_rate 5.0e-6 \
-    --num_train_epochs 5 \
+    --num_train_epochs 1 \
     --per_device_train_batch_size $MICRO_BATCH_SIZE \
     --gradient_accumulation_steps $GRAD_ACC \
     --gradient_checkpointing \
@@ -69,7 +69,8 @@ trl/scripts/minillm.py \
     --max_completion_length 8192 \
     --use_vllm \
     --vllm_mode colocate \
-    --vllm_gpu_memory_utilization 0.05
+    --vllm_gpu_memory_utilization 0.05 \
+    --rkl_advantage False
 EOF
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then

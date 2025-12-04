@@ -63,19 +63,20 @@ EOF
 
 
 cmd_gsm8k="${cmd_prefix} \
-    --data_names gsm8k
+    --data_names gsm8k \
+    --max_tokens_per_call 8192
 "
 
 cmd_math500="${cmd_prefix} \
     --data_names math500 \
-    --max_tokens_per_call 32768
+    --max_tokens_per_call 8192
 "
 
 # load run_single and run_loop functions
 setup_cmd="source scripts/eval/setup.sh"
 
 cmds=(
-    # "run_loop \"${cmd_gsm8k}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
+    "run_loop \"${cmd_gsm8k}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
     "run_loop \"${cmd_math500}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
 )
 
