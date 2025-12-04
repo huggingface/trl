@@ -282,6 +282,7 @@ class RewardDataCollatorWithPadding:
             "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
             "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
             FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
