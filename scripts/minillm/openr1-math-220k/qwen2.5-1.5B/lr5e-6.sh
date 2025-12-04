@@ -42,12 +42,14 @@ read -r -d '' cmd <<EOF
 accelerate launch --config_file=trl/accelerate_configs/zero1.yaml --num_processes $NUM_PROCESS \
 --num_machines $SLURM_NNODES --rdzv_backend c10d --main_process_ip $head_node_ip --main_process_port 29500 \
 trl/scripts/minillm.py \
-    --model_name_or_path results/sft/openr1-math-220k/qwen2.5-1.5B/checkpoint-2690/ \
+    --model_name_or_path results/train/sft/openr1-math-220k/qwen2.5-1.5B/lr4e-5/checkpoint-2695/ \
     --dtype bfloat16 \
     --teacher_model_name_or_path Qwen/Qwen2.5-3B-Instruct \
     --teacher_dtype bfloat16 \
     --dataset_name dataset/llm_rl/OpenR1-Math-220k \
     --learning_rate 5.0e-6 \
+    --lr_scheduler_type cosine \
+    --warmup_steps 100 \
     --num_train_epochs 1 \
     --per_device_train_batch_size $MICRO_BATCH_SIZE \
     --gradient_accumulation_steps $GRAD_ACC \
