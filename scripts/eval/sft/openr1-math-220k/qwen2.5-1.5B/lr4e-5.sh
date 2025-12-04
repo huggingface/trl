@@ -38,8 +38,8 @@ SPLIT="test"
 NUM_TEST_SAMPLE=-1
 
 CKPT_STEP_START=0
-CKPT_STEP_INTERVAL=500
-CKPT_STEP_END=2500
+CKPT_STEP_INTERVAL=539
+CKPT_STEP_END=2695
 
 read -r -d '' cmd_prefix <<EOF
 torchrun --nnodes $SLURM_NNODES --nproc_per_node=$gpu_count --rdzv_id $RANDOM --rdzv_backend c10d --rdzv_endpoint $head_node_ip:29500 \
