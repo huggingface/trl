@@ -307,7 +307,7 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    from trl.experiemental.merge_model_callback import MergeConfig, MergeModelCallback
+    from trl.experimental.merge_model_callback import MergeConfig, MergeModelCallback
 
     config = MergeConfig()
     merge_callback = MergeModelCallback(config)
