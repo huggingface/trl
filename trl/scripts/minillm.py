@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 import torch
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoConfig, AutoModelForCausalLM, TrainerCallback, TrainingArguments
+from transformers import AutoConfig, AutoModelForCausalLM, TrainerCallback
+from transformers.trainer_utils import get_last_checkpoint
 
 
 from trl import (
@@ -40,7 +41,7 @@ from trl import (
     get_peft_config,
 )
 from trl.experimental.minillm.minillm_trainer import MiniLLMTrainer, MiniLLMConfig
-
+from trl.wandb_utils import setup_wandb
 
 logger = logging.get_logger(__name__)
 
@@ -94,7 +95,7 @@ class TeacherArguments:
         default=None,
         metadata={"help": "The data type to use in the teacher model."},
     )
-    
+
 
 def load_model(model_name_or_path, model_revision, trust_remote_code, attn_implementation, dtype):
     model_kwargs = dict(
@@ -164,8 +165,33 @@ def main(
         peft_config=get_peft_config(model_args),
     )
 
+    trainer.add_callback(SaveStep0CallBack(trainer))
+    try:
+        resume_from_checkpoint = eval(training_args.resume_from_checkpoint)
+    except Exception:
+        pass
+    if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+        resume_from_checkpoint = get_last_checkpoint(training_args.output_dir)
+
+    if resume_from_checkpoint is not None:
+        trainer.accelerator.print(f"Resuming training from checkpoint: {resume_from_checkpoint}")
+
+    wandb_config = {
+        "entity": wandb_args.wandb_entity,
+        "project": wandb_args.wandb_project,
+        "name": wandb_args.wandb_run_name.strip("/") if wandb_args.wandb_run_name else None,
+        "mode": wandb_args.wandb_mode,
+        "job_type": wandb_args.wandb_job_type,
+        "group": wandb_args.wandb_group.strip("/") if wandb_args.wandb_group else None,
+    }
+    if trainer.accelerator.is_main_process:
+        wandb_logger = setup_wandb(wandb_config, wandb_dir=os.path.join(training_args.output_dir, "wandb"), resume=(resume_from_checkpoint is not None))
+    else:
+        wandb_logger = None
+    trainer.add_callback(WandbLoggingCallback(wandb_logger))
+
     # Train the model
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     # Log training complete
     trainer.accelerator.print("✅ Training completed.")

@@ -1499,7 +1499,7 @@ class GRPOTrainer(BaseTrainer):
         genenate_time_after = time.perf_counter()
         self._metrics[mode]["generation_time"].append(genenate_time_after - genenate_time_before)
 
-        if self.accelerator.is_main_process and self.state.global_step % 10:
+        if self.accelerator.is_main_process and self.state.global_step % 20 == 0:
             print("#### Sample generation output ####")
             print("#### Prompt:\n", self.processing_class.decode(prompt_ids_list[0]))
             print("#### Completion:\n", self.processing_class.decode(completion_ids_list[0]))

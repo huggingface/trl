@@ -60,7 +60,7 @@ trl/scripts/minillm.py \
     --resume_from_checkpoint True \
     --report_to none \
     --wandb_run_name $RUN_NAME \
-    --wandb_mode disabled \
+    --wandb_mode online \
     --wandb_job_type $JOB_TYPE \
     --wandb_group $GROUP_NAME \
     --logging_steps 1 \
@@ -69,9 +69,7 @@ trl/scripts/minillm.py \
     --max_completion_length 8192 \
     --use_vllm \
     --vllm_mode colocate \
-    --vllm_gpu_memory_utilization 0.05 \
-    --per_device_train_batch_size 2 \
-    --gradient_accumulation_steps 8
+    --vllm_gpu_memory_utilization 0.05
 EOF
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then

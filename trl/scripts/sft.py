@@ -182,7 +182,6 @@ def main(
         peft_config=get_peft_config(model_args),
     )
     trainer.add_callback(SaveStep0CallBack(trainer))
-    # Train the model
     try:
         resume_from_checkpoint = eval(training_args.resume_from_checkpoint)
     except Exception:
@@ -207,6 +206,7 @@ def main(
         wandb_logger = None
     trainer.add_callback(WandbLoggingCallback(wandb_logger))
 
+    # Train the model
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     # Log training complete
