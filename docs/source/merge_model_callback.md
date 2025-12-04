@@ -4,4 +4,4 @@
 
 ## MergeConfig
 
-Removed.
+[[autodoc]] experimental.merge_model_callback.MergeConfig
