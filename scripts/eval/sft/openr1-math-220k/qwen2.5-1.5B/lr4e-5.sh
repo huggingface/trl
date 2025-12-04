@@ -20,6 +20,7 @@ fi
 export OMP_NUM_THREADS=32
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TOKENIZERS_PARALLELISM=false
+export VLLM_LOGGING_LEVEL=ERROR
 
 if [[ -z $CUDA_VISIBLE_DEVICES ]]; then
     gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
@@ -85,7 +86,9 @@ if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then
     # on nv cluster
     # loop over cmds and run each sequentially
     for cmd in "${cmds[@]}"; do
-        echo $cmd
+        if [ "$SLURM_PROCID" -eq 0 ]; then
+            echo $cmd
+        fi
         srun bash -c "${setup_cmd}; ${cmd}"
     done
 else
