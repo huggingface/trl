@@ -297,8 +297,8 @@ class MergeModelCallback(TrainerCallback):
     on a merge configuration.
 
     Args:
-        merge_config ([`MergeConfig`], *optional*):
-            Configuration used for the merging process. If not provided, the default [`MergeConfig`] is used.
+        merge_config ([`experimental.merge_model_callback.MergeConfig`], *optional*):
+            Configuration used for the merging process. If not provided, the default [`~experimental.merge_model_callback.MergeConfig`] is used.
         merge_at_every_checkpoint (`bool`, *optional*, defaults to `False`):
             Whether to merge the model at every checkpoint.
         push_to_hub (`bool`, *optional*, defaults to `False`):
