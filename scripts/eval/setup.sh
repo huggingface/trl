@@ -39,11 +39,13 @@ function run_loop() {
     local interval_step="$5"
     local end_step="$6"
 
-    echo "=================================================="
-    echo "Starting Loop Eval for dataset: ${data_names}"
-    echo "Model Base: ${base_model_path}"
-    echo "Steps: ${start_step} to ${end_step} (Interval: ${interval_step})"
-    echo "=================================================="
+    if [ -n "$SLURM_PROCID" ] && [ "$SLURM_PROCID" -eq 0 ]; then
+        echo "=================================================="
+        echo "Starting Loop Eval for dataset: ${data_names}"
+        echo "Model Base: ${base_model_path}"
+        echo "Steps: ${start_step} to ${end_step} (Interval: ${interval_step})"
+        echo "=================================================="
+    fi
 
     for step in $(seq $start_step $interval_step $end_step); do
         local ckpt_path="${base_model_path}/checkpoint-${step}"

@@ -210,7 +210,8 @@ def main(args):
                     tensor_parallel_size=len(available_gpus) // args.pipeline_parallel_size,
                     pipeline_parallel_size=args.pipeline_parallel_size,
                     trust_remote_code=True,
-                    gpu_memory_utilization=args.gpu_memory_utilization
+                    gpu_memory_utilization=args.gpu_memory_utilization,
+                    disable_log_stats=True
                 )
                 tokenizer = None
                 if args.apply_chat_template:
