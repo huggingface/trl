@@ -25,6 +25,7 @@ export TOKENIZERS_PARALLELISM=false
 export VLLM_LOGGING_LEVEL=ERROR
 export VLLM_DP_MASTER_IP=$head_node_ip
 export VLLM_DP_MASTER_PORT=$port
+export GLOO_LOG_LEVEL=ERROR
 
 if [[ -z $CUDA_VISIBLE_DEVICES ]]; then
     gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)

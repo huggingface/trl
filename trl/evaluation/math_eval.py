@@ -40,6 +40,11 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 from vllm import LLM, SamplingParams
 
+import sys
+import multiprocessing
+if multiprocessing.current_process().name != 'EngineCore_DP0':
+    sys.stdout = open(os.devnull, 'w')
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
