@@ -1055,18 +1055,7 @@ class GOLDTrainer(SFTTrainer):
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                try:
-                    dataset = dataset.map(_func, batched=False, **map_kwargs)
-                except Exception as e:
-                    warnings.warn(
-                        f"Failed to apply the formatting function due to the following error: {e}. This may be "
-                        "because the function is designed for batched input. Please update it to process one example "
-                        "at a time (i.e., accept and return a single example). For now, we will attempt to apply the "
-                        "function in batched mode, but note that batched formatting is deprecated and will be removed "
-                        "in version 0.21.",
-                        DeprecationWarning,
-                    )
-                    dataset = dataset.map(_func, batched=True, **map_kwargs)
+                dataset = dataset.map(_func, batched=False, **map_kwargs)
 
             # Convert the dataset to ChatML if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1129,7 +1118,8 @@ class GOLDTrainer(SFTTrainer):
                         warnings.warn(
                             "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                             "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                            "token handling. Verify that the tokenizer is processing text consistently."
+                            "token handling. Verify that the tokenizer is processing text consistently.",
+                            stacklevel=2,
                         )
 
                     # Create a completion mask
@@ -1845,6 +1835,8 @@ class GOLDTrainer(SFTTrainer):
         if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
             empty_cache()
             self.vllm_engine.wake_up(tags=["weights"])
+            # Work around for https://github.com/vllm-project/vllm/issues/29341
+            self.vllm_engine.collective_rpc("reload_weights")
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as

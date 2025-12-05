@@ -29,3 +29,14 @@ trainer = DPOTrainer(
 
 trainer.train()
 ```
+
+## DPOTrainer
+
+[[autodoc]] experimental.bema_for_ref_model.DPOTrainer
+    - train
+    - save_model
+    - push_to_hub
+
+## BEMACallback
+
+[[autodoc]] experimental.bema_for_ref_model.BEMACallback
