@@ -34,7 +34,7 @@ from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
-from ..import_utils import is_weave_available, temporary_env
+from ..import_utils import is_weave_available, suppress_experimental_warning
 from ..models.utils import unwrap_model_for_generation
 from .utils import log_table_to_comet_experiment
 
@@ -55,7 +55,7 @@ if is_weave_available():
     from weave import EvaluationLogger
     from weave.trace.context import weave_client_context
 
-with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+with suppress_experimental_warning():
     from ..experimental.merge_model_callback import MergeModelCallback as _MergeModelCallback
     from ..experimental.winrate_callback import WinRateCallback as _WinRateCallback
 
