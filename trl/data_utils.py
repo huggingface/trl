@@ -766,15 +766,15 @@ def pack_dataset(
     >>> from trl import pack_dataset
 
     >>> examples = {
-    ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
-    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]],
+    ...     "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10], [11]],
+    ...     "attention_mask": [[1, 1, 1, 0, 0], [1, 0], [1, 1, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 9], [6, 7, 8], [4, 5]],
-    'attention_mask': [[1, 1, 0, 1], [1, 0, 0], [1, 0]],
-    'seq_lengths': [[3, 1], [3], [2]]}
+    {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 5], [6, 7, 11]],
+     'attention_mask': [[1, 1, 1, 0], [0, 1, 1, 0], [1, 1, 1]],
+     'seq_lengths': [[4], [3, 1], [2, 1]]}
     ```
     """
     if map_kwargs is None:
