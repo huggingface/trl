@@ -15,7 +15,7 @@ def set_seed(seed: int = 42) -> None:
     np.random.seed(seed)
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
-    if dist.is_initialized():
+    if dist.is_initialized() and dist.get_rank() == 0:
         print(f"Random seed set as {seed}")
 
 

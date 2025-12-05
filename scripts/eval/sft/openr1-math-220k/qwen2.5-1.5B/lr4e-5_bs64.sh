@@ -17,9 +17,14 @@ else
     head_node_ip=localhost
 fi
 
+port=29500
+
 export OMP_NUM_THREADS=32
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TOKENIZERS_PARALLELISM=false
+export VLLM_LOGGING_LEVEL=ERROR
+export VLLM_DP_MASTER_IP=$head_node_ip
+export VLLM_DP_MASTER_PORT=$port
 
 if [[ -z $CUDA_VISIBLE_DEVICES ]]; then
     gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
@@ -42,7 +47,7 @@ CKPT_STEP_INTERVAL=270
 CKPT_STEP_END=1350
 
 read -r -d '' cmd_prefix <<EOF
-torchrun --nnodes $SLURM_NNODES --nproc_per_node=$gpu_count --rdzv_id $RANDOM --rdzv_backend c10d --rdzv_endpoint $head_node_ip:29500 \
+torchrun --nnodes $SLURM_NNODES --nproc_per_node=$gpu_count --rdzv_id $RANDOM --rdzv_backend c10d --rdzv_endpoint $head_node_ip:$port \
 trl/evaluation/math_eval.py \
     --split ${SPLIT} \
     --prompt_type ${PROMPT_TYPE} \

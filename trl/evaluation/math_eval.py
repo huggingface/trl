@@ -29,8 +29,12 @@ from vllm.distributed.parallel_state import (
 local_rank = int(os.environ.get("LOCAL_RANK", 0))
 rank = int(os.environ.get("RANK", 0))
 world_size = int(os.environ.get("WORLD_SIZE", 1))
-os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
 
+os.environ["VLLM_DP_RANK"] = str(rank)
+os.environ["VLLM_DP_RANK_LOCAL"] = str(local_rank)
+os.environ["VLLM_DP_SIZE"] = str(world_size)
+
+os.environ["VLLM_CONFIGURE_LOGGING"] = "0"
 os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
@@ -65,6 +69,7 @@ def parse_args():
         help="Apply chat template to prompt.",
     )
     parser.add_argument("--pipeline_parallel_size", type=int, default=1)
+    parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument(
         "--adapt_few_shot",
         action="store_true",
@@ -104,7 +109,7 @@ def parse_args():
         "--log_avg", action="store_true", help="Whether to log average accuracy"
     )
     parser.add_argument(
-        "--gpu_memory_utilization", type=float, default=0.1, help="GPU memory utilization for vllm"
+        "--gpu_memory_utilization", type=float, default=0.9, help="GPU memory utilization for vllm"
     )
     args = parser.parse_args()
     args.top_p = (
@@ -163,10 +168,6 @@ def main(args):
             print(f"Evaluation already completed in {args.output_dir}. Exiting...")
         return
 
-    available_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
-    if len(available_gpus) == 0 or available_gpus[0] == "":
-        available_gpus = [str(i) for i in range(torch.cuda.device_count())]
-
     # setup wandb
     if rank == 0:
         wandb_cfg = {
@@ -207,12 +208,11 @@ def main(args):
             if args.use_vllm:
                 llm = LLM(
                     model=args.model_name_or_path,
-                    tensor_parallel_size=len(available_gpus) // args.pipeline_parallel_size,
+                    tensor_parallel_size=args.tensor_parallel_size,
                     pipeline_parallel_size=args.pipeline_parallel_size,
-                    trust_remote_code=True,
                     gpu_memory_utilization=args.gpu_memory_utilization,
-                    disable_log_stats=True
                 )
+                
                 tokenizer = None
                 if args.apply_chat_template:
                     tokenizer = AutoTokenizer.from_pretrained(
@@ -272,6 +272,8 @@ def main(args):
     if rank == 0 and not os.path.exists(os.path.join(args.output_dir, f"complete_{args.data_names}.txt")):
         with open(os.path.join(args.output_dir, f"complete_{args.data_names}.txt"), "w") as f:
             f.write("Evaluation completed.\n")
+    
+    time.sleep(10)
 
 
 def is_multi_choice(answer):
@@ -296,7 +298,7 @@ def setup_data(data_name, args):
     examples, ids = zip(*examples_w_ids) if len(examples_w_ids) > 0 else ([], [])
 
     samples = []
-    for example in tqdm(examples, total=len(examples)):
+    for example in tqdm(examples, total=len(examples), disable=(rank != 0), desc=f"Process data on rank {rank}"):
         idx = example["idx"]
 
         # parse question and answer
@@ -415,6 +417,7 @@ def run_generation(llm, tokenizer, data_name, args, samples):
                         else None
                     ),
                 ),
+                use_tqdm=(rank == 0)
             )
 
             outputs = sorted(
@@ -474,7 +477,11 @@ def run_generation(llm, tokenizer, data_name, args, samples):
             remain_prompts[k] = (i, query)
 
     # unsolved samples
-    print(f"Unsolved samples on rank {rank}: {len(remain_prompts)}")
+    num_remain_prompts = len(remain_prompts)
+    dist.all_reduce(torch.tensor(num_remain_prompts).to("cuda"), op=dist.ReduceOp.SUM)
+    if rank == 0:
+        print(f"Unsolved samples: {num_remain_prompts}")
+
     end_prompts.extend(remain_prompts)
     # sort by idx
     end_prompts = sorted(end_prompts, key=lambda x: x[0])
@@ -573,6 +580,7 @@ def postprocess_and_evaluate(
     dist.barrier()
 
     return result_json
+
 
 if __name__ == "__main__":
 
