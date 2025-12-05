@@ -35,7 +35,7 @@ fi
 echo "Available GPU count: $gpu_count"
 
 PROMPT_TYPE="qwen25-math-cot"
-MODEL_TAG=sft/openr1-math-220k/qwen2.5-1.5B/lr4e-5
+MODEL_TAG=sft/openr1-math-220k/qwen2.5-1.5B/lr5e-4
 MODEL_NAME_OR_PATH="results/train/${MODEL_TAG}"
 JOB_TYPE=eval
 OUTPUT_DIR=results/${JOB_TYPE}/${MODEL_TAG}
