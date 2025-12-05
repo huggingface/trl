@@ -15,4 +15,5 @@
 from .kto_config import KTOConfig
 from .kto_trainer import KTOTrainer
 
+
 __all__ = ["KTOConfig", "KTOTrainer"]
