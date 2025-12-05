@@ -106,7 +106,7 @@
   - local: judges
     title: Judges
   - local: kto_trainer
-    title: KTO
+    title: KTO 
   - local: merge_model_callback
     title: MergeModelCallback
   - local: minillm_trainer
