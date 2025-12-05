@@ -389,13 +389,13 @@ Choosing the right dataset type depends on the task you are working on and the s
 | --- | --- |
 | [`DPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
-| [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
 | [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
 | [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
 | [`experimental.bco.BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.cpo.CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.gkd.GKDTrainer`] | [Prompt-completion](#prompt-completion) |
+| [`experimental.kto.KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`experimental.nash_md.NashMDTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.online_dpo.OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`experimental.orpo.ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
