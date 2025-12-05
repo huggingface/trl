@@ -69,6 +69,8 @@ _import_structure = {
         "GRPOConfig",
         "GRPOTrainer",
         "HfPairwiseJudge",
+        "KTOConfig",
+        "KTOTrainer",
         "LogCompletionsCallback",
         "ModelConfig",
         "NashMDConfig",
