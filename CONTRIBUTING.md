@@ -345,6 +345,7 @@ Example:
        "The `Trainer.foo` method is deprecated and will be removed in version 0.14.0. "
        "Please use the `Trainer.bar` class instead.",
        FutureWarning,
+       stacklevel=2,
    )
    ```
 

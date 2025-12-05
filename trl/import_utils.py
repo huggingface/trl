@@ -92,7 +92,7 @@ def is_vllm_available() -> bool:
         warnings.warn(
             f"TRL currently only supports vLLM version `0.10.2`. You have version {_vllm_version} installed. We "
             "recommend to install this version to avoid compatibility issues.",
-            UserWarning,
+            stacklevel=2,
         )
     return _vllm_available
 

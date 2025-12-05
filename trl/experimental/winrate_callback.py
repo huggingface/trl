@@ -100,6 +100,10 @@ class WinRateCallback(TrainerCallback):
 
     Usage:
     ```python
+    from trl import DPOTrainer
+    from trl.experimental.judges import PairRMJudge
+    from trl.experimental.winrate_callback import WinRateCallback
+
     trainer = DPOTrainer(...)
     judge = PairRMJudge()
     win_rate_callback = WinRateCallback(judge=judge, trainer=trainer)
