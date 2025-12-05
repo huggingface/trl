@@ -689,20 +689,26 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     examples = pa.Table.from_arrays(columns, names=examples.column_names)
 
     ids = np.arange(len(examples))
+    assert list_column_idx is not None
     lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
-    examples = examples.append_column("seq_lengths", lengths)
-    lengths = pc.make_struct(lengths, ids).sort("descending", by=0)
+    examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
+    lengths = pc.make_struct(lengths, ids)
+    lengths = lengths.sort("descending", by=0)
 
     segment_tree = _SegmentTree(seq_length)
-    segment_tree.add(seq_length)
+    segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
     space_to_bin = defaultdict(deque)
 
+    # Bin is represented as a dict (of example ids and sum of their lengths) to allow in-place updates
     bins: list[dict] = []
     for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy(), strict=True):
         space = segment_tree.search(length)
+
         if space < seq_length:
+            # Use existing bin with exactly this amount of space
             bin = space_to_bin[space].popleft()
         else:
+            # Create a new bin
             bin = {"ids": [], "length": 0}
             bins.append(bin)
 
@@ -711,7 +717,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
         if space < seq_length and not space_to_bin[space]:
             segment_tree.remove(space)
 
-        space -= length
+        space = space - length
         space_to_bin[space].append(bin)
         if space > 0:
             segment_tree.add(space)
@@ -719,20 +725,40 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     examples = pc.take(examples, [id_ for bin in bins for id_ in bin["ids"]])
     offsets = np.cumsum([0] + [bin["length"] for bin in bins])
 
-    assert all(column.num_chunks == 1 for column in examples.columns)
+    assert all(
+        column.num_chunks == 1 for column in examples.columns
+    )  # `pc.take` returns a ChunkedArray with a single chunk
 
     lengths = examples["seq_lengths"].chunks[0]
     examples = examples.drop_columns("seq_lengths")
     lengths = pa.ListArray.from_arrays(np.cumsum([0] + [len(bin["ids"]) for bin in bins], dtype=np.int32), lengths)
 
-    rebuilt_columns = []
+    columns = []
     for column in examples.columns:
         column = column.chunks[0]
         if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
             dtype = column.offsets.type.to_pandas_dtype()
             column = type(column).from_arrays(offsets.astype(dtype), column.values)
-        rebuilt_columns.append(column)
-    return pa.Table.from_arrays(rebuilt_columns + [lengths], names=examples.column_names + ["seq_lengths"])
+        columns.append(column)
+    return pa.Table.from_arrays(columns + [lengths], names=examples.column_names + ["seq_lengths"])
+
+
+def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using a wrapped strategy."""
+    columns = []
+    for column in examples.columns:
+        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+            if isinstance(column, pa.ChunkedArray):
+                column = column.combine_chunks()
+            offsets, values = column.offsets, column.values
+            values = values[offsets[0].as_py() : offsets[-1].as_py()]
+            num_elements = len(values)
+            dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
+            offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
+            offsets = np.concatenate((offsets, [num_elements]))
+            column = type(column).from_arrays(offsets, values)
+        columns.append(column)
+    return pa.Table.from_arrays(columns, names=examples.column_names)
 
 
 def pack_dataset(
