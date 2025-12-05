@@ -1118,7 +1118,8 @@ class GOLDTrainer(SFTTrainer):
                         warnings.warn(
                             "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                             "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                            "token handling. Verify that the tokenizer is processing text consistently."
+                            "token handling. Verify that the tokenizer is processing text consistently.",
+                            stacklevel=2,
                         )
 
                     # Create a completion mask
