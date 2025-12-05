@@ -775,8 +775,8 @@ def pack_dataset(
         strategy (`str`, *optional*, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
-            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
-                middle.
+            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries inside each packed sample. If a
+                single sequence exceeds `seq_length` it is split into multiple samples.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
         map_kwargs (`dict`, *optional*):
