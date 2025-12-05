@@ -13,7 +13,7 @@ function run_single() {
     local output_dir="$3"
 
     local full_cmd="${cmd_prefix} --model_name_or_path ${model_path} --output_dir ${output_dir}"
-    if [ "$SLURM_PROCID" -eq 0 ]; then
+    if [ -n "$SLURM_PROCID" ] && [ "$SLURM_PROCID" -eq 0 ]; then
         echo ">>> Full Command: ${full_cmd}"
     fi
     $full_cmd
@@ -49,14 +49,14 @@ function run_loop() {
         local ckpt_path="${base_model_path}/checkpoint-${step}"
         local ckpt_output="${base_output_dir}/checkpoint-${step}"
 
-        if [ "$SLURM_PROCID" -eq 0 ]; then
+        if [ -n "$SLURM_PROCID" ] && [ "$SLURM_PROCID" -eq 0 ]; then
             echo ">>> Full Command: ${full_cmd}"
         fi     
    
         # 调用 run_single 执行
         run_single "$cmd_prefix" "$ckpt_path" "$ckpt_output"
         
-        if [ "$SLURM_PROCID" -eq 0 ]; then
+        if [ -n "$SLURM_PROCID" ] && [ "$SLURM_PROCID" -eq 0 ]; then
             echo ">>> [Loop Progress] Step ${step} Finished."
             echo ""
         fi

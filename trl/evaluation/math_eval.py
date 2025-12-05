@@ -104,7 +104,7 @@ def parse_args():
         "--log_avg", action="store_true", help="Whether to log average accuracy"
     )
     parser.add_argument(
-        "--gpu_memory_utilization", type=float, default=0.8, help="GPU memory utilization for vllm"
+        "--gpu_memory_utilization", type=float, default=0.1, help="GPU memory utilization for vllm"
     )
     args = parser.parse_args()
     args.top_p = (

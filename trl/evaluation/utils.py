@@ -8,13 +8,15 @@ from pathlib import Path
 from typing import Iterable, Union, Any
 
 from trl.evaluation.examples import get_examples
+import torch.distributed as dist
 
 
 def set_seed(seed: int = 42) -> None:
     np.random.seed(seed)
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
-    print(f"Random seed set as {seed}")
+    if dist.is_initialized():
+        print(f"Random seed set as {seed}")
 
 
 def load_jsonl(file: Union[str, Path]) -> Iterable[Any]:
