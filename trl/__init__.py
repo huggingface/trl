@@ -149,6 +149,8 @@ if TYPE_CHECKING:
         GRPOConfig,
         GRPOTrainer,
         HfPairwiseJudge,
+        KTOConfig,
+        KTOTrainer,
         LogCompletionsCallback,
         ModelConfig,
         NashMDConfig,
