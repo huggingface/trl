@@ -105,6 +105,12 @@ def is_weave_available() -> bool:
     return _weave_available
 
 
+class TRLExperimentalWarning(UserWarning):
+    """Warning for using the 'trl.experimental' submodule."""
+
+    pass
+
+
 @contextmanager
 def temporary_env(var, value):
     """
