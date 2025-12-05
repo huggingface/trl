@@ -37,3 +37,14 @@ trainer = GFPOTrainer(
 )
 trainer.train()
 ```
+
+## GFPOTrainer
+
+[[autodoc]] experimental.gfpo.GFPOTrainer
+    - train
+    - save_model
+    - push_to_hub
+
+## GFPOConfig
+
+[[autodoc]] experimental.gfpo.GFPOConfig

@@ -605,6 +605,7 @@ class MergeModelCallback(_MergeModelCallback):
             "`from trl.experimental.merge_model_callback import MergeModelCallback`. The current import path will be "
             "removed and no longer supported in TRL 0.27. For more information, see "
             "https://github.com/huggingface/trl/issues/4223.",
+            stacklevel=2,
         )
 
 

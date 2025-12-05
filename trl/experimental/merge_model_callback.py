@@ -268,12 +268,12 @@ class MergeConfig:
             return self.create_merge_config_slerp()
 
 
-def merge_models(config: MergeConfig, out_path: str):
+def merge_models(config: "MergeConfiguration", out_path: str):
     """
     Merge two models using mergekit
 
     Args:
-        config ([`MergeConfig`]): The merge configuration.
+        config (`MergeConfiguration`): The merge configuration.
         out_path (`str`): The output path for the merged model.
     """
     if not is_mergekit_available():
@@ -297,8 +297,8 @@ class MergeModelCallback(TrainerCallback):
     on a merge configuration.
 
     Args:
-        merge_config ([`MergeConfig`], *optional*):
-            Configuration used for the merging process. If not provided, the default [`MergeConfig`] is used.
+        merge_config ([`experimental.merge_model_callback.MergeConfig`], *optional*):
+            Configuration used for the merging process. If not provided, the default [`~experimental.merge_model_callback.MergeConfig`] is used.
         merge_at_every_checkpoint (`bool`, *optional*, defaults to `False`):
             Whether to merge the model at every checkpoint.
         push_to_hub (`bool`, *optional*, defaults to `False`):
@@ -307,7 +307,7 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    from trl.experiemental.merge_model_callback import MergeConfig, MergeModelCallback
+    from trl.experimental.merge_model_callback import MergeConfig, MergeModelCallback
 
     config = MergeConfig()
     merge_callback = MergeModelCallback(config)
