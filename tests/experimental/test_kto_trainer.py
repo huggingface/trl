@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 from trl.experimental.kto import KTOConfig, KTOTrainer
 from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
-from .testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, require_peft
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, require_peft
 
 
 class TestKTOTrainer(TrlTestCase):
