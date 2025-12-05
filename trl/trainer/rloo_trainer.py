@@ -248,6 +248,7 @@ class RLOOTrainer(BaseTrainer):
                 "it and want it to remain, please share your comments here: "
                 "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
                 "TRL_EXPERIMENTAL_SILENCE=1.",
+                FutureWarning,
                 stacklevel=2,
             )
 
