@@ -644,6 +644,7 @@ class _SegmentTree:
 
 def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
+    # Identify the list column and prepare all columns
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
@@ -659,6 +660,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     offsets = np.asarray(list_column.offsets)
     values = list_column.values
 
+    # Split every list row into fragments of length <= seq_length (so long rows become multiple samples).
     frag_lengths: list[int] = []
     frag_slices: list[tuple[int, int]] = []
     expanded_indices: list[int] = []
@@ -670,9 +672,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
             frag_slices.append((row_start + split_start, frag_len))
             expanded_indices.append(row_idx)
 
-    if not frag_lengths:
-        return pa.Table.from_arrays([col.slice(0, 0) for col in columns], names=examples.column_names)
-
+    # Rebuild list column with fragments and duplicate non-list columns accordingly.
     offsets_type = list_column.offsets.type
     new_offsets = np.empty(len(frag_lengths) + 1, dtype=offsets_type.to_pandas_dtype())
     new_offsets[0] = 0
@@ -687,14 +687,13 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
         columns[idx] = pc.take(column, expanded_indices_array)
 
     examples = pa.Table.from_arrays(columns, names=examples.column_names)
-
     ids = np.arange(len(examples))
-    assert list_column_idx is not None
     lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
     examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
     lengths = pc.make_struct(lengths, ids)
     lengths = lengths.sort("descending", by=0)
 
+    # Greedy BFD binning using a segment tree to quickly find best-fit remaining space.
     segment_tree = _SegmentTree(seq_length)
     segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
     space_to_bin = defaultdict(deque)
