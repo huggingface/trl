@@ -69,10 +69,7 @@ trl/scripts/minillm.py \
     --logging_steps 1 \
     --logging_first_step true \
     --dataset_num_proc 64 \
-    --max_completion_length 8192 \
-    --use_vllm \
-    --vllm_mode colocate \
-    --vllm_gpu_memory_utilization 0.05 \
+    --max_completion_length 256 \
     --rkl_advantage False
 EOF
 
