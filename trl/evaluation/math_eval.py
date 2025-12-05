@@ -31,9 +31,8 @@ rank = int(os.environ.get("RANK", 0))
 world_size = int(os.environ.get("WORLD_SIZE", 1))
 os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
 
-if rank != 0:
-    os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
-    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 from vllm import LLM, SamplingParams
 
@@ -103,6 +102,9 @@ def parse_args():
     )
     parser.add_argument(
         "--log_avg", action="store_true", help="Whether to log average accuracy"
+    )
+    parser.add_argument(
+        "--gpu_memory_utilization", type=float, default=0.8, help="GPU memory utilization for vllm"
     )
     args = parser.parse_args()
     args.top_p = (
@@ -208,6 +210,7 @@ def main(args):
                     tensor_parallel_size=len(available_gpus) // args.pipeline_parallel_size,
                     pipeline_parallel_size=args.pipeline_parallel_size,
                     trust_remote_code=True,
+                    gpu_memory_utilization=args.gpu_memory_utilization
                 )
                 tokenizer = None
                 if args.apply_chat_template:
