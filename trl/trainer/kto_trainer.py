@@ -365,7 +365,8 @@ class KTOTrainer(BaseTrainer):
                 "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
                 "it and want it to remain, please share your comments here: "
                 "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
+                "TRL_EXPERIMENTAL_SILENCE=1.",
+                stacklevel=2,
             )
         if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
