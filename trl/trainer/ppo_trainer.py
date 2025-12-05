@@ -15,7 +15,11 @@
 import warnings
 from dataclasses import dataclass
 
-from ..experimental.ppo import PPOTrainer as _PPOTrainer
+from ..import_utils import suppress_experimental_warning
+
+
+with suppress_experimental_warning():
+    from ..experimental.ppo import PPOTrainer as _PPOTrainer
 
 
 @dataclass
@@ -24,6 +28,8 @@ class PPOTrainer(_PPOTrainer):
         warnings.warn(
             "The `PPOTrainer` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.ppo import PPOTrainer`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)

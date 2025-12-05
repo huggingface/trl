@@ -167,7 +167,14 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo"])
+    def test_get_sapo_token_loss(self):
+        sample_token_importance_ratio = torch.ones((2, 4))
+        sapo_token_loss = GRPOTrainer.get_sapo_token_loss(sample_token_importance_ratio, 1.0)
+        # sigmoid(temp * (1-1)) * 4/temp = 0.5 * 4 = 2
+        expected_sapo_token_loss = torch.full_like(sample_token_importance_ratio, 2.0)
+        torch.testing.assert_close(sapo_token_loss, expected_sapo_token_loss)
+
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo"])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

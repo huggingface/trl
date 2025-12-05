@@ -15,7 +15,11 @@
 import warnings
 from dataclasses import dataclass
 
-from ..experimental.online_dpo import OnlineDPOConfig as _OnlineDPOConfig
+from ..import_utils import suppress_experimental_warning
+
+
+with suppress_experimental_warning():
+    from ..experimental.online_dpo import OnlineDPOConfig as _OnlineDPOConfig
 
 
 @dataclass
@@ -25,6 +29,8 @@ class OnlineDPOConfig(_OnlineDPOConfig):
             "The `OnlineDPOConfig` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.online_dpo import OnlineDPOConfig`. The current import path will be removed and "
             "no longer supported in TRL 0.29. For more information, see "
-            "https://github.com/huggingface/trl/issues/4223."
+            "https://github.com/huggingface/trl/issues/4223.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__post_init__()
