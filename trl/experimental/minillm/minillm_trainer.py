@@ -48,6 +48,7 @@ from ...data_utils import (
     is_conversational_from_value,
     maybe_convert_to_chatml,
 )
+from ...extras.profiling import profiling_decorator
 
 
 if is_peft_available():
@@ -533,6 +534,7 @@ class MiniLLMTrainer(GRPOTrainer):
         kl = log_ratio.float().exp() - 1 - log_ratio
         return kl
 
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
@@ -588,19 +590,20 @@ class MiniLLMTrainer(GRPOTrainer):
 
             inputs["advantages"] = inputs["advantages"].unsqueeze(1) + reverse_kl_advantage
             mean_advantage = (inputs["advantages"] * mask).sum() / mask.sum()
-            self._metrics[mode]["minillm/mean_advantage"].append(mean_advantage.item())
+            self._metrics[mode]["minillm/mean_advantage"].append(self.accelerator.gather(mean_advantage).mean().item())
             rkl_advantage_time_after = time.perf_counter()
             self._current_rkl_advantange_time += rkl_advantage_time_after - rkl_advantage_time
-            if self._step % self.current_gradient_accumulation_steps == 0:
+            if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
                 self._metrics[mode]["rkl_advantage_time"].append(self._current_rkl_advantange_time)
                 self._current_rkl_advantange_time = 0.0
 
         # Compute GRPO loss on verifiable reward
         rl_loss_time = time.perf_counter()
         loss = self._compute_loss(model, inputs)
+        self._metrics[mode]["rl_loss"].append(self.accelerator.gather(loss).mean().item())
         rl_loss_time_after = time.perf_counter()
         self._current_rl_loss_time += rl_loss_time_after - rl_loss_time
-        if self._step % self.current_gradient_accumulation_steps == 0:
+        if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
             self._metrics[mode]["rl_loss_time"].append(self._current_rl_loss_time)
             self._current_rl_loss_time = 0.0
 
@@ -613,11 +616,11 @@ class MiniLLMTrainer(GRPOTrainer):
                 mask=mask,
             )
 
-            self._metrics[mode]["minillm/single_step_decomposition_loss"].append(single_step_decomposition_loss.item())
-            loss += single_step_decomposition_loss
+            self._metrics[mode]["minillm/single_step_decomposition_loss"].append(self.accelerator.gather(single_step_decomposition_loss).mean().item())
+            loss += (single_step_decomposition_loss / self.current_gradient_accumulation_steps)
             single_step_loss_time_after = time.perf_counter()
             self._current_single_step_loss_time += single_step_loss_time_after - single_step_loss_time
-            if self._step % self.current_gradient_accumulation_steps == 0:
+            if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
                 self._metrics[mode]["single_step_loss_time"].append(self._current_single_step_loss_time)
                 self._current_single_step_loss_time = 0.0
 
@@ -629,7 +632,7 @@ class MiniLLMTrainer(GRPOTrainer):
                 mask=mask,
             )
             reverse_kl = reverse_kl.sum() / mask.sum()
-            self._metrics[mode]["minillm/reverse_kl"].append(reverse_kl.item())
+            self._metrics[mode]["minillm/reverse_kl"].append(self.accelerator.gather(reverse_kl).mean().item())
 
         # Empty cache
         empty_cache()
