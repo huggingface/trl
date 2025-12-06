@@ -21,8 +21,9 @@
 # ]
 # ///
 
-import argparse
 import os
+import time
+import argparse
 from dataclasses import dataclass, field
 
 import torch
@@ -55,6 +56,21 @@ class SaveStep0CallBack(TrainerCallback):
         self.trainer._save_checkpoint(self.trainer.model_wrapped, self.trial)
 
 
+class SaveTimeLimitCallBack(TrainerCallback):
+    def __init__(self, trainer: MiniLLMTrainer, start_time: int, time_limit: int, trial=None):
+        self.trainer = trainer
+        self.trial = trial
+        self.start_time = start_time
+        self.time_limit = time_limit
+
+    def on_step_end(self, args, state, control, **kwargs):
+        current_time = time.time()
+        elapsed_time = current_time - self.start_time
+        if elapsed_time > self.time_limit:
+            control.should_save = True
+            self.start_time = current_time  # Reset start time for the next interval
+
+
 class WandbLoggingCallback(TrainerCallback):
     def __init__(self, wandb_logger):
         self.wandb_logger = wandb_logger
@@ -73,6 +89,7 @@ class WandbArguments:
     wandb_mode: str = "disabled"
     wandb_job_type: str = "sft"
     wandb_group: str = None
+    time_limit: int = 110 * 60  # ~2h
 
 
 @dataclass
@@ -118,8 +135,7 @@ def main(
         dataset_args: DatasetMixtureConfig,
         wandb_args: WandbArguments
     ):
-    # Get the reward models and functions
-
+    start_time = time.time()
     if os.environ.get("ACCELERATE_GRADIENT_ACCUMULATION_STEPS") == "auto":
         os.environ["ACCELERATE_GRADIENT_ACCUMULATION_STEPS"] = str(training_args.gradient_accumulation_steps)
 
@@ -166,6 +182,7 @@ def main(
     )
 
     trainer.add_callback(SaveStep0CallBack(trainer))
+    trainer.add_callback(SaveTimeLimitCallBack(trainer, start_time, wandb_args.time_limit))
     try:
         resume_from_checkpoint = eval(training_args.resume_from_checkpoint)
     except Exception:
