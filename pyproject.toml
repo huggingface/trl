@@ -34,7 +34,10 @@ dependencies = [
     "word2number",
     "Pebble",
     "timeout-decorator",
-    "latex2sympy2"
+    "latex2sympy2",
+    "wandb",
+    "vllm==0.11.2",
+    "deepspeed"
 ]
 dynamic = ["version"]
 
