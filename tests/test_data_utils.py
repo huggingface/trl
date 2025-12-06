@@ -1028,7 +1028,7 @@ class TestPackDatasetBfd(TrlTestCase):
         num_examples = len(examples[next(iter(examples))])
         assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
 
-    def test_with_truncation(self):
+    def test_with_overlong_0(self):
         examples = {
             "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
             "attention_mask": [[1, 1, 1, 1, 1], [1, 1], [1, 1, 1, 1], [1]],
@@ -1036,9 +1036,24 @@ class TestPackDatasetBfd(TrlTestCase):
         dataset = Dataset.from_dict(examples)
         seq_length = 4
         expected_output = {
-            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
-            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
-            "seq_lengths": [[4], [4], [2, 1]],
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
+            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]],
+            "seq_lengths": [[4], [4], [2, 1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        assert dataset.to_dict() == expected_output
+
+    def test_with_overlong_1(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15, 16]],
+            "attention_mask": [[1, 1, 1, 1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1, 1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [13, 14, 15, 16], [7, 8, 9], [10, 11, 12], [5, 6]],
+            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1]],
+            "seq_lengths": [[4], [4], [3], [3], [2]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
