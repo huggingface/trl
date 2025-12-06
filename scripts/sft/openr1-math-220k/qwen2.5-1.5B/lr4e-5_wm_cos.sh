@@ -46,7 +46,7 @@ trl/scripts/sft.py \
     --dataset_name dataset/llm_rl/OpenR1-Math-220k \
     --learning_rate 4.0e-5 \
     --warmup_steps 100 \
-    --lr_scheduler cosine \
+    --lr_scheduler_type cosine \
     --num_train_epochs 5 \
     --packing \
     --per_device_train_batch_size $MICRO_BATCH_SIZE \
