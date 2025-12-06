@@ -143,5 +143,5 @@ checklink/cookies.txt
 nbs/wandb/
 examples/notebooks/wandb/
 wandb/
-results/
+results
 dataset

@@ -28,7 +28,7 @@ else
 fi
 echo "Available GPU count: $gpu_count"
 
-GROUP_NAME=minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l256
+GROUP_NAME=minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l256_test
 JOB_TYPE=train
 RUN_NAME=${JOB_TYPE}/${GROUP_NAME}
 OUTPUT_DIR=results/${RUN_NAME}
@@ -36,7 +36,7 @@ OUTPUT_DIR=results/${RUN_NAME}
 NUM_PROCESS=$((gpu_count * SLURM_NNODES))
 
 BATCH_SIZE=128
-MICRO_BATCH_SIZE=1
+MICRO_BATCH_SIZE=4
 GRAD_ACC=$((BATCH_SIZE / MICRO_BATCH_SIZE / NUM_PROCESS))
 
 read -r -d '' cmd <<EOF
@@ -60,10 +60,10 @@ trl/scripts/minillm.py \
     --eval_steps 100 \
     --output_dir ${OUTPUT_DIR} \
     --attn_implementation flash_attention_2 \
-    --resume_from_checkpoint True \
+    --resume_from_checkpoint False \
     --report_to none \
     --wandb_run_name $RUN_NAME \
-    --wandb_mode online \
+    --wandb_mode disabled \
     --wandb_job_type $JOB_TYPE \
     --wandb_group $GROUP_NAME \
     --logging_steps 1 \

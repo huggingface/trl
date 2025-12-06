@@ -28,15 +28,15 @@ else
 fi
 echo "Available GPU count: $gpu_count"
 
-GROUP_NAME=minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l256
+GROUP_NAME=minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l256_bs256
 JOB_TYPE=train
 RUN_NAME=${JOB_TYPE}/${GROUP_NAME}
 OUTPUT_DIR=results/${RUN_NAME}
 
 NUM_PROCESS=$((gpu_count * SLURM_NNODES))
 
-BATCH_SIZE=128
-MICRO_BATCH_SIZE=1
+BATCH_SIZE=256
+MICRO_BATCH_SIZE=8
 GRAD_ACC=$((BATCH_SIZE / MICRO_BATCH_SIZE / NUM_PROCESS))
 
 read -r -d '' cmd <<EOF
