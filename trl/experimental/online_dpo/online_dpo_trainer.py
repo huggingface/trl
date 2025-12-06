@@ -92,6 +92,7 @@ else:
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.lora.request import LoRARequest
     from vllm.sampling_params import GuidedDecodingParams
 
 if is_bitsandbytes_available():
@@ -336,10 +337,18 @@ class OnlineDPOTrainer(BaseTrainer):
         # Usually, the user wants the ref model to be the initial version of the model. When using PEFT, it's easy to
         # get the ref model, as it's just the model with a disabled adapter. When not using PEFT, we need to create
         # the ref model from the model by copying it and disable the gradients and set it in evaluation mode.
+        #
+        # Special case: When using vLLM with LoRA (vllm_use_lora=True), we need to handle the reference model
+        # differently:
+        # - The base model (without adapter) is loaded into vLLM and serves as the reference model
+        # - During generation, vLLM uses the base model with the current LoRA adapter weights
+        # - For ref_logprobs computation, we use the model with disabled adapter (same as normal PEFT case)
         if ref_model is None:  # No ref model provided, the most common case
             if peft_config is None:
                 self.ref_model = create_reference_model(model)  # copy, disable gradients, set eval mode
             else:
+                # When using vLLM with LoRA, we still need to disable adapter for ref_logprobs
+                # The base model will be loaded into vLLM separately
                 self.ref_model = None  # we don't need a ref model here, we can just disable the adapter.
         else:  # rare case, the user provided a ref model
             self.ref_model = ref_model
@@ -384,6 +393,19 @@ class OnlineDPOTrainer(BaseTrainer):
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
         self.vllm_model_impl = args.vllm_model_impl
+
+        # Auto-detect vLLM LoRA support when using vLLM with PEFT
+        has_peft = peft_config is not None or (is_peft_available() and isinstance(model, PeftModel))
+        self.vllm_use_lora = args.use_vllm and has_peft
+
+        if self.vllm_use_lora:
+            logger.info(
+                "Detected PEFT model with vLLM enabled. Using vLLM's native LoRA adapter support for efficient generation."
+            )
+
+        self.vllm_lora_adapter_name = args.vllm_lora_adapter_name
+        self.vllm_lora_adapter_id = args.vllm_lora_adapter_id
+        self.vllm_max_lora_rank = args.vllm_max_lora_rank
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -477,8 +499,14 @@ class OnlineDPOTrainer(BaseTrainer):
                             break
                         elif isinstance(module, bnb.nn.Linear8bitLt):
                             raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+                # When using LoRA, we need to load the base model into vLLM, not the adapter
+                if self.vllm_use_lora and is_peft_model(model):
+                    vllm_model_name = model.get_base_model().config._name_or_path
+                else:
+                    vllm_model_name = model.name_or_path
+
                 vllm_kwargs = {
-                    "model": model.name_or_path,
+                    "model": vllm_model_name,
                     "tensor_parallel_size": self.vllm_tensor_parallel_size,
                     "gpu_memory_utilization": self.vllm_gpu_memory_utilization,
                     "model_impl": self.vllm_model_impl,
@@ -491,6 +519,19 @@ class OnlineDPOTrainer(BaseTrainer):
                     "max_num_batched_tokens": 4096,
                     "quantization": vllm_quantization,
                 }
+
+                # Enable LoRA support if requested
+                if self.vllm_use_lora:
+                    vllm_kwargs["enable_lora"] = True
+
+                    # Determine max_lora_rank from PEFT config and/or user setting
+                    peft_rank = model.peft_config[model.active_adapter].r
+                    max_rank = (
+                        max(peft_rank, self.vllm_max_lora_rank) if self.vllm_max_lora_rank is not None else peft_rank
+                    )
+
+                    vllm_kwargs["max_lora_rank"] = max_rank
+                    logger.info(f"Setting vLLM max_lora_rank={max_rank}")
 
                 # vLLM requires the environment variables to be set for distributed training.
                 os.environ["RANK"] = str(self.accelerator.process_index)
@@ -748,6 +789,22 @@ class OnlineDPOTrainer(BaseTrainer):
                 ordered_set_of_images = all_images[:: self.num_generations]
             else:
                 ordered_set_of_images = None
+            # Prepare LoRA parameters if using LoRA
+            lora_kwargs = {}
+            if self.vllm_use_lora:
+                # Cycle through 2 adapter IDs to force vLLM to reload updated weights while keeping memory usage bounded
+                # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
+                # By alternating between 2 IDs, we ensure the adapter is reloaded each step without accumulating N adapters
+                adapter_id = self.vllm_lora_adapter_id + (self.state.global_step % 2)
+                lora_kwargs = {
+                    "lora_adapter_name": self.vllm_lora_adapter_name,
+                    "lora_adapter_id": adapter_id,
+                    "lora_adapter_path": self._vllm_lora_path,
+                }
+                logger.debug(
+                    f"Using LoRA adapter: {self.vllm_lora_adapter_name} (ID={adapter_id}) from path: {self._vllm_lora_path}"
+                )
+
             completion_ids = self.vllm_client.generate(
                 prompts=ordered_set_of_prompts,
                 images=ordered_set_of_images,
@@ -760,6 +817,7 @@ class OnlineDPOTrainer(BaseTrainer):
                 max_tokens=self.generation_config.max_tokens,
                 guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
                 generation_kwargs=self.args.generation_kwargs,
+                **lora_kwargs,
             )["completion_ids"]
             # Flatten: each prompt generates 2 completions
             completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
@@ -813,7 +871,19 @@ class OnlineDPOTrainer(BaseTrainer):
         else:
             vllm_inputs = prompts_text
 
-        outputs = self.llm.generate(vllm_inputs, self.generation_config, use_tqdm=False)
+        # Prepare LoRA request if using LoRA
+        lora_request = None
+        if self.vllm_use_lora:
+            # Cycle through 2 adapter IDs to force vLLM to reload updated weights while keeping memory usage bounded
+            # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
+            # By alternating between 2 IDs, we ensure the adapter is reloaded each step without accumulating N adapters
+            adapter_id = self.vllm_lora_adapter_id + (self.state.global_step % 2)
+            lora_request = LoRARequest(self.vllm_lora_adapter_name, adapter_id, self._vllm_lora_path)
+            logger.debug(
+                f"Using LoRA adapter: {self.vllm_lora_adapter_name} (ID={adapter_id}) from path: {self._vllm_lora_path}"
+            )
+
+        outputs = self.llm.generate(vllm_inputs, self.generation_config, lora_request=lora_request, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
@@ -833,43 +903,65 @@ class OnlineDPOTrainer(BaseTrainer):
             gather_if_zero3 = nullcontext
 
         if is_peft_model(self.model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
-            with gather_if_zero3(list(self.model.parameters())):
-                self.model.merge_adapter()
+            # When using vLLM with LoRA, we save only the adapter weights instead of merging
+            if self.vllm_use_lora:
+                import tempfile
 
-                # Update vLLM weights while parameters are gathered
-                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
+                # Create a temporary directory to save the LoRA adapter (only once)
+                if not hasattr(self, "_vllm_lora_path"):
+                    self._vllm_lora_path = tempfile.mkdtemp(prefix="trl_vllm_lora_")
+
+                # Save the LoRA adapter weights
+                # For FSDP/DeepSpeed, we need to gather parameters first
+                with gather_if_zero3(list(self.model.parameters())):
+                    if self.accelerator.is_main_process or not (self.is_fsdp_enabled or zero_stage_3):
+                        # Save adapter weights only (not merged)
+                        self.model.save_pretrained(self._vllm_lora_path)
+
+                # Wait for all processes to ensure the adapter is saved
+                self.accelerator.wait_for_everyone()
+
+                # No need to update weights param-by-param when using LoRA
+                # vLLM will load the adapter from the saved directory
+            else:
+                # Original code path: merge and sync full model weights
+                # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
+                # merging adapters in a sharded manner is not supported.
+                # TODO: does this work with FSDP?
+                with gather_if_zero3(list(self.model.parameters())):
+                    self.model.merge_adapter()
+
                     # Update vLLM weights while parameters are gathered
-                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
-                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-                    if fsdp_version == 1:
-                        # use memory-efficient post-order traversal for FSDP
-                        self._sync_fsdp1_params_to_vllm(self.model)
-                    elif fsdp_version == 2:
-                        self._sync_fsdp2_params_to_vllm(self.model)
-                else:
-                    # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if self.model.prefix in name:
-                            continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
-                            continue
-                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+                    if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
+                        # Update vLLM weights while parameters are gathered
+                        # For PEFT with FSDP we need to use the memory efficient post-order traversal
+                        fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                        fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                        if fsdp_version == 1:
+                            # use memory-efficient post-order traversal for FSDP
+                            self._sync_fsdp1_params_to_vllm(self.model)
+                        elif fsdp_version == 2:
+                            self._sync_fsdp2_params_to_vllm(self.model)
+                    else:
+                        # DeepSpeed ZeRO-3 with PEFT
+                        for name, param in self.model.named_parameters():
+                            # When using PEFT, we need to recover the original parameter name and discard some parameters
+                            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                            if self.model.prefix in name:
+                                continue
+                            # When module to save, remove its prefix and discard the original module
+                            if "original_module" in name:
+                                continue
+                            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.vllm_mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
+                            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                                self.vllm_client.update_named_param(name, param.data)
+                            elif self.vllm_mode == "colocate":
+                                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                                llm_model.load_weights([(name, param.data)])
+                    # Unmerge adapters while parameters are still gathered
+                    self.model.unmerge_adapter()
+                    # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:

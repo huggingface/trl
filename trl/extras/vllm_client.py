@@ -192,6 +192,9 @@ class VLLMClient:
         truncate_prompt_tokens: int | None = None,
         guided_decoding_regex: str | None = None,
         generation_kwargs: dict | None = None,
+        lora_adapter_name: str | None = None,
+        lora_adapter_id: int | None = None,
+        lora_adapter_path: str | None = None,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided prompts.
@@ -225,6 +228,12 @@ class VLLMClient:
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
                 `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
                 will override them.
+            lora_adapter_name (`str`, *optional*):
+                Name of the LoRA adapter to use for generation. Only used when vLLM server has LoRA support enabled.
+            lora_adapter_id (`int`, *optional*):
+                Integer ID of the LoRA adapter. Only used when vLLM server has LoRA support enabled.
+            lora_adapter_path (`str`, *optional*):
+                Path to the LoRA adapter weights. Only used when vLLM server has LoRA support enabled.
 
         Returns:
             `dict` with keys:
@@ -240,23 +249,31 @@ class VLLMClient:
         # Convert PIL images to base64 strings
         images = [pil_to_base64(img) for img in images] if images else None
 
-        response = self.session.post(
-            url,
-            json={
-                "prompts": prompts,
-                "images": images,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "truncate_prompt_tokens": truncate_prompt_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
-                "generation_kwargs": generation_kwargs or {},
-            },
-        )
+        # Build request payload
+        payload = {
+            "prompts": prompts,
+            "images": images,
+            "n": n,
+            "repetition_penalty": repetition_penalty,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "truncate_prompt_tokens": truncate_prompt_tokens,
+            "guided_decoding_regex": guided_decoding_regex,
+            "generation_kwargs": generation_kwargs or {},
+        }
+
+        # Add LoRA parameters if provided
+        if lora_adapter_name is not None:
+            payload["lora_adapter_name"] = lora_adapter_name
+        if lora_adapter_id is not None:
+            payload["lora_adapter_id"] = lora_adapter_id
+        if lora_adapter_path is not None:
+            payload["lora_adapter_path"] = lora_adapter_path
+
+        response = self.session.post(url, json=payload)
         if response.status_code == 200:
             json_response = response.json()
             return {
