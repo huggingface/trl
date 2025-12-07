@@ -986,6 +986,16 @@ class GRPOTrainer(BaseTrainer):
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
+            # When using PEFT, we need to recover the original parameter name
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            if is_peft_model(module) and module.prefix in name:
+                continue
+            # When module to save, remove its prefix and discard the original module
+            if "original_module" in name:
+                continue
+            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
             if param.is_cpu:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
@@ -1030,8 +1040,9 @@ class GRPOTrainer(BaseTrainer):
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
