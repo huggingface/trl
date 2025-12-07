@@ -1894,13 +1894,6 @@ class GRPOTrainer(BaseTrainer):
         else:
             entropy_mask = None
 
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
-
         # Compute the loss
         advantages = inputs["advantages"]
         # In the base GRPO implementation, advantages are expected to have shape (B,). To support subclasses that
@@ -1928,6 +1921,16 @@ class GRPOTrainer(BaseTrainer):
             )
 
         coef_1 = torch.exp(log_importance_weights)
+
+        # Compute the KL divergence between the model and the reference model
+        if self.beta != 0.0:
+            ref_per_token_logps = inputs["ref_per_token_logps"]
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
+            # Importance sampling correction for the KL divergence
+            if self.args.use_bias_correction_kl:
+                per_token_kl = per_token_kl * coef_1
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)

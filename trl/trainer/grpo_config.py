@@ -741,6 +741,14 @@ class GRPOConfig(TrainingArguments):
             "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
+    use_bias_correction_kl: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
+            "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
+            "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
