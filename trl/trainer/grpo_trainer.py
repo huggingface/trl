@@ -621,6 +621,7 @@ class GRPOTrainer(BaseTrainer):
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
                     logprobs_mode="processed_logprobs",
                     quantization=vllm_quantization,
+                    enforce_eager=True,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
@@ -971,7 +972,7 @@ class GRPOTrainer(BaseTrainer):
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
             # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
-            if self.model.prefix in name:
+            if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
             if "original_module" in name:
