@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -366,13 +365,6 @@ class BCOTrainer(BaseTrainer):
         embedding_func: Callable | None = None,
         embedding_tokenizer: PreTrainedTokenizerBase | None = None,
     ):
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
         if embedding_func is not None and not (is_sklearn_available() and is_joblib_available()):
             raise ImportError(
                 "BCOTrainer with UDM requires the scikit-learn and joblib libraries. Please install it with `pip install scikit-learn joblib`."

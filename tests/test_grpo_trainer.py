@@ -36,7 +36,6 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -168,7 +167,14 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo"])
+    def test_get_sapo_token_loss(self):
+        sample_token_importance_ratio = torch.ones((2, 4))
+        sapo_token_loss = GRPOTrainer.get_sapo_token_loss(sample_token_importance_ratio, 1.0)
+        # sigmoid(temp * (1-1)) * 4/temp = 0.5 * 4 = 2
+        expected_sapo_token_loss = torch.full_like(sample_token_importance_ratio, 2.0)
+        torch.testing.assert_close(sapo_token_loss, expected_sapo_token_loss)
+
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo"])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1797,39 +1803,6 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
-
-
-class TestGSPOTokenTrainer(TrlTestCase):
-    def test_training(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            num_iterations=2,  # the importance sampling weights won't be 0 in this case
-            importance_sampling_level="sequence_token",
-            report_to="none",
-        )
-        trainer = GSPOTokenTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
 @pytest.mark.slow

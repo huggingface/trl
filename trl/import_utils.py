@@ -15,6 +15,7 @@
 import importlib
 import os
 import warnings
+from contextlib import contextmanager
 from itertools import chain
 from types import ModuleType
 from typing import Any
@@ -91,7 +92,7 @@ def is_vllm_available() -> bool:
         warnings.warn(
             f"TRL currently only supports vLLM version `0.10.2`. You have version {_vllm_version} installed. We "
             "recommend to install this version to avoid compatibility issues.",
-            UserWarning,
+            stacklevel=2,
         )
     return _vllm_available
 
@@ -102,6 +103,23 @@ def is_vllm_ascend_available() -> bool:
 
 def is_weave_available() -> bool:
     return _weave_available
+
+
+class TRLExperimentalWarning(UserWarning):
+    """Warning for using the 'trl.experimental' submodule."""
+
+    pass
+
+
+@contextmanager
+def suppress_warning(category):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=category)
+        yield
+
+
+def suppress_experimental_warning():
+    return suppress_warning(TRLExperimentalWarning)
 
 
 class _LazyModule(ModuleType):
