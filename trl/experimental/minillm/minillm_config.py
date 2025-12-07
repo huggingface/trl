@@ -115,6 +115,10 @@ class MiniLLMConfig(GRPOConfig):
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
         },
     )
+    log_large_reverse_kl: bool = field(
+        default=False,
+        metadata={"help": "Whether to log large reverse KL values for debugging purposes."},
+    )
 
     def __post_init__(self):
         # We do not use the post_init of GRPOConfig because:

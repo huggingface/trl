@@ -18,7 +18,7 @@ else
 fi
 
 export OMP_NUM_THREADS=32
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 if [[ -z $CUDA_VISIBLE_DEVICES ]]; then
     gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)

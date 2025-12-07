@@ -40,11 +40,6 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 from vllm import LLM, SamplingParams
 
-import sys
-import multiprocessing
-if multiprocessing.current_process().name != 'EngineCore_DP0':
-    sys.stdout = open(os.devnull, 'w')
-
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -175,6 +170,7 @@ def main(args):
 
     # setup wandb
     if rank == 0:
+        print(f"\n\n\n######### Evaluating {args.model_name_or_path} on {args.data_names} ##########")
         wandb_cfg = {
             "project": args.wandb_project,
             "name": args.wandb_run_name.strip("/") + f"_{args.data_names}" if args.wandb_run_name else None,
@@ -208,29 +204,30 @@ def main(args):
 
     for data_name in data_list:
         samples, ids, processed_samples, out_file = setup_data(data_name, args)
-    
-        if len(samples) > 0 and llm is None and tokenizer is None and not is_dummy_step:
-            if args.use_vllm:
-                llm = LLM(
-                    model=args.model_name_or_path,
-                    tensor_parallel_size=args.tensor_parallel_size,
-                    pipeline_parallel_size=args.pipeline_parallel_size,
-                    gpu_memory_utilization=args.gpu_memory_utilization,
-                )
-                
-                tokenizer = None
-                if args.apply_chat_template:
-                    tokenizer = AutoTokenizer.from_pretrained(
-                        args.model_name_or_path, trust_remote_code=True
+        if rank == 0:
+            print(len(samples), len(processed_samples))
+        if len(samples) > 0 and not is_dummy_step:
+            if llm is None and tokenizer is None:
+                if args.use_vllm:
+                    llm = LLM(
+                        model=args.model_name_or_path,
+                        tensor_parallel_size=args.tensor_parallel_size,
+                        pipeline_parallel_size=args.pipeline_parallel_size,
+                        gpu_memory_utilization=args.gpu_memory_utilization,
                     )
-            else:
-                llm, tokenizer = load_hf_lm_and_tokenizer(
-                    model_name_or_path=args.model_name_or_path,
-                    load_in_half=True,
-                    use_fast_tokenizer=True,
-                    use_safetensors=args.use_safetensors,
-                )
-            
+                    
+                    tokenizer = None
+                    if args.apply_chat_template:
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            args.model_name_or_path, trust_remote_code=True
+                        )
+                else:
+                    llm, tokenizer = load_hf_lm_and_tokenizer(
+                        model_name_or_path=args.model_name_or_path,
+                        load_in_half=True,
+                        use_fast_tokenizer=True,
+                        use_safetensors=args.use_safetensors,
+                    )
             all_samples, time_use = run_generation(llm, tokenizer, data_name, args, samples)
         else:
             all_samples, time_use = [], 0
@@ -493,7 +490,7 @@ def run_generation(llm, tokenizer, data_name, args, samples):
 
     # remove input_prompt from end_prompt
     codes = []
-    assert len(input_prompts) == len(end_prompts)
+    assert len(input_prompts) == len(end_prompts), f"{len(input_prompts)=} vs {len(end_prompts)=}"
     for i in range(len(input_prompts)):
         _, end_prompt = end_prompts[i]
         code = end_prompt.split(input_prompts[i])[-1].strip()
@@ -543,7 +540,7 @@ def run_generation(llm, tokenizer, data_name, args, samples):
 def postprocess_and_evaluate(
     all_samples, ids, processed_samples, out_file, data_name, args, time_use
 ):
-    assert len(all_samples) == len(ids)
+    assert len(all_samples) == len(ids), f"{len(all_samples)=} vs {len(ids)=}"
     # all gather samples
     all_samples_with_ids = list(zip(all_samples, ids))
     gathered_all_samples_w_ids = [None for _ in range(world_size)] if rank == 0 else None

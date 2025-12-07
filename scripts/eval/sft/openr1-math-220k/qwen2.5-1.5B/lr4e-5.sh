@@ -20,7 +20,7 @@ fi
 port=29500
 
 export OMP_NUM_THREADS=32
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TOKENIZERS_PARALLELISM=false
 export VLLM_LOGGING_LEVEL=ERROR
 export VLLM_DP_MASTER_IP=$head_node_ip

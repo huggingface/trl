@@ -16,7 +16,7 @@ function run_single() {
     if [ -n "$SLURM_PROCID" ] && [ "$SLURM_PROCID" -eq 0 ]; then
         echo ">>> Full Command: ${full_cmd}"
     fi
-    $full_cmd
+    $full_cmd | grep -v -E "\[Gloo\]|EngineCore|connected peer ranks|PYTORCH_CUDA_ALLOC_CONF|Loading safetensors"
 }
 
 # ==============================================================================

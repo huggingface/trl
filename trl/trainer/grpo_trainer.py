@@ -1406,9 +1406,14 @@ class GRPOTrainer(BaseTrainer):
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
-                prompt_completion_ids = unwrapped_model.generate(
-                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
+                output = unwrapped_model.generate(
+                    **generate_inputs,
+                    generation_config=self.generation_config,
+                    disable_compile=True,
+                    return_dict_in_generate=True,
+                    output_scores=True,
                 )
+                prompt_completion_ids = output.sequences
             # Compute prompt length and extract completion ids
             prompt_ids, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_length = prompt_ids.size(1)
@@ -1422,7 +1427,7 @@ class GRPOTrainer(BaseTrainer):
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
             prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
-            logprobs = None  # not used in this case
+            logprobs = output.scores[0].tolist()  # not used in this case
             extra_fields = {}  # No extra fields for non-rollout_func paths
 
         return prompt_ids, completion_ids, logprobs, extra_fields
@@ -1736,6 +1741,8 @@ class GRPOTrainer(BaseTrainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
+        if sampling_per_token_logps is not None:
+            output["sampling_per_token_logps"] = sampling_per_token_logps
         if self.use_vllm and self.vllm_importance_sampling_correction:
             output["importance_sampling_ratio"] = importance_sampling_ratio
         if ref_per_token_logps is not None:

@@ -538,8 +538,6 @@ class MiniLLMTrainer(GRPOTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
 
         # Compute student output
         student_outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
@@ -574,7 +572,7 @@ class MiniLLMTrainer(GRPOTrainer):
             teacher_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
         ).squeeze(-1)
 
-        mask = shifted_labels != -100
+        mask = attention_mask[:, prompt_lengths:].bool()
 
         # Logging Meitrcs
         mode = "train" if self.model.training else "eval"
@@ -632,6 +630,14 @@ class MiniLLMTrainer(GRPOTrainer):
                 mask=mask,
             )
             reverse_kl = reverse_kl.sum() / mask.sum()
+
+            if self.args.log_large_reverse_kl and reverse_kl.item() > 5.0:
+                save_path = f"{self.args.output_dir}/large_reverse_kl_logs/rank_{self.accelerator.process_index}/gs{self.state.global_step}_s{self._step}_rkl_{reverse_kl.item():.2f}/"
+                os.makedirs(save_path, exist_ok=True)
+                torch.save(inputs, f"{save_path}/inputs.pt")
+                torch.save(student_log_probs, f"{save_path}/student_log_probs.pt")
+                torch.save(teacher_log_probs, f"{save_path}/teacher_log_probs.pt")
+
             self._metrics[mode]["minillm/reverse_kl"].append(self.accelerator.gather(reverse_kl).mean().item())
 
         # Empty cache
