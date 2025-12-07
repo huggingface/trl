@@ -28,7 +28,7 @@ else
 fi
 echo "Available GPU count: $gpu_count"
 
-GROUP_NAME=minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l256_bs256
+GROUP_NAME=minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l512_bs256
 JOB_TYPE=train
 RUN_NAME=${JOB_TYPE}/${GROUP_NAME}
 OUTPUT_DIR=results/${RUN_NAME}
@@ -70,7 +70,7 @@ trl/scripts/minillm.py \
     --logging_steps 1 \
     --logging_first_step true \
     --dataset_num_proc 64 \
-    --max_completion_length 256 \
+    --max_completion_length 512 \
     --rkl_advantage False
 EOF
 

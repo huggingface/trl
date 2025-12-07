@@ -8,7 +8,7 @@ def get_rev_kl(log_p: torch.Tensor, log_q: torch.Tensor, mask: torch.Tensor):
     kl = log_ratio.float().exp() - 1 - log_ratio
     return kl
 
-input_dir = "results/train/minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l256_bs256_test2/large_reverse_kl_logs/rank_4/gs2_s11_rkl_5.87/"
+input_dir = "results/train/minillm/openr1-math-220k/qwen2.5-1.5B/lr5e-6_hf_l256_bs256_test2/large_reverse_kl_logs/rank_2/gs17_s68_rkl_803.30/"
 
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B", trust_remote_code=True)
 
@@ -49,24 +49,26 @@ print(per_token_reverse_kl)
 print(reverse_kl)
 # print(list(map(lambda x: round(x, 4), per_token_reverse_kl[2].tolist())))
 # print(list(map(lambda x: round(x, 4), student_log_probs_on_labels[2].tolist())))
-for i, x in enumerate(per_token_reverse_kl[6]):
+
+sid, tid = 0, 10
+
+for i, x in enumerate(per_token_reverse_kl[sid]):
     if x > 1000:
         print(i)
-        
 
-print(per_token_reverse_kl[6][34])
-print(teacher_log_probs_on_labels[6][34])
-print(student_log_probs_on_labels[6][34])
-print(shifted_labels[6][34-10:34+10])
-print(tokenizer.convert_ids_to_tokens(shifted_labels[6][34-10:34+10].tolist()))
-print(tokenizer.convert_ids_to_tokens([shifted_labels[6][34]]))
+print(per_token_reverse_kl[sid][tid])
+print(teacher_log_probs_on_labels[sid][tid])
+print(student_log_probs_on_labels[sid][tid])
+print(shifted_labels[sid][tid-10:tid+10])
+print(tokenizer.convert_ids_to_tokens(shifted_labels[sid][tid-10:tid+10].tolist()))
+print(tokenizer.convert_ids_to_tokens([shifted_labels[sid][tid]]))
 print(inputs["old_per_token_logps"].shape)
 print(inputs["sampling_per_token_logps"].shape)
 
-print(inputs["old_per_token_logps"][6][34])
-print(inputs["sampling_per_token_logps"][6][34])
+print(inputs["old_per_token_logps"][sid][tid])
+print(inputs["sampling_per_token_logps"][sid][tid])
 
 print(inputs["old_per_token_logps"].dtype)
 print(inputs["sampling_per_token_logps"].dtype)
 
-print(inputs["old_per_token_logps"][6] / inputs["sampling_per_token_logps"][6])
+print(inputs["old_per_token_logps"][sid] / inputs["sampling_per_token_logps"][sid])
