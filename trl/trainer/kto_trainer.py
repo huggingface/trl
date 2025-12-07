@@ -1111,18 +1111,11 @@ class KTOTrainer(BaseTrainer):
                 "examples for which an output sequence was predicted."
             )
 
-        # Convert Python lists to tensor indices for efficient CUDA operations
+        # Use torch.nonzero for efficient tensor index selection
         device = completion_logits.device
-        chosen_idx = torch.tensor(
-            [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True],
-            dtype=torch.long,
-            device=device,
-        )
-        rejected_idx = torch.tensor(
-            [i for i in range(completion_logps.shape[0]) if not batch["label"][i]],
-            dtype=torch.long,
-            device=device,
-        )
+        labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+        chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+        rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
         # Use index_select for efficient CUDA operations
         chosen_logps = completion_logps.index_select(0, chosen_idx)
