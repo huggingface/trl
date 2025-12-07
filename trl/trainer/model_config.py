@@ -197,6 +197,7 @@ class ModelConfig:
             warnings.warn(
                 "`torch_dtype` is deprecated and will be removed in version 0.27.0, please use `dtype` instead.",
                 FutureWarning,
+                stacklevel=2,
             )
             self.dtype = self.torch_dtype
 

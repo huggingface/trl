@@ -111,6 +111,8 @@
     title: GSPO-token
   - local: judges
     title: Judges
+  - local: merge_model_callback
+    title: MergeModelCallback
   - local: minillm_trainer
     title: MiniLLM
   - local: nash_md_trainer
