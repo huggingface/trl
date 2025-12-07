@@ -39,3 +39,18 @@ previous_trainable_params = {n: param.clone() for n, param in trainer.model.name
 
 trainer.train()
 ```
+
+## GRPOWithReplayBufferTrainer
+
+[[autodoc]] experimental.grpo_with_replay_buffer.GRPOWithReplayBufferTrainer
+    - train
+    - save_model
+    - push_to_hub
+
+## GRPOWithReplayBufferConfig
+
+[[autodoc]] experimental.grpo_with_replay_buffer.GRPOWithReplayBufferConfig
+
+## ReplayBuffer
+
+[[autodoc]] experimental.grpo_with_replay_buffer.ReplayBuffer

@@ -171,7 +171,13 @@ class GRPOConfig(TrainingArguments):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
             When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
-            paper](https://arxiv.org/pdf/2510.13786) and the recommended value is `5.0`.
+            paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`.
+        sapo_temperature_neg (`float`, *optional*, defaults to `1.05`):
+            Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. This parameter
+            is introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
+        sapo_temperature_pos (`float`, *optional*, defaults to `1.0`):
+            Temperature for tokens with positive advantage scores used in the `sapo` loss function. This parameter is
+            introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -211,6 +217,10 @@ class GRPOConfig(TrainingArguments):
               clipped weights are then multiplied with the advantages and policy model's log probs. Individual token
               losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
               This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
+            - `"sapo"`: Soft Adaptive Policy Optimization loss, as introduced in the [Soft Adaptive Policy Optimization
+              paper](https://huggingface.co/papers/2506.13585). Replaces hard clipping with a smooth,
+              temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
+              learning signals.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -243,16 +253,23 @@ class GRPOConfig(TrainingArguments):
             instead.
 
             </Deprecated>
-
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
-            Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
-            logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
-            Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
-            (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
-            and training backends. TIS is proposed as a remedy for this issue.
-        vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
-            Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
-            sampling ratio, improving training stability.
+            Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
+            recomputed training logprobs. If set to `False`, no IS is applied regardless of
+            `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
+            and constrained.
+        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
+            Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
+            values are:
+
+                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped from above at C.
+                - `"token_mask"`: Token-level masked IS. Per-token ratios above C are set to zero.
+                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
+                  C and applied to all tokens in the sequence.
+                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
+        vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
+            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
+            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
 
         > Parameters that control the logging
 
@@ -576,6 +593,22 @@ class GRPOConfig(TrainingArguments):
             "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
         },
     )
+    sapo_temperature_neg: float = field(
+        default=1.05,
+        metadata={
+            "help": "Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. "
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
+    sapo_temperature_pos: float = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature for tokens with positive advantage scores used in the `sapo` loss function. "
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
     importance_sampling_level: str = field(
         default="token",
         metadata={
@@ -627,6 +660,10 @@ class GRPOConfig(TrainingArguments):
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
             "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
+            "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
+            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
+            "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
+            "off-policy updates while preserving useful learning signals."
         },
     )
     mask_truncated_completions: bool = field(
@@ -676,18 +713,32 @@ class GRPOConfig(TrainingArguments):
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
-            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
-            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
-            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
-            "effects due to subtle implementation differences between generation and training backends. TIS is "
-            "proposed as a remedy for this issue."
+            "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
+            "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
+            "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
+            "IS ratios are computed and constrained."
         },
     )
-    vllm_importance_sampling_cap: float = field(
-        default=2.0,
+
+    vllm_importance_sampling_mode: str = field(
+        default="sequence_mask",
         metadata={
-            "help": "Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the "
-            "importance sampling ratio, improving training stability."
+            "help": "Specifies how Importance Sampling (IS) is performed when "
+            "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
+            "dimensions: (1) constraint, which determines how to handle ratios above "
+            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
+            "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+            "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
+            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
+            "'sequence_mask'."
+        },
+    )
+
+    vllm_importance_sampling_cap: float = field(
+        default=3.0,
+        metadata={
+            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
 
