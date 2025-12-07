@@ -163,36 +163,6 @@ def prepare_data(data_name, args):
 
 
 def main(args):
-    if os.path.exists(os.path.join(args.output_dir, f"complete_{args.data_names}.txt")) and args.resume:
-        if rank == 0:
-            print(f"Evaluation already completed in {args.output_dir}. Exiting...")
-        return
-
-    # setup wandb
-    if rank == 0:
-        print(f"\n\n\n######### Evaluating {args.model_name_or_path} on {args.data_names} ##########")
-        wandb_cfg = {
-            "project": args.wandb_project,
-            "name": args.wandb_run_name.strip("/") + f"_{args.data_names}" if args.wandb_run_name else None,
-            "group": args.wandb_group.strip("/") if args.wandb_group else None,
-            "mode": args.wandb_mode,
-            "entity": args.wandb_entity,
-            "job_type": args.wandb_job_type,
-        }
-        if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)):
-            wandb_dir = os.path.join(os.path.dirname(args.output_dir), f"wandb_{args.data_names}")
-        else:
-            wandb_dir = os.path.join(args.output_dir, f"wandb_{args.data_names}")
-
-        wandb_logger = setup_wandb(
-            wandb_cfg=wandb_cfg,
-            wandb_dir=wandb_dir,
-            config=vars(args),
-            resume=args.resume,
-        )
-    else:
-        wandb_logger = None
-
     # infer and evaluate
     data_list = args.data_names.split(",")
     llm, tokenizer = None, None
@@ -203,9 +173,37 @@ def main(args):
         is_dummy_step = int(re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)).group(1)) in dummy_output_steps
 
     for data_name in data_list:
-        samples, ids, processed_samples, out_file = setup_data(data_name, args)
+        if os.path.exists(os.path.join(args.output_dir, f"complete_{data_name}.txt")) and args.resume:
+            if rank == 0:
+                print(f"Evaluation already completed in {args.output_dir}. Exiting...")
+            continue
+
         if rank == 0:
-            print(len(samples), len(processed_samples))
+            print(f"\n\n\n######### Evaluating {args.model_name_or_path} on {data_name} ##########")
+            wandb_cfg = {
+                "project": args.wandb_project,
+                "name": args.wandb_run_name.strip("/") + f"_{data_name}" if args.wandb_run_name else None,
+                "group": args.wandb_group.strip("/") if args.wandb_group else None,
+                "mode": args.wandb_mode,
+                "entity": args.wandb_entity,
+                "job_type": args.wandb_job_type,
+            }
+            if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)):
+                wandb_dir = os.path.join(os.path.dirname(args.output_dir), f"wandb_{data_name}")
+            else:
+                wandb_dir = os.path.join(args.output_dir, f"wandb_{data_name}")
+
+            wandb_logger = setup_wandb(
+                wandb_cfg=wandb_cfg,
+                wandb_dir=wandb_dir,
+                config=vars(args),
+                resume=args.resume,
+            )
+        else:
+            wandb_logger = None
+
+        samples, ids, processed_samples, out_file = setup_data(data_name, args)
+        
         if len(samples) > 0 and not is_dummy_step:
             if llm is None and tokenizer is None:
                 if args.use_vllm:
@@ -237,7 +235,22 @@ def main(args):
         else:
             result_json = {"acc": 0.0}
         results.append(result_json)
+        
+        if wandb_logger is not None:
+            wandb_logging_dict = {f"math_eval/{data_name}": result_json["acc"]}
+            if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)) is not None:
+                step = int(re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)).group(1))
+            else:
+                step = args.wandb_logging_step
+            wandb_logger.log(wandb_logging_dict, step=step)
+            wandb_logger.finish()
 
+        dist.barrier()
+
+        if rank == 0 and not os.path.exists(os.path.join(args.output_dir, f"complete_{data_name}.txt")):
+            with open(os.path.join(args.output_dir, f"complete_{data_name}.txt"), "w") as f:
+                f.write("Evaluation completed.\n")
+    
     # log results
     if rank == 0:
         # add "avg" result to data_list and results
@@ -250,17 +263,6 @@ def main(args):
         pad = max([len(data_name) for data_name in data_list])
         print("\t".join(data_name.ljust(pad, " ") for data_name in data_list))
         print("\t".join([f"{result['acc']:.1f}".ljust(pad, " ") for result in results]))
-        wandb_logging_dict = {f"math_eval/{data_name}": result["acc"] for data_name, result in zip(data_list, results)}
-        if wandb_logger is not None:
-            if re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)) is not None:
-                step = int(re.match(r"checkpoint-(\d+)", os.path.basename(args.output_dir)).group(1))
-            else:
-                step = args.wandb_logging_step
-            wandb_logger.log(wandb_logging_dict, step=step)
-    
-    # clean up
-    if wandb_logger is not None:
-        wandb_logger.finish()
 
     # free gpu memory
     if args.use_vllm:
@@ -269,12 +271,7 @@ def main(args):
 
     del llm
     gc.collect()
-    torch.cuda.empty_cache()
-
-    if rank == 0 and not os.path.exists(os.path.join(args.output_dir, f"complete_{args.data_names}.txt")):
-        with open(os.path.join(args.output_dir, f"complete_{args.data_names}.txt"), "w") as f:
-            f.write("Evaluation completed.\n")
-    
+    torch.cuda.empty_cache()    
     time.sleep(10)
 
 

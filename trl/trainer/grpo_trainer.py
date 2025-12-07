@@ -1411,7 +1411,7 @@ class GRPOTrainer(BaseTrainer):
                     generation_config=self.generation_config,
                     disable_compile=True,
                     return_dict_in_generate=True,
-                    output_scores=True,
+                    # output_sampled_log_probs=True,
                 )
                 prompt_completion_ids = output.sequences
             # Compute prompt length and extract completion ids
@@ -1427,7 +1427,8 @@ class GRPOTrainer(BaseTrainer):
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
             prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
-            logprobs = output.scores[0].tolist()  # not used in this case
+            # logprobs = torch.stack(output.sampled_log_probs, dim=1).tolist()  # not used in this case
+            logprobs = None  # not used in this case
             extra_fields = {}  # No extra fields for non-rollout_func paths
 
         return prompt_ids, completion_ids, logprobs, extra_fields

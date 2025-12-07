@@ -71,7 +71,7 @@ trl/scripts/minillm.py \
     --dataset_num_proc 64 \
     --max_completion_length 256 \
     --rkl_advantage False \
-    --log_large_reverse_kl True \
+    --log_large_reverse_kl True
 EOF
 
 if [ -n "$SLURM_JOB_ID" ] && [ ! -t 0 ]; then
