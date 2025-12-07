@@ -522,3 +522,20 @@ def prepare_peft_model(
         peft_module_casting_to_bf16(model)
 
     return model
+
+
+@contextmanager
+def disable_gradient_checkpointing(model: PreTrainedModel):
+    """
+    Temporarily disable gradient checkpointing, restoring the previous state afterward.
+
+    Args:
+        model (`PreTrainedModel`):
+            Model for which to temporarily disable gradient checkpointing.
+    """
+    was_enabled = model.is_gradient_checkpointing
+    if was_enabled:
+        model.gradient_checkpointing_disable()
+    yield
+    if was_enabled:
+        model.gradient_checkpointing_enable()

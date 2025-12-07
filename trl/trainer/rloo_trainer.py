@@ -62,6 +62,7 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
@@ -1329,7 +1330,10 @@ class RLOOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        with torch.no_grad():
+        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
+        # Temporarily disable checkpointing to avoid this warning during inference.
+        with torch.no_grad(), disable_gradient_checkpointing(self.model):
             # Compute the per-token log probabilities for the current model
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                 self.model,

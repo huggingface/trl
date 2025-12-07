@@ -60,7 +60,7 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..models.utils import _ForwardRedirection
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -1568,7 +1568,10 @@ class GRPOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        with torch.no_grad():
+        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
+        # Temporarily disable checkpointing to avoid this warning during inference.
+        with torch.no_grad(), disable_gradient_checkpointing(self.model):
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
             # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
