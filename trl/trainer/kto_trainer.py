@@ -1119,7 +1119,7 @@ class KTOTrainer(BaseTrainer):
             device=device,
         )
         rejected_idx = torch.tensor(
-            [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False],
+            [i for i in range(completion_logps.shape[0]) if not batch["label"][i]],
             dtype=torch.long,
             device=device,
         )
