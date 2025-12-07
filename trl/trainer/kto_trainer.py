@@ -1423,16 +1423,9 @@ class KTOTrainer(BaseTrainer):
             if "reference_logps" in batch:
                 # Convert Python lists to tensor indices for efficient CUDA operations
                 device = batch["reference_logps"].device
-                chosen_idx = torch.tensor(
-                    [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True],
-                    dtype=torch.long,
-                    device=device,
-                )
-                rejected_idx = torch.tensor(
-                    [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is False],
-                    dtype=torch.long,
-                    device=device,
-                )
+                labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+                chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+                rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
                 # Use index_select for efficient CUDA operations
                 reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
