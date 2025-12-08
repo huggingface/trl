@@ -158,7 +158,8 @@ class GRPOConfig(TrainingArguments):
 
         beta (`float`, *optional*, defaults to `0.0`):
             KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and improving
-            training speed.
+            training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement
+            learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -270,6 +271,10 @@ class GRPOConfig(TrainingArguments):
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
             Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
             ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+        use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
+            Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
+            KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
+            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
 
         > Parameters that control the logging
 
@@ -565,7 +570,8 @@ class GRPOConfig(TrainingArguments):
         default=0.0,
         metadata={
             "help": "KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and "
-            "improving training speed."
+            "improving training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement "
+            "learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`."
         },
     )
     num_iterations: int = field(

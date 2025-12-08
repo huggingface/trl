@@ -387,6 +387,35 @@ training_args = GRPOConfig(
 )
 ```
 
+### DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2512.02556
+
+DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement the *Unbiased KL Estimate*, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
+ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
+
+$$
+\mathrm{D}_{\mathrm{KL}}\!\left(\pi_\theta(o_{i,t}) \,\|\, \pi_{\text{ref}}(o_{i,t})\right) =
+\textcolor{red}{\frac{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}{\pi_{\text{old}}(o_{i,t}\mid q, o_{i,<t})}}
+\left(
+  \frac{\pi_{\text{ref}}(o_{i,t}\mid q, o_{i,<t})}{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}
+  -
+  \log \frac{\pi_{\text{ref}}(o_{i,t}\mid q, o_{i,<t})}{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}
+  - 1
+\right).
+$$
+
+To enable this feature, set the `use_bias_correction_kl` parameter to `True` in the [`GRPOConfig`], and `beta > 0`:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    beta=0.001,  # the paper don't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
+    use_bias_correction_kl=True,
+)
+```
 
 ## Direct Policy Optimization
 
