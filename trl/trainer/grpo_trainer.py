@@ -402,7 +402,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Tools
         if tools:
-            if not Version(transformers.__version__) >= Version("5.0.0.rc0"):
+            if not Version(transformers.__version__) >= Version("5.0.0.dev0"):
                 raise ImportError(
                     "Using tools with GRPOTrainer requires transformers version 5.0.0 or higher. Please use "
                     "transformers with `pip install --pre transformers` to use this feature."
