@@ -2,6 +2,11 @@
 
 [![model badge](https://img.shields.io/badge/All_models-KTO-blue)](https://huggingface.co/models?other=kto,trl)
 
+> [!WARNING]
+> As of TRL v1.0, `KTOTrainer` and `KTOConfig` have been moved to the `trl.experimental.kto` module.  
+> KTO API is experimental and may change at any time.
+> Promoting KTO back into the stable API is a high-priority task: KTO is slated for refactoring to align with the standard core trainer architecture.
+
 ## Overview
 
 Kahneman-Tversky Optimization (KTO) was introduced in [KTO: Model Alignment as Prospect Theoretic Optimization](https://huggingface.co/papers/2402.01306) by [Kawin Ethayarajh](https://huggingface.co/kawine), [Winnie Xu](https://huggingface.co/xwinxu), [Niklas Muennighoff](https://huggingface.co/Muennighoff), Dan Jurafsky, [Douwe Kiela](https://huggingface.co/douwekiela).
