@@ -14,7 +14,11 @@
 
 import warnings
 
-from ..experimental.prm import PRMConfig as _PRMConfig
+from ..import_utils import suppress_experimental_warning
+
+
+with suppress_experimental_warning():
+    from ..experimental.prm import PRMConfig as _PRMConfig
 
 
 class PRMConfig(_PRMConfig):
@@ -22,6 +26,8 @@ class PRMConfig(_PRMConfig):
         warnings.warn(
             "The `PRMConfig` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.xco import PRMConfig`. The current import path will be removed and no longer "
-            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223."
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__post_init__()

@@ -88,12 +88,14 @@ def is_uvicorn_available() -> bool:
 
 
 def is_vllm_available() -> bool:
-    if _vllm_available and version.parse(_vllm_version) != version.parse("0.10.2"):
-        warnings.warn(
-            f"TRL currently only supports vLLM version `0.10.2`. You have version {_vllm_version} installed. We "
-            "recommend to install this version to avoid compatibility issues.",
-            UserWarning,
-        )
+    if _vllm_available:
+        if not (version.parse("0.10.2") <= version.parse(_vllm_version) <= version.parse("0.11.2")):
+            warnings.warn(
+                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2. You have version "
+                f"{_vllm_version} installed. We recommend installing a supported version to avoid compatibility "
+                "issues.",
+                stacklevel=2,
+            )
     return _vllm_available
 
 
@@ -105,23 +107,21 @@ def is_weave_available() -> bool:
     return _weave_available
 
 
+class TRLExperimentalWarning(UserWarning):
+    """Warning for using the 'trl.experimental' submodule."""
+
+    pass
+
+
 @contextmanager
-def temporary_env(var, value):
-    """
-    Temporarily set an environment variable. Restores the original value (if any) when done.
-    """
-    # Save original value (or None if not set)
-    original = os.environ.get(var)
-    os.environ[var] = value
-    try:
+def suppress_warning(category):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=category)
         yield
-    finally:
-        if original is None:
-            # Variable wasn't set before → remove it
-            os.environ.pop(var, None)
-        else:
-            # Variable was set → restore original value
-            os.environ[var] = original
+
+
+def suppress_experimental_warning():
+    return suppress_warning(TRLExperimentalWarning)
 
 
 class _LazyModule(ModuleType):
