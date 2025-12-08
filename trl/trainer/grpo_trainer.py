@@ -1520,16 +1520,6 @@ class GRPOTrainer(BaseTrainer):
         while idxs_with_tool:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
-            # Tokenize the current prompt. We will use this to filter out overlong samples later.
-            kwargs = {
-                "tools": self.tools,
-                "add_generation_prompt": True,
-                "tokenize": True,
-                "chat_template": self.chat_template,
-                **self.chat_template_kwargs,
-            }
-            p_ids = self.processing_class.apply_chat_template(prompt_completion_tools, **kwargs)["input_ids"]
-
             # Call the tools, and build the new prompt for generation
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
@@ -1555,10 +1545,24 @@ class GRPOTrainer(BaseTrainer):
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
 
-            # Tokenize and filter samples whose length exceeds max allowed length. This is important, because if vLLM
-            # is called with an input longer than its max model length, it will error out.
-            pct_ids = self.processing_class.apply_chat_template(prompt_completion_tools, **kwargs)["input_ids"]
-            overlong = [len(pct) - len(p) >= self.max_completion_length for p, pct in zip(p_ids, pct_ids, strict=True)]
+            # Tokenize and filter samples whose length exceeds max allowed length. This is important, because both
+            # vLLM and transformers will error out if the input is longer than the model's max length.
+            pct_ids = self.processing_class.apply_chat_template(
+                prompt_completion_tools,
+                tools=self.tools,
+                tokenize=True,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )["input_ids"]
+            if self.use_vllm and self.vllm_mode == "colocate":
+                max_model_len = self.llm.llm_engine.model_config.max_model_len
+            elif not self.use_vllm:
+                max_model_len = self.model.config.max_position_embeddings
+            else:
+                raise NotImplementedError(
+                    f"Unsupported mode detected: use_vllm={self.use_vllm}, vllm_mode={self.vllm_mode}"
+                )
+            overlong = [len(pct) >= max_model_len for pct in pct_ids]
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 if overlong[idx]:
