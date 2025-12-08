@@ -1,0 +1,45 @@
+# ALST/Ulysses Sequence Parallelism with 2D Parallelism (DP + SP) for 4 GPUs
+#
+# This configuration enables 2D parallelism:
+# - Sequence Parallelism (sp_size=2): Sequences split across 2 GPUs using ALST/Ulysses
+# - Data Parallelism (dp_shard_size=2): Model/optimizer sharded across 2 GPUs
+# - Total: 4 GPUs (2 × 2)
+#
+# Set parallelism_config in your training script:
+#   parallelism_config = ParallelismConfig(
+#       sp_backend="deepspeed",
+#       sp_size=2,
+#       dp_shard_size=2,  # Calculated as: num_gpus // sp_size
+#       sp_handler=DeepSpeedSequenceParallelConfig(...)
+#   )
+
+compute_environment: LOCAL_MACHINE
+debug: false
+deepspeed_config:
+  zero_stage: 3
+  seq_parallel_communication_data_type: bf16
+  offload_optimizer_device: none
+  offload_param_device: none
+  zero3_init_flag: false
+  zero3_save_16bit_model: false
+distributed_type: DEEPSPEED
+downcast_bf16: 'no'
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 4  # Total number of GPUs
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+parallelism_config:
+  parallelism_config_dp_replicate_size: 1
+  parallelism_config_dp_shard_size: 2  # Enables 2D parallelism with SP
+  parallelism_config_tp_size: 1
+  parallelism_config_sp_size: 2  # Sequence parallel size
+  parallelism_config_sp_backend: deepspeed
+  parallelism_config_sp_seq_length_is_variable: true
+  parallelism_config_sp_attn_implementation: flash_attention_2
