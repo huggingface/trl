@@ -30,6 +30,7 @@ import datasets
 import pandas as pd
 import torch
 import torch.utils.data
+import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
@@ -63,8 +64,6 @@ from ..data_utils import (
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
-from ..import_utils import is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .base_trainer import BaseTrainer
@@ -403,10 +402,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Tools
         if tools:
-            if not Version(transformers.__version__) >= Version("5.0.0.dev0"):
+            if not Version(transformers.__version__) >= Version("5.0.0.rc0"):
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires transformers version 5.0.0.dev0 or higher. Please upgrade "
-                    "transformers to use this feature."
+                    "Using tools with GRPOTrainer requires transformers version 5.0.0 or higher. Please use "
+                    "transformers with `pip install --pre transformers` to use this feature."
                 )
             if not is_jmespath_available():
                 raise ImportError(

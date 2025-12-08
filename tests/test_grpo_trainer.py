@@ -1721,7 +1721,7 @@ class TestGRPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-        reason="Tool parsing is not supported in transformers versions below 5.0.0.dev0",
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
     def test_training_with_tools(self):

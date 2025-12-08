@@ -30,7 +30,7 @@ from trl.chat_template_utils import (
 class TestAddResponseSchema:
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-        reason="Response parsing is not supported in transformers versions below 5.0.0.dev0",
+        reason="Response parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
     def test_add_response_schema(self):
@@ -127,7 +127,7 @@ class TestGetTrainingChatTemplate:
 
 @pytest.mark.xfail(
     condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-    reason="Tool parsing is not supported in transformers versions below 5.0.0.dev0",
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
 class TestParseResponse:

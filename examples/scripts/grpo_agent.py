@@ -30,7 +30,6 @@ python examples/scripts/grpo_agent.py \
     --push_to_hub True \
     --use_vllm True \
     --vllm_mode colocate \
-    --vllm_enable_sleep_mode False \
     --max_completion_length 1024 \
     --report_to trackio \
     --log_completions True \
@@ -47,21 +46,11 @@ from contextlib import contextmanager
 
 from datasets import load_dataset
 
-from trl import (
-    GRPOConfig,
-    GRPOTrainer,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-)
+from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser
 
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-# ------------------------
-# Reward functions
-# ------------------------
 
 
 def query_reward(completions, answer, **kwargs):
