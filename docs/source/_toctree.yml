@@ -17,8 +17,6 @@
     title: DPO
   - local: grpo_trainer
     title: GRPO
-  - local: kto_trainer
-    title: KTO
   - local: reward_trainer
     title: Reward
   - local: rloo_trainer
@@ -111,6 +109,8 @@
     title: GSPO-token
   - local: judges
     title: Judges
+  - local: kto_trainer
+    title: KTO 
   - local: merge_model_callback
     title: MergeModelCallback
   - local: minillm_trainer
