@@ -15,7 +15,6 @@
 import os
 import re
 import textwrap
-import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
 from functools import wraps
@@ -202,13 +201,6 @@ class OnlineDPOTrainer(BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -898,8 +890,30 @@ class OnlineDPOTrainer(BaseTrainer):
 
         return completion_ids, prompt_ids
 
+    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
+        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
+        for name, param in module.state_dict().items():
+            # When using PEFT, we need to recover the original parameter name
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            if is_peft_model(module) and module.prefix in name:
+                continue
+            # When module to save, remove its prefix and discard the original module
+            if "original_module" in name:
+                continue
+            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
+            if param.is_cpu:
+                param = param.to(torch.device("cuda"))
+            param = param.full_tensor()
+
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                self.vllm_client.update_named_param(name, param)
+            elif self.vllm_mode == "colocate":
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights([(name, param)])
+
     def _move_model_to_vllm(self):
-        """Synchronize model weights to vLLM server with support for PEFT, DeepSpeed, and FSDP"""
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
@@ -940,21 +954,21 @@ class OnlineDPOTrainer(BaseTrainer):
                     self.model.merge_adapter()
 
                     # Update vLLM weights while parameters are gathered
-                    if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
-                        # Update vLLM weights while parameters are gathered
-                        # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                        fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
-                        fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-                        if fsdp_version == 1:
-                            # use memory-efficient post-order traversal for FSDP
-                            self._sync_fsdp1_params_to_vllm(self.model)
-                        elif fsdp_version == 2:
-                            self._sync_fsdp2_params_to_vllm(self.model)
+                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
+                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                    if fsdp_version == 1:
+                        self._sync_fsdp1_params_to_vllm(
+                            self.model
+                        )  # use memory-efficient post-order traversal for FSDP
+                    elif fsdp_version == 2:
+                        self._sync_fsdp2_params_to_vllm(self.model)
                     else:
                         # DeepSpeed ZeRO-3 with PEFT
                         for name, param in self.model.named_parameters():
-                            # When using PEFT, we need to recover the original parameter name and discard some parameters
+                            # When using PEFT, we need to recover the original parameter name
                             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                            # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
                             if self.model.prefix in name:
                                 continue
                             # When module to save, remove its prefix and discard the original module
@@ -1021,19 +1035,6 @@ class OnlineDPOTrainer(BaseTrainer):
                     elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
-
-    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
-        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
-        for name, param in module.state_dict().items():
-            if param.is_cpu:
-                param = param.to(torch.device("cuda"))
-            param = param.full_tensor()
-
-            if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                self.vllm_client.update_named_param(name, param)
-            elif self.vllm_mode == "colocate":
-                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                llm_model.load_weights([(name, param)])
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):
         """Clean parameter names for vLLM compatibility"""
