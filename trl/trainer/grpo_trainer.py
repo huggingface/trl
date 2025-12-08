@@ -1656,6 +1656,7 @@ class GRPOTrainer(BaseTrainer):
             if (
                 Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
                 and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
+                and hasattr(self.processing_class, "response_schema") # for now, tokenizers don't have this attribute by default
                 and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
             ):
                 completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
