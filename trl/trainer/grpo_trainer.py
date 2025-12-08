@@ -417,6 +417,7 @@ class GRPOTrainer(BaseTrainer):
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
+        # We need `getattr`` until the base class sets a default None value for response_schema
         if tools and not getattr(processing_class, "response_schema", None):
             processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
@@ -663,6 +664,7 @@ class GRPOTrainer(BaseTrainer):
                     max_num_seqs=self.args.per_device_train_batch_size
                     * self.vllm_tensor_parallel_size
                     * self.args.steps_per_generation,
+                    max_model_len=self.args.vllm_max_model_length,
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
