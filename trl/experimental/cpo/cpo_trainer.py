@@ -492,7 +492,7 @@ class CPOTrainer(BaseTrainer):
             # and length only differs by 1 at most
             num_diff_tokens = sum(
                 a != b
-                for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"], strict=True)
+                for a, b in zip(chosen_tokens["prompt_input_ids"][:prompt_len_input_ids], rejected_tokens["prompt_input_ids"][:prompt_len_input_ids])
             )
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:
