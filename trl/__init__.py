@@ -199,7 +199,8 @@ else:
 # Monkey-patch for vLLM.
 # Bug introduced in https://github.com/vllm-project/vllm/pull/52
 # Fixed inhttps://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-# Since TRL currently only supports vLLM v0.10.2, we patch it here. This can be removed when TRL requires vLLM >=0.11.1
+# Since TRL currently only supports vLLM v0.10.2-0.11.2, we patch it here. This can be removed when TRL requires
+# vLLM >=0.11.1
 from .import_utils import is_vllm_available  # noqa: E402
 
 
