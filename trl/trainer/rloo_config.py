@@ -425,6 +425,26 @@ class RLOOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
+    vllm_lora_adapter_name: str = field(
+        default="trl-rloo",
+        metadata={
+            "help": "Name used when registering the LoRA adapter inside vLLM. Only used when training with PEFT and vLLM.",
+        },
+    )
+    vllm_lora_adapter_id: int = field(
+        default=1,
+        metadata={
+            "help": "Integer identifier used by vLLM to track the LoRA adapter. Change only if you need to coordinate "
+            "with other adapters. Only used when training with PEFT and vLLM.",
+        },
+    )
+    vllm_max_lora_rank: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum LoRA rank to support in vLLM. Should match the highest rank among your adapters. "
+            "Only used when training with PEFT and vLLM. If None, vLLM will infer from the adapter.",
+        },
+    )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_base_url: str | None = field(

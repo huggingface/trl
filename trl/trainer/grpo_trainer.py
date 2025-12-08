@@ -93,6 +93,7 @@ if is_liger_kernel_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.lora.request import LoRARequest
     from vllm.sampling_params import GuidedDecodingParams
 
 if is_wandb_available():
@@ -401,6 +402,20 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
+
+        # Auto-detect vLLM LoRA support when using vLLM with PEFT
+        has_peft = peft_config is not None or (is_peft_available() and isinstance(model, PeftModel))
+        self.vllm_use_lora = args.use_vllm and has_peft
+
+        if self.vllm_use_lora:
+            logger.info(
+                "Detected PEFT model with vLLM enabled. Using vLLM's native LoRA adapter support for efficient generation."
+            )
+
+        self.vllm_lora_adapter_name = args.vllm_lora_adapter_name
+        self.vllm_lora_adapter_id = args.vllm_lora_adapter_id
+        self.vllm_max_lora_rank = args.vllm_max_lora_rank
+
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
@@ -621,25 +636,46 @@ class GRPOTrainer(BaseTrainer):
                             break
                         elif isinstance(module, bnb.nn.Linear8bitLt):
                             raise ValueError("vLLM does not support in-flight 8-bit quantization.")
-                self.llm = LLM(
-                    model=model.name_or_path,
-                    tensor_parallel_size=args.vllm_tensor_parallel_size,
-                    gpu_memory_utilization=self.vllm_gpu_memory_utilization,
-                    max_num_seqs=self.args.per_device_train_batch_size
+                # When using LoRA, we need to load the base model into vLLM, not the adapter
+                if self.vllm_use_lora and is_peft_model(model):
+                    vllm_model_name = model.get_base_model().config._name_or_path
+                else:
+                    vllm_model_name = model.name_or_path
+
+                vllm_kwargs = {
+                    "model": vllm_model_name,
+                    "tensor_parallel_size": args.vllm_tensor_parallel_size,
+                    "gpu_memory_utilization": self.vllm_gpu_memory_utilization,
+                    "max_num_seqs": self.args.per_device_train_batch_size
                     * self.vllm_tensor_parallel_size
                     * self.args.steps_per_generation,
-                    max_model_len=max_model_len,
-                    distributed_executor_backend="external_launcher",
+                    "max_model_len": max_model_len,
+                    "distributed_executor_backend": "external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                    seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
+                    "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
-                    max_num_batched_tokens=4096,
-                    model_impl=self.args.vllm_model_impl,
-                    enable_sleep_mode=self.args.vllm_enable_sleep_mode,
+                    "max_num_batched_tokens": 4096,
+                    "model_impl": self.args.vllm_model_impl,
+                    "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     # Important so temperature scaling/logit tweaking affects the TIS log probs
-                    logprobs_mode="processed_logprobs",
-                    quantization=vllm_quantization,
-                )
+                    "logprobs_mode": "processed_logprobs",
+                    "quantization": vllm_quantization,
+                }
+
+                # Enable LoRA support if requested
+                if self.vllm_use_lora:
+                    vllm_kwargs["enable_lora"] = True
+
+                    # Determine max_lora_rank from PEFT config and/or user setting
+                    peft_rank = model.peft_config[model.active_adapter].r
+                    max_rank = (
+                        max(peft_rank, self.vllm_max_lora_rank) if self.vllm_max_lora_rank is not None else peft_rank
+                    )
+
+                    vllm_kwargs["max_lora_rank"] = max_rank
+                    logger.info(f"Setting vLLM max_lora_rank={max_rank}")
+
+                self.llm = LLM(**vllm_kwargs)
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=2)
             else:
@@ -1019,14 +1055,34 @@ class GRPOTrainer(BaseTrainer):
             gather_if_zero3 = nullcontext
 
         if is_peft_model(self.model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
-            with gather_if_zero3(list(self.model.parameters())):
-                self.model.merge_adapter()
+            # When using vLLM with LoRA, we save only the adapter weights instead of merging
+            if self.vllm_use_lora:
+                import tempfile
 
-                # Update vLLM weights while parameters are gathered
-                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
+                # Create a temporary directory to save the LoRA adapter (only once)
+                if not hasattr(self, "_vllm_lora_path"):
+                    self._vllm_lora_path = tempfile.mkdtemp(prefix="trl_vllm_lora_")
+
+                # Save the LoRA adapter weights
+                # For FSDP/DeepSpeed, we need to gather parameters first
+                with gather_if_zero3(list(self.model.parameters())):
+                    if self.accelerator.is_main_process or not (self.is_fsdp_enabled or zero_stage_3):
+                        # Save adapter weights only (not merged)
+                        self.model.save_pretrained(self._vllm_lora_path)
+
+                # Wait for all processes to ensure the adapter is saved
+                self.accelerator.wait_for_everyone()
+
+                # No need to update weights param-by-param when using LoRA
+                # vLLM will load the adapter from the saved directory
+            else:
+                # Original code path: merge and sync full model weights
+                # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
+                # merging adapters in a sharded manner is not supported.
+                # TODO: does this work with FSDP?
+                with gather_if_zero3(list(self.model.parameters())):
+                    self.model.merge_adapter()
+
                     # Update vLLM weights while parameters are gathered
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
                     fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
@@ -1037,27 +1093,27 @@ class GRPOTrainer(BaseTrainer):
                         )  # use memory-efficient post-order traversal for FSDP
                     elif fsdp_version == 2:
                         self._sync_fsdp2_params_to_vllm(self.model)
-                else:
-                    # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
-                        if self.model.prefix in name:
-                            continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
-                            continue
-                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+                    else:
+                        # DeepSpeed ZeRO-3 with PEFT
+                        for name, param in self.model.named_parameters():
+                            # When using PEFT, we need to recover the original parameter name
+                            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                            # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+                            if self.model.prefix in name:
+                                continue
+                            # When module to save, remove its prefix and discard the original module
+                            if "original_module" in name:
+                                continue
+                            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.vllm_mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
+                            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                                self.vllm_client.update_named_param(name, param.data)
+                            elif self.vllm_mode == "colocate":
+                                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                                llm_model.load_weights([(name, param.data)])
+                    # Unmerge adapters while parameters are still gathered
+                    self.model.unmerge_adapter()
+                    # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
@@ -1228,6 +1284,22 @@ class GRPOTrainer(BaseTrainer):
                         "guided_decoding_regex": self.guided_decoding_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
+                    # Prepare LoRA parameters if using LoRA
+                    lora_kwargs = {}
+                    if self.vllm_use_lora:
+                        # Cycle through 2 adapter IDs to force vLLM to reload updated weights while keeping memory usage bounded
+                        # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
+                        # By alternating between 2 IDs, we ensure the adapter is reloaded each step without accumulating N adapters
+                        adapter_id = self.vllm_lora_adapter_id + (self.state.global_step % 2)
+                        lora_kwargs = {
+                            "lora_adapter_name": self.vllm_lora_adapter_name,
+                            "lora_adapter_id": adapter_id,
+                            "lora_adapter_path": self._vllm_lora_path,
+                        }
+                        logger.debug(
+                            f"Using LoRA adapter: {self.vllm_lora_adapter_name} (ID={adapter_id}) from path: {self._vllm_lora_path}"
+                        )
+
                     with profiling_context(self, "vLLM.generate"):
                         if self.rollout_func is not None:
                             rollout_prompts = ordered_set_of_prompts
@@ -1245,9 +1317,12 @@ class GRPOTrainer(BaseTrainer):
                                     messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
+                                    **lora_kwargs,
                                 )
                             else:
-                                output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
+                                output = self.vllm_client.generate(
+                                    prompts=ordered_set_of_prompts, **sampling_params, **lora_kwargs
+                                )
                         # Extract required fields and collect any extra fields for reward functions
                         required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                         extra_fields = {k: v for k, v in output.items() if k not in required_keys}
@@ -1331,12 +1406,26 @@ class GRPOTrainer(BaseTrainer):
                     if self.args.vllm_enable_sleep_mode:
                         self.llm.wake_up(tags=["kv_cache"])
 
+                    # Prepare LoRA request if using LoRA
+                    lora_request = None
+                    if self.vllm_use_lora:
+                        # Cycle through 2 adapter IDs to force vLLM to reload updated weights while keeping memory usage bounded
+                        # vLLM uses lora_int_id as the cache key (see WorkerLoRAManager.add_adapter)
+                        # By alternating between 2 IDs, we ensure the adapter is reloaded each step without accumulating N adapters
+                        adapter_id = self.vllm_lora_adapter_id + (self.state.global_step % 2)
+                        lora_request = LoRARequest(self.vllm_lora_adapter_name, adapter_id, self._vllm_lora_path)
+                        logger.debug(
+                            f"Using LoRA adapter: {self.vllm_lora_adapter_name} (ID={adapter_id}) from path: {self._vllm_lora_path}"
+                        )
+
                     with profiling_context(self, "vLLM.generate"):
                         if is_conversational({"prompt": prompts[0]}):
-                            all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                            all_outputs = self.llm.chat(
+                                all_prompts, sampling_params=sampling_params, lora_request=lora_request, use_tqdm=False
+                            )
                         else:
                             all_outputs = self.llm.generate(
-                                all_prompts, sampling_params=sampling_params, use_tqdm=False
+                                all_prompts, sampling_params=sampling_params, lora_request=lora_request, use_tqdm=False
                             )
 
                     all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
