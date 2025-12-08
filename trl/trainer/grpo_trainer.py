@@ -1587,7 +1587,9 @@ class GRPOTrainer(BaseTrainer):
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
-                assert prompt_ids[idx_with_tool] == pct[: len(prompt_ids[idx_with_tool])]
+                if prompt_ids[idx_with_tool] != pct[: len(prompt_ids[idx_with_tool])]:
+
+                    raise ValueError("The chat template has been detected as not being a prefix-preserving template. Please correct the chat template.")
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for idx in range(len(idxs_with_tool)):
