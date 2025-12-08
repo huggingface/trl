@@ -174,7 +174,7 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
         return tokenizer
     raise ValueError(
         "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
-        "tokenizer or processor."
+        "tokenizer or processor. See the Transformers [docs](https://huggingface.co/docs/transformers/main/en/chat_response_parsing#response-parsing) for more details on response parsing."
     )
 
 

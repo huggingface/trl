@@ -418,7 +418,7 @@ class GRPOTrainer(BaseTrainer):
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
-        if tools and not processing_class.response_schema:
+        if tools and not getattr(processing_class, "response_schema", None):
             processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
