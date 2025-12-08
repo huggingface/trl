@@ -196,11 +196,7 @@ else:
     )
 
 
-# Monkey-patch for vLLM.
-# Bug introduced in https://github.com/vllm-project/vllm/pull/52
-# Fixed inhttps://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-# Since TRL currently only supports vLLM v0.10.2-0.11.2, we patch it here. This can be removed when TRL requires
-# vLLM >=0.11.1
+# Monkey-patches for vLLM.
 from .import_utils import is_vllm_available  # noqa: E402
 
 
@@ -210,6 +206,10 @@ if is_vllm_available():
     os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
 
     # Fix DisableTqdm
+    # Bug introduced in https://github.com/vllm-project/vllm/pull/52
+    # Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
+    # Since TRL currently only supports vLLM v0.10.2-0.11.2, we patch it here. This can be removed when TRL requires
+    # vLLM >=0.11.1
     import vllm.model_executor.model_loader.weight_utils
     from tqdm import tqdm
 
@@ -218,7 +218,7 @@ if is_vllm_available():
             kwargs["disable"] = True
             super().__init__(*args, **kwargs)
 
-    # overwrite the class in the dependency
+    # Overwrite the class in the dependency
     vllm.model_executor.model_loader.weight_utils.DisabledTqdm = DisabledTqdm
 
     # Fix get_cached_tokenizer: remove all_special_tokens_extended, because it doesn't exist in transformers v5
@@ -266,5 +266,5 @@ if is_vllm_available():
         cached_tokenizer.__class__ = CachedTokenizer
         return cached_tokenizer
 
-    # overwrite the function in the dependency
+    # Overwrite the function in the dependency
     vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
