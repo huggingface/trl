@@ -650,9 +650,10 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     for idx, column in enumerate(examples.columns):
         if isinstance(column, pa.ChunkedArray):
             column = column.combine_chunks()
-        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-            if list_column_idx is None:
-                list_column_idx = idx
+        if not (pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type)):
+            raise TypeError("pack_dataset(bfd) requires all columns to be list-like.")
+        if list_column_idx is None:
+            list_column_idx = idx
         columns.append(column)
 
     assert list_column_idx is not None
@@ -662,29 +663,43 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     # Split every list row into fragments of length <= seq_length (so long rows become multiple samples).
     frag_lengths: list[int] = []
-    frag_slices: list[tuple[int, int]] = []
+    frag_info: list[tuple[int, int, int]] = []  # (row_idx, split_start, frag_len)
     expanded_indices: list[int] = []
     for row_idx, (row_start, row_end) in enumerate(zip(offsets[:-1], offsets[1:], strict=False)):
         length = row_end - row_start
         for split_start in range(0, length, seq_length):
             frag_len = min(seq_length, length - split_start)
             frag_lengths.append(frag_len)
-            frag_slices.append((row_start + split_start, frag_len))
+            frag_info.append((row_idx, split_start, frag_len))
             expanded_indices.append(row_idx)
 
-    # Rebuild list column with fragments and duplicate non-list columns accordingly.
+    # Rebuild list columns with fragments and duplicate non-list columns accordingly.
     offsets_type = list_column.offsets.type
     new_offsets = np.empty(len(frag_lengths) + 1, dtype=offsets_type.to_pandas_dtype())
     new_offsets[0] = 0
     new_offsets[1:] = np.cumsum(frag_lengths, dtype=offsets_type.to_pandas_dtype())
-    new_values = pa.concat_arrays([values.slice(start, length) for start, length in frag_slices])
-    columns[list_column_idx] = type(list_column).from_arrays(pa.array(new_offsets, type=offsets_type), new_values)
+    new_offsets_array = pa.array(new_offsets, type=offsets_type)
 
-    expanded_indices_array = pa.array(expanded_indices)
     for idx, column in enumerate(columns):
         if idx == list_column_idx:
+            slices = [
+                values.slice(offsets[row_idx] + split_start, frag_len) for row_idx, split_start, frag_len in frag_info
+            ]
+            new_values = pa.concat_arrays(slices)
+            columns[idx] = type(column).from_arrays(new_offsets_array, new_values)
             continue
-        columns[idx] = pc.take(column, expanded_indices_array)
+
+        column_offsets = np.asarray(column.offsets)
+        column_values = column.values
+        slices = []
+        for row_idx, split_start, frag_len in frag_info:
+            row_len = column_offsets[row_idx + 1] - column_offsets[row_idx]
+            if row_len < split_start + frag_len:
+                raise ValueError("List columns must have matching lengths when packing datasets.")
+            start = column_offsets[row_idx] + split_start
+            slices.append(column_values.slice(start, frag_len))
+        column_offsets_array = pa.array(new_offsets, type=column.offsets.type)
+        columns[idx] = type(column).from_arrays(column_offsets_array, pa.concat_arrays(slices))
 
     examples = pa.Table.from_arrays(columns, names=examples.column_names)
     ids = np.arange(len(examples))
