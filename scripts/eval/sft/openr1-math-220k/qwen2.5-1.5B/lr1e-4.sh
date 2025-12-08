@@ -64,26 +64,27 @@ trl/evaluation/math_eval.py \
     --wandb_mode online \
     --wandb_group ${MODEL_TAG} \
     --wandb_run_name ${JOB_TYPE}/${MODEL_TAG} \
-    --wandb_job_type ${JOB_TYPE}
+    --wandb_job_type ${JOB_TYPE} \
+    --dummy_output_steps 0
 EOF
 
 
-cmd_gsm8k="${cmd_prefix} \
-    --data_names gsm8k \
+cmd_8k="${cmd_prefix} \
+    --data_names gsm8k,math500 \
     --max_tokens_per_call 8192
 "
 
-cmd_math500="${cmd_prefix} \
-    --data_names math500 \
-    --max_tokens_per_call 8192
+cmd_32k="${cmd_prefix} \
+    --data_names aime24,amc23,minerva_math,olympiadbench \
+    --max_tokens_per_call 32768
 "
 
 # load run_single and run_loop functions
 setup_cmd="source scripts/eval/setup.sh"
 
 cmds=(
-    "run_loop \"${cmd_gsm8k}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
-    "run_loop \"${cmd_math500}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
+    "run_loop \"${cmd_8k}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
+    "run_loop \"${cmd_32k}\" \"${MODEL_NAME_OR_PATH}\" \"${OUTPUT_DIR}\" ${CKPT_STEP_START} ${CKPT_STEP_INTERVAL} ${CKPT_STEP_END}"
 )
 
 
