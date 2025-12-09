@@ -1551,6 +1551,7 @@ class GRPOTrainer(BaseTrainer):
                 prompt_completion_tools,
                 tools=self.tools,
                 tokenize=True,
+                add_generation_prompt=True,
                 chat_template=self.chat_template,
                 **self.chat_template_kwargs,
             )["input_ids"]
@@ -1588,8 +1589,10 @@ class GRPOTrainer(BaseTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 if prompt_ids[idx_with_tool] != pct[: len(prompt_ids[idx_with_tool])]:
-
-                    raise ValueError("The chat template has been detected as not being a prefix-preserving template. Please correct the chat template.")
+                    raise ValueError(
+                        "The chat template is not prefix-preserving. Please update it to use a prefix-preserving "
+                        "format."
+                    )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for idx in range(len(idxs_with_tool)):
@@ -1658,7 +1661,7 @@ class GRPOTrainer(BaseTrainer):
             if (
                 Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
                 and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
-                and hasattr(self.processing_class, "response_schema") # for now, tokenizers don't have this attribute by default
+                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
                 and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
             ):
                 completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
