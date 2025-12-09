@@ -40,7 +40,6 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
-    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -575,7 +574,9 @@ class RLOOTrainer(BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
-            self.generation_config = GenerationConfig(**generation_kwargs)
+            # Use the model's generation_config directly to ensure training parameters properly override model defaults
+            self.generation_config = self.model.generation_config
+            self.generation_config.update(**generation_kwargs)
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
