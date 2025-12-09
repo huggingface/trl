@@ -18,7 +18,6 @@ import json
 import os
 import random
 import socket
-import warnings
 from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -250,98 +249,6 @@ def ensure_master_addr_port(addr: str | None = None, port: int | None = None) ->
             pass
 
     os.environ["MASTER_PORT"] = str(_find_free_port() if port in (None, 0) else port)
-
-
-@dataclass
-class RewardDataCollatorWithPadding:
-    # docstyle-ignore
-    r"""
-    Reward DataCollator class that pads the inputs to the maximum length of the batch.
-
-    > [!WARNING]
-    > This class is deprecated and will be removed in version 0.27.0. Please use
-    `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
-
-    Args:
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
-            The tokenizer used for encoding the data.
-        padding (`bool | str | PaddingStrategy`, `optional`, defaults to `True`):
-            padding_strategy to pass to the tokenizer.
-        pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
-            If set will pad the sequence to a multiple of the provided value.
-        return_tensors (`str`, `optional`, defaults to `"pt"`):
-            The tensor type to use.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding: bool | str = True
-    pad_to_multiple_of: int | None = None
-    return_tensors: str = "pt"
-
-    def __init__(self, *args, **kwargs) -> None:
-        warnings.warn(
-            "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
-            "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
-
-    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        features_chosen = []
-        features_rejected = []
-        margin = []
-        # check if we have a margin. If we do, we need to batch it as well
-        has_margin = "margin" in features[0]
-        for feature in features:
-            # check if the keys are named as expected
-            if (
-                "input_ids_chosen" not in feature
-                or "input_ids_rejected" not in feature
-                or "attention_mask_chosen" not in feature
-                or "attention_mask_rejected" not in feature
-            ):
-                raise ValueError(
-                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
-                )
-
-            features_chosen.append(
-                {
-                    "input_ids": feature["input_ids_chosen"],
-                    "attention_mask": feature["attention_mask_chosen"],
-                }
-            )
-            features_rejected.append(
-                {
-                    "input_ids": feature["input_ids_rejected"],
-                    "attention_mask": feature["attention_mask_rejected"],
-                }
-            )
-            if has_margin:
-                margin.append(feature["margin"])
-        batch_chosen = self.tokenizer.pad(
-            features_chosen,
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch_rejected = self.tokenizer.pad(
-            features_rejected,
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch = {
-            "input_ids_chosen": batch_chosen["input_ids"],
-            "attention_mask_chosen": batch_chosen["attention_mask"],
-            "input_ids_rejected": batch_rejected["input_ids"],
-            "attention_mask_rejected": batch_rejected["attention_mask"],
-            "return_loss": True,
-        }
-        if has_margin:
-            margin = torch.tensor(margin, dtype=torch.float)
-            batch["margin"] = margin
-        return batch
 
 
 def pad(
