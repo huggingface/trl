@@ -203,8 +203,9 @@ def main(args):
             wandb_logger = None
 
         samples, ids, processed_samples, out_file = setup_data(data_name, args)
-        
-        if len(samples) > 0 and not is_dummy_step:
+        all_num_samples = [0 for _ in range(world_size)]        
+        dist.all_gather_object(all_num_samples, len(samples))
+        if any(all_num_samples) and not is_dummy_step:
             if llm is None and tokenizer is None:
                 if args.use_vllm:
                     llm = LLM(
