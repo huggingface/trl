@@ -164,23 +164,6 @@ class RTPOTrainer(GRPOTrainer):
 
     _tag_names = ["trl", "rtpo"]
     _name = "RTPO"
-    # _paper = { # TODO paper
-    #     "title": "Perception-Aware Policy Optimization for Multimodal Reasoning",
-    #     "id": "2507.06448",
-    #     # docstyle-ignore
-    #     "citation": textwrap.dedent(
-    #         """\
-    #         @misc{wang2025perceptionawarepolicyoptimizationmultimodal,
-    #             title        = {{Perception-Aware Policy Optimization for Multimodal Reasoning}},
-    #             author       = {Zhenhailong Wang and Xuehang Guo and Sofia Stoica and Haiyang Xu and Hongru Wang and Hyeonjeong Ha and Xiusi Chen and Yangyi Chen and Ming Yan and Fei Huang and Heng Ji},
-    #             year         = 2025,
-    #             url          = {https://arxiv.org/abs/2507.06448},
-    #             archivePrefix= {arXiv},
-    #             eprint       = {2507.06448},
-    #             primaryClass = {cs.CL}
-    #         }"""
-    #     ),
-    # }
 
     def __init__(
         self,
