@@ -228,6 +228,7 @@ def main(args):
                         use_fast_tokenizer=True,
                         use_safetensors=args.use_safetensors,
                     )
+            all_samples, time_use = run_generation(llm, tokenizer, data_name, args, samples)
         else:
             all_samples, time_use = [], 0
         
