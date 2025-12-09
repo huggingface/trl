@@ -206,6 +206,7 @@ def main(args):
         all_num_samples = [0 for _ in range(world_size)]        
         dist.all_gather_object(all_num_samples, len(samples))
         if any(all_num_samples) and not is_dummy_step:
+            assert len(samples) > 0, f"Rank {rank} has no samples but other ranks have samples. We need this because vLLM requires all ranks to have data."
             if llm is None and tokenizer is None:
                 if args.use_vllm:
                     llm = LLM(
@@ -227,10 +228,6 @@ def main(args):
                         use_fast_tokenizer=True,
                         use_safetensors=args.use_safetensors,
                     )
-            if len(samples) > 0:
-                all_samples, time_use = run_generation(llm, tokenizer, data_name, args, samples)
-            else:
-                all_samples, time_use = [], 0
         else:
             all_samples, time_use = [], 0
         
@@ -297,6 +294,8 @@ def setup_data(data_name, args):
             print(examples[0])
 
     examples_w_ids = [(example, i) for i, example in enumerate(examples)]
+    if len(examples_w_ids) < world_size:
+        examples_w_ids += [(examples_w_ids[-1][0], -1)] * (world_size - len(examples_w_ids))
     examples_w_ids = examples_w_ids[rank::world_size]
     examples, ids = zip(*examples_w_ids) if len(examples_w_ids) > 0 else ([], [])
 
