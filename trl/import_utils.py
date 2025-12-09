@@ -29,6 +29,7 @@ LIGER_KERNEL_MIN_VERSION = "0.6.4"
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
 _fastapi_available = _is_package_available("fastapi")
+_is_jmespath_available = _is_package_available("jmespath")
 _joblib_available = _is_package_available("joblib")
 _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
 _llm_blender_available = _is_package_available("llm_blender")
@@ -49,6 +50,10 @@ def is_deepspeed_available() -> bool:
 
 def is_fastapi_available() -> bool:
     return _fastapi_available
+
+
+def is_jmespath_available() -> bool:
+    return _is_jmespath_available
 
 
 def is_joblib_available() -> bool:
@@ -88,12 +93,14 @@ def is_uvicorn_available() -> bool:
 
 
 def is_vllm_available() -> bool:
-    if _vllm_available and version.parse(_vllm_version) != version.parse("0.10.2"):
-        warnings.warn(
-            f"TRL currently only supports vLLM version `0.10.2`. You have version {_vllm_version} installed. We "
-            "recommend to install this version to avoid compatibility issues.",
-            stacklevel=2,
-        )
+    if _vllm_available:
+        if not (version.parse("0.10.2") <= version.parse(_vllm_version) <= version.parse("0.11.2")):
+            warnings.warn(
+                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2. You have version "
+                f"{_vllm_version} installed. We recommend installing a supported version to avoid compatibility "
+                "issues.",
+                stacklevel=2,
+            )
     return _vllm_available
 
 

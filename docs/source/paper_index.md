@@ -149,7 +149,6 @@ training_args = GRPOConfig(
     loss_type="dr_grpo",
     per_device_train_batch_size=1, # train_batch_size_per_device in the Training section of the repository
     num_generations=8, #  num_samples in the Training section of the repository
-    max_prompt_length=1024, #  prompt_max_length in the Training section of the repository
     max_completion_length=3000, # generate_max_length in the Training section of the repository
     beta=0.0, # beta in the Training section of the repository
 )
@@ -387,6 +386,35 @@ training_args = GRPOConfig(
 )
 ```
 
+### DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2512.02556
+
+DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement the *Unbiased KL Estimate*, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
+ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
+
+$$
+\mathrm{D}_{\mathrm{KL}}\!\left(\pi_\theta(o_{i,t}) \,\|\, \pi_{\text{ref}}(o_{i,t})\right) =
+\textcolor{red}{\frac{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}{\pi_{\text{old}}(o_{i,t}\mid q, o_{i,<t})}}
+\left(
+  \frac{\pi_{\text{ref}}(o_{i,t}\mid q, o_{i,<t})}{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}
+  -
+  \log \frac{\pi_{\text{ref}}(o_{i,t}\mid q, o_{i,<t})}{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}
+  - 1
+\right).
+$$
+
+To enable this feature, set the `use_bias_correction_kl` parameter to `True` in the [`GRPOConfig`], and `beta > 0`:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    beta=0.001,  # the paper don't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
+    use_bias_correction_kl=True,
+)
+```
 
 ## Direct Policy Optimization
 
@@ -615,17 +643,17 @@ These parameters only appear in the [published version](https://aclanthology.org
 
 ## Kahneman–Tversky Optimization
 
-Papers relating to the [`KTOTrainer`]
+Papers relating to the [`experimental.kto.KTOTrainer`]
 
 ### KTO: Model Alignment as Prospect Theoretic Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2402.01306
 
 KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
-To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
+To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
 
 ```python
-from trl import KTOConfig, KTOTrainer
+from trl.experimental.kto import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)
