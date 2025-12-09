@@ -24,7 +24,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     BartModel,
-    BloomConfig,
+        BloomConfig,
     BloomForCausalLM,
     CohereConfig,
     CohereForCausalLM,
@@ -39,6 +39,7 @@ from transformers import (
     Gemma3ForConditionalGeneration,
     GemmaConfig,
     GemmaForCausalLM,
+    GenerationConfig,
     GPT2Config,
     GPT2LMHeadModel,
     GPTNeoXConfig,
@@ -99,7 +100,7 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 api = HfApi()
 
 
-def push_to_hub(model, tokenizer, prefix=None, suffix=None, force=False):
+def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, force=False):
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
     model_card = ModelCard(content)
@@ -115,6 +116,8 @@ def push_to_hub(model, tokenizer, prefix=None, suffix=None, force=False):
         model.push_to_hub(repo_id)
         tokenizer.push_to_hub(repo_id)
         model_card.push_to_hub(repo_id)
+        if generation_config is not None:
+            generation_config.push_to_hub(repo_id)
 
 
 def init_weights_tiny_model(model):
@@ -178,6 +181,7 @@ for model_id, config_class, model_class, suffix in [
 ]:
     revision = "refs/pr/14" if model_id == "Qwen/Qwen3-8B" else "main"  # chat template with {% generation %}
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
+    generation_config = GenerationConfig.from_pretrained(model_id, revision=revision)
     config = config_class(
         vocab_size=len(tokenizer.vocab),
         hidden_size=8,
@@ -188,7 +192,7 @@ for model_id, config_class, model_class, suffix in [
     )
     model = model_class(config)
     init_weights_tiny_model(model)
-    push_to_hub(model, tokenizer, "tiny", suffix)
+    push_to_hub(model, tokenizer, generation_config, "tiny", suffix, force=True)
 
 # MoE models
 for model_id, config_class, model_class, suffix in [
@@ -196,6 +200,7 @@ for model_id, config_class, model_class, suffix in [
     ("openai/gpt-oss-20b", GptOssConfig, GptOssForCausalLM, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    generation_config = GenerationConfig.from_pretrained(model_id)
     config = config_class(
         vocab_size=len(tokenizer.vocab),
         hidden_size=8,
@@ -208,11 +213,12 @@ for model_id, config_class, model_class, suffix in [
     )
     model = model_class(config)
     init_weights_tiny_model(model)
-    push_to_hub(model, tokenizer, "tiny", suffix)
+    push_to_hub(model, tokenizer, generation_config, "tiny", suffix)
 
 # Special case for databricks/dbrx-instruct as it requires specific changes in the config
 model_id = "databricks/dbrx-instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+generation_config = GenerationConfig.from_pretrained(model_id)
 config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=16, d_model=24)
 # transformers mistakenly ignores ffn_config keys when loading from pretrained. We need to set them manually after
 # loading the config
@@ -220,10 +226,11 @@ config.ffn_config.ffn_hidden_size = 24
 config.ffn_config.hidden_size = 24
 model = DbrxForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
-push_to_hub(model, tokenizer, "tiny")
+push_to_hub(model, tokenizer, generation_config, "tiny")
 
 # Two slightly bigger models, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
+generation_config = GenerationConfig.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
 config = Qwen2Config(
     vocab_size=len(tokenizer.vocab),
     hidden_size=128,  # increase hidden size so that hidden_size // num_attention_heads = 32, required for vLLM
@@ -233,9 +240,10 @@ config = Qwen2Config(
     intermediate_size=32,
 )
 model = Qwen2ForCausalLM(config)
-push_to_hub(model, tokenizer, "small", "2.5")
+push_to_hub(model, tokenizer, generation_config, "small", "2.5")
 
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
+generation_config = GenerationConfig.from_pretrained("Qwen/Qwen3-4B")
 config = Qwen3Config(
     vocab_size=len(tokenizer.vocab),
     hidden_size=128,  # increase hidden size so that hidden_size // num_attention_heads = 32, required for vLLM
@@ -245,7 +253,7 @@ config = Qwen3Config(
     intermediate_size=32,
 )
 model = Qwen3ForCausalLM(config)
-push_to_hub(model, tokenizer, "small")
+push_to_hub(model, tokenizer, generation_config, "small")
 
 # Reward models
 for model_id, model_class, suffix in [
@@ -255,6 +263,7 @@ for model_id, model_class, suffix in [
     ("Qwen/Qwen3-4B", Qwen3ForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    generation_config = GenerationConfig.from_pretrained(model_id)
     kwargs = {
         "num_labels": 1,
         "hidden_size": 16,
@@ -269,13 +278,14 @@ for model_id, model_class, suffix in [
         config.layer_types = config.layer_types[:2]
     model = model_class(config).to(dtype=torch.bfloat16)
     init_weights_tiny_model(model)
-    push_to_hub(model, tokenizer, "tiny", suffix)
+    push_to_hub(model, tokenizer, generation_config, "tiny", suffix)
 
 # MoE Reward models
 for model_id, model_class, suffix in [
     ("Qwen/Qwen3-30B-A3B", Qwen3MoeForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    generation_config = GenerationConfig.from_pretrained(model_id)
     kwargs = {
         "num_labels": 1,
         "hidden_size": 16,
@@ -288,7 +298,7 @@ for model_id, model_class, suffix in [
     }
     config = AutoConfig.from_pretrained(model_id, **kwargs)
     model = model_class(config).to(dtype=torch.bfloat16)
-    push_to_hub(model, tokenizer, "tiny", suffix)
+    push_to_hub(model, tokenizer, generation_config, "tiny", suffix)
 
 
 # Encoder-decoder models
@@ -297,10 +307,11 @@ for model_id, model_class, suffix in [
     ("google/flan-t5-small", T5ForConditionalGeneration, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    generation_config = GenerationConfig.from_pretrained(model_id)
     config = AutoConfig.from_pretrained(model_id)
     config.d_model = 24
     model = model_class(config)
-    push_to_hub(model, tokenizer, "tiny", suffix)
+    push_to_hub(model, tokenizer, generation_config, "tiny", suffix)
 
 
 # Vision Language Models
@@ -318,6 +329,7 @@ for model_id, model_class in [
     ("Qwen/Qwen3-VL-2B-Instruct", Qwen3VLForConditionalGeneration),
 ]:
     processor = AutoProcessor.from_pretrained(model_id)
+    generation_config = GenerationConfig.from_pretrained(model_id)
 
     text_config = {
         "num_hidden_layers": 2,
@@ -365,4 +377,4 @@ for model_id, model_class in [
 
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=torch.bfloat16)
-    push_to_hub(model, processor, "tiny")
+    push_to_hub(model, processor, generation_config, "tiny")
