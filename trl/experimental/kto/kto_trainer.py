@@ -1100,14 +1100,18 @@ class KTOTrainer(BaseTrainer):
                 "examples for which an output sequence was predicted."
             )
 
-        chosen_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True]
-        rejected_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False]
+        # Use torch.nonzero for efficient tensor index selection
+        device = completion_logits.device
+        labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+        chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+        rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
-        chosen_logps = completion_logps[chosen_idx, ...]
-        rejected_logps = completion_logps[rejected_idx, ...]
+        # Use index_select for efficient CUDA operations
+        chosen_logps = completion_logps.index_select(0, chosen_idx)
+        rejected_logps = completion_logps.index_select(0, rejected_idx)
 
-        chosen_logits = completion_logits[chosen_idx, ...]
-        rejected_logits = completion_logits[rejected_idx, ...]
+        chosen_logits = completion_logits.index_select(0, chosen_idx)
+        rejected_logits = completion_logits.index_select(0, rejected_idx)
 
         if self.aux_loss_enabled:
             return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
@@ -1399,11 +1403,15 @@ class KTOTrainer(BaseTrainer):
 
             # if reference_logps in batch use them, otherwise use the reference model
             if "reference_logps" in batch:
-                chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
-                rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is False]
+                # Convert Python lists to tensor indices for efficient CUDA operations
+                device = batch["reference_logps"].device
+                labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+                chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+                rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
-                reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
-                reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
+                # Use index_select for efficient CUDA operations
+                reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
+                reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
                 if self.calculate_KL:
                     reference_KL_logps = batch["reference_KL_logps"]
                 else:
