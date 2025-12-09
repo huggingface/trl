@@ -116,10 +116,9 @@ trainer = SFTTrainer(
 
 PEFT can be combined with other memory reduction techniques such as quantization (4-bit or 8-bit) for even greater memory savings. See [PEFT Integration](peft_integration) for quantization examples.
 
-
 ## Liger for reducing peak memory usage
 
-> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
+[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
@@ -156,7 +155,7 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 <hfoption id="KTO">
 
 ```python
-from trl import KTOConfig
+from trl.experimental.kto import KTOConfig
 
 training_args = KTOConfig(..., use_liger_kernel=True)
 ```
@@ -319,3 +318,15 @@ training_args = RLOOConfig(..., vllm_enable_sleep_mode=True)
 </hfoptions>
 
 Offloading the vLLM weights and cache helps keep GPU memory usage low, which can be particularly beneficial when training large models or using limited GPU resources. However, waking the vLLM engine from sleep mode introduces some host–device transfer latency, which may slightly impact training speed.
+
+## Gradient checkpointing
+
+Gradient checkpointing trades compute for memory by not storing all intermediate activations during the forward pass, recomputing them during the backward pass instead.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., gradient_checkpointing=True)
+```
+
+Gradient checkpointing is available and activated by default across all TRL trainers. For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).

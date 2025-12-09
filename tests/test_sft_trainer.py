@@ -1600,97 +1600,55 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_peft
     @require_bitsandbytes
-    def test_peft_model_with_quantization(self):
-        """SFTTrainer should not freeze layers of existing PeftModel.
-
-        This test simulates a realistic QLoRA scenario where a quantized base model is first converted to a PeftModel,
-        then passed to SFTTrainer. The issue was that prepare_model_for_kbit_training would freeze all parameters
-        including the LoRA adapters, making training impossible.
-        """
+    def test_peft_with_quantization(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
 
-        # Simulate a realistic QLoRA setup by mocking quantization attributes
-        # This mimics what happens when loading a model with load_in_4bit=True
-        model.is_loaded_in_4bit = True
-        model.is_loaded_in_8bit = False
-
-        # Verify that this triggers the is_qlora condition
-        is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
-        assert is_qlora, "Model should be detected as QLoRA (quantized)"
-
-        # Create LoRA configuration suitable for QLoRA
-        lora_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            target_modules=["q_proj", "v_proj"],
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.1,
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
         )
-
-        # Convert the quantized model to a PeftModel (typical QLoRA workflow)
-        peft_model = get_peft_model(model, lora_config)
-
-        # Verify the quantization attributes are preserved on the PeftModel
-        assert getattr(peft_model, "is_loaded_in_4bit", False), "PeftModel should preserve quantization flag"
+        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
 
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        # Analyze parameters before SFTTrainer initialization
-        trainable_params_before = []
-        base_params_before = []
-        lora_params_before = []
-
-        for name, param in peft_model.named_parameters():
-            if param.requires_grad:
-                trainable_params_before.append(name)
-                if "lora" in name.lower():
-                    lora_params_before.append(name)
-                else:
-                    base_params_before.append(name)
-
-        # Ensure we have the expected parameter distribution for QLoRA
-        assert len(trainable_params_before) > 0, "PeftModel should have trainable parameters initially"
-        assert len(lora_params_before) > 0, "PeftModel should have trainable LoRA parameters"
-        assert len(base_params_before) == 0, "Base model parameters should already be frozen in PeftModel"
-
         # Initialize the trainer with the already configured PeftModel
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", max_steps=1)
-        trainer = SFTTrainer(model=peft_model, args=training_args, train_dataset=dataset)
+        training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
 
-        # Analyze parameters after SFTTrainer initialization
-        trainable_params_after = []
-        lora_params_after = []
+        # Save initial parameters to check they change during training
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        for name, param in trainer.model.named_parameters():
-            if param.requires_grad:
-                trainable_params_after.append(name)
-                if "lora" in name.lower():
-                    lora_params_after.append(name)
+        trainer.train()
 
-        # LoRA parameters should remain trainable
-        assert len(trainable_params_after) > 0, (
-            f"PeftModel should still have trainable parameters after SFTTrainer initialization. "
-            f"Found {len(trainable_params_after)} trainable params. "
-            f"This test fails without the fix for issue #3926."
-        )
+        # Check that training completed successfully
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
 
-        assert len(lora_params_after) > 0, (
-            f"LoRA adapter parameters should remain trainable. "
-            f"Found {len(lora_params_after)} trainable LoRA params out of {len(lora_params_before)} original."
-        )
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # In bitsandbytes, bias parameters are automatically cast to the input dtype during the forward pass if
+            # their dtype doesn’t match. This causes the module to change unexpectedly during the first forward pass of
+            # the training. To handle this, we cast these specific bias parameters to float32 before comparison.
+            # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/45553f7392e524eacf400b132cfe01261f6477be/bitsandbytes/nn/modules.py#L518
+            # We still need to investigate why the compute dtype ends up being different than for these parameters.
+            if n in [
+                "base_model.model.model.layers.1.self_attn.k_proj.bias",
+                "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
+                "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
+            ]:
+                param = param.float()
 
-        # Ensure the parameter counts are preserved (no additional freezing occurred)
-        assert len(trainable_params_before) == len(trainable_params_after), (
-            "Number of trainable parameters should not change after SFTTrainer initialization"
-        )
-
-        # Verify that all original LoRA parameters are still trainable
-        assert set(lora_params_before) == set(lora_params_after), (
-            "All original LoRA parameters should remain trainable after SFTTrainer initialization"
-        )
+            if "lora" not in n:  # We expect the base model parameters to be the same
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+            elif "lora" in n:  # We expect the peft parameters to be different
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
     @require_peft
     def test_prompt_tuning_peft_model(self):

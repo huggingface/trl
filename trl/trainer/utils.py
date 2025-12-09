@@ -48,6 +48,7 @@ from transformers import (
     TrainingArguments,
     is_comet_available,
 )
+from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     ModelOutput,
     is_peft_available,
@@ -282,6 +283,7 @@ class RewardDataCollatorWithPadding:
             "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
             "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
             FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -1981,13 +1983,18 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         raise TypeError("Input must be a list or a dictionary.")
 
 
-def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
+def create_model_from_path(
+    model_id: str, architecture: _BaseAutoModelClass | None = None, **kwargs
+) -> PreTrainedModel:
     """
     Create a model from a given path using the specified initialization arguments.
 
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+            Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
+            this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
@@ -2008,8 +2015,9 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
     kwargs["device_map"] = kwargs.get("device_map", "auto")
-    config = AutoConfig.from_pretrained(model_id)
-    architecture = getattr(transformers, config.architectures[0])
+    if architecture is None:
+        config = AutoConfig.from_pretrained(model_id)
+        architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 
@@ -2026,5 +2034,4 @@ def get_config_model_id(config: PretrainedConfig) -> str:
         `str`:
             The model identifier associated with the model configuration.
     """
-    # Fall back to `config.text_config._name_or_path` if `config._name_or_path` is missing: Qwen2-VL and Qwen2.5-VL. See GH-4323
-    return getattr(config, "_name_or_path", "") or getattr(getattr(config, "text_config", None), "_name_or_path", "")
+    return getattr(config, "_name_or_path", "")

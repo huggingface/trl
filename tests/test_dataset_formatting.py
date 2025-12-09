@@ -19,7 +19,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl.extras.dataset_formatting import get_formatting_func_from_dataset
-from trl.models.utils import ChatMlSpecialTokens, clone_chat_template, setup_chat_format
+from trl.models.utils import clone_chat_template
 
 from .testing_utils import TrlTestCase
 
@@ -116,47 +116,6 @@ class TestDatasetFormatting(TrlTestCase):
         dataset = Dataset.from_dict({"text": "test"})
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         assert formatting_func is None
-
-
-@pytest.mark.filterwarnings("ignore::FutureWarning")
-class TestSetupChatFormat(TrlTestCase):
-    def setup_method(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        # remove built-in chat_template to simulate a model having no chat_template
-        self.tokenizer.chat_template = None
-
-    def test_setup_chat_format(self):
-        modified_model, modified_tokenizer = setup_chat_format(
-            self.model, self.tokenizer, format="chatml", resize_to_multiple_of=123
-        )
-
-        _chatml = ChatMlSpecialTokens()
-        # Check if special tokens are correctly set
-        assert modified_tokenizer.eos_token == "<|im_end|>"
-        assert modified_tokenizer.pad_token == "<|im_end|>"
-        assert modified_tokenizer.bos_token == "<|im_start|>"
-        assert modified_tokenizer.eos_token == _chatml.eos_token
-        assert modified_tokenizer.pad_token == _chatml.pad_token
-        assert modified_tokenizer.bos_token == _chatml.bos_token
-        assert (modified_model.vocab_size % 123) == 0
-
-    def test_example_with_setup_model(self):
-        modified_model, modified_tokenizer = setup_chat_format(
-            self.model,
-            self.tokenizer,
-        )
-        messages = [
-            {"role": "system", "content": "You are helpful"},
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi, how can I help you?"},
-        ]
-        prompt = modified_tokenizer.apply_chat_template(messages, tokenize=False)
-
-        assert (
-            prompt
-            == "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
-        )
 
 
 class TestCloneChatTemplate(TrlTestCase):

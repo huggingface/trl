@@ -41,9 +41,9 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 - [`SFTTrainer`](sft_trainer)
 - [`DPOTrainer`](dpo_trainer)
-- [`KTOTrainer`](kto_trainer)
 - [`BCOTrainer`](bco_trainer) 🧪
 - [`CPOTrainer`](cpo_trainer) 🧪
+- [`KTOTrainer`](kto_trainer) 🧪
 - [`ORPOTrainer`](orpo_trainer) 🧪
 
 ### Knowledge distillation
@@ -75,7 +75,7 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/openenv">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published October 23, 2025</p>
       <p class="text-gray-700">Building the Open Agent Ecosystem Together: Introducing OpenEnv</p>

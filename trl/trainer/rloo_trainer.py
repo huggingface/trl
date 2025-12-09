@@ -16,7 +16,6 @@ import inspect
 import os
 import textwrap
 import time
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -242,14 +241,6 @@ class RLOOTrainer(BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
     ):
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
-
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -810,6 +801,16 @@ class RLOOTrainer(BaseTrainer):
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
+            # When using PEFT, we need to recover the original parameter name
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            if is_peft_model(module) and module.prefix in name:
+                continue
+            # When module to save, remove its prefix and discard the original module
+            if "original_module" in name:
+                continue
+            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
             if param.is_cpu:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
@@ -854,8 +855,9 @@ class RLOOTrainer(BaseTrainer):
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module

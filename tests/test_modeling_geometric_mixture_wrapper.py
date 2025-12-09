@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import torch
-import transformers
-from packaging.version import Version
 from transformers import AutoModelForCausalLM, GenerationConfig
 
 from trl.models.modeling_base import GeometricMixtureWrapper, create_reference_model
@@ -60,11 +57,6 @@ class TestGeometricMixtureWrapper(TrlTestCase):
 
         assert torch.allclose(wrapper_output.logits, expected_logits, atol=1e-5)
 
-    @pytest.mark.xfail(
-        Version(transformers.__version__).is_devrelease,  # Tests with dev dependencies
-        reason="Blocked by upstream fix pending in huggingface/transformers#41764 (tracked in GH-4272)",
-        strict=True,
-    )
     def test_prepare_inputs_for_generation(self):
         input_ids = torch.tensor([[1, 2, 3, 4, 5]], device=self.device)
         attention_mask = torch.ones_like(input_ids)

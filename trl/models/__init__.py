@@ -28,7 +28,6 @@ _import_structure = {
         "prepare_fsdp",
         "prepare_model_for_kbit_training",
         "prepare_peft_model",
-        "setup_chat_format",
         "unwrap_model_for_generation",
     ],
 }
@@ -45,7 +44,6 @@ if TYPE_CHECKING:
         prepare_fsdp,
         prepare_model_for_kbit_training,
         prepare_peft_model,
-        setup_chat_format,
         unwrap_model_for_generation,
     )
 else:
