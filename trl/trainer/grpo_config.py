@@ -51,8 +51,6 @@ class GRPOConfig(TrainingArguments):
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
@@ -146,6 +144,9 @@ class GRPOConfig(TrainingArguments):
             Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        vllm_max_model_length (`int`, *optional*, defaults to `None`):
+            Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus
+            `max_completion_length`; if omitted, it is inferred from the model config.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
@@ -290,6 +291,15 @@ class GRPOConfig(TrainingArguments):
 
         > Deprecated arguments
 
+        max_prompt_length (`bool`, *optional*):
+
+            <Deprecated version="0.26.0">
+
+            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
+            filter your dataset before training to ensure that prompts do not exceed your desired length.
+
+            </Deprecated>
+
         wandb_log_unique_prompts (`bool`, *optional*):
 
             <Deprecated version="0.26.0">
@@ -358,8 +368,9 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
-            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only supported when the model"
-            " has untied word embedding and language modeling head layers i.e. `tie_word_embeddings` in the model config is False."
+            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only "
+            "supported when the model has untied word embedding and language modeling head layers i.e. "
+            "`tie_word_embeddings` in the model config is False."
         },
     )
 
@@ -371,12 +382,6 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
             "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
-        },
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
         },
     )
     num_generations: int | None = field(
@@ -554,6 +559,13 @@ class GRPOConfig(TrainingArguments):
             "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
             "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
             "launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
+        },
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={
+            "help": "Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus "
+            "`max_completion_length`; if omitted, it is inferred from the model config."
         },
     )
     vllm_tensor_parallel_size: int = field(
@@ -777,6 +789,13 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Deprecated arguments
+    max_prompt_length: int | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
+            "desired length."
+        },
+    )
     wandb_log_unique_prompts: bool | None = field(
         default=None,
         metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
@@ -844,6 +863,15 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.max_prompt_length is not None:
+            warnings.warn(
+                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
+                "instead filter your dataset before training to ensure that prompts do not exceed your desired "
+                "length.",
+                FutureWarning,
+                stacklevel=2,
+            )
 
         if self.wandb_log_unique_prompts is not None:
             warnings.warn(

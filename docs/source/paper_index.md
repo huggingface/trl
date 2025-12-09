@@ -149,7 +149,6 @@ training_args = GRPOConfig(
     loss_type="dr_grpo",
     per_device_train_batch_size=1, # train_batch_size_per_device in the Training section of the repository
     num_generations=8, #  num_samples in the Training section of the repository
-    max_prompt_length=1024, #  prompt_max_length in the Training section of the repository
     max_completion_length=3000, # generate_max_length in the Training section of the repository
     beta=0.0, # beta in the Training section of the repository
 )
@@ -644,17 +643,17 @@ These parameters only appear in the [published version](https://aclanthology.org
 
 ## Kahneman–Tversky Optimization
 
-Papers relating to the [`KTOTrainer`]
+Papers relating to the [`experimental.kto.KTOTrainer`]
 
 ### KTO: Model Alignment as Prospect Theoretic Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2402.01306
 
 KTO derives an alignment objective from prospect theory and learns directly from **binary** human feedback (liked/disliked), matching or surpassing DPO-style methods while handling imbalanced/noisy signals well.
-To reproduce the paper's setting, you can use the default configuration of [`KTOTrainer`]:
+To reproduce the paper's setting, you can use the default configuration of [`experimental.kto.KTOTrainer`]:
 
 ```python
-from trl import KTOConfig, KTOTrainer
+from trl.experimental.kto import KTOConfig, KTOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained(model_id)
