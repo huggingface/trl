@@ -141,14 +141,14 @@ This constant is recommended to be the maximum completion length. To use this fo
 
 While training and evaluating, we record the following reward metrics:
 
-- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions. When using tools, only non-tool tokens are counted.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
-- `completions/mean_length`: The average length of generated completions.
-- `completions/min_length`: The minimum length of generated completions.
-- `completions/max_length`: The maximum length of generated completions.
-- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
-- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
-- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
@@ -546,6 +546,68 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+## Agent Training
+
+GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
+This parameter expects a list of Python functions that define the tools available to the agent:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    tools=[tool1, tool2],
+    ...,
+)
+```
+
+Each tool must be a standard Python function with **type-hinted arguments and return types**, along with a **Google-style docstring** describing its purpose, arguments, and return value.
+For more details, see the [Passing tools guide](https://huggingface.co/docs/transformers/en/chat_extras#passing-tools).
+
+Example:
+
+```python
+from trl import GRPOTrainer
+
+def multiply(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+trainer = GRPOTrainer(
+    tools=[multiply],
+    ...,
+)
+```
+
+### Supported Models
+
+Tested with:
+
+- **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
+
+> [!TIP]
+> Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+
+### Quick Start
+
+Use [grpo\_agent.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_agent.py) to fine-tune a LLM for agentic workflows.
+
+```bash
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/grpo_agent.py \
+  --model_name_or_path Qwen/Qwen3-0.6B
+  ...
+```
+
 ## Vision-Language Model (VLM) Training
 
 GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
@@ -576,7 +638,6 @@ accelerate launch \
   --learning_rate 1e-5 \
   --gradient_checkpointing \
   --dtype bfloat16 \
-  --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
@@ -586,15 +647,6 @@ accelerate launch \
 ```
 
 ### Configuration Tips
-
-> [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`GRPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
->
-> ```python
-> GRPOConfig(max_prompt_length=None, ...)
-> ```
->
-> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage
