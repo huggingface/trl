@@ -24,8 +24,6 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     BartModel,
-        BloomConfig,
-    BloomForCausalLM,
     CohereConfig,
     CohereForCausalLM,
     DbrxConfig,
@@ -158,7 +156,7 @@ def init_weights_tiny_model(model):
 
 # Decoder models
 for model_id, config_class, model_class, suffix in [
-    ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),
+    # ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),  # loading fails with this model, see https://huggingface.co/bigscience/bloomz-560m/discussions/14
     ("CohereForAI/aya-expanse-8b", CohereConfig, CohereForCausalLM, None),
     ("deepseek-ai/DeepSeek-R1", DeepseekV3Config, DeepseekV3ForCausalLM, None),
     # It's important to have R1-0528 as it doesn't have the same chat template
@@ -192,7 +190,7 @@ for model_id, config_class, model_class, suffix in [
     )
     model = model_class(config)
     init_weights_tiny_model(model)
-    push_to_hub(model, tokenizer, generation_config, "tiny", suffix, force=True)
+    push_to_hub(model, tokenizer, generation_config, "tiny", suffix)
 
 # MoE models
 for model_id, config_class, model_class, suffix in [
@@ -307,7 +305,7 @@ for model_id, model_class, suffix in [
     ("google/flan-t5-small", T5ForConditionalGeneration, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    generation_config = GenerationConfig.from_pretrained(model_id)
+    generation_config = GenerationConfig.from_pretrained(model_id) if model_id != "facebook/bart-base" else None
     config = AutoConfig.from_pretrained(model_id)
     config.d_model = 24
     model = model_class(config)
