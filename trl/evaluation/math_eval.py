@@ -552,6 +552,7 @@ def postprocess_and_evaluate(
         all_samples = []
         for part in gathered_all_samples_w_ids:
             all_samples.extend(part)
+        all_samples = [item for item in all_samples if item[1] >= 0] # remove padding samples
         all_samples = sorted(all_samples, key=lambda x: x[1])
         all_samples = [item[0] for item in all_samples]
 
