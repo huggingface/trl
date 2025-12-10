@@ -40,7 +40,7 @@ class PAPOTrainer(GRPOTrainer):
 
     ```python
     from datasets import load_dataset
-    from trl import PAPOTrainer, PAPOConfig
+    from trl.experimental.papo import PAPOTrainer, PAPOConfig
 
     dataset = load_dataset("your-vlm-dataset", split="train")
 

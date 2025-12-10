@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 
 from transformers import TrainingArguments
@@ -134,6 +133,9 @@ class RLOOConfig(TrainingArguments):
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
 
         > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
 
@@ -198,17 +200,6 @@ class RLOOConfig(TrainingArguments):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
-
-        > Deprecated arguments
-
-        wandb_log_unique_prompts (`bool`, *optional*):
-
-            <Deprecated version="0.26.0">
-
-            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.27.0. Use
-            `log_unique_prompts` instead.
-
-            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -449,6 +440,13 @@ class RLOOConfig(TrainingArguments):
             "after the timeout, a `ConnectionError` is raised."
         },
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group. This is used to communicate with the vLLM server. "
+            "Unless the port is occupied, there is no need to change it.",
+        },
+    )
 
     # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
@@ -560,12 +558,6 @@ class RLOOConfig(TrainingArguments):
         },
     )
 
-    # Deprecated arguments
-    wandb_log_unique_prompts: bool | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
@@ -614,12 +606,3 @@ class RLOOConfig(TrainingArguments):
                 "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
-
-        if self.wandb_log_unique_prompts is not None:
-            warnings.warn(
-                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.27.0. Please "
-                "use `log_unique_prompts` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.log_unique_prompts = self.wandb_log_unique_prompts

@@ -18,7 +18,6 @@ import json
 import os
 import random
 import socket
-import warnings
 from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -48,6 +47,7 @@ from transformers import (
     TrainingArguments,
     is_comet_available,
 )
+from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     ModelOutput,
     is_peft_available,
@@ -249,97 +249,6 @@ def ensure_master_addr_port(addr: str | None = None, port: int | None = None) ->
             pass
 
     os.environ["MASTER_PORT"] = str(_find_free_port() if port in (None, 0) else port)
-
-
-@dataclass
-class RewardDataCollatorWithPadding:
-    # docstyle-ignore
-    r"""
-    Reward DataCollator class that pads the inputs to the maximum length of the batch.
-
-    > [!WARNING]
-    > This class is deprecated and will be removed in version 0.27.0. Please use
-    `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
-
-    Args:
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
-            The tokenizer used for encoding the data.
-        padding (`bool | str | PaddingStrategy`, `optional`, defaults to `True`):
-            padding_strategy to pass to the tokenizer.
-        pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
-            If set will pad the sequence to a multiple of the provided value.
-        return_tensors (`str`, `optional`, defaults to `"pt"`):
-            The tensor type to use.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding: bool | str = True
-    pad_to_multiple_of: int | None = None
-    return_tensors: str = "pt"
-
-    def __init__(self, *args, **kwargs) -> None:
-        warnings.warn(
-            "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
-            "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
-            FutureWarning,
-        )
-        super().__init__(*args, **kwargs)
-
-    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        features_chosen = []
-        features_rejected = []
-        margin = []
-        # check if we have a margin. If we do, we need to batch it as well
-        has_margin = "margin" in features[0]
-        for feature in features:
-            # check if the keys are named as expected
-            if (
-                "input_ids_chosen" not in feature
-                or "input_ids_rejected" not in feature
-                or "attention_mask_chosen" not in feature
-                or "attention_mask_rejected" not in feature
-            ):
-                raise ValueError(
-                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
-                )
-
-            features_chosen.append(
-                {
-                    "input_ids": feature["input_ids_chosen"],
-                    "attention_mask": feature["attention_mask_chosen"],
-                }
-            )
-            features_rejected.append(
-                {
-                    "input_ids": feature["input_ids_rejected"],
-                    "attention_mask": feature["attention_mask_rejected"],
-                }
-            )
-            if has_margin:
-                margin.append(feature["margin"])
-        batch_chosen = self.tokenizer.pad(
-            features_chosen,
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch_rejected = self.tokenizer.pad(
-            features_rejected,
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch = {
-            "input_ids_chosen": batch_chosen["input_ids"],
-            "attention_mask_chosen": batch_chosen["attention_mask"],
-            "input_ids_rejected": batch_rejected["input_ids"],
-            "attention_mask_rejected": batch_rejected["attention_mask"],
-            "return_loss": True,
-        }
-        if has_margin:
-            margin = torch.tensor(margin, dtype=torch.float)
-            batch["margin"] = margin
-        return batch
 
 
 def pad(
@@ -1981,13 +1890,18 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         raise TypeError("Input must be a list or a dictionary.")
 
 
-def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
+def create_model_from_path(
+    model_id: str, architecture: _BaseAutoModelClass | None = None, **kwargs
+) -> PreTrainedModel:
     """
     Create a model from a given path using the specified initialization arguments.
 
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+            Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
+            this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
@@ -2008,8 +1922,9 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
     kwargs["device_map"] = kwargs.get("device_map", "auto")
-    config = AutoConfig.from_pretrained(model_id)
-    architecture = getattr(transformers, config.architectures[0])
+    if architecture is None:
+        config = AutoConfig.from_pretrained(model_id)
+        architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
 
