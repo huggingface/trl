@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
-        with: { ref: v0.25-release }
+        with: { ref: v0.26-release }
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5

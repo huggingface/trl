@@ -121,6 +121,9 @@ class OnlineDPOConfig(TrainingArguments):
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
 
         > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
 
@@ -345,6 +348,13 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up "
             "after the timeout, a `ConnectionError` is raised.",
+        },
+    )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group. This is used to communicate with the vLLM server. "
+            "Unless the port is occupied, there is no need to change it.",
         },
     )
     vllm_tensor_parallel_size: int = field(
