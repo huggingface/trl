@@ -40,8 +40,9 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
+from ..chat_template_utils import clone_chat_template
 from ..data_utils import is_conversational
-from ..models import clone_chat_template, get_act_offloading_ctx_manager
+from ..models import get_act_offloading_ctx_manager
 from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
 from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad, remove_none_values

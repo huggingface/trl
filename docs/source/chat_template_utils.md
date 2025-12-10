@@ -1,5 +1,9 @@
 # Chat template utilities
 
+## clone_chat_template
+
+[[autodoc]] clone_chat_template
+
 ## add_response_schema
 
 [[autodoc]] chat_template_utils.add_response_schema
