@@ -15,14 +15,12 @@ import asyncio
 import copy
 import inspect
 import json
-import multiprocessing
 import os
 import textwrap
 import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
@@ -1212,26 +1210,13 @@ class GRPOTrainer(BaseTrainer):
 
         # Execute non-async custom functions in parallel using ProcessPoolExecutor
         if sync_funcs_info:
-
-            def _invoke_sync_reward(index, func, func_name):
-                with profiling_context(self, func_name):
-                    output = func(
-                        prompts=prompts,
-                        completions=completions,
-                        completion_ids=completion_ids_list,
-                        **reward_kwargs,
+            for idx, reward_func, reward_func_name in sync_funcs_info:
+                with profiling_context(self, reward_func_name):
+                    output_reward_func = reward_func(
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
-                    output = [r if r is not None else torch.nan for r in output]
-                    return index, output
-
-            with ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn")) as executor:
-                sync_futures = [
-                    executor.submit(_invoke_sync_reward, i, func, func_name)
-                    for (i, func, func_name) in sync_funcs_info
-                ]
-
-                for future in as_completed(sync_futures):
-                    idx, output_reward_func = future.result()
+                    # Convert None values to NaN
+                    output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
                     rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Execute async custom functions in parallel using asyncio.gather
@@ -1252,22 +1237,7 @@ class GRPOTrainer(BaseTrainer):
                 coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            # Detect if a loop is already running (e.g., pytest-asyncio). If so create a new loop to avoid
-            # creating coroutines that never get awaited due to fallback.
-            try:
-                running_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                running_loop = None
-
-            if running_loop and running_loop.is_running():
-                new_loop = asyncio.new_event_loop()
-                try:
-                    async_results = new_loop.run_until_complete(_run_async_funcs())
-                finally:
-                    new_loop.close()
-            else:
-                async_results = asyncio.run(_run_async_funcs())
-
+            async_results = asyncio.run(_run_async_funcs())
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 

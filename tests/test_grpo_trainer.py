@@ -518,11 +518,14 @@ class TestGRPOTrainer(TrlTestCase):
         # Test that GRPOTrainer can be instantiated with multiple reward functions one of which is async
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func1(completions, **kwargs):
+        def sync_reward_func1(completions, **kwargs):
             """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
-        async def reward_func2(completions, **kwargs):
+        def sync_reward_func2(completions, **kwargs):
+            return [1 for _ in completions]
+
+        async def async_reward_func(completions, **kwargs):
             """Async Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
@@ -536,7 +539,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[reward_func1, reward_func2],
+            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func],
             args=training_args,
             train_dataset=dataset,
         )
