@@ -56,14 +56,14 @@ def create_reference_model(
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
 
     Args:
-        model ([`PreTrainedModelWrapper`]): The model to be copied.
+        model ([`nn.Module`]): The model to be copied.
         num_shared_layers (`int`, *optional*):
             The number of initial layers that are shared between both models and kept frozen.
         pattern (`str`, *optional*): The shared layers are selected with a string pattern
             (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 
     Returns:
-        [`PreTrainedModelWrapper`]
+        [`nn.Module`]
     """
     if is_deepspeed_zero3_enabled():
         raise ValueError(
