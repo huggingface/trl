@@ -37,7 +37,7 @@ LAYER_PATTERNS = [
 
 
 class PreTrainedModelWrapper(_PreTrainedModelWrapper):
-    def __post_init__(self):
+    def __init__(self, *args, **kwargs):
         warnings.warn(
             "The `PreTrainedModelWrapper` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.bco import PreTrainedModelWrapper`. The current import path will be removed and "
@@ -46,7 +46,7 @@ class PreTrainedModelWrapper(_PreTrainedModelWrapper):
             FutureWarning,
             stacklevel=2,
         )
-        super().__post_init__()
+        super().__init__(*args, **kwargs)
 
 
 def create_reference_model(
