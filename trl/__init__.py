@@ -44,7 +44,6 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "models": [
-        "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
@@ -123,7 +122,6 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .models import (
-        SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
