@@ -27,8 +27,11 @@ from packaging import version
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, TrainingArguments
 from transformers.utils import is_peft_available
 
-from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+from ..import_utils import suppress_experimental_warning
 
+
+with suppress_experimental_warning():
+    from ..experimental.ppo import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
 if is_peft_available():
     import peft

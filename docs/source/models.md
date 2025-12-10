@@ -6,22 +6,6 @@ With the `AutoModelForCausalLMWithValueHead` class TRL supports all decoder mode
 
 [[autodoc]] PreTrainedModelWrapper
 
-## AutoModelForCausalLMWithValueHead
-
-[[autodoc]] AutoModelForCausalLMWithValueHead
-    - __init__
-    - forward
-    - generate
-    - _init_weights
-
-## AutoModelForSeq2SeqLMWithValueHead
-
-[[autodoc]] AutoModelForSeq2SeqLMWithValueHead
-    - __init__
-    - forward
-    - generate
-    - _init_weights
-
 ## create_reference_model
 
 [[autodoc]] create_reference_model
