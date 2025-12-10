@@ -1292,7 +1292,7 @@ class GRPOTrainer(BaseTrainer):
                                     messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
-                                    tools=self.tools,
+                                    tools=self.tools if self.tools else None,
                                     chat_template=self.chat_template,
                                 )
                             else:
