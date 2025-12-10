@@ -45,3 +45,4 @@ class AutoModelForSeq2SeqLMWithValueHead(_AutoModelForSeq2SeqLMWithValueHead):
             FutureWarning,
             stacklevel=2,
         )
+        super().__init__(*args, **kwargs)
