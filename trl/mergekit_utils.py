@@ -14,10 +14,10 @@
 
 import warnings
 
-from .import_utils import temporary_env
+from .import_utils import suppress_experimental_warning
 
 
-with temporary_env("TRL_EXPERIMENTAL_SILENCE", "1"):
+with suppress_experimental_warning():
     from .experimental.merge_model_callback import MergeConfig as _MergeConfig
     from .experimental.merge_model_callback import merge_models as _merge_models
     from .experimental.merge_model_callback import upload_model_to_hf as _upload_model_to_hf
