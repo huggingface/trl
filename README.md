@@ -104,7 +104,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-> [NOTE!]
+> [!NOTE]
 > For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
 
 ### `DPOTrainer`

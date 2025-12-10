@@ -14,14 +14,18 @@
 
 import warnings
 
-from ..experimental.judges import AllTrueJudge as _AllTrueJudge
-from ..experimental.judges import BaseBinaryJudge as _BaseBinaryJudge
-from ..experimental.judges import BaseJudge as _BaseJudge
-from ..experimental.judges import BasePairwiseJudge as _BasePairwiseJudge
-from ..experimental.judges import BaseRankJudge as _BaseRankJudge
-from ..experimental.judges import HfPairwiseJudge as _HfPairwiseJudge
-from ..experimental.judges import OpenAIPairwiseJudge as _OpenAIPairwiseJudge
-from ..experimental.judges import PairRMJudge as _PairRMJudge
+from ..import_utils import suppress_experimental_warning
+
+
+with suppress_experimental_warning():
+    from ..experimental.judges import AllTrueJudge as _AllTrueJudge
+    from ..experimental.judges import BaseBinaryJudge as _BaseBinaryJudge
+    from ..experimental.judges import BaseJudge as _BaseJudge
+    from ..experimental.judges import BasePairwiseJudge as _BasePairwiseJudge
+    from ..experimental.judges import BaseRankJudge as _BaseRankJudge
+    from ..experimental.judges import HfPairwiseJudge as _HfPairwiseJudge
+    from ..experimental.judges import OpenAIPairwiseJudge as _OpenAIPairwiseJudge
+    from ..experimental.judges import PairRMJudge as _PairRMJudge
 
 
 class AllTrueJudge(_AllTrueJudge):
@@ -29,7 +33,9 @@ class AllTrueJudge(_AllTrueJudge):
         warnings.warn(
             "The `AllTrueJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import AllTrueJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -39,7 +45,9 @@ class BaseBinaryJudge(_BaseBinaryJudge):
         warnings.warn(
             "The `BaseBinaryJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import BaseBinaryJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -49,7 +57,9 @@ class BaseJudge(_BaseJudge):
         warnings.warn(
             "The `BaseJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import BaseJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -59,7 +69,9 @@ class BasePairwiseJudge(_BasePairwiseJudge):
         warnings.warn(
             "The `BasePairwiseJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import BasePairwiseJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -69,7 +81,9 @@ class BaseRankJudge(_BaseRankJudge):
         warnings.warn(
             "The `BaseRankJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import BaseRankJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -79,7 +93,9 @@ class HfPairwiseJudge(_HfPairwiseJudge):
         warnings.warn(
             "The `HfPairwiseJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import HfPairwiseJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -89,7 +105,9 @@ class OpenAIPairwiseJudge(_OpenAIPairwiseJudge):
         warnings.warn(
             "The `OpenAIPairwiseJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import OpenAIPairwiseJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
 
@@ -99,6 +117,8 @@ class PairRMJudge(_PairRMJudge):
         warnings.warn(
             "The `PairRMJudge` is now located in `trl.experimental`. Please update your imports to "
             "`from trl.experimental.judges import PairRMJudge`. The current import path will be removed and no "
-            "longer supported in TRL 0.29."
+            "longer supported in TRL 0.29.",
+            FutureWarning,
+            stacklevel=2,
         )
         super().__init__(*args, **kwargs)
