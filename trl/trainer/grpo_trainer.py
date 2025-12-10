@@ -13,12 +13,14 @@
 # limitations under the License.
 import asyncio
 import inspect
+import multiprocessing
 import os
 import textwrap
 import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
@@ -163,10 +165,11 @@ class GRPOTrainer(BaseTrainer):
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. Custom reward
-                   functions can be either synchronous or asynchronous and can also return `None` when the reward
-                   is not applicable to those samples. This is useful for multi-task training where different reward
+                   functions can be either synchronous or asynchronous and can also return `None` when the reward is
+                   not applicable to those samples. This is useful for multi-task training where different reward
                    functions apply to different types of samples. When a reward function returns `None` for a sample,
-                   that reward function is excluded from the reward calculation for that sample. For more details, see [Using a custom reward
+                   that reward function is excluded from the reward calculation for that sample. For more details, see
+                   [Using a custom reward
                   function](#using-a-custom-reward-function).
 
                   The trainer's state is also passed to the reward function. The trainer's state is an instance of
@@ -1111,7 +1114,7 @@ class GRPOTrainer(BaseTrainer):
         reward_kwargs["trainer_state"] = self.state
 
         # Separate functions by type for different execution strategies
-        sync_funcs_info = []  # non-async custom functions for ThreadPoolExecutor
+        sync_funcs_info = []  # non-async custom functions for ProcessPoolExecutor
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1141,9 +1144,8 @@ class GRPOTrainer(BaseTrainer):
                 else:
                     sync_funcs_info.append((i, reward_func, reward_func_name))
 
-        # Execute non-async custom functions in parallel using ThreadPoolExecutor
+        # Execute non-async custom functions in parallel using ProcessPoolExecutor
         if sync_funcs_info:
-            import concurrent.futures
 
             def _invoke_sync_reward(index, func, func_name):
                 with profiling_context(self, func_name):
@@ -1156,13 +1158,13 @@ class GRPOTrainer(BaseTrainer):
                     output = [r if r is not None else torch.nan for r in output]
                     return index, output
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn")) as executor:
                 sync_futures = [
                     executor.submit(_invoke_sync_reward, i, func, func_name)
                     for (i, func, func_name) in sync_funcs_info
                 ]
 
-                for future in concurrent.futures.as_completed(sync_futures):
+                for future in as_completed(sync_futures):
                     idx, output_reward_func = future.result()
                     rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
