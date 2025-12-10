@@ -22,7 +22,6 @@ _import_structure = {
     "modeling_base": ["GeometricMixtureWrapper", "PreTrainedModelWrapper", "create_reference_model"],
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
     "utils": [
-        "SUPPORTED_ARCHITECTURES",
         "clone_chat_template",
         "prepare_deepspeed",
         "prepare_fsdp",
@@ -38,7 +37,6 @@ if TYPE_CHECKING:
     from .modeling_base import GeometricMixtureWrapper, PreTrainedModelWrapper, create_reference_model
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import (
-        SUPPORTED_ARCHITECTURES,
         clone_chat_template,
         prepare_deepspeed,
         prepare_fsdp,

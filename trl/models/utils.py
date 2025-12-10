@@ -27,11 +27,6 @@ from packaging import version
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, TrainingArguments
 from transformers.utils import is_peft_available
 
-from ..import_utils import suppress_experimental_warning
-
-
-with suppress_experimental_warning():
-    from ..experimental.ppo import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
 if is_peft_available():
     import peft
@@ -43,12 +38,6 @@ if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
-
-
-SUPPORTED_ARCHITECTURES = (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-)
 
 
 # TODO: Add Abstract Base Class if more formats are added
