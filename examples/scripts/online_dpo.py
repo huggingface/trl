@@ -146,7 +146,7 @@ if __name__ == "__main__":
 
     if training_args.eval_strategy != "no":
         generation_config = GenerationConfig(
-            max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+            max_new_tokens=training_args.max_completion_length, do_sample=True, temperature=training_args.temperature
         )
         completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
         trainer.add_callback(completions_callback)
