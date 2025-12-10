@@ -49,14 +49,6 @@ if is_peft_available():
     )
 
 
-LAYER_PATTERNS = [
-    "transformer.h.{layer}",
-    "model.decoder.layers.{layer}",
-    "gpt_neox.layers.{layer}",
-    "model.layers.{layer}",
-]
-
-
 class PreTrainedModelWrapper(nn.Module):
     """
     Wrapper for a [`~transformers.PreTrainedModel`] implemented as a standard PyTorch [`torch.nn.Module`].

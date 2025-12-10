@@ -55,8 +55,13 @@ from ...data_utils import apply_chat_template, is_conversational, maybe_apply_ch
 from ...extras.profiling import profiling_context
 from ...extras.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
-from ...models.modeling_base import create_reference_model
-from ...models.utils import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from ...models.utils import (
+    create_reference_model,
+    prepare_deepspeed,
+    prepare_fsdp,
+    prepare_peft_model,
+    unwrap_model_for_generation,
+)
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     SIMPLE_CHAT_TEMPLATE,
