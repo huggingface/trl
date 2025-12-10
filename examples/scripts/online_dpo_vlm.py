@@ -38,7 +38,7 @@ accelerate launch \
     --gradient_checkpointing \
     --dtype bfloat16 \
     --max_length 1536 \
-    --max_new_tokens 1024 \
+    --max_completion_length 1024 \
     --use_vllm \
     --vllm_mode server \
     --use_peft \
@@ -58,7 +58,7 @@ accelerate launch \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
     --max_length 1536 \
-    --max_new_tokens 1024 \
+    --max_completion_length 1024 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
     --per_device_train_batch_size 1 \
@@ -72,7 +72,7 @@ python examples/scripts/online_dpo_vlm.py \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
     --max_length 1536 \
-    --max_new_tokens 128 \
+    --max_completion_length 128 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
     --per_device_train_batch_size 1 \
@@ -205,7 +205,7 @@ if __name__ == "__main__":
     # Add completion logging callback (from online DPO pattern)
     if training_args.eval_strategy != "no":
         generation_config = GenerationConfig(
-            max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+            max_new_tokens=training_args.max_completion_length, do_sample=True, temperature=training_args.temperature
         )
         completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
         trainer.add_callback(completions_callback)

@@ -333,7 +333,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
             top_p=0.95,
             top_k=50,
             repetition_penalty=1.1,
-            max_new_tokens=32,
+            max_completion_length=32,
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
@@ -408,7 +408,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
             top_p=0.9,
             top_k=40,
             repetition_penalty=1.2,
-            max_new_tokens=64,
+            max_completion_length=64,
             generation_kwargs={"do_sample": False},
             report_to="none",
         )
@@ -433,7 +433,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.top_p == 0.9
         assert trainer.generation_config.top_k == 40
         assert trainer.generation_config.repetition_penalty == 1.2
-        assert trainer.generation_config.max_new_tokens == 64
+        assert trainer.generation_config.max_completion_length == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
