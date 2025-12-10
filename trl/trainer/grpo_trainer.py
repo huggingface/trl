@@ -1177,14 +1177,11 @@ class GRPOTrainer(BaseTrainer):
         # This allows for dynamic reward shaping based on training progress.
         reward_kwargs["trainer_state"] = self.state
 
-        # Separate functions by type for different execution strategies
-        sync_funcs_info = []  # non-async custom functions for ProcessPoolExecutor
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names, strict=True)
         ):
-            # Execute module-based rewards synchronously (no changes needed here)
             if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                 with profiling_context(self, reward_func_name):
                     if is_conversational(inputs[0]):
@@ -1202,22 +1199,23 @@ class GRPOTrainer(BaseTrainer):
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
             else:
-                # Separate async and sync custom functions
+                # Separate async reward functions to run them in parallel later
                 if asyncio.iscoroutinefunction(reward_func):
                     async_funcs_info.append((i, reward_func, reward_func_name))
                 else:
-                    sync_funcs_info.append((i, reward_func, reward_func_name))
-
-        # Execute non-async custom functions in parallel using ProcessPoolExecutor
-        if sync_funcs_info:
-            for idx, reward_func, reward_func_name in sync_funcs_info:
-                with profiling_context(self, reward_func_name):
-                    output_reward_func = reward_func(
-                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
-                    )
-                    # Convert None values to NaN
-                    output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
-                    rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+                    # Run synchronous reward function
+                    with profiling_context(self, reward_func_name):
+                        output_reward_func = reward_func(
+                            prompts=prompts,
+                            completions=completions,
+                            completion_ids=completion_ids_list,
+                            **reward_kwargs,
+                        )
+                        # Convert None values to NaN
+                        output_reward_func = [
+                            reward if reward is not None else torch.nan for reward in output_reward_func
+                        ]
+                        rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Execute async custom functions in parallel using asyncio.gather
         if async_funcs_info:
