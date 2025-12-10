@@ -27,6 +27,7 @@ except PackageNotFoundError:
 
 _import_structure = {
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
+    "chat_template_utils": ["clone_chat_template"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -43,11 +44,9 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "models": [
-        "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
-        "clone_chat_template",
         "create_reference_model",
     ],
     "trainer": [
@@ -106,6 +105,7 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
+    from .chat_template_utils import clone_chat_template
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
@@ -122,11 +122,9 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .models import (
-        SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
-        clone_chat_template,
         create_reference_model,
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose

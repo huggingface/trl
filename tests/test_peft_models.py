@@ -18,7 +18,7 @@ import torch
 from transformers import AutoModelForCausalLM
 from transformers.utils import is_peft_available
 
-from trl import AutoModelForCausalLMWithValueHead
+from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
 
 from .testing_utils import (
     TrlTestCase,
