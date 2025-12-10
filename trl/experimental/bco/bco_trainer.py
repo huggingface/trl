@@ -52,7 +52,7 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_joblib_available
-from ...models.utils import prepare_deepspeed, create_reference_model
+from ...models.utils import create_reference_model, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     DPODataCollatorWithPadding,
