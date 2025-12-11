@@ -14,6 +14,7 @@
 
 from dataclasses import dataclass, field
 from ...trainer.grpo_config import GRPOConfig
+from typing import Optional
 
 
 @dataclass
@@ -25,31 +26,51 @@ class RTPOConfig(GRPOConfig):
     perception loss and double entropy regularization.
 
     Args:
-        schedule_type (`str`,defaults to linear):
+        schedule_type (`str`, *optional*, defaults to `"linear"`):
             Choose a schedule type for AnnealingScheduler to control thinking guidance length.
-            Supports: linear, cosine, exponential, piecewise, constant
-        direction (`str`,defaults to down):
-            down: 1 -> 0, up: 0 -> 1.
-            Supports: up, down
-        decay_rate (`float`, defaults to 5.0):
-            The decay rate used when schedule_type is set to 'exponential'.
-        milestones (`list[float]`, defaults to [0.3, 0.6, 0.9]):
-            Milestones for piecewise schedule.
-        values (`list[float]`, defaults to [0.2, 0.5, 0.8, 1.0]):
-            Values corresponding to milestones.
-        value (`float`, defaults to 1.0):
+            Supports: `"linear"`, `"cosine"`, `"exponential"`, `"piecewise"`, `"constant"`
+
+        direction (`str`, *optional*, defaults to `"down"`):
+            Direction of the annealing schedule.
+            - `"down"`: Schedule value goes from 1.0 → 0.0
+            - `"up"`: Schedule value goes from 0.0 → 1.0
+            Supports: `"up"`, `"down"`
+
+        decay_rate (`float`, *optional*, defaults to 5.0):
+            The decay rate used when `schedule_type` is set to `"exponential"`.
+            Higher values result in faster decay.
+
+        milestones (`list[float]`, *optional*, defaults to `[0.3, 0.6, 0.9]`):
+            Milestones (progress points between 0 and 1) for piecewise linear schedule.
+            Only used when `schedule_type` is set to `"piecewise"`.
+            Must be in ascending order and within [0, 1] range.
+
+        values (`list[float]`, *optional*, defaults to `[0.2, 0.5, 0.8, 1.0]`):
+            Schedule values corresponding to the milestones and boundaries.
+            Only used when `schedule_type` is set to `"piecewise"`.
+            Length must be `len(milestones) + 1`.
+            For `direction="down"`, values typically decrease; for `direction="up"`, values typically increase.
+
+        value (`float`, *optional*, defaults to 1.0):
             Constant value for constant schedule.
+            Only used when `schedule_type` is set to `"constant"`.
     """
 
-    schedule_type: str = "linear"
-    direction: str = "down"
-    # when schedule_type set to exponential
-    decay_rate: float = 5.0 if schedule_type == "exponential" else None
-    # when schedule_type set to piecewise
-    if schedule_type == "piecewise":
-        milestones: list[float] = field(default_factory=lambda: [0.3, 0.6, 0.9])
-        values: list[float] = field(default_factory=lambda: [0.2, 0.5, 0.8, 1.0])
-    else:
-        milestones = values = None
-    # when schedule_type set to constant
-    value: float = 1.0 if schedule_type == "constant" else None
+    schedule_type: str = field(default="linear")
+    direction: str = field(default="down")
+    decay_rate: Optional[float] = field(default=None)
+    milestones: Optional[list[float]] = field(default=None)
+    values: Optional[list[float]] = field(default=None)
+    value: Optional[float] = field(default=None)
+
+    def __post_init__(self):
+        # 根据 schedule_type 设置默认值
+        if self.schedule_type == "exponential" and self.decay_rate is None:
+            self.decay_rate = 5.0
+        elif self.schedule_type == "piecewise":
+            if self.milestones is None:
+                self.milestones = [0.3, 0.6, 0.9]
+            if self.values is None:
+                self.values = [0.2, 0.5, 0.8, 1.0]
+        elif self.schedule_type == "constant" and self.value is None:
+            self.value = 1.0
