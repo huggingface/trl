@@ -1916,10 +1916,9 @@ class GOLDTrainer(SFTTrainer):
                 )
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
             else:
-                with (
-                    unwrap_model_for_generation(model, self.accelerator) as unwrapped_model,
-                    self._override_model_generation_config(unwrapped_model),
-                ):
+                with unwrap_model_for_generation(
+                    model, self.accelerator, generation_config=self.generation_config
+                ) as unwrapped_model:
                     result = self.generate_on_policy_outputs(
                         unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
                     )

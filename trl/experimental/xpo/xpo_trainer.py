@@ -191,8 +191,9 @@ class XPOTrainer(OnlineDPOTrainer):
 
     def _generate_completions(self, prompts, model):
         with (
-            unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_model_for_gen,
-            self._override_model_generation_config(unwrapped_policy_model_for_gen),
+            unwrap_model_for_generation(
+                model, self.accelerator, generation_config=self.generation_config
+            ) as unwrapped_policy_model_for_gen,
         ):
             model_output = unwrapped_policy_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
@@ -212,8 +213,9 @@ class XPOTrainer(OnlineDPOTrainer):
             actual_model_for_ref_generation = self.accelerator.unwrap_model(self.ref_model)
 
         with (
-            unwrap_model_for_generation(actual_model_for_ref_generation, self.accelerator) as final_ref_model_for_gen,
-            self._override_model_generation_config(final_ref_model_for_gen),
+            unwrap_model_for_generation(
+                actual_model_for_ref_generation, self.accelerator, generation_config=self.generation_config
+            ) as final_ref_model_for_gen,
         ):
             ref_output = final_ref_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
