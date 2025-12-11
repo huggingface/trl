@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-import torch.utils.data
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedTokenizerBase
 
