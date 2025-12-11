@@ -78,7 +78,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm==0.10.2",
+    "vllm>=0.10.2,<0.12.0",
     "fastapi",
     "pydantic",
     "requests",
@@ -122,7 +122,9 @@ dev = [
     # vlm
     "Pillow",
     "torchvision",
-    "num2words==0.5.14"
+    "num2words==0.5.14",
+    # for response parsing (required for training with tools)
+    "jmespath",
 ]
 
 [tool.setuptools]
