@@ -27,8 +27,8 @@ class RTPOConfig(GRPOConfig):
 
     Args:
         schedule_type (`str`, *optional*, defaults to `"linear"`):
-            Choose a schedule type for AnnealingScheduler to control thinking guidance length.
-            Supports: `"linear"`, `"cosine"`, `"exponential"`, `"piecewise"`, `"constant"`
+            Choose a schedule type for AnnealingScheduler to control thinking guidance length. Supports: `"linear"`,
+            `"cosine"`, `"exponential"`, `"piecewise"`, `"constant"`
 
         direction (`str`, *optional*, defaults to `"down"`):
             Direction of the annealing schedule.
@@ -37,23 +37,19 @@ class RTPOConfig(GRPOConfig):
             Supports: `"up"`, `"down"`
 
         decay_rate (`float`, *optional*, defaults to 5.0):
-            The decay rate used when `schedule_type` is set to `"exponential"`.
-            Higher values result in faster decay.
+            The decay rate used when `schedule_type` is set to `"exponential"`. Higher values result in faster decay.
 
         milestones (`list[float]`, *optional*, defaults to `[0.3, 0.6, 0.9]`):
-            Milestones (progress points between 0 and 1) for piecewise linear schedule.
-            Only used when `schedule_type` is set to `"piecewise"`.
-            Must be in ascending order and within [0, 1] range.
+            Milestones (progress points between 0 and 1) for piecewise linear schedule. Only used when `schedule_type`
+            is set to `"piecewise"`. Must be in ascending order and within [0, 1] range.
 
         values (`list[float]`, *optional*, defaults to `[0.2, 0.5, 0.8, 1.0]`):
-            Schedule values corresponding to the milestones and boundaries.
-            Only used when `schedule_type` is set to `"piecewise"`.
-            Length must be `len(milestones) + 1`.
-            For `direction="down"`, values typically decrease; for `direction="up"`, values typically increase.
+            Schedule values corresponding to the milestones and boundaries. Only used when `schedule_type` is set to
+            `"piecewise"`. Length must be `len(milestones) + 1`. For `direction="down"`, values typically decrease; for
+            `direction="up"`, values typically increase.
 
         value (`float`, *optional*, defaults to 1.0):
-            Constant value for constant schedule.
-            Only used when `schedule_type` is set to `"constant"`.
+            Constant value for constant schedule. Only used when `schedule_type` is set to `"constant"`.
     """
 
     schedule_type: str = field(default="linear")

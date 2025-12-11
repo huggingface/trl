@@ -34,9 +34,8 @@ from .rtpo_config import RTPOConfig
 
 class AnnealingScheduler:
     """
-    General annealing scheduler, can be used like a learning rate scheduler.
-    Supports: linear, cosine, exponential, constant, piecewise
-    Can be 'up' (0→1) or 'down' (1→0).
+    General annealing scheduler, can be used like a learning rate scheduler. Supports: linear, cosine, exponential,
+    constant, piecewise Can be 'up' (0→1) or 'down' (1→0).
     """
 
     def __init__(
@@ -118,8 +117,7 @@ def drop_assistant_content(generation_batch: list[dict[str, Any]]) -> list[dict[
 
 class RTPOTrainer(GRPOTrainer):
     """
-    Trainer for Reverse Thinking Policy Optimization (RTPO).
-    Example:
+    Trainer for Reverse Thinking Policy Optimization (RTPO). Example:
 
     ```python
     from datasets import load_dataset
