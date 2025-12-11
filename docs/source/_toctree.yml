@@ -77,8 +77,6 @@
     - local: script_utils
       title: Script Utilities
     title: Utilities
-  - local: models
-    title: Model Classes
   - local: callbacks
     title: Callbacks
   - local: rewards
