@@ -586,20 +586,6 @@ def cap_exp(value, cap=-1):
     return torch.exp(torch.clamp(value, max=cap))
 
 
-def print_rich_table(df: pd.DataFrame) -> None:
-    if not is_rich_available():
-        raise ImportError(
-            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
-        )
-    console = Console()
-    table = Table(show_lines=True)
-    for column in df.columns:
-        table.add_column(column)
-    for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
-    console.print(table)
-
-
 SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
 
@@ -978,29 +964,6 @@ def prepare_deepspeed(
     model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
     model.eval()
     return model
-
-
-def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
-    """
-    Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
-
-    Args:
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs.
-        pad_token_id (`int`):
-            The token ID representing the pad token used to fill the truncated responses.
-        responses (`torch.Tensor`):
-            The tensor containing the responses to be truncated.
-
-    Returns:
-        `torch.Tensor`:
-            The truncated responses tensor with pad tokens filled after the stop token.
-    """
-    trunc_idxs = first_true_indices(responses == stop_token_id).unsqueeze(-1)
-    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
-    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
-    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, pad_token_id)
-    return postprocessed_responses
 
 
 def generate(

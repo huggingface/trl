@@ -57,11 +57,14 @@ from ...trainer.utils import (
     log_table_to_comet_experiment,
     peft_module_casting_to_bf16,
     prepare_deepspeed,
-    print_rich_table,
     selective_log_softmax,
-    truncate_response,
 )
 from .ppo_config import PPOConfig
+
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.table import Table
 
 
 logger = logging.get_logger(__name__)
@@ -78,6 +81,43 @@ def exact_div(a, b, custom_error_message=""):
     if a != q * b:
         raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
     return q
+
+
+def print_rich_table(df: pd.DataFrame) -> None:
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
+        )
+    console = Console()
+    table = Table(show_lines=True)
+    for column in df.columns:
+        table.add_column(column)
+    for _, row in df.iterrows():
+        table.add_row(*row.astype(str).tolist())
+    console.print(table)
+
+
+def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
+    """
+    Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
+
+    Args:
+        stop_token_id (`int`):
+            The token ID representing the stop token where truncation occurs.
+        pad_token_id (`int`):
+            The token ID representing the pad token used to fill the truncated responses.
+        responses (`torch.Tensor`):
+            The tensor containing the responses to be truncated.
+
+    Returns:
+        `torch.Tensor`:
+            The truncated responses tensor with pad tokens filled after the stop token.
+    """
+    trunc_idxs = first_true_indices(responses == stop_token_id).unsqueeze(-1)
+    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
+    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
+    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, pad_token_id)
+    return postprocessed_responses
 
 
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
