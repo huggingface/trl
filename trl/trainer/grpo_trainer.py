@@ -412,8 +412,9 @@ class GRPOTrainer(BaseTrainer):
                     "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
                     "it with `pip install jmespath` to use this feature."
                 )
-        self.tools = tools or []
-        self._tool_dict = {tool.__name__: tool for tool in self.tools}
+        self.tools = tools
+        if self.tools:
+            self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
@@ -1292,7 +1293,7 @@ class GRPOTrainer(BaseTrainer):
                                     messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
-                                    tools=self.tools if self.tools else None,
+                                    tools=self.tools,
                                     chat_template=self.chat_template,
                                 )
                             else:
