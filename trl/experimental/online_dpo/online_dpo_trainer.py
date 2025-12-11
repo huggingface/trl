@@ -63,16 +63,9 @@ from ...models.utils import (
     unwrap_model_for_generation,
 )
 from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    SIMPLE_CHAT_TEMPLATE,
-    disable_dropout_in_model,
-    empty_cache,
-    ensure_master_addr_port,
-    get_config_model_id,
-    pad,
-)
+from ...trainer.utils import disable_dropout_in_model, empty_cache, ensure_master_addr_port, get_config_model_id, pad
 from ..judges import BasePairwiseJudge
-from ..utils import DPODataCollatorWithPadding, truncate_right
+from ..utils import SIMPLE_CHAT_TEMPLATE, DPODataCollatorWithPadding, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
 
