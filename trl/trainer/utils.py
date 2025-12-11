@@ -646,40 +646,6 @@ def batch_generation(
     return padded_query_responses, padded_logitss
 
 
-def add_bos_token_if_needed(
-    bos_token_id: int | None,
-    prompt_len_input_ids: int,
-    prompt_tokens: dict[str, list[int]],
-    chosen_prompt_len_input_ids: int,
-    chosen_tokens: dict[str, list[int]],
-    rejected_prompt_len_input_ids: int,
-    rejected_tokens: dict[str, list[int]],
-):
-    if bos_token_id is not None:
-        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
-            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
-            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
-            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
-    return prompt_tokens, chosen_tokens, rejected_tokens
-
-
-def add_eos_token_if_needed(
-    eos_token_id: int, chosen_tokens: dict[str, list[int]], rejected_tokens: dict[str, list[int]]
-):
-    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
-        chosen_tokens["input_ids"].append(eos_token_id)
-        chosen_tokens["attention_mask"].append(1)
-    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
-        rejected_tokens["input_ids"].append(eos_token_id)
-        rejected_tokens["attention_mask"].append(1)
-    return chosen_tokens, rejected_tokens
-
-
 def truncate_right(
     input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
