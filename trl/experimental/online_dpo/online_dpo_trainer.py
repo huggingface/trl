@@ -70,10 +70,9 @@ from ...trainer.utils import (
     ensure_master_addr_port,
     get_config_model_id,
     pad,
-    truncate_right,
 )
 from ..judges import BasePairwiseJudge
-from ..utils import DPODataCollatorWithPadding
+from ..utils import DPODataCollatorWithPadding, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
 
