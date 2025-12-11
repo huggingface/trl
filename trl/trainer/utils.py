@@ -43,7 +43,6 @@ from transformers import (
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
-    ModelOutput,
     is_peft_available,
     is_rich_available,
     is_torch_mlu_available,
@@ -278,13 +277,6 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
             module.p = 0
 
 
-def exact_div(a, b, custom_error_message=""):
-    q = a // b
-    if a != q * b:
-        raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
-    return q
-
-
 def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
@@ -370,20 +362,6 @@ def cap_exp(value, cap=-1):
     return torch.exp(torch.clamp(value, max=cap))
 
 
-def print_rich_table(df: pd.DataFrame) -> None:
-    if not is_rich_available():
-        raise ImportError(
-            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
-        )
-    console = Console()
-    table = Table(show_lines=True)
-    for column in df.columns:
-        table.add_column(column)
-    for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
-    console.print(table)
-
-
 SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
 
@@ -460,38 +438,6 @@ def get_reward(
     )
 
 
-def forward(
-    model: torch.nn.Module,
-    query_responses: torch.Tensor,
-    pad_token_id: int,
-) -> ModelOutput:
-    """
-    Performs a forward pass through the model with the given query responses and pad token ID.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to perform the forward pass.
-        query_responses (`torch.Tensor`):
-            The tensor containing the query responses.
-        pad_token_id (`int`):
-            The token ID representing the pad token.
-
-    Returns:
-        `ModelOutput`:
-            The output of the model, including hidden states.
-    """
-    attention_mask = query_responses != pad_token_id
-    position_ids = attention_mask.cumsum(1) - attention_mask.long()
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    return model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-    )
-
-
 def prepare_deepspeed(
     model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
 ) -> torch.nn.Module:
@@ -548,63 +494,6 @@ def prepare_deepspeed(
     model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
     model.eval()
     return model
-
-
-def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
-    """
-    Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
-
-    Args:
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs.
-        pad_token_id (`int`):
-            The token ID representing the pad token used to fill the truncated responses.
-        responses (`torch.Tensor`):
-            The tensor containing the responses to be truncated.
-
-    Returns:
-        `torch.Tensor`:
-            The truncated responses tensor with pad tokens filled after the stop token.
-    """
-    trunc_idxs = first_true_indices(responses == stop_token_id).unsqueeze(-1)
-    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
-    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
-    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, pad_token_id)
-    return postprocessed_responses
-
-
-def add_bos_token_if_needed(
-    bos_token_id: int | None,
-    prompt_len_input_ids: int,
-    prompt_tokens: dict[str, list[int]],
-    chosen_prompt_len_input_ids: int,
-    chosen_tokens: dict[str, list[int]],
-    rejected_prompt_len_input_ids: int,
-    rejected_tokens: dict[str, list[int]],
-):
-    if bos_token_id is not None:
-        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
-            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
-            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
-            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
-    return prompt_tokens, chosen_tokens, rejected_tokens
-
-
-def add_eos_token_if_needed(
-    eos_token_id: int, chosen_tokens: dict[str, list[int]], rejected_tokens: dict[str, list[int]]
-):
-    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
-        chosen_tokens["input_ids"].append(eos_token_id)
-        chosen_tokens["attention_mask"].append(1)
-    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
-        rejected_tokens["input_ids"].append(eos_token_id)
-        rejected_tokens["attention_mask"].append(1)
-    return chosen_tokens, rejected_tokens
 
 
 def truncate_right(

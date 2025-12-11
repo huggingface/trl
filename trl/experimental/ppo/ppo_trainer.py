@@ -44,26 +44,27 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ...models.utils import create_reference_model, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
-    exact_div,
     first_true_indices,
-    forward,
     get_reward,
     log_table_to_comet_experiment,
     pad,
     peft_module_casting_to_bf16,
     prepare_deepspeed,
-    print_rich_table,
     selective_log_softmax,
-    truncate_response,
 )
 from .ppo_config import PPOConfig
+
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.table import Table
 
 
 logger = logging.get_logger(__name__)
@@ -145,6 +146,82 @@ def batch_generation(
     padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
 
     return padded_query_responses, padded_logitss
+
+
+def exact_div(a, b, custom_error_message=""):
+    q = a // b
+    if a != q * b:
+        raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
+    return q
+
+
+def print_rich_table(df: pd.DataFrame) -> None:
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
+        )
+    console = Console()
+    table = Table(show_lines=True)
+    for column in df.columns:
+        table.add_column(column)
+    for _, row in df.iterrows():
+        table.add_row(*row.astype(str).tolist())
+    console.print(table)
+
+
+def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
+    """
+    Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
+
+    Args:
+        stop_token_id (`int`):
+            The token ID representing the stop token where truncation occurs.
+        pad_token_id (`int`):
+            The token ID representing the pad token used to fill the truncated responses.
+        responses (`torch.Tensor`):
+            The tensor containing the responses to be truncated.
+
+    Returns:
+        `torch.Tensor`:
+            The truncated responses tensor with pad tokens filled after the stop token.
+    """
+    trunc_idxs = first_true_indices(responses == stop_token_id).unsqueeze(-1)
+    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
+    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
+    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, pad_token_id)
+    return postprocessed_responses
+
+
+def forward(
+    model: torch.nn.Module,
+    query_responses: torch.Tensor,
+    pad_token_id: int,
+) -> ModelOutput:
+    """
+    Performs a forward pass through the model with the given query responses and pad token ID.
+
+    Args:
+        model (`torch.nn.Module`):
+            The model to perform the forward pass.
+        query_responses (`torch.Tensor`):
+            The tensor containing the query responses.
+        pad_token_id (`int`):
+            The token ID representing the pad token.
+
+    Returns:
+        `ModelOutput`:
+            The output of the model, including hidden states.
+    """
+    attention_mask = query_responses != pad_token_id
+    position_ids = attention_mask.cumsum(1) - attention_mask.long()
+    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    return model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+    )
 
 
 @dataclass
