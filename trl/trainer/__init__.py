@@ -120,7 +120,16 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
-    from .utils import RunningMoments, disable_dropout_in_model, empty_cache, peft_module_casting_to_bf16
+    from .utils import (
+        RunningMoments,
+        disable_dropout_in_model,
+        empty_cache,
+        get_kbit_device_map,
+        get_peft_config,
+        get_quantization_config,
+        peft_module_casting_to_bf16,
+        ensure_master_addr_port,
+    )
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
 else:

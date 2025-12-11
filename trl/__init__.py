@@ -26,8 +26,7 @@ except PackageNotFoundError:
     __version__ = "unknown"
 
 _import_structure = {
-    "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
-    "chat_template_utils": ["clone_chat_template"],
+    "chat_template_utils": ["add_response_schema", "clone_chat_template", "get_training_chat_template"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -49,6 +48,7 @@ _import_structure = {
         "PreTrainedModelWrapper",
         "create_reference_model",
     ],
+    "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
         "AllTrueJudge",
         "BaseBinaryJudge",
@@ -57,6 +57,7 @@ _import_structure = {
         "BaseRankJudge",
         "BCOConfig",
         "BCOTrainer",
+        "BEMACallback",
         "CPOConfig",
         "CPOTrainer",
         "DPOConfig",
@@ -86,26 +87,24 @@ _import_structure = {
         "PRMTrainer",
         "RewardConfig",
         "RewardTrainer",
+        "RichProgressCallback",
         "RLOOConfig",
         "RLOOTrainer",
         "SFTConfig",
         "SFTTrainer",
+        "SyncRefModelCallback",
+        "WeaveCallback",
         "WinRateCallback",
         "XPOConfig",
         "XPOTrainer",
+        "get_kbit_device_map",
+        "get_peft_config",
+        "get_quantization_config",
     ],
-    "trainer.callbacks": [
-        "BEMACallback",
-        "MergeModelCallback",
-        "RichProgressCallback",
-        "SyncRefModelCallback",
-        "WeaveCallback",
-    ],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
 if TYPE_CHECKING:
-    from .chat_template_utils import clone_chat_template
+    from .chat_template_utils import add_response_schema, clone_chat_template, get_training_chat_template
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
@@ -136,6 +135,7 @@ if TYPE_CHECKING:
         BaseRankJudge,
         BCOConfig,
         BCOTrainer,
+        BEMACallback,
         CPOConfig,
         CPOTrainer,
         DPOConfig,
@@ -165,22 +165,20 @@ if TYPE_CHECKING:
         PRMTrainer,
         RewardConfig,
         RewardTrainer,
+        RichProgressCallback,
         RLOOConfig,
         RLOOTrainer,
         SFTConfig,
         SFTTrainer,
+        SyncRefModelCallback,
+        WeaveCallback,
         WinRateCallback,
         XPOConfig,
         XPOTrainer,
+        get_kbit_device_map,
+        get_peft_config,
+        get_quantization_config,
     )
-    from .trainer.callbacks import (
-        BEMACallback,
-        MergeModelCallback,
-        RichProgressCallback,
-        SyncRefModelCallback,
-        WeaveCallback,
-    )
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
 else:
     import sys
