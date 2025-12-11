@@ -1115,6 +1115,7 @@ class OnlineDPOTrainer(BaseTrainer):
                 unwrap_model_for_generation(
                     model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
+                self._override_model_generation_config(unwrapped_model),
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
