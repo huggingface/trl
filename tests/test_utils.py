@@ -18,8 +18,6 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from datasets import load_dataset
-from transformers import AutoTokenizer
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
