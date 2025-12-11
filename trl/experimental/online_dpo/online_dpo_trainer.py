@@ -65,7 +65,6 @@ from ...models.utils import (
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     SIMPLE_CHAT_TEMPLATE,
-    DPODataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
@@ -74,6 +73,7 @@ from ...trainer.utils import (
     truncate_right,
 )
 from ..judges import BasePairwiseJudge
+from ..utils import DPODataCollatorWithPadding
 from .online_dpo_config import OnlineDPOConfig
 
 
@@ -136,8 +136,8 @@ class OnlineDPOTrainer(BaseTrainer):
             The online DPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
