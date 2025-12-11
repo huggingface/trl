@@ -55,13 +55,13 @@ from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
-    DataCollatorForChatML,
     create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
     pad,
 )
+from ..utils import DataCollatorForChatML
 from .gold_config import GOLDConfig
 
 
