@@ -430,6 +430,8 @@ class GRPOTrainer(BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        if args.eval_on_start:
+            self.current_gradient_accumulation_steps = 1  # loss/grad_acc_steps scaling handled manually
         self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
