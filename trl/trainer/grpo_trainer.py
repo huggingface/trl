@@ -65,7 +65,7 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..models.utils import _ForwardRedirection
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -412,8 +412,9 @@ class GRPOTrainer(BaseTrainer):
                     "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
                     "it with `pip install jmespath` to use this feature."
                 )
-        self.tools = tools or []
-        self._tool_dict = {tool.__name__: tool for tool in self.tools}
+        self.tools = tools
+        if self.tools:
+            self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
@@ -620,7 +621,9 @@ class GRPOTrainer(BaseTrainer):
                         base_url = args.vllm_server_base_url
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client = VLLMClient(
+                        base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                    )
                     self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
             elif self.vllm_mode == "colocate":
@@ -1854,7 +1857,10 @@ class GRPOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        with torch.no_grad():
+        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
+        # Temporarily disable checkpointing to avoid this warning during inference.
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
             # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
@@ -1966,11 +1972,17 @@ class GRPOTrainer(BaseTrainer):
 
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
-            std_rewards = rewards.view(-1, num_generations).std(dim=1)
-            std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
+            if num_generations > 1:
+                std_rewards = rewards.view(-1, num_generations).std(dim=1)
+                std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
+            else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+                std_rewards = torch.zeros_like(rewards)
         elif self.scale_rewards == "batch":
             # Compute global std
-            std_rewards = rewards.std().expand_as(rewards)
+            if rewards.numel() > 1:
+                std_rewards = rewards.std().expand_as(rewards)
+            else:  # this case doesn't occur during training, but could in eval when num_generations_eval=batch_size=1
+                std_rewards = torch.zeros_like(rewards)
         else:
             raise ValueError(
                 f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."

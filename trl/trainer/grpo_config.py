@@ -137,6 +137,9 @@ class GRPOConfig(TrainingArguments):
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
 
         > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
 
@@ -297,15 +300,6 @@ class GRPOConfig(TrainingArguments):
 
             Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
             filter your dataset before training to ensure that prompts do not exceed your desired length.
-
-            </Deprecated>
-
-        wandb_log_unique_prompts (`bool`, *optional*):
-
-            <Deprecated version="0.26.0">
-
-            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.27.0. Use
-            `log_unique_prompts` instead.
 
             </Deprecated>
     """
@@ -549,6 +543,13 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up "
             "after the timeout, a `ConnectionError` is raised."
+        },
+    )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group. This is used to communicate with the vLLM server. "
+            "Unless the port is occupied, there is no need to change it.",
         },
     )
 
@@ -796,10 +797,6 @@ class GRPOConfig(TrainingArguments):
             "desired length."
         },
     )
-    wandb_log_unique_prompts: bool | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
-    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -872,12 +869,3 @@ class GRPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
-
-        if self.wandb_log_unique_prompts is not None:
-            warnings.warn(
-                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.27.0. Please "
-                "use `log_unique_prompts` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.log_unique_prompts = self.wandb_log_unique_prompts

@@ -55,7 +55,7 @@ from ...data_utils import apply_chat_template, is_conversational, maybe_apply_ch
 from ...extras.profiling import profiling_context
 from ...extras.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
-from ...models import (
+from ...models.utils import (
     create_reference_model,
     prepare_deepspeed,
     prepare_fsdp,
@@ -454,7 +454,9 @@ class OnlineDPOTrainer(BaseTrainer):
                         base_url = args.vllm_server_base_url
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client = VLLMClient(
+                        base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                    )
 
                     # Determine device type (supports cuda, xpu, etc.)
                     accelerator_type = torch.accelerator.current_accelerator().type
