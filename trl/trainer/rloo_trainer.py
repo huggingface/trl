@@ -18,7 +18,7 @@ import textwrap
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -600,31 +600,6 @@ class RLOOTrainer(BaseTrainer):
                     self.reward_funcs[i] = self.accelerator.prepare_model(
                         reward_func, evaluation_mode=True, device_placement=True
                     )
-
-    @contextmanager
-    def _override_model_generation_config(self, model):
-        """
-        Context manager to temporarily override a model's generation_config with training config.
-
-        This works around transformers' config merging logic that would otherwise overwrite
-        values matching global defaults with model-specific values. By temporarily setting
-        the model's generation_config to match the passed generation_config, we avoid the conflict.
-
-        The model's original generation_config is preserved outside this context, ensuring
-        that saved/pushed models retain their intended inference behavior.
-
-        Args:
-            model: The model (typically unwrapped_model) whose generation_config to temporarily override.
-        """
-        # If it is a PEFT model, override the underlying base model
-        if hasattr(model, "get_base_model"):
-            model = model.get_base_model()
-        original_config = model.generation_config
-        model.generation_config = self.generation_config
-        try:
-            yield
-        finally:
-            model.generation_config = original_config
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
