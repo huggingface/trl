@@ -53,13 +53,13 @@ from ...import_utils import is_liger_kernel_available
 from ...models.utils import create_reference_model, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    DPODataCollatorWithPadding,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from ..utils import DPODataCollatorWithPadding
 from .kto_config import KTOConfig
 
 
@@ -298,8 +298,8 @@ class KTOTrainer(BaseTrainer):
             reuse the fine-tuned model.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
