@@ -13,8 +13,8 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+
 from ...trainer.grpo_config import GRPOConfig
-from typing import Optional
 
 
 @dataclass
@@ -58,10 +58,10 @@ class RTPOConfig(GRPOConfig):
 
     schedule_type: str = field(default="linear")
     direction: str = field(default="down")
-    decay_rate: Optional[float] = field(default=None)
-    milestones: Optional[list[float]] = field(default=None)
-    values: Optional[list[float]] = field(default=None)
-    value: Optional[float] = field(default=None)
+    decay_rate: float | None = field(default=None)
+    milestones: list[float] | None = field(default=None)
+    values: list[float] | None = field(default=None)
+    value: float | None = field(default=None)
 
     def __post_init__(self):
         # 根据 schedule_type 设置默认值

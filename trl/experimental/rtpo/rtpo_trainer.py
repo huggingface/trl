@@ -12,20 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ...extras.profiling import profiling_decorator
-from typing import List, Dict, Any, Union, Optional
+# This class should be added to trl.data_utils when the RTPO method is stable enough to join trl.trainer
+import math
+from typing import Any
+
 import torch
 from datasets import Dataset, IterableDataset
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
-from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
-from .rtpo_config import RTPOConfig
+
 from ...data_utils import is_conversational
-from ...trainer.utils import shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, unsplit_pixel_values_by_grid
-
-
-# This class should be added to trl.data_utils when the RTPO method is stable enough to join trl.trainer
-import math
-from typing import Any, Union
+from ...extras.profiling import profiling_decorator
+from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
+from ...trainer.utils import (
+    shuffle_sequence_dict,
+    split_pixel_values_by_grid,
+    split_tensor_dict,
+    unsplit_pixel_values_by_grid,
+)
+from .rtpo_config import RTPOConfig
 
 
 class AnnealingScheduler:
@@ -37,7 +41,7 @@ class AnnealingScheduler:
 
     def __init__(
         self,
-        total_steps: Union[int, float],
+        total_steps: int | float,
         schedule_type: str = "linear",
         direction: str = "down",  # "down" means 1→0 annealing
         **kwargs: Any,
@@ -47,7 +51,7 @@ class AnnealingScheduler:
         self.direction = direction
         self.kwargs = kwargs  # extra params like decay_rate, milestones, etc.
 
-    def __call__(self, step: Union[int, float]) -> float:
+    def __call__(self, step: int | float) -> float:
         """Return annealing factor based on current step."""
         ratio = min(step / max(self.total_steps, 1), 1.0)
 
@@ -89,10 +93,10 @@ class AnnealingScheduler:
 
 
 def think_guigence_anneal(
-    generation_batch: List[Dict[str, Any]],
+    generation_batch: list[dict[str, Any]],
     anneal_factor: float,
-    tokenizer_or_processor: Union[PreTrainedTokenizerBase, ProcessorMixin],
-) -> List[Dict[str, Any]]:
+    tokenizer_or_processor: PreTrainedTokenizerBase | ProcessorMixin,
+) -> list[dict[str, Any]]:
     tokenizer = getattr(tokenizer_or_processor, "tokenizer", tokenizer_or_processor)
     if is_conversational(generation_batch[0]):
         for i in range(len(generation_batch)):
@@ -104,7 +108,7 @@ def think_guigence_anneal(
     return generation_batch
 
 
-def drop_assistant_content(generation_batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def drop_assistant_content(generation_batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if is_conversational(generation_batch[0]):
         for i in range(len(generation_batch)):
             if generation_batch[i]["prompt"][-1]["role"] == "assistant":
@@ -167,13 +171,13 @@ class RTPOTrainer(GRPOTrainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
-        reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: Optional[RTPOConfig] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
+        model: str | PreTrainedModel,
+        reward_funcs: RewardFunc | list[RewardFunc],
+        args: RTPOConfig | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks=None,
         optimizers=(None, None),
         peft_config=None,
@@ -210,7 +214,7 @@ class RTPOTrainer(GRPOTrainer):
         )
 
     @profiling_decorator
-    def _prepare_inputs(self, generation_batch: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
+    def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
         # During training:
         #   - Receives the local generation batch (Per-GPU batch size × steps per generation)
@@ -226,7 +230,9 @@ class RTPOTrainer(GRPOTrainer):
 
         mode = "train" if self.model.training else "eval"
         if mode == "train":
-            generation_batch = think_guigence_anneal(generation_batch, self.anneal_scheduler(self.state.global_step), self.processing_class)
+            generation_batch = think_guigence_anneal(
+                generation_batch, self.anneal_scheduler(self.state.global_step), self.processing_class
+            )
             generate_every = self.args.steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
