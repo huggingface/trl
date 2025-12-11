@@ -758,6 +758,8 @@ class GRPOTrainer(BaseTrainer):
         Args:
             model: The model (typically unwrapped_model) whose generation_config to temporarily override.
         """
+        if hasattr(model, "get_base_model"):
+            model = model.get_base_model()
         original_config = model.generation_config
         model.generation_config = self.generation_config
         try:
