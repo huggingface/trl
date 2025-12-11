@@ -1945,11 +1945,17 @@ class GRPOTrainer(BaseTrainer):
 
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
-            std_rewards = rewards.view(-1, num_generations).std(dim=1)
-            std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
+            if num_generations > 1:
+                std_rewards = rewards.view(-1, num_generations).std(dim=1)
+                std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
+            else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+                std_rewards = torch.zeros_like(rewards)
         elif self.scale_rewards == "batch":
             # Compute global std
-            std_rewards = rewards.std().expand_as(rewards)
+            if rewards.numel() > 1:
+                std_rewards = rewards.std().expand_as(rewards)
+            else:  # this case doesn't occur during training, but could in eval when num_generations_eval=batch_size=1
+                std_rewards = torch.zeros_like(rewards)
         else:
             raise ValueError(
                 f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
