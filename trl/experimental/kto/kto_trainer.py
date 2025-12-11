@@ -50,16 +50,16 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_liger_kernel_available
-from ...models import create_reference_model, prepare_deepspeed
+from ...models.utils import create_reference_model, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    DPODataCollatorWithPadding,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from ..utils import DPODataCollatorWithPadding
 from .kto_config import KTOConfig
 
 
@@ -282,7 +282,7 @@ class KTOTrainer(BaseTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
-        ref_model ([`PreTrainedModelWrapper`]):
+        ref_model ([`~transformers.PreTrainedModel`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
@@ -298,8 +298,8 @@ class KTOTrainer(BaseTrainer):
             reuse the fine-tuned model.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.

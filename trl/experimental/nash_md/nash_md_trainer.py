@@ -55,7 +55,7 @@ class NashMDTrainer(OnlineDPOTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model ([`PreTrainedModelWrapper`]):
+        ref_model ([`~transformers.PreTrainedModel`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
@@ -68,8 +68,8 @@ class NashMDTrainer(OnlineDPOTrainer):
             The NashMD config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):

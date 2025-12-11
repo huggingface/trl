@@ -17,9 +17,10 @@ from collections.abc import Callable
 from itertools import chain
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from datasets import Dataset, features
 from transformers import (
     BaseImageProcessor,
@@ -36,12 +37,59 @@ from transformers.utils import is_peft_available
 
 from ...models import prepare_peft_model
 from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import compute_accuracy, disable_dropout_in_model
+from ...trainer.utils import disable_dropout_in_model
 from .prm_config import PRMConfig
 
 
 if is_peft_available():
     from peft import PeftModel
+
+logger = logging.get_logger(__name__)
+
+
+def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
+    predictions, labels = eval_pred
+    if predictions.ndim == 3:
+        # Token classification task. Shapes are (batch_size, seq_len, num_labels) and (batch_size, seq_len)
+        # Used to compute the accuracy in the prm_trainer.
+        predictions = np.argmax(predictions, axis=2)
+
+        # Flatten the predictions and labels to remove the ignored tokens.
+        predictions = np.array(
+            [
+                p
+                for prediction, label in zip(predictions, labels, strict=True)
+                for (p, lbl) in zip(prediction, label, strict=True)
+                if lbl != -100
+            ]
+        )
+        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
+
+    else:
+        # Here, predictions is rewards_chosen and rewards_rejected. Shapes are (batch_size, 2) and (batch_size,)
+        # We want to see how much of the time rewards_chosen > rewards_rejected.
+        equal_mask = predictions[:, 0] == predictions[:, 1]
+        equal_predictions_count = int(equal_mask.sum())
+
+        if equal_predictions_count > 0:
+            # Before using the logger, the accelerate state must be initialized. It'susually the case when using this
+            # function inside a Trainer, but it may not be the case otherwise, in particular when unit testing.
+            PartialState()
+
+            logger.warning(
+                f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
+                "for both options are equal. These instances are ignored in the accuracy computation.",
+            )
+
+        # Filter out equal predictions
+        predictions = predictions[~equal_mask]
+        labels = labels[~equal_mask]
+
+        # Use the remaining predictions for accuracy calculation
+        predictions = np.argmax(predictions, axis=1)
+
+    accuracy = np.array(predictions == labels, dtype=float).mean().item()
+    return {"accuracy": accuracy}
 
 
 class PRMTrainer(BaseTrainer):
