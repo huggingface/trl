@@ -52,7 +52,6 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
     first_true_indices,
-    forward,
     get_reward,
     log_table_to_comet_experiment,
     peft_module_casting_to_bf16,
