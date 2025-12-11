@@ -501,13 +501,6 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
             module.p = 0
 
 
-def exact_div(a, b, custom_error_message=""):
-    q = a // b
-    if a != q * b:
-        raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
-    return q
-
-
 def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm) or "norm" in name:

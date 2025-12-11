@@ -51,7 +51,6 @@ from ...trainer.utils import (
     batch_generation,
     disable_dropout_in_model,
     empty_cache,
-    exact_div,
     first_true_indices,
     forward,
     get_reward,
@@ -72,6 +71,13 @@ if is_peft_available():
 
 
 INVALID_LOGPROB = 1.0
+
+
+def exact_div(a, b, custom_error_message=""):
+    q = a // b
+    if a != q * b:
+        raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
+    return q
 
 
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
