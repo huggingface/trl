@@ -183,7 +183,10 @@ class NashMDTrainer(OnlineDPOTrainer):
 
     def _generate_completions(self, model, prompts):
         # Generate completions from the policy model.
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_for_gen_ctx:
+        with (
+            unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_for_gen_ctx,
+            self._override_model_generation_config(unwrapped_policy_for_gen_ctx),
+        ):
             model_output = unwrapped_policy_for_gen_ctx.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
@@ -221,6 +224,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 device=self.accelerator.device,
             )
 
+            # TODO: use self._override_model_generation_config for both models?
             mixture_output = mixture_model.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
