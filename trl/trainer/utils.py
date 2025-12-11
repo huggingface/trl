@@ -1036,6 +1036,7 @@ def generate(
     context_length = queries.shape[1]
     attention_mask = queries != pad_token_id
     input_ids = torch.masked_fill(queries, ~attention_mask, 0)
+    # TODO: use self._override_model_generation_config
     output = lm_backbone.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
