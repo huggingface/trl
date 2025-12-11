@@ -19,10 +19,10 @@ import os
 import random
 import socket
 from collections.abc import Mapping, Sequence, Sized
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
-from typing import Literal, TypeVar
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -40,8 +40,6 @@ from transformers import (
     GenerationConfig,
     PretrainedConfig,
     PreTrainedModel,
-    TrainerState,
-    TrainingArguments,
     is_comet_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
@@ -366,220 +364,6 @@ def cap_exp(value, cap=-1):
 
 
 SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
-
-
-@dataclass
-class OnlineTrainerState(TrainerState):
-    """
-    Training state for online/on-policy trainers.
-
-    Extends [`~transformers.TrainerState`] with an `episode` counter to track the current rollout/episode.
-
-    Args:
-        episode (`int`, defaults to 0): Zero-based episode index.
-    """
-
-    episode: int = 0
-
-
-@dataclass
-class OnPolicyConfig(TrainingArguments):
-    r"""
-    Base configuration class for on-policy trainers.
-
-    This class includes only the parameters that are specific to some on-policy training. For a full list of training
-    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
-    class may differ from those in [`~transformers.TrainingArguments`].
-
-    Using [`~transformers.HfArgumentParser`] we can turn this class into
-    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
-    command line.
-
-    Parameters:
-        run_name (`str`, *optional*):
-            Name of the run.
-        dataset_num_proc (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        num_mini_batches (`int`, *optional*, defaults to `1`):
-            Number of minibatches to split a batch into.
-        total_episodes (`int`, *optional*):
-            Total number of episodes in the dataset.
-        local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
-            Per rank no grad forward pass in the rollout phase.
-        num_sample_generations (`int`, *optional*, defaults to `10`):
-            Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
-        response_length (`int`, *optional*, defaults to `53`):
-            Length of the response.
-        stop_token (`str`, *optional*):
-            Specifies the stop token to use for text generation. This parameter is mutually exclusive with
-            `stop_token_id`.
-
-            - `None`: No stop token is applied, unless `stop_token_id` is specified.
-            - `'eos'`: Uses the tokenizer's `eos_token`.
-
-        stop_token_id (`int`, *optional*):
-            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
-            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
-        temperature (`float`, *optional*, defaults to `0.7`):
-            Sampling temperature.
-        missing_eos_penalty (`float`, *optional*):
-            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
-            generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
-            value.
-        sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
-            Path to the SFT model.
-        world_size (`int`, *optional*):
-            Number of processes (GPUs) to use for the training.
-        num_total_batches (`int`, *optional*):
-            Number of total batches to train.
-        micro_batch_size (`int`, *optional*):
-            Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
-        local_batch_size (`int`, *optional*):
-            Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
-        batch_size (`int`, *optional*):
-            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` *
-            `gradient_accumulation_steps`).
-        local_mini_batch_size (`int`, *optional*):
-            Mini batch size per GPU.
-        mini_batch_size (`int`, *optional*):
-            Mini batch size across GPUs.
-        push_to_hub (`bool`, *optional*, defaults to `False`):
-            Whether to push the model to the Hub after training.
-    """
-
-    # Parameters whose default values are overridden from TrainingArguments
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
-    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
-    lr_scheduler_kwargs: dict | str | None = field(
-        default=None,
-        metadata={
-            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
-            "restarts."
-        },
-    )
-
-    run_name: str | None = field(
-        default=None,
-        metadata={"help": "Name of the run."},
-    )
-    dataset_num_proc: int | None = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    num_mini_batches: int = field(
-        default=1,
-        metadata={"help": "Number of minibatches to split a batch into."},
-    )
-    total_episodes: int | None = field(
-        default=None,
-        metadata={"help": "Total number of episodes in the dataset."},
-    )
-    local_rollout_forward_batch_size: int = field(
-        default=64,
-        metadata={"help": "Per rank no grad forward pass in the rollout phase."},
-    )
-    num_sample_generations: int = field(
-        default=10,
-        metadata={
-            "help": "Number of debugging samples generations (i.e., `generate_completions` calls) throughout training."
-        },
-    )
-    response_length: int = field(
-        default=53,
-        metadata={"help": "Length of the response."},
-    )
-    stop_token: Literal["eos"] | None = field(
-        default=None,
-        metadata={
-            "help": "Specifies the stop token to use for text generation. This parameter is mutually exclusive with "
-            "`stop_token_id`."
-        },
-    )
-    stop_token_id: int | None = field(
-        default=None,
-        metadata={
-            "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
-            "applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`."
-        },
-    )
-    temperature: float = field(
-        default=0.7,
-        metadata={"help": "Sampling temperature."},
-    )
-    missing_eos_penalty: float | None = field(
-        default=None,
-        metadata={
-            "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
-            "encourage to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be "
-            "a positive value."
-        },
-    )
-    sft_model_path: str = field(
-        default="EleutherAI/pythia-160m",
-        metadata={"help": "Path to the SFT model."},
-    )
-    world_size: int | None = field(
-        default=None,
-        metadata={"help": "Number of processes (GPUs) to use for the training."},
-    )
-    num_total_batches: int | None = field(
-        default=None,
-        metadata={"help": "Number of total batches to train."},
-    )
-    micro_batch_size: int | None = field(
-        default=None,
-        metadata={"help": "Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)."},
-    )
-    local_batch_size: int | None = field(
-        default=None,
-        metadata={"help": "Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)."},
-    )
-    batch_size: int | None = field(
-        default=None,
-        metadata={
-            "help": "Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * "
-            "`gradient_accumulation_steps`)."
-        },
-    )
-    local_mini_batch_size: int | None = field(
-        default=None,
-        metadata={"help": "Mini batch size per GPU."},
-    )
-    mini_batch_size: int | None = field(
-        default=None,
-        metadata={"help": "Mini batch size across GPUs."},
-    )
-    push_to_hub: bool = field(
-        default=False,
-        metadata={"help": "Whether to push the model to the Hub after training."},
-    )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
