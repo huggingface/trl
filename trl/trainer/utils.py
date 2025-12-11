@@ -48,7 +48,6 @@ from transformers import (
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
-    ModelOutput,
     is_peft_available,
     is_rich_available,
     is_torch_mlu_available,
@@ -873,38 +872,6 @@ def get_reward(
             sequence_lengths,
         ].squeeze(-1),
         sequence_lengths,
-    )
-
-
-def forward(
-    model: torch.nn.Module,
-    query_responses: torch.Tensor,
-    pad_token_id: int,
-) -> ModelOutput:
-    """
-    Performs a forward pass through the model with the given query responses and pad token ID.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to perform the forward pass.
-        query_responses (`torch.Tensor`):
-            The tensor containing the query responses.
-        pad_token_id (`int`):
-            The token ID representing the pad token.
-
-    Returns:
-        `ModelOutput`:
-            The output of the model, including hidden states.
-    """
-    attention_mask = query_responses != pad_token_id
-    position_ids = attention_mask.cumsum(1) - attention_mask.long()
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    return model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
     )
 
 
