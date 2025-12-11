@@ -190,7 +190,10 @@ class XPOTrainer(OnlineDPOTrainer):
             return self._alpha
 
     def _generate_completions(self, prompts, model):
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_model_for_gen:
+        with (
+            unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_model_for_gen,
+            self._override_model_generation_config(unwrapped_policy_model_for_gen),
+        ):
             model_output = unwrapped_policy_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
@@ -208,7 +211,10 @@ class XPOTrainer(OnlineDPOTrainer):
         else:
             actual_model_for_ref_generation = self.accelerator.unwrap_model(self.ref_model)
 
-        with unwrap_model_for_generation(actual_model_for_ref_generation, self.accelerator) as final_ref_model_for_gen:
+        with (
+            unwrap_model_for_generation(actual_model_for_ref_generation, self.accelerator) as final_ref_model_for_gen,
+            self._override_model_generation_config(final_ref_model_for_gen),
+        ):
             ref_output = final_ref_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
