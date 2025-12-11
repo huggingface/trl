@@ -63,6 +63,7 @@ def _generate_completions(
     """
     completions = []
     with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+        # TODO: use self._override_model_generation_config
         for idx in range(0, len(prompts), batch_size):
             batch = prompts[idx : idx + batch_size]
             tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
