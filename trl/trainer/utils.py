@@ -387,9 +387,6 @@ def print_rich_table(df: pd.DataFrame) -> None:
     console.print(table)
 
 
-SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
-
-
 @dataclass
 class OnlineTrainerState(TrainerState):
     """

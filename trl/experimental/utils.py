@@ -269,3 +269,6 @@ def truncate_right(
     output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
     mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
     return output_ids, mask
+
+
+SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
