@@ -253,16 +253,6 @@ class RichProgressCallback(TrainerCallback):
         self.current_step = None
 
 
-def _win_rate_completions_df(
-    state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
-) -> pd.DataFrame:
-    global_step = [str(state.global_step)] * len(prompts)
-    data = list(zip(global_step, prompts, completions, winner_indices, strict=True))
-    # Split completions from reference model and policy
-    split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
-    return pd.DataFrame(split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"])
-
-
 class WinRateCallback(_WinRateCallback):
     def __init__(self, *args, **kwargs):
         warnings.warn(

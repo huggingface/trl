@@ -19,7 +19,7 @@ from ..import_utils import _LazyModule
 
 _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
-    "modeling_base": ["GeometricMixtureWrapper", "PreTrainedModelWrapper"],
+    "modeling_base": ["PreTrainedModelWrapper"],
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
     "utils": [
         "create_reference_model",
@@ -34,7 +34,7 @@ _import_structure = {
 
 if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
-    from .modeling_base import GeometricMixtureWrapper, PreTrainedModelWrapper
+    from .modeling_base import PreTrainedModelWrapper
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import (
         create_reference_model,
