@@ -19,6 +19,7 @@ import textwrap
 import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +39,7 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
     TrainerControl,
+    TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
@@ -47,7 +49,6 @@ from transformers.utils import is_peft_available, is_rich_available
 from ...models.utils import create_reference_model, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    OnlineTrainerState,
     disable_dropout_in_model,
     empty_cache,
     exact_div,
@@ -144,6 +145,20 @@ def batch_generation(
     padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
 
     return padded_query_responses, padded_logitss
+
+
+@dataclass
+class OnlineTrainerState(TrainerState):
+    """
+    Training state for online/on-policy trainers.
+
+    Extends [`~transformers.TrainerState`] with an `episode` counter to track the current rollout/episode.
+
+    Args:
+        episode (`int`, defaults to 0): Zero-based episode index.
+    """
+
+    episode: int = 0
 
 
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
