@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -103,7 +103,7 @@ class DPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -113,7 +113,7 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the model
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
@@ -126,28 +126,28 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    pad_token: Optional[str] = field(
+    pad_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
             "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={"help": "Maximum length of the prompt part of the sequence. If `None`, no truncation is applied."},
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=None,
         metadata={
             "help": "Maximum length of the completion part of the sequence. If `None`, no truncation is applied."
         },
     )
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
@@ -171,7 +171,7 @@ class DPOConfig(TrainingArguments):
             "structure."
         },
     )
-    pad_to_multiple_of: Optional[int] = field(
+    pad_to_multiple_of: int | None = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )

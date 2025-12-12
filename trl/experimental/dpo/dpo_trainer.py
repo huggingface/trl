@@ -12,23 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
+import inspect
 import textwrap
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from datasets.fingerprint import Hasher
 from transformers import (
-    AutoConfig,
     AutoProcessor,
     BaseImageProcessor,
     DataCollator,
@@ -40,11 +39,10 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages, truncate_dataset
-from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp, prepare_peft_model
+from ...models import prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
@@ -57,10 +55,18 @@ from ...trainer.utils import (
     selective_log_softmax,
 )
 from .dpo_config import DPOConfig
+from .utils import (
+    create_model_from_path,
+    disable_dropout_in_model,
+    entropy_from_logits,
+    get_config_model_id,
+    pad,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 logger = logging.get_logger(__name__)
@@ -75,7 +81,7 @@ FLASH_ATTENTION_VARIANTS = {
 }
 
 
-def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
@@ -120,7 +126,7 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
 
     pad_token_id: int
-    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -172,9 +178,8 @@ class DataCollatorForPreference(DataCollatorMixin):
 
 class DPOTrainer(BaseTrainer):
     """
-    Trainer for Direct Preference Optimization (DPO) method.
-
-    This class is a wrapper around the [`~transformers.Trainer`] class and inherits all of its attributes and methods.
+    Trainer for Direct Preference Optimization (DPO) method. This algorithm was initially proposed in the paper [Direct
+    Preference Optimization: Your Language Model is Secretly a Reward Model](https://huggingface.co/papers/2305.18290).
 
     Example:
 
@@ -184,22 +189,23 @@ class DPOTrainer(BaseTrainer):
 
     dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-    trainer = DPOTrainer(model="Qwen/Qwen2-0.5B-Instruct", train_dataset=dataset)
+    trainer = DPOTrainer(
+        model="Qwen/Qwen2-0.5B-Instruct",
+        train_dataset=dataset,
+    )
     trainer.train()
     ```
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
-              config) with the keyword arguments in `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object.
-            If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
-            as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -207,51 +213,28 @@ class DPOTrainer(BaseTrainer):
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
             [`~trainer.dpo_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. DPO supports both [language modeling](#language-modeling) type and
+            Dataset to use for training. It supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If `None`, the processing class is loaded from the model's name
-            with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
-            If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
-        compute_loss_func (`Callable`, *optional*):
-            A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
-            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
-            function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
-            used by [`Trainer`].
-        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function that will be used to compute metrics at evaluation. Must take a
-            [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
-            [`DPOConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
-            `compute_result` argument. This will be triggered after the last eval batch to signal that the function
-            needs to calculate and return the global summary statistics rather than accumulating the batch-level
-            statistics.
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
-            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
-            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
-            A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
-            `args`. Incompatible with the `optimizers` argument.
-
-            Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
-            initializing the Trainer.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*):
-            A function that preprocess the logits right before caching them at each evaluation step. Must take two
-            tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
-            by this function will be reflected in the predictions received by `compute_metrics`.
-
-            Note that the labels (second parameter) will be `None` if the dataset does not have them.
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
+            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
@@ -275,64 +258,49 @@ class DPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
-        args: Optional[DPOConfig] = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        compute_loss_func: Optional[Callable] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional["PeftConfig"] = None,
+        model: str | PreTrainedModel,
+        args: DPOConfig | None = None,
+        data_collator: DataCollator | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        peft_config: "PeftConfig | None" = None,
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
-        # Models
-        # Trained model
-        model_init_kwargs = args.model_init_kwargs or {}
+        # Model
         if isinstance(model, str):
-            model_id = model
-            dtype = model_init_kwargs.get("dtype")
-            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-                pass  # dtype is already a torch.dtype or "auto" or None
-            elif isinstance(dtype, str):  # it's a str, but not "auto"
-                dtype = getattr(torch, dtype)
-                model_init_kwargs["dtype"] = dtype
-            else:
-                raise ValueError(
-                    "Invalid `dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
-                    f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
-                )
-            # Disable caching if gradient checkpointing is enabled (not supported)
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
-            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
 
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
-
-        # Disable dropout in the model
-        if args.disable_dropout:
-            disable_dropout_in_model(model)
+        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
+        # Inspect the forward method before we wrap the model with PEFT
+        self.model_kwarg_keys = (
+            inspect.signature(model.forward).parameters.keys()
+            if not hasattr(model, "get_base_model")
+            else inspect.signature(model.get_base_model().forward).parameters.keys()
+        )
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -344,36 +312,42 @@ class DPOTrainer(BaseTrainer):
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        if self._is_vlm and args.padding_free:
-            raise ValueError(
-                "Padding-free training is yet not supported for vision-language models. Please set "
-                "`padding_free=False` in the `DPOConfig`."
-            )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-        # Data collator
-        self.padding_free = args.padding_free
-        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
-        if self.padding_free:
-            raise NotImplementedError("Padding-free training is not yet implemented.")
-            if data_collator is not None:
-                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
-            if not use_flash_attention:
-                logger.warning(
-                    "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
-                    "the following implementations are known to reliably support this: "
-                    f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
-                    "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
-                    "configuration to one of these supported options or verify that your attention mechanism can "
-                    "handle flattened sequences."
-                )
+        self.pad_token = tokenizer.pad_token
+        self.pad_token_id = tokenizer.pad_token_id
+        self.eos_token_id = tokenizer.eos_token_id
 
-            if args.per_device_train_batch_size == 1:
-                logger.warning(
-                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
-                    "to at least 2."
-                )
+        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+            # If the model is already a PeftModel, we need to merge and unload it.
+            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+            model = model.merge_and_unload()
+
+        # Create PEFT model
+        if peft_config is not None:
+            model = get_peft_model(model, peft_config)
+
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
+        # Training arguments
+        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
+
+        # Dataset
+        self.shuffle_dataset = args.shuffle_dataset
 
         dataset_sample = next(iter(train_dataset))
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
@@ -383,6 +357,21 @@ class DPOTrainer(BaseTrainer):
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
 
+        # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
+        # and done on the fly instead.
+        skip_prepare_dataset = self._is_vision_dataset
+        if not skip_prepare_dataset:
+            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
+            if eval_dataset is not None:
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self._prepare_dataset(dataset, processing_class, args, key)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+
+        # Data collator
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -401,34 +390,13 @@ class DPOTrainer(BaseTrainer):
         elif data_collator is None and self._is_vision_dataset:
             raise NotImplementedError("VLM training is not yet implemented.")
 
-        # Training arguments
-        self.loss_type = args.loss_type if isinstance(args.loss_type, list) else [args.loss_type]
-        self.beta = args.beta
-
-        # Dataset
-        # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
-        # and done on the fly instead.
-        skip_prepare_dataset = self._is_vision_dataset
-        if not skip_prepare_dataset:
-            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
-            if eval_dataset is not None:
-                if isinstance(eval_dataset, dict):
-                    eval_dataset = {
-                        key: self._prepare_dataset(dataset, processing_class, args, key)
-                        for key, dataset in eval_dataset.items()
-                    }
-                else:
-                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
-
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._total_train_tokens = 0
-
-        # Initialize the Trainer. Parent class will handle:
-        # - DeepSpeed configuration (through create_accelerator_and_postprocess)
-        # - FSDP setup
-        # - Distributed training setup
-        # - Optimizer and scheduler creation
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys is "prompt", "chosen" and "rejected". As a result, the trainer
+        # issues the warning: "Could not estimate the number of tokens of the input, floating-point operations will not
+        # be computed." To suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued"
+        # dictionary to True. This acts as a flag to indicate that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
 
         super().__init__(
             model=model,
@@ -437,12 +405,8 @@ class DPOTrainer(BaseTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            compute_loss_func=compute_loss_func,
-            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
         # Reference model
@@ -456,15 +420,11 @@ class DPOTrainer(BaseTrainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
-
-        # Disable dropout in the models
-        if args.disable_dropout:
-            disable_dropout_in_model(model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if self.args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
@@ -481,7 +441,7 @@ class DPOTrainer(BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        # Add tags for model
+        # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
         if self.ref_model is not None:
@@ -492,19 +452,31 @@ class DPOTrainer(BaseTrainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-        # Initialize activation offloading context
-        if self.args.activation_offloading:
-            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
-        else:
-            self.maybe_activation_offload_context = contextlib.nullcontext()
+        if args.sync_ref_model:
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+
+        if self.args.precompute_ref_log_probs:
+            self.train_dataset = self._precompute_ref_logps(
+                ref_model, self.train_dataset, self.args.per_device_train_batch_size, "train"
+            )
+            if self.eval_dataset is not None:
+                if isinstance(self.eval_dataset, dict):
+                    self.eval_dataset = {
+                        key: self._precompute_ref_logps(ref_model, dataset, self.args.per_device_eval_batch_size, key)
+                        for key, dataset in self.eval_dataset.items()
+                    }
+                else:
+                    self.eval_dataset = self._precompute_ref_logps(
+                        self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
+                    )
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args: DPOConfig,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
         # sampled data.
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
@@ -644,32 +616,17 @@ class DPOTrainer(BaseTrainer):
                     "ref_rejected_logps",
                 ]
 
-    def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None, **kwargs):
-        if self.args.precompute_ref_log_probs:
-            self.train_dataset = self._precompute_ref_logps(
-                self.train_dataset, self.args.per_device_train_batch_size, "train"
-            )
-            if self.eval_dataset is not None:
-                if isinstance(self.eval_dataset, dict):
-                    self.eval_dataset = {
-                        key: self._precompute_ref_logps(dataset, self.args.per_device_eval_batch_size, key)
-                        for key, dataset in self.eval_dataset.items()
-                    }
-                else:
-                    self.eval_dataset = self._precompute_ref_logps(
-                        self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
-                    )
-        return super().train()
-
     def _precompute_ref_logps(
-        self, dataset: Union[Dataset, IterableDataset], batch_size: int, dataset_name: str
+        self, model, dataset: Dataset | IterableDataset, batch_size: int, dataset_name: str
     ) -> None:
         def compute_ref_logps(examples, collator, max_length, truncation_mode):
-            examples = [dict(zip(examples.keys(), v)) for v in zip(*examples.values())]  # dict[list] to list[dict]
+            examples = [
+                dict(zip(examples.keys(), v, strict=False)) for v in zip(*examples.values(), strict=False)
+            ]  # dict[list] to list[dict]
             inputs = collator(examples)
-            input_ids = inputs["input_ids"].to(self.model.device)
-            attention_mask = inputs["attention_mask"].to(self.model.device)
-            completion_mask = inputs["completion_mask"].to(self.model.device)
+            input_ids = inputs["input_ids"].to(model.device)
+            attention_mask = inputs["attention_mask"].to(model.device)
+            completion_mask = inputs["completion_mask"].to(model.device)
 
             # Truncate inputs
             if max_length is not None:
@@ -690,7 +647,7 @@ class DPOTrainer(BaseTrainer):
                         f"Unsupported truncation mode: {truncation_mode}, expected 'keep_start' or 'keep_end'"
                     )
 
-            outputs = self.model(input_ids, attention_mak=attention_mask, use_cache=False)
+            outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = input_ids[..., 1:].contiguous()
             shift_completion_mask = completion_mask[..., 1:].contiguous()
@@ -708,7 +665,7 @@ class DPOTrainer(BaseTrainer):
             "max_length": self.args.max_length,
             "truncation_mode": self.args.truncation_mode,
         }
-        model_hash = hash_module(self.model)
+        model_hash = hash_module(model)
         dataset = dataset.map(
             compute_ref_logps,
             batched=True,
@@ -722,9 +679,9 @@ class DPOTrainer(BaseTrainer):
     def compute_loss(
         self,
         model: nn.Module,
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs: bool = False,
-        num_items_in_batch: Optional[torch.Tensor] = None,
+        num_items_in_batch: torch.Tensor | None = None,
     ):
         """
         Compute training loss and additionally compute token accuracies
@@ -848,7 +805,7 @@ class DPOTrainer(BaseTrainer):
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
