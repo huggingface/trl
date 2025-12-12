@@ -18,14 +18,11 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
-    batch_generation,
     entropy_from_logits,
     flush_left,
     flush_right,
@@ -209,66 +206,6 @@ class TestGenerateModelCard(TrlTestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
-
-
-class TestBatchGeneration(TrlTestCase):
-    def setup_method(self):
-        # Initialize the tokenizer
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id).to(self.device)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-
-        self.generation_config = GenerationConfig(
-            max_new_tokens=128,
-            temperature=0.5,
-            do_sample=True,
-            top_k=0,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
-
-        # Example input
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        self.examples = dataset["messages"]
-        self.mini_batch_size = 3
-
-    def test_mini_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, self.mini_batch_size, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        assert max_length_query > context_length
-        assert query_responses.shape == (bs, max_length_query)
-        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
-
-    def test_single_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, bs, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        assert max_length_query > context_length
-        assert query_responses.shape == (bs, max_length_query)
-        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
 
 
 class TestFlushLeft(TrlTestCase):
