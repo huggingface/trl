@@ -904,14 +904,6 @@ def add_margin(example):
 dataset = dataset.map(add_margin)
 ```
 
-## Distributed Training
-
-### ZeRO: Memory Optimizations Toward Training Trillion-Parameter Models
-
-**📜 Paper**: https://huggingface.co/papers/1910.02054
-
-**ZeRO** partitions optimizer states/gradients/params to scale training efficiently. TRL relies on [DeepSpeed](https://www.deepspeed.ai/) for ZeRO support. See the [DeepSpeed Integration](deepspeed_integration) guide for details.
-
 ## Distillation
 
 Papers relating to training a student model with the help of a teacher model.
