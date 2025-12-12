@@ -19,6 +19,7 @@ import textwrap
 import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -38,31 +39,32 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
     TrainerControl,
+    TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ...models.utils import create_reference_model, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    OnlineTrainerState,
-    batch_generation,
     disable_dropout_in_model,
     empty_cache,
-    exact_div,
     first_true_indices,
-    forward,
     get_reward,
     log_table_to_comet_experiment,
+    pad,
     peft_module_casting_to_bf16,
     prepare_deepspeed,
-    print_rich_table,
     selective_log_softmax,
-    truncate_response,
 )
 from .ppo_config import PPOConfig
+
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.table import Table
 
 
 logger = logging.get_logger(__name__)
@@ -72,6 +74,168 @@ if is_peft_available():
 
 
 INVALID_LOGPROB = 1.0
+
+
+def generate(
+    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generates sequences from the language model backbone in a way that does not affect padding tokens.
+
+    Args:
+        lm_backbone (`torch.nn.Module`):
+            The language model backbone used for generation.
+        queries (`torch.Tensor`):
+            The tensor containing the input queries.
+        pad_token_id (`int`):
+            The token ID representing the pad token.
+        generation_config ([`~transformers.GenerationConfig`]):
+            The configuration for the generation process.
+
+    Returns:
+        tuple:
+            - `generated_sequences` (`torch.Tensor`):
+                The concatenated tensor of input queries and generated sequences.
+            - `logits` (`torch.Tensor`):
+                The logits output from the generation process.
+    """
+    context_length = queries.shape[1]
+    attention_mask = queries != pad_token_id
+    input_ids = torch.masked_fill(queries, ~attention_mask, 0)
+    output = lm_backbone.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
+        # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
+        generation_config=generation_config,
+        return_dict_in_generate=True,
+        output_scores=True,
+    )
+    logits = torch.stack(output.scores, 1)
+    return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
+
+
+@torch.no_grad()
+def batch_generation(
+    model: torch.nn.Module,
+    queries: torch.Tensor,
+    local_rollout_forward_batch_size: int,
+    pad_token_id: int,
+    generation_config: GenerationConfig,
+):
+    query_responses = []
+    logitss = []
+    batch_size = queries.shape[0]
+    for i in range(0, batch_size, local_rollout_forward_batch_size):
+        query = queries[i : i + local_rollout_forward_batch_size]
+        query_response, logits = generate(
+            model,
+            query,
+            pad_token_id,
+            generation_config,
+        )
+        query_responses.append(query_response)
+        logitss.append(logits)
+
+    # padding tensors
+    padded_query_responses = pad(query_responses, padding_value=pad_token_id, padding_side="right")
+    padded_logitss = pad(logitss, padding_value=0, padding_side="right")
+
+    # reshaping
+    padded_query_responses = padded_query_responses.view(-1, padded_query_responses.shape[-1])[:batch_size]
+    padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
+
+    return padded_query_responses, padded_logitss
+
+
+def exact_div(a, b, custom_error_message=""):
+    q = a // b
+    if a != q * b:
+        raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
+    return q
+
+
+def print_rich_table(df: pd.DataFrame) -> None:
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
+        )
+    console = Console()
+    table = Table(show_lines=True)
+    for column in df.columns:
+        table.add_column(column)
+    for _, row in df.iterrows():
+        table.add_row(*row.astype(str).tolist())
+    console.print(table)
+
+
+def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
+    """
+    Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
+
+    Args:
+        stop_token_id (`int`):
+            The token ID representing the stop token where truncation occurs.
+        pad_token_id (`int`):
+            The token ID representing the pad token used to fill the truncated responses.
+        responses (`torch.Tensor`):
+            The tensor containing the responses to be truncated.
+
+    Returns:
+        `torch.Tensor`:
+            The truncated responses tensor with pad tokens filled after the stop token.
+    """
+    trunc_idxs = first_true_indices(responses == stop_token_id).unsqueeze(-1)
+    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
+    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
+    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, pad_token_id)
+    return postprocessed_responses
+
+
+def forward(
+    model: torch.nn.Module,
+    query_responses: torch.Tensor,
+    pad_token_id: int,
+) -> ModelOutput:
+    """
+    Performs a forward pass through the model with the given query responses and pad token ID.
+
+    Args:
+        model (`torch.nn.Module`):
+            The model to perform the forward pass.
+        query_responses (`torch.Tensor`):
+            The tensor containing the query responses.
+        pad_token_id (`int`):
+            The token ID representing the pad token.
+
+    Returns:
+        `ModelOutput`:
+            The output of the model, including hidden states.
+    """
+    attention_mask = query_responses != pad_token_id
+    position_ids = attention_mask.cumsum(1) - attention_mask.long()
+    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    return model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+    )
+
+
+@dataclass
+class OnlineTrainerState(TrainerState):
+    """
+    Training state for online/on-policy trainers.
+
+    Extends [`~transformers.TrainerState`] with an `episode` counter to track the current rollout/episode.
+
+    Args:
+        episode (`int`, defaults to 0): Zero-based episode index.
+    """
+
+    episode: int = 0
 
 
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool | None = None) -> torch.Tensor:
