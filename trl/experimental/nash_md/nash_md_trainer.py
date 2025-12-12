@@ -37,8 +37,9 @@ from transformers.utils import is_peft_available
 from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
-from ...trainer.utils import SIMPLE_CHAT_TEMPLATE, empty_cache, get_reward, selective_log_softmax, truncate_right
+from ...trainer.utils import empty_cache, get_reward, selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
+from ..utils import SIMPLE_CHAT_TEMPLATE, truncate_right
 from .nash_md_config import NashMDConfig
 
 
