@@ -437,13 +437,17 @@ class PPOTrainer(BaseTrainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        generation_config = GenerationConfig(
-            max_new_tokens=args.response_length,
-            temperature=(args.temperature + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.response_length,
+            "temperature": (args.temperature + 1e-7),
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+        }
+        # Create training-specific generation config from the model's original generation config
+        # Then overwrite it with the training-specific generation kwargs
+        generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
+        generation_config.update(**generation_kwargs)
 
         accelerator.print("===training policy===")
         start_time = time.time()
@@ -767,13 +771,17 @@ class PPOTrainer(BaseTrainer):
     def generate_completions(self, sampling: bool = False):
         args = self.args
         processing_class = self.processing_class
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.response_length,
-            temperature=(0.01 + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.response_length,
+            "temperature": (0.01 + 1e-7),
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+        }
+        # Create training-specific generation config from the model's original generation config
+        # Then overwrite it with the training-specific generation kwargs
+        generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
+        generation_config.update(**generation_kwargs)
 
         table = defaultdict(list)
         with unwrap_model_for_generation(
