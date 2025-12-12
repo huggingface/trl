@@ -1,9 +1,11 @@
 # Paper Index
 
 > [!WARNING]
-> Section under construction. Feel free to contribute!
+> Section under construction. Feel free to contribute! See https://github.com/huggingface/trl/issues/4407.
 
 ## Group Relative Policy Optimization
+
+Papers relating to the [`GRPOTrainer`].
 
 ### DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models
 
