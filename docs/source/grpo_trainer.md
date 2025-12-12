@@ -137,10 +137,7 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
-Alternatively, in the [SAPO paper](https://arxiv.org/abs/2511.20347), the Qwen team proposes replacing the "hard" clipping mechanism of GRPO with a smooth, temperature-controlled soft gating mechanism. While GRPO zeroes out gradients when the policy deviates too far from the reference, SAPO uses a soft trust region that smoothly decays the gradient weight. This allows the model to retain useful learning signals from "near-on-policy" tokens while suppressing noise from extreme deviations. See figure below for a visual comparison of the two clipping methods:
-
-[insert figure here]
-
+Alternatively, in the [SAPO paper](https://huggingface.co/papers/2511.20347), the Qwen team proposes replacing the "hard" clipping mechanism of GRPO with a smooth, temperature-controlled soft gating mechanism. While GRPO zeroes out gradients when the policy deviates too far from the reference, SAPO uses a soft trust region that smoothly decays the gradient weight. This allows the model to retain useful learning signals from "near-on-policy" tokens while suppressing noise from extreme deviations.
 
 The loss function is defined as:
 
@@ -148,13 +145,13 @@ $$
 \mathcal{L}_{\text{SAPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} f_{i,t} \left( \frac{\pi_\theta(o_{i,t} | q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t} | q, o_{i,<t})} \right) \hat{A}_{i,t}
 $$
 
-With \\( r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} | q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t} | q, o_{i,<t})} \\), the soft-gating function \\( f_{i,t} \\) is defined using the sigmoid function \\( \sigma \\) as:
+The soft-gating function  \\( f_{i,t} \\) is defined using the sigmoid function  \\( \sigma \\) as:
 
 $$
-f_{i,t}(r_{i,t}(\theta)) = \sigma \left( \tau_{i,t} (r_{i,t}(\theta) - 1) \right) \cdot \frac{4}{\tau_{i,t}}
+f_{i,t}(x) = \sigma \left( \tau_{i,t} (x - 1) \right) \cdot \frac{4}{\tau_{i,t}}
 $$
 
-The temperature \\( \tau_{i,t} \\) is chosen based on the sign of the advantage \\( \hat{A}_{i,t} \\):
+The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
 
 $$
 \tau_{i,t} = \begin{cases} 
@@ -163,7 +160,7 @@ $$
 \end{cases}
 $$
 
-Qwen recommends using asymmetric temperatures, \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
+They recommends using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
 
 To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
 
