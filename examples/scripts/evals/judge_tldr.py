@@ -14,19 +14,17 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
-#     "vllm",
+#     "trl[vllm]",
 # ]
 # ///
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
 from transformers import HfArgumentParser
 from vllm import LLM, SamplingParams
 
-from trl import HfPairwiseJudge, OpenAIPairwiseJudge
+from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge
 
 
 """
@@ -63,7 +61,7 @@ class ScriptArguments:
         judge_model (`str`, *optional*, defaults to `"meta-llama/Meta-Llama-3-70B-Instruct"`):
             Model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125' or
             'meta-llama/Meta-Llama-3-70B-Instruct'.
-        num_examples (`int` or `None`, *optional*, defaults to `None`):
+        num_examples (`int`, *optional*):
             Number of examples to evaluate.
     """
 
@@ -75,7 +73,7 @@ class ScriptArguments:
             "'meta-llama/Meta-Llama-3-70B-Instruct'."
         },
     )
-    num_examples: Optional[int] = field(default=None, metadata={"help": "Number of examples to evaluate."})
+    num_examples: int | None = field(default=None, metadata={"help": "Number of examples to evaluate."})
 
 
 if __name__ == "__main__":
@@ -104,7 +102,7 @@ if __name__ == "__main__":
     else:
         judge = HfPairwiseJudge(script_args.judge_model)
 
-    completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions)]
+    completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions, strict=True)]
     best_idxs = judge.judge(prompts, completions)
     model_win_rate = best_idxs.count(1) / len(best_idxs)
     print(f"Model win rate: {model_win_rate * 100:.2f}%")

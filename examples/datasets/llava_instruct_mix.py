@@ -14,7 +14,6 @@
 
 import ast
 from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
 from huggingface_hub import ModelCard
@@ -31,7 +30,7 @@ class ScriptArguments:
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/llava-instruct-mix"`):
             Hugging Face repository ID to push the dataset to.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of workers to use for dataset processing.
     """
 
@@ -43,7 +42,7 @@ class ScriptArguments:
         default="trl-lib/llava-instruct-mix",
         metadata={"help": "Hugging Face repository ID to push the dataset to."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of workers to use for dataset processing."},
     )

@@ -36,7 +36,7 @@ print(pipe("This movie was really")[0]["generated_text"])
 from peft import PeftConfig, PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-base_model_name = "kashif/stack-llama-2" #path/to/your/model/or/name/on/hub"
+base_model_name = "kashif/stack-llama-2" #path/to/your/model/or/name/on/hub
 adapter_model_name = "path/to/my/adapter"
 
 model = AutoModelForCausalLM.from_pretrained(base_model_name)

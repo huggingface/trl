@@ -338,7 +338,7 @@ def main(test_size, push_to_hub, repo_id):
             "Namespaces are one",
             "Although practicality sometimes beats purity,",
         ],
-        "completions":[
+        "completions": [
             [", let me think...", " ugly."],
             [", of course,", " implicit.", " because clarity matters."],
             ["... let's keep it basic,", " complex."],
@@ -350,7 +350,7 @@ def main(test_size, push_to_hub, repo_id):
             [" some theoretical elegance,", " purity."],
             [" silently,", " unless explicitly silenced."],
             [" the temptation to guess."],
-            [" way to do it,"," but sometimes it's not obvious.", " especially when there's more than one possibility."],
+            [" way to do it,", " but sometimes it's not obvious.", " especially when there's more than one possibility."],
             [" clear at first,", " it will eventually emerge."],
             [" later."],
             [" problematic fixes."],

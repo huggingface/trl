@@ -12,27 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
+import inspect
 import itertools
-import warnings
+import logging
+from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
 from accelerate.utils import is_peft_model
 from packaging import version
-from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, TrainingArguments
+from transformers import PreTrainedModel, TrainingArguments
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
-
-from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 if TYPE_CHECKING:
@@ -40,219 +39,6 @@ if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
-
-
-SUPPORTED_ARCHITECTURES = (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-)
-
-
-# TODO: Add Abstract Base Class if more formats are added
-@dataclass
-class ChatMlSpecialTokens:
-    """Dataclass for special tokens used in ChatML, including system, user, assistant, bos, eos, and pad tokens."""
-
-    bos_token: str = "<|im_start|>"
-    eos_token: str = "<|im_end|>"
-    pad_token: str = "<|im_end|>"
-
-    @property
-    def system(self):
-        return f"{self.bos_token}system"
-
-    @property
-    def user(self):
-        return f"{self.bos_token}user"
-
-    @property
-    def assistant(self):
-        return f"{self.bos_token}assistant"
-
-    @property
-    def chat_template(self):
-        return (
-            "{% for message in messages %}"
-            f"{{{{'{self.bos_token}' + message['role'] + '\n' + message['content'] + '{self.eos_token}' + '\n'}}}}"
-            "{% endfor %}"
-            "{% if add_generation_prompt %}"
-            f"{{{{ '{self.assistant}\n' }}}}"
-            "{% endif %}"
-        )
-
-
-FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
-
-
-def setup_chat_format(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
-    format: Optional[Literal["chatml"]] = "chatml",
-    resize_to_multiple_of: Optional[int] = None,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
-    """
-    Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
-    embedding layer of the model based on the new special tokens.
-
-    <Tip warning="true">
-
-    This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
-
-    </Tip>
-
-    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set
-    `tokenizer.chat_template` to `None`.
-
-    Args:
-        model (`~transformers.PreTrainedModel`): The model to be modified.
-        tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
-        format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
-        resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
-
-    Returns:
-        model (`~transformers.PreTrainedModel`):
-            The modified model.
-        tokenizer (`~transformers.PreTrainedTokenizer`):
-            The modified tokenizer.
-    """
-    warnings.warn(
-        "The `setup_chat_format` function is deprecated and will be removed in version 0.26.0. Please use "
-        "`clone_chat_template` instead.",
-        DeprecationWarning,
-    )
-    # check if model already had a chat template
-    if tokenizer.chat_template is not None:
-        raise ValueError(
-            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None"
-        )
-
-    # check if format available and retrieve
-    if format not in FORMAT_MAPPING:
-        raise ValueError(f"Format {format} not available. Please use one of {FORMAT_MAPPING.keys()}")
-
-    chat_format = FORMAT_MAPPING[format]()
-
-    # set special tokens and them
-    tokenizer.eos_token = chat_format.eos_token
-    tokenizer.pad_token = chat_format.pad_token
-    tokenizer.bos_token = chat_format.bos_token
-    tokenizer.add_special_tokens({"additional_special_tokens": [chat_format.bos_token, chat_format.eos_token]})
-    # set chat format for tokenizer
-    tokenizer.chat_template = chat_format.chat_template
-
-    # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
-    model.resize_token_embeddings(
-        # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
-        # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
-        # as handling of special and added tokens varies across tokenizers.
-        new_num_tokens=len(tokenizer.vocab),
-        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
-    )
-    # Update the model config to use the new eos & bos tokens
-    if getattr(model, "config", None) is not None:
-        model.config.pad_token_id = tokenizer.pad_token_id
-        model.config.bos_token_id = tokenizer.bos_token_id
-        model.config.eos_token_id = tokenizer.eos_token_id
-    # Update the generation config to use the new eos & bos token
-    if getattr(model, "generation_config", None) is not None:
-        model.generation_config.bos_token_id = tokenizer.bos_token_id
-        model.generation_config.eos_token_id = tokenizer.eos_token_id
-        model.generation_config.pad_token_id = tokenizer.pad_token_id
-
-    return model, tokenizer
-
-
-def clone_chat_template(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
-    source_tokenizer_path: str,
-    resize_to_multiple_of: Optional[int] = 64,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[int]]:
-    """
-    Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
-
-    This function:
-    - Copies the chat template from a source tokenizer to the target tokenizer.
-    - Adds any new tokens from the source tokenizer to the target tokenizer.
-    - Sets and synchronizes the EOS token across the tokenizer and model.
-    - Resizes the model's token embeddings to match the new vocabulary size, optionally rounding it up to a multiple of
-      a specified value. In such cases, dummy tokens are added to the tokenizer to ensure the vocabulary size matches
-      the embedding dimensions.
-
-    Args:
-        model (`PreTrainedModel`):
-            Model to update.
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer to update.
-        source_tokenizer_path (`str`):
-            Path or identifier of the pretrained tokenizer to clone from.
-        resize_to_multiple_of (`int` or `None`, *optional*, defaults to `64`):
-            The embedding layer will be resized to the new vocabulary size. If this is not `None`, it will round up the
-            new vocabulary size to the nearest multiple of this value.
-
-    Returns:
-        model (`PreTrainedModel`):
-            Updated model with resized token embeddings and EOS token configured.
-        tokenizer (`~transformers.PreTrainedTokenizer`):
-            Updated tokenizer with the chat template and special tokens applied.
-        added_tokens (`list[int]`):
-            List of tokens that were added to the tokenizer from the source tokenizer.
-
-    Example:
-    ```python
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from trl import clone_chat_template
-
-    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
-    model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
-    ```
-    """
-    # Load the source tokenizer containing the desired chat template
-    tokenizer_source = AutoTokenizer.from_pretrained(source_tokenizer_path)
-
-    # Copy the chat template from the source tokenizer
-    tokenizer.chat_template = tokenizer_source.get_chat_template()
-
-    # Ensure all added tokens from the source are available in the target tokenizer
-    added_tokens = [
-        token for token in tokenizer_source.added_tokens_decoder.values() if token.content not in tokenizer.vocab
-    ]
-    tokenizer.add_tokens(added_tokens)
-
-    # Set the EOS token from the source tokenizer (important for generation)
-    tokenizer.eos_token = tokenizer_source.eos_token
-    model.config.eos_token_id = tokenizer.eos_token_id
-    model.generation_config.eos_token_id = tokenizer.eos_token_id
-
-    # Resize model embeddings to include any new tokens, optionally rounding up to a multiple
-    model.resize_token_embeddings(
-        # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
-        # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
-        # as handling of special and added tokens varies across tokenizers.
-        new_num_tokens=len(tokenizer.vocab),
-        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
-    )
-
-    # After resizing, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
-    # ensure vocabulary size matches the embedding matrix dimensions.
-    idx = 0
-    while model.vocab_size > len(tokenizer.vocab):
-        dummy_token = AddedToken(f"<extra_id_{idx}>")
-        is_added = tokenizer.add_tokens(dummy_token)
-        idx += 1
-        if is_added == 1:
-            added_tokens.append(dummy_token)
-
-    # Verify that vocabulary size now matches embedding dimensions
-    if len(tokenizer.vocab) != model.vocab_size:
-        raise RuntimeError(
-            f"Vocabulary size mismatch after resizing: tokenizer vocab size is {len(tokenizer.vocab)}, but model "
-            f"embedding size is {model.vocab_size}. This indicates an internal error in the token alignment process."
-        )
-    added_tokens = [token.content for token in added_tokens]
-    added_tokens = tokenizer.convert_tokens_to_ids(added_tokens)
-    return model, tokenizer, added_tokens
 
 
 def remove_hooks(model: "DeepSpeedEngine") -> None:
@@ -307,7 +93,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 @contextmanager
 def unwrap_model_for_generation(
-    model: Union["DistributedDataParallel", "DeepSpeedEngine"],
+    model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
 ):
@@ -315,9 +101,9 @@ def unwrap_model_for_generation(
     Context manager to unwrap distributed or accelerated models for generation tasks.
 
     Args:
-        model (`Union[DistributedDataParallel, DeepSpeedEngine]`):
+        model (`DistributedDataParallel | DeepSpeedEngine`):
             Model to be unwrapped.
-        accelerator (`~accelerate.Accelerator`):
+        accelerator ([`~accelerate.Accelerator`]):
             Accelerator instance managing the model.
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
@@ -432,18 +218,18 @@ class _ForwardRedirection:
     """
 
     def __call__(
-        self, wrapper_module: nn.Module, original_module: nn.Module, method: callable, *args: Any, **kwargs: Any
+        self, wrapper_module: nn.Module, original_module: nn.Module, method: Callable, *args: Any, **kwargs: Any
     ):
         """Reroutes a method call through the `wrapper_module`'s `forward` method.
 
         Args:
             wrapper_module: The module that has `original_module` wrapped.
             original_module: The module that was wrapped inside `wrapper_module`.
-            method_name: The name of the method that should be called on the `original_module` after inputs get
+            method: The method that should be called on the `original_module` after inputs get
                 redirected through the `wrapper_module`'s `forward` method.
-            *args: The positional arguments to the method `method_name`. They will get passed to a patched
+            *args: The positional arguments to the `method`. They will get passed to a patched
                 `forward` method instead.
-            **kwargs: The keyword arguments to the method `method_name`. They will get passed to a patched
+            **kwargs: The keyword arguments to the `method`. They will get passed to a patched
                 `forward` method instead.
 
         """
@@ -472,8 +258,45 @@ class _ForwardRedirection:
         pass
 
 
+def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
+    r"""
+    Prepare a k-bit quantized transformers model for training (PEFT/QLoRA).
+    """
+    loaded_in_kbit = getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False)
+    quant_methods = ["gptq", "aqlm", "eetq", "torchao", "hqq"]
+    is_quantized = getattr(model, "quantization_method", None) in quant_methods or getattr(
+        model, "hqq_quantized", False
+    )
+
+    if gradient_checkpointing_kwargs is None:
+        gradient_checkpointing_kwargs = {}
+
+    for _, param in model.named_parameters():
+        # freeze all parameters
+        param.requires_grad = False
+
+    # Enable gradient checkpointing if needed
+    if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        else:
+            # backward-compatible hook
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+
+            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
+            inspect.signature(model.gradient_checkpointing_enable).parameters
+        )
+        gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
+        model.gradient_checkpointing_enable(**gc_kwargs)
+
+    return model
+
+
 def enable_gradient_checkpointing(
-    model: PreTrainedModel, gradient_checkpointing_kwargs: Optional[dict]
+    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
 ) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
     # Enable gradient checkpointing on the base model for PEFT
@@ -512,7 +335,7 @@ def peft_module_casting_to_bf16(model):
 
 
 def prepare_peft_model(
-    model: PreTrainedModel, peft_config: Optional["PeftConfig"], args: TrainingArguments
+    model: PreTrainedModel, peft_config: "PeftConfig | None", args: TrainingArguments
 ) -> PreTrainedModel:
     """Prepares a model for PEFT training."""
     if not is_peft_available():
@@ -535,14 +358,14 @@ def prepare_peft_model(
                 break
 
     # Prepare model for kbit training if needed
-    if is_qlora and not is_sharded_qlora:
+    if is_qlora and not is_sharded_qlora and not isinstance(model, PeftModel):
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=args.gradient_checkpointing,
             gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
         )
         # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-        args = dataclasses.replace(args, gradient_checkpointing=False)
+        args.gradient_checkpointing = False
     elif args.gradient_checkpointing:
         model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
 
@@ -562,3 +385,107 @@ def prepare_peft_model(
         peft_module_casting_to_bf16(model)
 
     return model
+
+
+@contextmanager
+def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None = None):
+    """
+    Temporarily disable gradient checkpointing, restoring the previous state afterward.
+
+    Args:
+        model (`PreTrainedModel`):
+            Model for which to temporarily disable gradient checkpointing.
+        gradient_checkpointing_kwargs (`dict` or `None`, *optional*):
+            Additional kwargs for gradient checkpointing enabling.
+    """
+    was_enabled = model.is_gradient_checkpointing
+    if was_enabled:
+        model.gradient_checkpointing_disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+
+
+LAYER_PATTERNS = [
+    "transformer.h.{layer}",
+    "model.decoder.layers.{layer}",
+    "gpt_neox.layers.{layer}",
+    "model.layers.{layer}",
+]
+
+
+def create_reference_model(
+    model: nn.Module, num_shared_layers: int | None = None, pattern: str | None = None
+) -> nn.Module:
+    """
+    Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
+
+    Args:
+        model ([`nn.Module`]): The model to be copied.
+        num_shared_layers (`int`, *optional*):
+            The number of initial layers that are shared between both models and kept frozen.
+        pattern (`str`, *optional*): The shared layers are selected with a string pattern
+            (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
+
+    Returns:
+        [`nn.Module`]
+    """
+    if is_deepspeed_zero3_enabled():
+        raise ValueError(
+            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoModelForCausalLM.from_pretrained()`."
+        )
+
+    parameter_names = [n for n, _ in model.named_parameters()]
+    ref_model = deepcopy(model)
+
+    # if no layers are shared, return copy of model
+    if num_shared_layers is None:
+        for param_name in parameter_names:
+            param = ref_model.get_parameter(param_name)
+            param.requires_grad = False
+        return ref_model.eval()
+
+    # identify layer name pattern
+    if pattern is not None:
+        pattern = pattern.format(layer=num_shared_layers)
+    else:
+        for pattern_candidate in LAYER_PATTERNS:
+            pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
+            if any(pattern_candidate in name for name in parameter_names):
+                pattern = pattern_candidate
+                break
+
+    if pattern is None:
+        raise ValueError("Layer pattern could not be matched.")
+
+    # divide parameters in shared and unshared parameter lists
+    shared_param_list = []
+    unshared_param_list = []
+
+    shared_parameter = True
+    for name, _param in model.named_parameters():
+        if pattern in name:
+            shared_parameter = False
+        if shared_parameter:
+            shared_param_list.append(name)
+        else:
+            unshared_param_list.append(name)
+
+    # create reference of the original parameter if they are shared
+    for param_name in shared_param_list:
+        param = model.get_parameter(param_name)
+        param.requires_grad = False
+
+        _ref_param = ref_model.get_parameter(param_name)
+
+    # for all other parameters just make sure they don't use gradients
+    for param_name in unshared_param_list:
+        param = ref_model.get_parameter(param_name)
+        param.requires_grad = False
+
+    if pattern is not None and len(unshared_param_list) == 0:
+        logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
+
+    return ref_model.eval()

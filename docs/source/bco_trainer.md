@@ -1,6 +1,6 @@
 # BCO Trainer
 
-[![](https://img.shields.io/badge/All_models-BCO-blue)](https://huggingface.co/models?other=bco,trl)
+[![model badge](https://img.shields.io/badge/All_models-BCO-blue)](https://huggingface.co/models?other=bco,trl)
 
 TRL supports the Binary Classifier Optimization (BCO).
 The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0.
@@ -8,21 +8,22 @@ For a full example have a look at  [`examples/scripts/bco.py`].
 
 ## Expected dataset type
 
-The [`BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
-The [`BCOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`experimental.bco.BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
+The [`experimental.bco.BCOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Expected model format
+
 The BCO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
 
 ## Using the `BCOTrainer`
 
-For a detailed example have a look at the `examples/scripts/bco.py` script. At a high level we need to initialize the `BCOTrainer` with a `model` we wish to train and a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response. 
+For a detailed example have a look at the `examples/scripts/bco.py` script. At a high level we need to initialize the `BCOTrainer` with a `model` we wish to train and a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response.
 
 The `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
 
+```python
+from trl.experimental.bco import BCOConfig, BCOTrainer
 
-
-```py
 training_args = BCOConfig(
     beta=0.1,
 )
@@ -35,9 +36,10 @@ bco_trainer = BCOTrainer(
     processing_class=tokenizer,
 )
 ```
+
 After this one can then call:
 
-```py
+```python
 bco_trainer.train()
 ```
 
@@ -49,7 +51,7 @@ If the prompts in your desired and undesired datasets differ a lot, it is useful
 
 Choose an embedding model and tokenizer:
 
-```py
+```python
 embedding_model = AutoModel.from_pretrained(your_model_id)
 embedding_tokenizer = AutoTokenizer.from_pretrained(your_model_id)
 
@@ -64,7 +66,7 @@ embedding_func = partial(embed_prompt, model=embedding_model)
 
 Set `prompt_sample_size` to define how many prompts are selected to train the UDM classifier and start the training with the provided embedding function:
 
-```py
+```python
 training_args = BCOConfig(
     beta=0.1,
     prompt_sample_size=512,
@@ -93,11 +95,11 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 ## BCOTrainer
 
-[[autodoc]] BCOTrainer
+[[autodoc]] experimental.bco.BCOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## BCOConfig
 
-[[autodoc]] BCOConfig
+[[autodoc]] experimental.bco.BCOConfig

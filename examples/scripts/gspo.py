@@ -14,10 +14,12 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -25,7 +27,7 @@
 pip install math_verify
 
 # For Qwen/Qwen3-0.6B
-pip install num2words
+pip install num2words==0.5.14
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
@@ -33,8 +35,7 @@ accelerate launch \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --output_dir gspo-Qwen3-0.6B \
     --learning_rate 1e-5 \
-    --torch_dtype bfloat16 \
-    --max_prompt_length 2048 \
+    --dtype bfloat16 \
     --max_completion_length 1024 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
@@ -51,10 +52,10 @@ accelerate launch \
 
 """
 
+import os
+
 import torch
 from datasets import load_dataset
-from latex2sympy2_extended import NormalizationConfig
-from math_verify import LatexExtractionConfig, parse, verify
 
 from trl import (
     GRPOConfig,
@@ -66,8 +67,11 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.rewards import think_format_reward
+from trl.rewards import accuracy_reward, think_format_reward
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GRPOConfig, ModelConfig))
@@ -75,17 +79,17 @@ if __name__ == "__main__":
     ################
     # Model & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
+        dtype=dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
+        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     ################
     # Dataset
@@ -112,54 +116,6 @@ if __name__ == "__main__":
 
     train_dataset = train_dataset.remove_columns(["messages", "problem"])
     eval_dataset = eval_dataset.remove_columns(["messages", "problem"])
-
-    ################
-    # Reward Function for Training
-    ################
-    def accuracy_reward(completions, solution: list[str], **kwargs):
-        """Reward function that checks if the completion matches the ground truth.
-        - If both gold and prediction are parseable → use math verification.
-        - If not parseable → compare as normalized text.
-        """
-        rewards = []
-        contents = [completion[0]["content"] for completion in completions]
-        for content, sol in zip(contents, solution):
-            try:
-                gold_parsed = parse(sol, extraction_mode="first_match")
-            except Exception:
-                gold_parsed = []
-
-            if len(gold_parsed) != 0:
-                # Try parsing predicted answer too
-                try:
-                    answer_parsed = parse(
-                        content,
-                        extraction_config=[
-                            LatexExtractionConfig(
-                                normalization_config=NormalizationConfig(
-                                    nits=False,
-                                    malformed_operators=False,
-                                    basic_latex=True,
-                                    boxed="all",
-                                    units=True,
-                                ),
-                                boxed_match_priority=0,
-                                try_extract_without_anchor=False,
-                            )
-                        ],
-                        extraction_mode="first_match",
-                    )
-                    reward = float(verify(gold_parsed, answer_parsed))
-                except Exception as e:
-                    print(f"verify failed: {e}, answer: {content}, gold: {sol}")
-                    reward = None
-            else:
-                # fallback to text match
-                reward = float(content.strip().lower() == sol.strip().lower())
-
-            rewards.append(reward)
-
-        return rewards
 
     ################
     # Training

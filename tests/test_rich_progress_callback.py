@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import torch
 import torch.nn as nn
 from datasets import Dataset
@@ -34,8 +33,7 @@ class DummyModel(nn.Module):
 
 @require_rich
 class TestRichProgressCallback(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.dummy_model = DummyModel()
         self.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 5)
         self.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)
@@ -63,5 +61,4 @@ class TestRichProgressCallback(TrlTestCase):
             callbacks=callbacks,
         )
 
-        trainer.train()
         trainer.train()

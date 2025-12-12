@@ -14,7 +14,9 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
+#     "kernels",
+#     "trackio",
 #     "kernels",
 # ]
 # ///
@@ -26,10 +28,10 @@ Example:
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sccripts/sft_gpt_oss.py \
-    --torch_dtype bfloat16 \
+    examples/scripts/sft_gpt_oss.py \
+    --dtype bfloat16 \
     --model_name_or_path openai/gpt-oss-20b \
-    --packing true packing_strategy wrapped \
+    --packing \
     --run_name 20b-full-eager \
     --attn_implementation kernels-community/vllm-flash-attn3 \
     --dataset_num_proc 12 \
@@ -47,27 +49,31 @@ accelerate launch \
     --seed 42
 """
 
+import os
+
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
+from transformers import AutoModelForCausalLM, Mxfp4Config
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
 
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 def main(script_args, training_args, model_args):
-    # Load model & tokenizer
+    # Load model
     quantization_config = Mxfp4Config(dequantize=True)
     model_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
+        dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         quantization_config=quantization_config,
     )
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
-
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
 
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
@@ -78,7 +84,6 @@ def main(script_args, training_args, model_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 

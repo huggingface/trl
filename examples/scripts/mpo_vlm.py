@@ -14,8 +14,12 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
+#     "Pillow",
 #     "peft",
+#     "torchvision",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -29,18 +33,20 @@ python examples/scripts/mpo_vlm.py \
     --gradient_accumulation_steps 8 \
     --dataset_num_proc 1 \
     --output_dir dpo_idefics_rlaif-v \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj \
     --loss_type sigmoid bco_pair sft \
-    --loss_weights 0.8 0.2 1.0 \
+    --loss_weights 0.8 0.2 1.0
 """
+
+import os
 
 import torch
 from datasets import load_dataset
 from PIL import Image
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoModelForImageTextToText
 
 from trl import (
     DPOConfig,
@@ -54,6 +60,10 @@ from trl import (
 )
 
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
@@ -61,19 +71,20 @@ if __name__ == "__main__":
     ################
     # Model & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
 
     model_kwargs = dict(
         trust_remote_code=model_args.trust_remote_code,
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
+        dtype=dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path,
         **model_kwargs,
@@ -86,9 +97,6 @@ if __name__ == "__main__":
         )
     else:
         ref_model = None
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
 
     ################
     # Dataset
@@ -124,7 +132,6 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
-        processing_class=processor,
         peft_config=peft_config,
     )
 

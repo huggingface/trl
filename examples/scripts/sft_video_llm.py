@@ -14,39 +14,41 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
-#     "wandb",
 #     "qwen-vl-utils",
+#     "torchvision",
+#     "bitsandbytes",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
 """
 Example usage:
 accelerate launch \
-    --config_file=deepspeed_zero2.yaml \
-    sft_video_llm.py \
-    --dataset_name=mfarre/simplevideoshorts \
-    --video_cache_dir="/optional/path/to/cache/" \
-    --model_name_or_path=Qwen/Qwen2-VL-7B-Instruct \
-    --per_device_train_batch_size=1 \
-    --output_dir=video-llm-output \
-    --tf32=True \
-    --gradient_accumulation_steps=4 \
-    --num_train_epochs=4 \
-    --optim="adamw_torch_fused" \
-    --log_level="debug" \
-    --log_level_replica="debug" \
-    --save_strategy="steps" \
-    --save_steps=300 \
-    --learning_rate=8e-5 \
-    --max_grad_norm=0.3 \
-    --warmup_ratio=0.1 \
-    --lr_scheduler_type="cosine" \
-    --report_to="wandb" \
-    --push_to_hub=False \
-    --torch_dtype=bfloat16 \
-    --gradient_checkpointing=True
+    --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/sft_video_llm.py \
+    --dataset_name mfarre/simplevideoshorts \
+    --video_cache_dir "/optional/path/to/cache/" \
+    --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
+    --per_device_train_batch_size 1 \
+    --output_dir video-llm-output \
+    --tf32 True \
+    --gradient_accumulation_steps 4 \
+    --num_train_epochs 4 \
+    --optim adamw_torch_fused \
+    --log_level debug \
+    --log_level_replica debug \
+    --save_strategy steps \
+    --save_steps 300 \
+    --learning_rate 8e-5 \
+    --max_grad_norm 0.3 \
+    --warmup_ratio 0.1 \
+    --lr_scheduler_type cosine \
+    --push_to_hub False \
+    --dtype bfloat16 \
+    --gradient_checkpointing True
 """
 
 import json
@@ -57,13 +59,16 @@ from typing import Any
 
 import requests
 import torch
-import wandb
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def download_video(url: str, cache_dir: str) -> str:
@@ -183,9 +188,7 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train")
 
     # Setup model
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
 
     # Quantization configuration for 4-bit training
     bnb_config = BitsAndBytesConfig(
@@ -199,7 +202,7 @@ if __name__ == "__main__":
     model_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map(),
         quantization_config=bnb_config,
     )
@@ -228,10 +231,6 @@ if __name__ == "__main__":
     # Prepare dataset
     prepared_dataset = [prepare_dataset(example, script_args.video_cache_dir) for example in dataset]
 
-    # Initialize wandb if specified
-    if training_args.report_to == "wandb":
-        wandb.init(project="video-llm-training")
-
     # Initialize trainer
     trainer = SFTTrainer(
         model=model,
@@ -249,11 +248,8 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-        if trainer.accelerator.is_main_process:
-            processor.push_to_hub(training_args.hub_model_id)
 
     # Cleanup
     del model
     del trainer
     torch.cuda.empty_cache()
-    wandb.finish()
