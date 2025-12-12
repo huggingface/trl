@@ -6,24 +6,32 @@
 ## Group Relative Policy Optimization
 
 ### DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models
+
 **📜 Paper**: https://huggingface.co/papers/2402.03300
 
-Introduces **GRPO** and shows strong math-reasoning gains from math-centric pretraining plus group-relative PPO-style optimization.  
-**Used in TRL via:** [`GRPOTrainer`]
+Introduces Group Relative Policy Optimization (GRPO) and shows strong math-reasoning gains from math-centric pretraining plus group-relative PPO-style optimization. Used in TRL via [`GRPOTrainer`].
 
 ```python
-# Minimal GRPO setup (mirrors style used for other papers on the page).
-from trl import GRPOConfig
+from trl import GRPOConfig, GRPOTrainer
 
+# The paper doesn't specify its hyperparameters, so here we provide hyperparameters from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning" instead.
 training_args = GRPOConfig(
     loss_type="grpo",
-    epsilon=2e-4,             # clip range (use paper/experiment settings if you mirror them)
-    gradient_accumulation_steps=1,
-    num_generations=8,        # completions per prompt (adjust to your compute)
-    max_prompt_length=1024,
-    max_completion_length=1024,
+    beta=0.001,  # "the KL coefficient to 0.001"
+    epsilon=10.0, # "the GRPO clip ratio ϵ to 10"
+    num_generations=16,  # "For each question, we sample 16 outputs..."
+    max_completion_length=32_768,  # "...with a maximum length of 32,768"
+    steps_per_generation=16,  # "To accelerate training, each rollout generates 8,192 outputs, which are randomly split into 16 minibatches"
+    # "resulting in a training batch size of 512". One way to achieve this setting with 1 device is per_device_train_batch_size=4, gradient_accumulation_steps=128
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=128,  
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
 )
 ```
+
 ### Group Sequence Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2507.18071
@@ -103,7 +111,7 @@ training_args = GRPOConfig(
     per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
     num_generations=16, # number of sample responses in the paper, DAPO paper: section 4.1
     max_completion_length=20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
-    beta=0.0 # section 2.3, DAPO paper
+    beta=0.0, # section 2.3, DAPO paper
 
 )
 # Soft Overlong Punishment
@@ -428,7 +436,7 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...,
-    beta=0.001,  # the paper don't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
+    beta=0.001,  # the paper doesn't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
     use_bias_correction_kl=True,
 )
 ```
