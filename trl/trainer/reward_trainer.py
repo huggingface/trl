@@ -538,16 +538,7 @@ class RewardTrainer(BaseTrainer):
         if self._signature_columns is None:
             self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "margin"]
 
-    def compute_loss(
-        self,
-        model: nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        return_outputs: bool = False,
-        num_items_in_batch: torch.Tensor | None = None,
-    ):
-        """
-        Compute training loss and additionally compute token accuracies
-        """
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
