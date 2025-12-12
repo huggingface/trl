@@ -31,7 +31,7 @@ import pandas as pd
 import torch
 import torch.utils.data
 import transformers
-from accelerate import logging
+from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
@@ -109,7 +109,7 @@ if is_trackio_available():
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -130,14 +130,14 @@ class GRPOTrainer(BaseTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
     from trl import GRPOTrainer
     from trl.rewards import accuracy_reward
+    from datasets import load_dataset
 
     dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
     trainer = GRPOTrainer(
-        model="Qwen/Qwen2-0.5B-Instruct",
+        model="Qwen/Qwen2.5-0.5B-Instruct",
         reward_funcs=accuracy_reward,
         train_dataset=dataset,
     )

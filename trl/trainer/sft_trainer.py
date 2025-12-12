@@ -22,13 +22,12 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from transformers import (
     AutoProcessor,
-    BaseImageProcessor,
     DataCollator,
-    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -67,7 +66,7 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 FLASH_ATTENTION_VARIANTS = {
@@ -489,14 +488,14 @@ class SFTTrainer(BaseTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
     from trl import SFTTrainer
+    from datasets import load_dataset
 
     dataset = load_dataset("roneneldan/TinyStories", split="train[:1%]")
 
     trainer = SFTTrainer(
-        model="Qwen/Qwen2-0.5B-Instruct",
-        train_dataset=dataset
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        train_dataset=dataset,
     )
     trainer.train()
     ```
@@ -510,7 +509,7 @@ class SFTTrainer(BaseTrainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
               config) with the keyword arguments in `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object.  Only causal language models are supported.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
             as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*):
@@ -520,7 +519,7 @@ class SFTTrainer(BaseTrainer):
             Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
             and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. SFT supports both [language modeling](#language-modeling) type and
+            Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
@@ -895,7 +894,7 @@ class SFTTrainer(BaseTrainer):
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
-        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         args: SFTConfig,
         packing: bool,
         formatting_func: Callable[[dict], str] | None,
@@ -1133,6 +1132,7 @@ class SFTTrainer(BaseTrainer):
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
+
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
             inputs["return_token_accuracy"] = True

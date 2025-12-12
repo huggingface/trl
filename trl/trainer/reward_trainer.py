@@ -78,6 +78,10 @@ def suppress_from_pretrained_warning(logger: logging.Logger):
         logger.removeFilter(f)
 
 
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
+
+
 @dataclass
 class DataCollatorForPreference(DataCollatorMixin):
     """
@@ -183,7 +187,10 @@ class RewardTrainer(BaseTrainer):
 
     dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-    trainer = RewardTrainer(model="Qwen/Qwen2.5-0.5B-Instruct", train_dataset=dataset)
+    trainer = RewardTrainer(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        train_dataset=dataset,
+    )
     trainer.train()
     ```
 
@@ -263,7 +270,7 @@ class RewardTrainer(BaseTrainer):
         args: RewardConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -405,16 +412,6 @@ class RewardTrainer(BaseTrainer):
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._total_train_tokens = 0
-
-        # Initialize the Trainer. Parent class will handle:
-        # - DeepSpeed configuration (through create_accelerator_and_postprocess)
-        # - FSDP setup
-        # - Distributed training setup
-        # - Optimizer and scheduler creation
-
         super().__init__(
             model=model,
             args=args,
@@ -439,11 +436,14 @@ class RewardTrainer(BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
-
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
     def _prepare_dataset(
         self,
@@ -458,7 +458,7 @@ class RewardTrainer(BaseTrainer):
             dataset = dataset.with_transform(remove_none_values)
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
-        column_names = list(next(iter(dataset)).keys())
+        column_names = get_dataset_column_names(dataset)
         is_processed = "chosen_input_ids" in column_names and "rejected_input_ids" in column_names
 
         # Build the kwargs for the `map` function
@@ -593,7 +593,7 @@ class RewardTrainer(BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs.update(metrics)
+        logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
