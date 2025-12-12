@@ -667,37 +667,39 @@ training_args = DPOConfig(
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
 ### Statistical Rejection Sampling Improves Preference Optimization
+
 **📜 Paper**: https://huggingface.co/papers/2309.06657
 
-Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC.
+Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC. They also introduce a new loss defined as:
+
+$$
+\mathcal{L}_{\text{hinge-norm}}(\pi_\theta)
+= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+\max\left(0,\; 1 - \left[\gamma \log \frac{\pi_\theta(y_w \mid x)}{\pi_\text{ref}(y_w \mid x)} - \gamma \log \frac{\pi_\theta(y_l \mid x)}{\pi_\text{ref}(y_l \mid x)}\right]\right)
+\right]
+$$
+
+To train with RSO-filtered data and the hinge-norm loss, you can use the following code:
+
 ```python
-from datasets import load_dataset
 from trl import DPOConfig, DPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# 1) Model & tokenizer (keep the example self-contained)
-model = AutoModelForCausalLM.from_pretrained("...") 
-tokenizer = AutoTokenizer.from_pretrained("...")
-
-# 2) Load and (optionally) filter your training data
-train_dataset = load_dataset(...)  # e.g., ("json", data_files="rso_pairs.jsonl")
+dataset = ...
 
 def rso_accept(example):  # replace with your actual filter/score logic
-    return example.get("rso_keep", True)
+    return example["rso_keep"]
 
 train_dataset = train_dataset.filter(rso_accept)
 
-# 3) Configure DPO
 training_args = DPOConfig(
-    loss_type="sigmoid",
-    beta=0.1,
+    loss_type="hinge",
+    beta=0.05,  # correspond to gamma in the paper
 )
 
-# 4) Train
 trainer = DPOTrainer(
-    model=model,
+    ...,
     args=training_args,
-    tokenizer=tokenizer,
     train_dataset=train_dataset,
 )
 trainer.train()
