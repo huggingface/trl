@@ -420,7 +420,7 @@ training_args = GRPOConfig(
 
 Papers relating to the [`DPOTrainer`]
 
-### Direct Preference Optimization (DPO): Your Language Model is Secretly a Reward Model
+### Direct Preference Optimization: Your Language Model is Secretly a Reward Model
 
 **📜 Paper**: https://huggingface.co/papers/2305.18290
 
@@ -441,7 +441,7 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2310.12036
 
-A new general objective,  \\( \Psi \\)$PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
+A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
