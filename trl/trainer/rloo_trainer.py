@@ -27,7 +27,6 @@ import datasets
 import pandas as pd
 import torch
 import torch.utils.data
-import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
@@ -35,7 +34,6 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
-    AutoConfig,
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
@@ -60,13 +58,14 @@ from ..data_utils import (
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
 from .utils import (
     RepeatSampler,
+    create_model_from_path,
     disable_dropout_in_model,
     ensure_master_addr_port,
     entropy_from_logits,
@@ -83,13 +82,9 @@ from .utils import (
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
 )
-from .utils import (
-    RepeatSampler,
-    create_model_from_path)
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
     from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_vllm_available():
