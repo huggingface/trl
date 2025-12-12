@@ -56,7 +56,6 @@ if is_weave_available():
     from weave.trace.context import weave_client_context
 
 with suppress_experimental_warning():
-    from ..experimental.merge_model_callback import MergeModelCallback as _MergeModelCallback
     from ..experimental.winrate_callback import WinRateCallback as _WinRateCallback
 
 # Logger for module-level logging
@@ -252,16 +251,6 @@ class RichProgressCallback(TrainerCallback):
         self.rich_console = None
         self.training_status = None
         self.current_step = None
-
-
-def _win_rate_completions_df(
-    state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
-) -> pd.DataFrame:
-    global_step = [str(state.global_step)] * len(prompts)
-    data = list(zip(global_step, prompts, completions, winner_indices, strict=True))
-    # Split completions from reference model and policy
-    split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
-    return pd.DataFrame(split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"])
 
 
 class WinRateCallback(_WinRateCallback):
@@ -596,17 +585,6 @@ class WeaveCallback(TrainerCallback):
                     logger.warning(f"Failed to finish evaluation logger: {finish_e}")
 
         self._last_logged_step = state.global_step
-
-
-class MergeModelCallback(_MergeModelCallback):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "The `MergeModelCallback` is now located in `trl.experimental`. Please update your imports to "
-            "`from trl.experimental.merge_model_callback import MergeModelCallback`. The current import path will be "
-            "removed and no longer supported in TRL 0.27. For more information, see "
-            "https://github.com/huggingface/trl/issues/4223.",
-            stacklevel=2,
-        )
 
 
 class BEMACallback(TrainerCallback):

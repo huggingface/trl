@@ -16,7 +16,6 @@ import inspect
 import os
 import textwrap
 import time
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -62,6 +61,7 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
@@ -242,16 +242,6 @@ class RLOOTrainer(BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
     ):
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1.",
-                FutureWarning,
-                stacklevel=2,
-            )
-
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -487,7 +477,9 @@ class RLOOTrainer(BaseTrainer):
                         base_url = args.vllm_server_base_url
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client = VLLMClient(
+                        base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                    )
                     self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
             elif self.vllm_mode == "colocate":
@@ -810,6 +802,16 @@ class RLOOTrainer(BaseTrainer):
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
+            # When using PEFT, we need to recover the original parameter name
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            if is_peft_model(module) and module.prefix in name:
+                continue
+            # When module to save, remove its prefix and discard the original module
+            if "original_module" in name:
+                continue
+            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
             if param.is_cpu:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
@@ -854,8 +856,9 @@ class RLOOTrainer(BaseTrainer):
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
@@ -1329,7 +1332,10 @@ class RLOOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        with torch.no_grad():
+        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
+        # Temporarily disable checkpointing to avoid this warning during inference.
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             # Compute the per-token log probabilities for the current model
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                 self.model,
@@ -1405,14 +1411,20 @@ class RLOOTrainer(BaseTrainer):
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
         grouped_rewards = rewards.view(-1, num_generations)
         mean_grouped_rewards = grouped_rewards.mean(dim=1)
-        std_rewards = grouped_rewards.std(dim=1)
+        if num_generations > 1:
+            std_rewards = grouped_rewards.std(dim=1)
+        else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+            std_rewards = torch.zeros_like(mean_grouped_rewards)
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
 
         # RLOO advantages computation
         grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
-        baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
-        baselines = baselines.view(-1)  # Flatten back to match rewards shape
-        advantages = rewards - baselines
+        if num_generations > 1:
+            baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
+            baselines = baselines.view(-1)  # Flatten back to match rewards shape
+            advantages = rewards - baselines
+        else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+            advantages = torch.zeros_like(rewards)
 
         # Normalize advantages
         if self.normalize_advantages:

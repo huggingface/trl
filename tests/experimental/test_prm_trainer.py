@@ -14,6 +14,7 @@
 
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 import torch
 from datasets import Dataset, load_dataset
@@ -21,12 +22,80 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrai
 from transformers.utils import is_peft_available
 
 from trl.experimental.prm import PRMConfig, PRMTrainer
+from trl.experimental.prm.prm_trainer import compute_accuracy
 
 from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig, TaskType
+
+
+class TestComputeAccuracy(TrlTestCase):
+    def test_token_classification_task(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[0, 1], [1, 0]]),
+        )
+        expected_accuracy = 0.5  # 2 matches, 2 mismatches
+        result = compute_accuracy(eval_pred)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+
+    def test_token_classification_task_with_ignored_tokens_0(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 0], [1, -100]]),
+        )
+        expected_accuracy = 1.0  # All non-ignored tokens match
+        result = compute_accuracy(eval_pred)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+
+    def test_token_classification_task_with_ignored_tokens_1(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 1], [0, -100]]),
+        )
+        expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
+        result = compute_accuracy(eval_pred)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+
+    def test_rewards_comparison_task(self, caplog):
+        eval_pred = (
+            np.array(
+                [
+                    [0.9, 0.1],  # Batch 1
+                    [0.6, 0.4],  # Batch 2
+                    [0.5, 0.5],  # Batch 3 (equal)
+                ]
+            ),
+            np.array([0, 1, 1]),
+        )
+        expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
+
+        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
+            result = compute_accuracy(eval_pred)
+
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+        expected_warning = (
+            "There are 1 out of 3 instances where the predictions for both options are equal. "
+            "These instances are ignored in the accuracy computation."
+        )
+        assert expected_warning in caplog.text
 
 
 class TestTokenizeRow(TrlTestCase):
