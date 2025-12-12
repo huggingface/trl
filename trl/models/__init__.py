@@ -23,6 +23,8 @@ _import_structure = {
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
     "utils": [
         "create_reference_model",
+        "disable_gradient_checkpointing",
+        "peft_module_casting_to_bf16",
         "prepare_deepspeed",
         "prepare_fsdp",
         "prepare_model_for_kbit_training",
@@ -38,6 +40,8 @@ if TYPE_CHECKING:
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import (
         create_reference_model,
+        disable_gradient_checkpointing,
+        peft_module_casting_to_bf16,
         prepare_deepspeed,
         prepare_fsdp,
         prepare_model_for_kbit_training,
