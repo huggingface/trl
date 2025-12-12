@@ -51,14 +51,13 @@ from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
-    first_true_indices,
     log_table_to_comet_experiment,
     pad,
     peft_module_casting_to_bf16,
     prepare_deepspeed,
     selective_log_softmax,
 )
-from ..utils import get_reward
+from ..utils import first_true_indices, get_reward
 from .ppo_config import PPOConfig
 
 
