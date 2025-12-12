@@ -706,34 +706,6 @@ trainer.train()
 
 ```
 
-### Direct Language Model Alignment from Online AI Feedback
-
-**📜 Paper**: https://huggingface.co/papers/2402.04792
-
-Uses **online AI feedback (OAIF)** to supply real-time preference signals, improving direct alignment beyond purely offline pairs.
-```python
-# Sketch: collect online AI feedback -> extend DPO dataset -> train
-from trl import DPOConfig, DPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-policy = AutoModelForCausalLM.from_pretrained("..."); tok = AutoTokenizer.from_pretrained("...")
-
-def ai_feedback_score(prompt, response) -> float:
-    # plug a judge / RM / heuristic here (return scalar)
-    pass
-
-new_pairs = []
-for ex in prompts_ds:
-    out = policy.generate(**tok(ex["prompt"], return_tensors="pt").to(policy.device), max_new_tokens=256)
-    resp = tok.decode(out[0], skip_special_tokens=True)
-    score = ai_feedback_score(ex["prompt"], resp)
-    # build a (chosen, rejected) pair using score (e.g., compare vs baseline response)
-    new_pairs.append({"prompt": ex["prompt"], "chosen": resp, "rejected": ex["baseline"]})
-
-augmented_pairs = dpo_pairs.add_items(new_pairs)
-
-training_args = DPOConfig()
-trainer = DPOTrainer(model=model, args=training_args, tokenizer=tok, train_dataset=...)
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
@@ -813,9 +785,11 @@ SFTConfig(
     gradient_accumulation_steps=32,
 )
 ```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 ### LoRA: Low-Rank Adaptation of Large Language Models
+
 **📜 Paper**: https://huggingface.co/papers/2106.09685
 
 Parameter-efficient fine-tuning via **low-rank adapters**, cutting trainable parameters and memory while preserving quality (see PEFT integration in TRL).
