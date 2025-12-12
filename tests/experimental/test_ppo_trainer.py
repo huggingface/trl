@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import os
 
 import pytest
 import torch
@@ -34,13 +35,18 @@ from trl.experimental.ppo import (
     PPOConfig,
     PPOTrainer,
 )
-from trl.experimental.ppo.ppo_trainer import masked_mean, masked_var, masked_whiten
+from trl.experimental.ppo.ppo_trainer import batch_generation, masked_mean, masked_var, masked_whiten
 
-from ..testing_utils import TrlTestCase, require_peft
+from ..testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_peft,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+)
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import LoraConfig, get_peft_model
 
 
 ALL_CAUSAL_LM_MODELS = [
@@ -66,6 +72,66 @@ ALL_SEQ2SEQ_MODELS = [
     "trl-internal-testing/tiny-T5ForConditionalGeneration",
     "trl-internal-testing/tiny-BartModel",
 ]
+
+
+class TestBatchGeneration(TrlTestCase):
+    def setup_method(self):
+        # Initialize the tokenizer
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id).to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+
+        self.generation_config = GenerationConfig(
+            max_new_tokens=128,
+            temperature=0.5,
+            do_sample=True,
+            top_k=0,
+            pad_token_id=self.tokenizer.pad_token_id,
+        )
+
+        # Example input
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        self.examples = dataset["messages"]
+        self.mini_batch_size = 3
+
+    def test_mini_batch_generation(self):
+        batch = [
+            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
+            for example in self.examples
+        ]
+        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
+        bs, context_length = queries.shape
+
+        query_responses, logits = batch_generation(
+            self.model, queries, self.mini_batch_size, self.tokenizer.pad_token_id, self.generation_config
+        )
+
+        max_length_query = query_responses.shape[1]
+        max_length_logits = max_length_query - context_length
+
+        assert max_length_query > context_length
+        assert query_responses.shape == (bs, max_length_query)
+        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
+
+    def test_single_batch_generation(self):
+        batch = [
+            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
+            for example in self.examples
+        ]
+        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
+        bs, context_length = queries.shape
+
+        query_responses, logits = batch_generation(
+            self.model, queries, bs, self.tokenizer.pad_token_id, self.generation_config
+        )
+
+        max_length_query = query_responses.shape[1]
+        max_length_logits = max_length_query - context_length
+
+        assert max_length_query > context_length
+        assert query_responses.shape == (bs, max_length_query)
+        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
 
 
 class BaseTester:
@@ -505,6 +571,176 @@ class TestSeq2SeqValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
 
             # check dummy forward pass works in half precision
             _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
+
+
+@require_peft
+class TestPeftModel(TrlTestCase):
+    def setup_method(self):
+        self.causal_lm_model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+    def test_create_peft_model(self):
+        r"""
+        Simply creates a peft model and checks that it can be loaded.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
+    def test_peft_requires_grad(self):
+        r"""
+        Check that the value head of the returned model has requires_grad=True.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
+        # Check that the value head has requires_grad=True
+        assert model.v_head.summary.weight.requires_grad
+
+    def test_check_peft_model_nb_trainable_params(self):
+        r"""
+        Check that the number of trainable parameters is correct.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        assert nb_trainable_params == 905
+
+        # Check that the number of trainable param for the non-peft model is correct
+        non_peft_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)
+        nb_trainable_params = sum(p.numel() for p in non_peft_model.parameters() if p.requires_grad)
+        assert nb_trainable_params == 2428641
+
+    def test_create_peft_model_from_config(self):
+        r"""
+        Simply creates a peft model and checks that it can be loaded.
+        """
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+            self.causal_lm_model_id, peft_config=self.lora_config
+        )
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        assert nb_trainable_params == 905
+
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        assert nb_trainable_params == 905
+
+    @require_bitsandbytes
+    @require_torch_gpu_if_bnb_not_multi_backend_enabled
+    def test_create_bnb_peft_model_from_config(self):
+        r"""
+        Simply creates a peft model and checks that it can be loaded.
+        """
+        from bitsandbytes.nn import Linear8bitLt
+        from transformers import BitsAndBytesConfig
+
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+            self.causal_lm_model_id,
+            peft_config=self.lora_config,
+            quantization_config=BitsAndBytesConfig(load_in_8bit=True),
+        )
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        assert nb_trainable_params == 905
+        assert isinstance(trl_model.pretrained_model.model.model.layers[0].mlp.gate_proj, Linear8bitLt)
+
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(
+            self.causal_lm_model_id, quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map="auto"
+        )
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        assert nb_trainable_params == 905
+        assert isinstance(trl_model.pretrained_model.model.model.layers[0].mlp.gate_proj, Linear8bitLt)
+
+    def test_save_pretrained_peft(self):
+        r"""
+        Check that the model can be saved and loaded properly.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
+        model.save_pretrained(self.tmp_dir)
+
+        # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
+        assert os.path.isfile(f"{self.tmp_dir}/adapter_model.safetensors"), (
+            f"{self.tmp_dir}/adapter_model.safetensors does not exist"
+        )
+        assert os.path.exists(f"{self.tmp_dir}/adapter_config.json"), (
+            f"{self.tmp_dir}/adapter_config.json does not exist"
+        )
+
+        # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
+        assert os.path.exists(f"{self.tmp_dir}/pytorch_model.bin"), f"{self.tmp_dir}/pytorch_model.bin does not exist"
+
+        # check that only keys that starts with `v_head` are in the dict
+        maybe_v_head = torch.load(f"{self.tmp_dir}/pytorch_model.bin", weights_only=True)
+        assert all(k.startswith("v_head") for k in maybe_v_head.keys()), (
+            f"keys in {self.tmp_dir}/pytorch_model.bin do not start with `v_head`"
+        )
+
+        model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(self.tmp_dir)
+
+        # check all the weights are the same
+        for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
+            assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
+
+    def test_load_pretrained_peft(self):
+        r"""
+        Check that the model saved with peft class interface can be loaded properly.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
+        pretrained_model.save_pretrained(self.tmp_dir)
+        model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(self.tmp_dir)
+
+        # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
+        assert os.path.isfile(f"{self.tmp_dir}/adapter_model.safetensors"), (
+            f"{self.tmp_dir}/adapter_model.safetensors does not exist"
+        )
+        assert os.path.exists(f"{self.tmp_dir}/adapter_config.json"), (
+            f"{self.tmp_dir}/adapter_config.json does not exist"
+        )
+
+        # check all the weights are the same
+        for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
+            if p1[0] not in ["v_head.summary.weight", "v_head.summary.bias"]:
+                assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
+
+    def test_continue_training_peft_model(self):
+        r"""
+        Load peft and checks that it can continue training.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        pretrained_model.save_pretrained(self.tmp_dir)
+        # set is_trainable to True
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(self.tmp_dir, is_trainable=True)
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        assert nb_trainable_params == 905
 
 
 class TestCore(TrlTestCase):
