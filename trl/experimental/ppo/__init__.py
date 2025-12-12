@@ -12,8 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .modeling_value_head import (
+    AutoModelForCausalLMWithValueHead,
+    AutoModelForSeq2SeqLMWithValueHead,
+    PreTrainedModelWrapper,
+)
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
 
 
-__all__ = ["PPOConfig", "PPOTrainer"]
+__all__ = [
+    "AutoModelForCausalLMWithValueHead",
+    "AutoModelForSeq2SeqLMWithValueHead",
+    "PreTrainedModelWrapper",
+    "PPOConfig",
+    "PPOTrainer",
+]

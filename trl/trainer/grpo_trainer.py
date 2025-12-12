@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import inspect
+import json
 import os
 import textwrap
 import time
@@ -28,9 +30,11 @@ import datasets
 import pandas as pd
 import torch
 import torch.utils.data
+import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -50,6 +54,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
+from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -58,9 +63,9 @@ from ..data_utils import (
 )
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_liger_kernel_available, is_vllm_available
+from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..models.utils import _ForwardRedirection
+from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -210,6 +215,13 @@ class GRPOTrainer(BaseTrainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        tools (list of `Callable`, *optional*):
+            A list of callable tool functions that the model can invoke during generation. Each tool should be a
+            standard Python function with properly type-hinted arguments and return values, and a Google-style
+            docstring describing its purpose, arguments, and return value. For more details, see:
+            https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
+            type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
+            use and that it has been fine-tuned for tool calling.
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
@@ -245,6 +257,7 @@ class GRPOTrainer(BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
+        tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
     ):
         # Args
@@ -277,7 +290,9 @@ class GRPOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config), truncation_side="left")
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -385,8 +400,35 @@ class GRPOTrainer(BaseTrainer):
             )
         self.rollout_func = rollout_func
 
+        # Tools
+        if tools:
+            if not Version(transformers.__version__) >= Version("5.0.0.dev0"):
+                raise ImportError(
+                    "Using tools with GRPOTrainer requires transformers version 5.0.0 or higher. Please use "
+                    "transformers with `pip install --pre transformers` to use this feature."
+                )
+            if not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
+                    "it with `pip install jmespath` to use this feature."
+                )
+        self.tools = tools
+        if self.tools:
+            self._tool_dict = {tool.__name__: tool for tool in self.tools}
+        # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
+        # While waiting for broader adoption, we provide this utility function to manually set the response schema for
+        # known chat templates.
+        # We need `getattr`` until the base class sets a default None value for response_schema
+        if tools and not getattr(processing_class, "response_schema", None):
+            processing_class = add_response_schema(processing_class)
+        # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
+        # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
+        if tools:
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
+
         # Training arguments
-        self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.num_generations_eval = args.num_generations_eval or self.num_generations
@@ -579,7 +621,9 @@ class GRPOTrainer(BaseTrainer):
                         base_url = args.vllm_server_base_url
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client = VLLMClient(
+                        base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                    )
                     self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
             elif self.vllm_mode == "colocate":
@@ -608,11 +652,6 @@ class GRPOTrainer(BaseTrainer):
                 # Ensure distributed rendezvous variables are set without colliding across concurrent runs
                 ensure_master_addr_port()
 
-                if self.max_prompt_length is not None and self.max_completion_length is not None:
-                    max_model_len = self.max_prompt_length + self.max_completion_length
-                else:
-                    max_model_len = None
-
                 vllm_quantization = None
                 if is_bitsandbytes_available():
                     for _, module in model.named_modules():
@@ -628,7 +667,7 @@ class GRPOTrainer(BaseTrainer):
                     max_num_seqs=self.args.per_device_train_batch_size
                     * self.vllm_tensor_parallel_size
                     * self.args.steps_per_generation,
-                    max_model_len=max_model_len,
+                    max_model_len=self.args.vllm_max_model_length,
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
@@ -986,6 +1025,16 @@ class GRPOTrainer(BaseTrainer):
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
+            # When using PEFT, we need to recover the original parameter name
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            if is_peft_model(module) and module.prefix in name:
+                continue
+            # When module to save, remove its prefix and discard the original module
+            if "original_module" in name:
+                continue
+            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
             if param.is_cpu:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
@@ -1030,8 +1079,9 @@ class GRPOTrainer(BaseTrainer):
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
@@ -1194,6 +1244,16 @@ class GRPOTrainer(BaseTrainer):
             if is_conversational({"prompt": prompts[0]}):
                 prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
 
+            # In vLLM, tool call arguments must be JSON strings. See https://github.com/vllm-project/vllm/pull/28820
+            for prompt in prompts:  # iterate over each conversation
+                if is_conversational({"prompt": prompt}):
+                    for message in prompt:  # iterate over each message
+                        if "tool_calls" in message:  # check if message has tool calls
+                            for call in message["tool_calls"]:
+                                args = call["function"]["arguments"]
+                                if isinstance(args, dict):  # only convert dict → JSON string
+                                    call["function"]["arguments"] = json.dumps(args)
+
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts = gather_object(prompts)
@@ -1213,7 +1273,6 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": -1 if self.top_k is None else self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "truncate_prompt_tokens": self.max_prompt_length,
                         "guided_decoding_regex": self.guided_decoding_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
@@ -1234,6 +1293,8 @@ class GRPOTrainer(BaseTrainer):
                                     messages=ordered_set_of_prompts,
                                     **sampling_params,
                                     chat_template_kwargs=self.chat_template_kwargs,
+                                    tools=self.tools,
+                                    chat_template=self.chat_template,
                                 )
                             else:
                                 output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
@@ -1299,7 +1360,6 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": -1 if self.top_k is None else self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "truncate_prompt_tokens": self.max_prompt_length,
                         "guided_decoding": guided_decoding,
                         "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                     }
@@ -1322,7 +1382,14 @@ class GRPOTrainer(BaseTrainer):
 
                     with profiling_context(self, "vLLM.generate"):
                         if is_conversational({"prompt": prompts[0]}):
-                            all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                            all_outputs = self.llm.chat(
+                                all_prompts,
+                                sampling_params=sampling_params,
+                                use_tqdm=False,
+                                chat_template_kwargs=self.chat_template_kwargs,
+                                tools=self.tools,
+                                chat_template=self.chat_template,
+                            )
                         else:
                             all_outputs = self.llm.generate(
                                 all_prompts, sampling_params=sampling_params, use_tqdm=False
@@ -1355,22 +1422,18 @@ class GRPOTrainer(BaseTrainer):
                         self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            processor_kwargs = {
-                "max_length": self.max_prompt_length,
-                "truncation": True,
-                "add_special_tokens": False,
-            }
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
+                    tools=self.tools,
+                    chat_template=self.chat_template,
                     add_generation_prompt=True,
                     tokenize=True,
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
+                processor_outputs = self.processing_class(text=prompts)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -1400,25 +1463,23 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            processor_kwargs = {
-                "return_tensors": "pt",
-                "padding": True,
-                "padding_side": "left",
-                "max_length": self.max_prompt_length,
-                "truncation": True,
-                "add_special_tokens": False,
-            }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
+                    tools=self.tools,
+                    chat_template=self.chat_template,
                     add_generation_prompt=True,
                     tokenize=True,
+                    padding=True,
+                    padding_side="left",
+                    return_tensors="pt",
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
+                generate_inputs = self.processing_class(
+                    text=prompts, padding=True, padding_side="left", return_tensors="pt"
+                )
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
@@ -1450,15 +1511,188 @@ class GRPOTrainer(BaseTrainer):
 
         return prompt_ids, completion_ids, logprobs, extra_fields
 
+    def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
+        # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
+        tool_calls = [completion[0].get("tool_calls") for completion in completions]
+        idxs_with_tool = [idx for idx, tool_call in enumerate(tool_calls) if tool_call]
+        tool_calls = [tool_calls[idx] for idx in idxs_with_tool]
+        tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
+        tool_call_count = 0
+        tool_failure_count = 0
+
+        while idxs_with_tool:
+            prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
+
+            # Call the tools, and build the new prompt for generation
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                tool_call_list = tool_calls[idx]
+                prompt_completion_tool = prompt_completion_tools[idx]
+                # Append the last assistant message (which triggered tool_calls) to the prompt
+                prompt_completion_tool.append(completions[idx_with_tool][-1])
+                for tool_call in tool_call_list:
+                    tool_call_count += 1
+                    if tool_call["type"] == "function":
+                        function = tool_call["function"]
+                        name = function["name"]
+                        try:
+                            result = self._tool_dict[name](**function["arguments"])
+                        except Exception as e:
+                            tool_failure_count += 1
+                            result = {"error": str(e)}
+                    else:
+                        tool_failure_count += 1
+                        name = tool_call.get("name", "unknown")
+                        result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
+                    tool_message = {"role": "tool", "name": name, "content": str(result)}
+                    prompt_completion_tool.append(tool_message)
+                    completions[idx_with_tool].append(tool_message)
+
+            # Tokenize and filter samples whose length exceeds max allowed length. This is important, because both
+            # vLLM and transformers will error out if the input is longer than the model's max length.
+            pct_ids = self.processing_class.apply_chat_template(
+                prompt_completion_tools,
+                tools=self.tools,
+                tokenize=True,
+                add_generation_prompt=True,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )["input_ids"]
+            if self.use_vllm and self.vllm_mode == "colocate":
+                max_model_len = self.llm.llm_engine.model_config.max_model_len
+            elif not self.use_vllm:
+                max_model_len = self.model.config.max_position_embeddings
+            else:
+                raise NotImplementedError(
+                    f"Unsupported mode detected: use_vllm={self.use_vllm}, vllm_mode={self.vllm_mode}"
+                )
+            overlong = [len(pct) >= max_model_len for pct in pct_ids]
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if overlong[idx]:
+                    prompt_length = len(prompt_ids[idx_with_tool])
+                    ct = pct_ids[idx][prompt_length : prompt_length + self.max_completion_length]
+                    completion_ids[idx_with_tool] = ct
+                    tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
+                    if logprobs is not None:
+                        logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
+            # Keep only non-overlong items for further processing
+            idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
+            prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
+            if not idxs_with_tool:
+                break  # all overlong, exit tool loop
+
+            # Generate new completions after tool execution
+            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _ = self._generate_single_turn(
+                prompt_completion_tools
+            )
+
+            # Sanity check: from experience, this is useful to catch bugs in the chat template
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
+                if prompt_ids[idx_with_tool] != pct[: len(prompt_ids[idx_with_tool])]:
+                    raise ValueError(
+                        "The chat template is not prefix-preserving. Please update it to use a prefix-preserving "
+                        "format."
+                    )
+
+            # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_len = len(prompt_ids[idx_with_tool])
+                completion_tool_ids = prompt_completion_tool_ids[idx][prompt_len:]
+                excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
+                if excess_length > 0:
+                    # If exceeding max length, truncate post_tool_ids
+                    post_tool_ids[idx] = post_tool_ids[idx][:-excess_length]
+                    if logprobs is not None:
+                        post_tool_logprobs[idx] = post_tool_logprobs[idx][:-excess_length]
+                    excess_length = len(completion_tool_ids) + len(post_tool_ids[idx]) - self.max_completion_length
+                    if excess_length > 0:
+                        # If still exceeding max length, truncate completion_tool_ids as well
+                        prompt_completion_tool_ids[idx] = prompt_completion_tool_ids[idx][:-excess_length]
+
+            # Update tool_mask: the tool result should be 0 and the post-tool 1
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
+                prompt_length = len(prompt_ids[idx_with_tool])
+                completion_length = len(completion_ids[idx_with_tool])
+                post_tool_length = len(post_tool_ids[idx])
+                tool_length = prompt_completion_tool_length - prompt_length - completion_length
+                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+                if logprobs is not None:
+                    logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
+
+            # Update completion_ids with the new completions (after tool execution)
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                prompt_length = len(prompt_ids[idx_with_tool])
+                pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
+                completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
+
+            # Decode post-tool completions
+            post_tool_completions = [
+                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
+            ]
+
+            # Add post-tool completions to the existing completions
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
+                    completions[idx_with_tool].append(post_tool_completions[idx])
+
+            # Check for further tool calls
+            tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
+            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
+            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+
+        return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
+
     def _generate(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
+        # Copy the prompts to avoid modifying the original list
+        prompts = copy.deepcopy(prompts)
+
         prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+
+        # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
+        if is_conversational({"prompt": prompts[0]}):
+            if (
+                Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
+                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
+                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
+                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+            ):
+                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
+            else:
+                contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+                completions = [[{"role": "assistant", "content": content}] for content in contents]
+        else:
+            completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+
+        # Extract tool calls from the completions and (possibly) execute them
+        if self.tools:
+            (
+                tool_mask,
+                completions,
+                completion_ids,
+                logprobs,
+                tool_call_count,
+                tool_failure_count,
+            ) = self._tool_call_loop(prompts, prompt_ids, completion_ids, completions, logprobs)
+        else:
+            tool_mask = None
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
-        completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
+        if tool_mask is not None:  # count only non-tool tokens (tool_mask=1)
+            completion_lengths = torch.tensor([sum(mask) for mask in tool_mask], device=device)
+        else:
+            completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         total_prompt_tokens = agg_prompt_lengths.sum()
@@ -1486,7 +1720,25 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, total_completion_tokens, logprobs, extra_fields
+        if self.tools:
+            agg_tool_call_count = self.accelerator.gather(torch.tensor(tool_call_count, device=device)).sum()
+            tool_call_frequency = (agg_tool_call_count / len(agg_prompt_lengths)).item()
+            self._metrics[mode]["tools/call_frequency"].append(tool_call_frequency)
+            agg_tool_failure_count = self.accelerator.gather(torch.tensor(tool_failure_count, device=device)).sum()
+            failure_frequency = (
+                (agg_tool_failure_count / agg_tool_call_count).item() if agg_tool_call_count > 0 else 0.0
+            )
+            self._metrics[mode]["tools/failure_frequency"].append(failure_frequency)
+
+        return (
+            prompt_ids,
+            completion_ids,
+            tool_mask,
+            completions,
+            total_completion_tokens,
+            logprobs,
+            extra_fields,
+        )
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
@@ -1515,9 +1767,15 @@ class GRPOTrainer(BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
-        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
-            self._generate(prompts)
-        )
+        (
+            prompt_ids_list,
+            completion_ids_list,
+            tool_mask_list,
+            completions,
+            num_items_in_batch,
+            sampling_per_token_logps_list,
+            extra_fields,
+        ) = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -1533,6 +1791,9 @@ class GRPOTrainer(BaseTrainer):
             sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
         else:
             sampling_per_token_logps = None
+        if self.tools:
+            tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
+            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")  # 0 for tool result tokens, 1 elsewhere
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1552,7 +1813,9 @@ class GRPOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
+                apply_chat_template(
+                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
+                )["prompt"]
                 for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
@@ -1568,7 +1831,10 @@ class GRPOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        with torch.no_grad():
+        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
+        # Temporarily disable checkpointing to avoid this warning during inference.
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
             # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
@@ -1594,7 +1860,8 @@ class GRPOTrainer(BaseTrainer):
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
-                per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * completion_mask
+                mask = completion_mask if not self.tools else completion_mask * tool_mask
+                per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
@@ -1651,16 +1918,6 @@ class GRPOTrainer(BaseTrainer):
         # Decode
         prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        if is_conversational(inputs[0]):
-            completions = []
-            for prompt, completion in zip(prompts, completions_text, strict=True):
-                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
-                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
-                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
-                    bootstrap = bootstrap[0]["text"]
-                completions.append([{"role": "assistant", "content": bootstrap + completion}])
-        else:
-            completions = completions_text
 
         # Merge extra_fields from rollout_func into inputs for reward functions
         if extra_fields:
@@ -1689,11 +1946,17 @@ class GRPOTrainer(BaseTrainer):
 
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
-            std_rewards = rewards.view(-1, num_generations).std(dim=1)
-            std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
+            if num_generations > 1:
+                std_rewards = rewards.view(-1, num_generations).std(dim=1)
+                std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
+            else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+                std_rewards = torch.zeros_like(rewards)
         elif self.scale_rewards == "batch":
             # Compute global std
-            std_rewards = rewards.std().expand_as(rewards)
+            if rewards.numel() > 1:
+                std_rewards = rewards.std().expand_as(rewards)
+            else:  # this case doesn't occur during training, but could in eval when num_generations_eval=batch_size=1
+                std_rewards = torch.zeros_like(rewards)
         else:
             raise ValueError(
                 f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
@@ -1733,7 +1996,8 @@ class GRPOTrainer(BaseTrainer):
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            delta = delta[completion_mask.bool()]
+            mask = completion_mask.bool() if not self.tools else (completion_mask * tool_mask).bool()
+            delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
@@ -1746,7 +2010,7 @@ class GRPOTrainer(BaseTrainer):
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:
-                flat_is_ratio = vllm_importance_sampling_ratio[completion_mask.bool()]
+                flat_is_ratio = vllm_importance_sampling_ratio[mask]
 
             min_importance_sampling_ratio = (
                 torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
@@ -1793,6 +2057,8 @@ class GRPOTrainer(BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
+        if self.tools:
+            output["tool_mask"] = tool_mask
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1879,16 +2145,10 @@ class GRPOTrainer(BaseTrainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+            mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
+            entropy_mask = self.get_high_entropy_mask(entropies, mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
-
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
 
         # Compute the loss
         advantages = inputs["advantages"]
@@ -1908,7 +2168,8 @@ class GRPOTrainer(BaseTrainer):
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
         elif self.importance_sampling_level == "sequence":
-            log_importance_weights = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
+            log_importance_weights = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             log_importance_weights = log_importance_weights.unsqueeze(-1)
         else:
             raise ValueError(
@@ -1917,6 +2178,16 @@ class GRPOTrainer(BaseTrainer):
             )
 
         coef_1 = torch.exp(log_importance_weights)
+
+        # Compute the KL divergence between the model and the reference model
+        if self.beta != 0.0:
+            ref_per_token_logps = inputs["ref_per_token_logps"]
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
+            # Importance sampling correction for the KL divergence
+            if self.args.use_bias_correction_kl:
+                per_token_kl = per_token_kl * coef_1
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
@@ -1954,31 +2225,32 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
+        mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
         if self.loss_type in ["grpo", "sapo"]:
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type in ["cispo", "dapo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * completion_mask).sum() / normalizer
+            loss = (per_token_loss * mask).sum() / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        completion_token_count = completion_mask.sum().clamp(min=1.0)
+        completion_token_count = mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
             if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
                 return x.mean()
             else:
-                return (x * completion_mask).sum() / completion_token_count
+                return (x * mask).sum() / completion_token_count
 
         if self.beta != 0.0:
             mean_kl = masked_batch_mean(per_token_kl)

@@ -242,3 +242,23 @@ python -m openrlbenchmark.rlops_multi_metrics \
 ## PPOConfig
 
 [[autodoc]] experimental.ppo.PPOConfig
+
+## PreTrainedModelWrapper
+
+[[autodoc]] experimental.ppo.PreTrainedModelWrapper
+
+## AutoModelForCausalLMWithValueHead
+
+[[autodoc]] experimental.ppo.AutoModelForCausalLMWithValueHead
+    - __init__
+    - forward
+    - generate
+    - _init_weights
+
+## AutoModelForSeq2SeqLMWithValueHead
+
+[[autodoc]] experimental.ppo.AutoModelForSeq2SeqLMWithValueHead
+    - __init__
+    - forward
+    - generate
+    - _init_weights

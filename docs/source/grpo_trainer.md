@@ -137,18 +137,45 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
+Alternatively, in the [SAPO paper](https://huggingface.co/papers/2511.20347), the Qwen team proposes replacing the "hard" clipping mechanism of GRPO with a smooth, temperature-controlled soft gating mechanism. While GRPO zeroes out gradients when the policy deviates too far from the reference, SAPO uses a soft trust region that smoothly decays the gradient weight. This allows the model to retain useful learning signals from "near-on-policy" tokens while suppressing noise from extreme deviations.
+
+The loss function is defined as:
+
+$$
+\mathcal{L}_{\text{SAPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} f_{i,t} \left( \frac{\pi_\theta(o_{i,t} | q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t} | q, o_{i,<t})} \right) \hat{A}_{i,t}
+$$
+
+The soft-gating function  \\( f_{i,t} \\) is defined using the sigmoid function  \\( \sigma \\) as:
+
+$$
+f_{i,t}(x) = \sigma \left( \tau_{i,t} (x - 1) \right) \cdot \frac{4}{\tau_{i,t}}
+$$
+
+The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
+
+$$
+\tau_{i,t} = \begin{cases} 
+\tau_{\text{pos}}, & \text{if } \hat{A}_{i,t} > 0 \\
+\tau_{\text{neg}}, & \text{otherwise}
+\end{cases}
+$$
+
+They recommends using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
+
+To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
+
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
 
-- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions. When using tools, only non-tool tokens are counted.
 - `step_time`: The average time (in seconds) taken per training step (including generation).
-- `completions/mean_length`: The average length of generated completions.
-- `completions/min_length`: The minimum length of generated completions.
-- `completions/max_length`: The maximum length of generated completions.
-- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
-- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
-- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
@@ -159,14 +186,10 @@ While training and evaluating, we record the following reward metrics:
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
-- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
-  $$
-  \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
-  $$
-  A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
@@ -546,6 +569,68 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+## Agent Training
+
+GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
+This parameter expects a list of Python functions that define the tools available to the agent:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    tools=[tool1, tool2],
+    ...,
+)
+```
+
+Each tool must be a standard Python function with **type-hinted arguments and return types**, along with a **Google-style docstring** describing its purpose, arguments, and return value.
+For more details, see the [Passing tools guide](https://huggingface.co/docs/transformers/en/chat_extras#passing-tools).
+
+Example:
+
+```python
+from trl import GRPOTrainer
+
+def multiply(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+trainer = GRPOTrainer(
+    tools=[multiply],
+    ...,
+)
+```
+
+### Supported Models
+
+Tested with:
+
+- **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
+
+> [!TIP]
+> Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+
+### Quick Start
+
+Use [grpo\_agent.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_agent.py) to fine-tune a LLM for agentic workflows.
+
+```bash
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/grpo_agent.py \
+  --model_name_or_path Qwen/Qwen3-0.6B
+  ...
+```
+
 ## Vision-Language Model (VLM) Training
 
 GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
@@ -576,7 +661,6 @@ accelerate launch \
   --learning_rate 1e-5 \
   --gradient_checkpointing \
   --dtype bfloat16 \
-  --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
@@ -586,15 +670,6 @@ accelerate launch \
 ```
 
 ### Configuration Tips
-
-> [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`GRPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
->
-> ```python
-> GRPOConfig(max_prompt_length=None, ...)
-> ```
->
-> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage

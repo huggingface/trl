@@ -55,7 +55,7 @@ from ...data_utils import apply_chat_template, is_conversational, maybe_apply_ch
 from ...extras.profiling import profiling_context
 from ...extras.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
-from ...models import (
+from ...models.utils import (
     create_reference_model,
     prepare_deepspeed,
     prepare_fsdp,
@@ -63,17 +63,9 @@ from ...models import (
     unwrap_model_for_generation,
 )
 from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    SIMPLE_CHAT_TEMPLATE,
-    DPODataCollatorWithPadding,
-    disable_dropout_in_model,
-    empty_cache,
-    ensure_master_addr_port,
-    get_config_model_id,
-    pad,
-    truncate_right,
-)
+from ...trainer.utils import disable_dropout_in_model, empty_cache, ensure_master_addr_port, get_config_model_id, pad
 from ..judges import BasePairwiseJudge
+from ..utils import SIMPLE_CHAT_TEMPLATE, DPODataCollatorWithPadding, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
 
@@ -136,8 +128,8 @@ class OnlineDPOTrainer(BaseTrainer):
             The online DPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
@@ -454,7 +446,9 @@ class OnlineDPOTrainer(BaseTrainer):
                         base_url = args.vllm_server_base_url
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client = VLLMClient(
+                        base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                    )
 
                     # Determine device type (supports cuda, xpu, etc.)
                     accelerator_type = torch.accelerator.current_accelerator().type
@@ -820,8 +814,30 @@ class OnlineDPOTrainer(BaseTrainer):
 
         return completion_ids, prompt_ids
 
+    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
+        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
+        for name, param in module.state_dict().items():
+            # When using PEFT, we need to recover the original parameter name
+            name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            if is_peft_model(module) and module.prefix in name:
+                continue
+            # When module to save, remove its prefix and discard the original module
+            if "original_module" in name:
+                continue
+            name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
+            if param.is_cpu:
+                param = param.to(torch.device("cuda"))
+            param = param.full_tensor()
+
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                self.vllm_client.update_named_param(name, param)
+            elif self.vllm_mode == "colocate":
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights([(name, param)])
+
     def _move_model_to_vllm(self):
-        """Synchronize model weights to vLLM server with support for PEFT, DeepSpeed, and FSDP"""
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
@@ -846,15 +862,17 @@ class OnlineDPOTrainer(BaseTrainer):
                     fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
                     fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
                     if fsdp_version == 1:
-                        # use memory-efficient post-order traversal for FSDP
-                        self._sync_fsdp1_params_to_vllm(self.model)
+                        self._sync_fsdp1_params_to_vllm(
+                            self.model
+                        )  # use memory-efficient post-order traversal for FSDP
                     elif fsdp_version == 2:
                         self._sync_fsdp2_params_to_vllm(self.model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
-                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
@@ -921,19 +939,6 @@ class OnlineDPOTrainer(BaseTrainer):
                     elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
-
-    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
-        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
-        for name, param in module.state_dict().items():
-            if param.is_cpu:
-                param = param.to(torch.device("cuda"))
-            param = param.full_tensor()
-
-            if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                self.vllm_client.update_named_param(name, param)
-            elif self.vllm_mode == "colocate":
-                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                llm_model.load_weights([(name, param)])
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):
         """Clean parameter names for vLLM compatibility"""
