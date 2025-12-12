@@ -864,14 +864,18 @@ class GOLDTrainer(SFTTrainer):
                 teacher_tokenizer=self.teacher_tokenizer,
             )
 
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_completion_length,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            do_sample=True,
-            top_k=args.top_k,
-            pad_token_id=self.processing_class.pad_token_id,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.max_completion_length,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "do_sample": True,
+            "top_k": args.top_k,
+            "pad_token_id": self.processing_class.pad_token_id,
+        }
+        # Create training-specific generation config from the model's original generation config
+        # Then overwrite it with the training-specific generation kwargs
+        self.generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
+        self.generation_config.update(**generation_kwargs)
         if (
             hasattr(self.model.generation_config, "eos_token_id")
             and self.model.generation_config.eos_token_id is not None
