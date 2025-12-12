@@ -706,24 +706,8 @@ trainer.train()
 
 ```
 
-### Nash Learning from Human Feedback
-**📜 Paper**: https://huggingface.co/papers/2312.00886
-
-Frames alignment as a **two-player game**, learning Nash policies from human feedback; connects to multi-objective and competitive preference training.
-```python
-# Train a DPO policy (one side of the game-theoretic setup)
-from trl import DPOConfig, DPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-model = AutoModelForCausalLM.from_pretrained("..."); tok = AutoTokenizer.from_pretrained("...")
-args = DPOConfig()
-trainer = DPOTrainer(model=model, args=args, tokenizer=tok, train_dataset=...)
-trainer.train()
-
-```
-
-
 ### Direct Language Model Alignment from Online AI Feedback
+
 **📜 Paper**: https://huggingface.co/papers/2402.04792
 
 Uses **online AI feedback (OAIF)** to supply real-time preference signals, improving direct alignment beyond purely offline pairs.
