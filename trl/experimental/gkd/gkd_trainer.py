@@ -420,6 +420,7 @@ class GKDTrainer(SFTTrainer):
         the original inputs.
         """
         if self.seq_kd:
+            # TODO: Fix generation_config
             with unwrap_model_for_generation(
                 self.teacher_model, self.accelerator, generation_config=self.generation_config
             ) as unwrapped_model:
@@ -430,6 +431,7 @@ class GKDTrainer(SFTTrainer):
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
         if random.random() <= self.lmbda:
+            # TODO: Fix generation_config
             with unwrap_model_for_generation(
                 model, self.accelerator, generation_config=self.generation_config
             ) as unwrapped_model:

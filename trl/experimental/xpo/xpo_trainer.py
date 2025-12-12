@@ -190,6 +190,7 @@ class XPOTrainer(OnlineDPOTrainer):
             return self._alpha
 
     def _generate_completions(self, prompts, model):
+        # TODO: Fix generation_config
         with (
             unwrap_model_for_generation(
                 model, self.accelerator, generation_config=self.generation_config
@@ -212,6 +213,7 @@ class XPOTrainer(OnlineDPOTrainer):
         else:
             actual_model_for_ref_generation = self.accelerator.unwrap_model(self.ref_model)
 
+        # TODO: Fix generation_config
         with (
             unwrap_model_for_generation(
                 actual_model_for_ref_generation, self.accelerator, generation_config=self.generation_config
