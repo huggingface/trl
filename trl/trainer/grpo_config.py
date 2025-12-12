@@ -829,13 +829,13 @@ class GRPOConfig(TrainingArguments):
 
         if self.do_eval and self.eval_strategy != "no":
             # Determine the number of generations to use for evaluation
-            num_gens_eval = self.num_generations_eval if self.num_generations_eval is not None else self.num_generations
+            num_generations = self.num_generations_eval or self.num_generations
 
             # Just ensure the value is divisible by the global batch size
-            if (self.per_device_eval_batch_size * num_processes) % num_gens_eval != 0:
+            if (self.per_device_eval_batch_size * num_processes) % num_generations != 0:
                 raise ValueError(
                     f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
-                    f"divisible by the number of generations used for evaluation ({num_gens_eval})."
+                    f"divisible by the number of generations used for evaluation ({num_generations})."
                 )
 
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
