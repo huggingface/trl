@@ -502,7 +502,7 @@ class PPOTrainer(BaseTrainer):
                     self.model,
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-                    generation_config=self.generation_config,
+                    generation_config=generation_config,
                 ) as unwrapped_model:
                     query_responses, logitss = batch_generation(
                         unwrapped_model.policy,
@@ -780,7 +780,7 @@ class PPOTrainer(BaseTrainer):
             self.model,
             self.accelerator,
             gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-            generation_config=self.generation_config,
+            generation_config=generation_config,
         ) as unwrapped_model:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
