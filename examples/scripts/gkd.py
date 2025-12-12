@@ -58,8 +58,6 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
 from trl import (
-    GKDConfig,
-    GKDTrainer,
     LogCompletionsCallback,
     ModelConfig,
     ScriptArguments,
@@ -68,6 +66,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.gkd import GKDConfig, GKDTrainer
 
 
 # Enable logging in a Hugging Face Space

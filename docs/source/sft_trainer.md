@@ -23,7 +23,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train/loss,train/mean_token_accuracy,train/num_tokens&sidebar=hidden" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&runs=sft_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
 
 ## Expected dataset type and format
 
@@ -105,11 +105,8 @@ $$
   
 where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is trained to predict the next token given the previous ones. In practice, padding tokens are masked out during loss computation.
 
-<Tip>
-
-[On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
-
-</Tip>
+> [!TIP]
+> The paper [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
 
 ### Label shifting and masking
 
@@ -180,9 +177,8 @@ To train on completion only, use a [prompt-completion](dataset_formats#prompt-co
 
 ![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
-<Tip>
-Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
-</Tip>
+> [!TIP]
+> Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 
 ### Train adapters with PEFT
 
@@ -204,7 +200,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-You can also continue training your [`peft.PeftModel`]. For that, first load a `PeftModel` outside [`SFTTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
+You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`SFTTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
 
 ```python
 from datasets import load_dataset
@@ -222,19 +218,20 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<Tip>
-
-When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
-
-```python
-SFTConfig(learning_rate=1e-4, ...)
-```
-
-</Tip>
+> [!TIP]
+> When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
+>
+> ```python
+> SFTConfig(learning_rate=1e-4, ...)
+> ```
 
 ### Train with Liger Kernel
 
 Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
+
+### Rapid Experimentation for SFT
+
+RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple SFT configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
 
 ### Train with Unsloth
 
@@ -313,17 +310,14 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<Tip>
-
-For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`SFTConfig`]. This allows the model to process the full sequence length without truncating image tokens.
-
-```python
-SFTConfig(max_length=None, ...)
-```
-
-Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
-
-</Tip>
+> [!TIP]
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`SFTConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> SFTConfig(max_length=None, ...)
+> ```
+>
+> Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 ## SFTTrainer
 

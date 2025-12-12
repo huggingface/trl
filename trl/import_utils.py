@@ -14,6 +14,8 @@
 
 import importlib
 import os
+import warnings
+from contextlib import contextmanager
 from itertools import chain
 from types import ModuleType
 from typing import Any
@@ -22,20 +24,22 @@ from packaging import version
 from transformers.utils.import_utils import _is_package_available
 
 
-LIGER_KERNEL_MIN_VERSION = "0.5.8"
+LIGER_KERNEL_MIN_VERSION = "0.6.4"
 
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
 _fastapi_available = _is_package_available("fastapi")
+_is_jmespath_available = _is_package_available("jmespath")
 _joblib_available = _is_package_available("joblib")
 _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
 _llm_blender_available = _is_package_available("llm_blender")
+_math_verify_available = _is_package_available("math_verify")
 _mergekit_available = _is_package_available("mergekit")
 _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
-_vllm_available = _is_package_available("vllm")
+_vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
 _vllm_ascend_available = _is_package_available("vllm_ascend")
 _weave_available = _is_package_available("weave")
 
@@ -48,6 +52,10 @@ def is_fastapi_available() -> bool:
     return _fastapi_available
 
 
+def is_jmespath_available() -> bool:
+    return _is_jmespath_available
+
+
 def is_joblib_available() -> bool:
     return _joblib_available
 
@@ -58,6 +66,10 @@ def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bo
 
 def is_llm_blender_available() -> bool:
     return _llm_blender_available
+
+
+def is_math_verify_available() -> bool:
+    return _math_verify_available
 
 
 def is_mergekit_available() -> bool:
@@ -81,6 +93,14 @@ def is_uvicorn_available() -> bool:
 
 
 def is_vllm_available() -> bool:
+    if _vllm_available:
+        if not (version.parse("0.10.2") <= version.parse(_vllm_version) <= version.parse("0.11.2")):
+            warnings.warn(
+                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2. You have version "
+                f"{_vllm_version} installed. We recommend installing a supported version to avoid compatibility "
+                "issues.",
+                stacklevel=2,
+            )
     return _vllm_available
 
 
@@ -90,6 +110,23 @@ def is_vllm_ascend_available() -> bool:
 
 def is_weave_available() -> bool:
     return _weave_available
+
+
+class TRLExperimentalWarning(UserWarning):
+    """Warning for using the 'trl.experimental' submodule."""
+
+    pass
+
+
+@contextmanager
+def suppress_warning(category):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=category)
+        yield
+
+
+def suppress_experimental_warning():
+    return suppress_warning(TRLExperimentalWarning)
 
 
 class _LazyModule(ModuleType):

@@ -26,8 +26,8 @@ import importlib
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
 
+import torch
 from accelerate import logging
 from datasets import load_dataset
 
@@ -39,9 +39,11 @@ from trl import (
     ScriptArguments,
     TrlParser,
     get_dataset,
+    get_kbit_device_map,
     get_peft_config,
+    get_quantization_config,
 )
-from trl.rewards import get_soft_overlong_punishment, think_format_reward
+from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
 
 
 logger = logging.get_logger(__name__)
@@ -51,6 +53,8 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 reward_funcs_registry = {
+    "accuracy_reward": accuracy_reward,
+    "reasoning_accuracy_reward": reasoning_accuracy_reward,
     "think_format_reward": think_format_reward,
     "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
 }
@@ -67,24 +71,25 @@ class GRPOScriptArguments(ScriptArguments):
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
         reward_funcs (`list[str]`, *optional*):
             Reward functions to use. Supported values are:
-
+                - `"accuracy_reward"`
+                - `"reasoning_accuracy_reward"`
                 - `"think_format_reward"`
                 - `"get_soft_overlong_punishment"` (used value are `max_completion_len=1280`, `soft_punish_cache=256`)
                 - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
     """
 
-    reward_model_name_or_path: Optional[str] = field(
+    reward_model_name_or_path: str | None = field(
         default=None,
         metadata={
             "help": "Reward model id of a pretrained model hosted inside a model repo on huggingface.co or "
             "local path to a directory containing model weights saved using `PreTrainedModel.save_pretrained`."
         },
     )
-    reward_funcs: Optional[list[str]] = field(
+    reward_funcs: list[str] | None = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. Supported values are: `think_format_reward`, "
-            "`get_soft_overlong_punishment` (used value are `max_completion_len=1280`, `soft_punish_cache=256`), or "
+            "help": "Reward functions to use. Supported values are: `accuracy_reward`,  `reasoning_accuracy_reward`, `think_format_reward`, "
+            "`get_soft_overlong_punishment` (used values are `max_completion_len=1280`, `soft_punish_cache=256`), or "
             "any dotted import path (e.g., `'my_lib.rewards.custom_reward'`)."
         },
     )
@@ -111,6 +116,21 @@ def main(script_args, training_args, model_args, dataset_args):
                     f"Could not load reward function '{func_name}'. Expected one of "
                     f"{list(reward_funcs_registry.keys())} or a valid import path."
                 )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
+        dtype=dtype,
+    )
+    quantization_config = get_quantization_config(model_args)
+
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
+    training_args.model_init_kwargs = model_kwargs
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -118,6 +138,7 @@ def main(script_args, training_args, model_args, dataset_args):
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )
+        dataset = get_dataset(dataset_args)
     elif dataset_args.datasets and not script_args.dataset_name:
         dataset = get_dataset(dataset_args)
     elif not dataset_args.datasets and script_args.dataset_name:
@@ -140,13 +161,19 @@ def main(script_args, training_args, model_args, dataset_args):
     # Train the model
     trainer.train()
 
+    # Log training complete
+    trainer.accelerator.print("✅ Training completed.")
+
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None):
     dataclass_types = (GRPOScriptArguments, GRPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)

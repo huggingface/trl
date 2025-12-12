@@ -3,6 +3,9 @@ name: Build PR Documentation
 on:
   pull_request:
 
+env:
+  TRL_EXPERIMENTAL_SILENCE: 1
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
@@ -16,4 +19,3 @@ jobs:
       pr_number: ${{ github.event.number }}
       package: trl
       version_tag_suffix: ""
-      custom_container: huggingface/transformers-doc-builder

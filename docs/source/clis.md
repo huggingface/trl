@@ -2,17 +2,20 @@
 
 TRL provides a powerful command-line interface (CLI) to fine-tune large language models (LLMs) using methods like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and more. The CLI abstracts away much of the boilerplate, letting you launch training jobs quickly and reproducibly.
 
+## Commands
+
 Currently supported commands are:
 
-#### Training Commands
+### Training Commands
 
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
+- `trl reward`: train a Reward Model
 - `trl rloo`: fine-tune a LLM with RLOO
 - `trl sft`: fine-tune a LLM with SFT
 
-#### Other Commands
+### Other Commands
 
 - `trl env`: get the system information
 - `trl vllm-serve`: serve a model with vLLM
@@ -23,7 +26,7 @@ Currently supported commands are:
 
 You can launch training directly from the CLI by specifying required arguments like the model and dataset:
 
-<hfoptions id="command_line">
+<hfoptions id="trainer">
 <hfoption id="SFT">
 
 ```bash
@@ -42,13 +45,51 @@ trl dpo \
 ```
 
 </hfoption>
+<hfoption id="Reward">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k
+```
+
+</hfoption>
 </hfoptions>
 
 ### Using Configuration Files
 
 To keep your CLI commands clean and reproducible, you can define all training arguments in a YAML configuration file:
 
-<hfoptions id="config_file">
+<hfoptions id="trainer">
 <hfoption id="SFT">
 
 ```yaml
@@ -79,6 +120,70 @@ trl dpo --config dpo_config.yaml
 ```
 
 </hfoption>
+<hfoption id="Reward">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
+```
+
+</hfoption>
 </hfoptions>
 
 ### Scaling Up with Accelerate
@@ -87,8 +192,8 @@ TRL CLI natively supports [🤗 Accelerate](https://huggingface.co/docs/accelera
 
 You can pass any `accelerate launch` arguments directly to `trl`, such as `--num_processes`. For more information see [Using accelerate launch](https://huggingface.co/docs/accelerate/en/basic_tutorials/launch#using-accelerate-launch).
 
-<hfoptions id="launch_args">
-<hfoption id="SFT inline">
+<hfoptions id="trainer">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -97,8 +202,7 @@ trl sft \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="SFT w/ config file">
+or, with a config file:
 
 ```yaml
 # sft_config.yaml
@@ -114,7 +218,7 @@ trl sft --config sft_config.yaml
 ```
 
 </hfoption>
-<hfoption id="DPO inline">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
@@ -123,8 +227,7 @@ trl dpo \
   --num_processes 4
 ```
 
-</hfoption>
-<hfoption id="DPO w/ config file">
+or, with a config file:
 
 ```yaml
 # dpo_config.yaml
@@ -138,6 +241,113 @@ Launch with:
 ```bash
 trl dpo --config dpo_config.yaml
 ```
+
+</hfoption>
+<hfoption id="Reward">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --num_processes 4
+```
+
+or, with a config file:
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
+  --num_processes 4
+```
+
+or, with a config file:
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
+  --num_processes 4
+```
+
+or, with a config file:
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k \
+  --num_processes 4
+```
+
+or, with a config file:
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
+```
+
 </hfoption>
 </hfoptions>
 
@@ -145,29 +355,29 @@ trl dpo --config dpo_config.yaml
 
 The `--accelerate_config` flag lets you easily configure distributed training with [🤗 Accelerate](https://github.com/huggingface/accelerate). This flag accepts either:
 
-* the name of a predefined config profile (built into TRL), or
-* a path to a custom Accelerate YAML config file.
+- the name of a predefined config profile (built into TRL), or
+- a path to a custom Accelerate YAML config file.
 
 #### Predefined Config Profiles
 
 TRL provides several ready-to-use Accelerate configs to simplify common training setups:
 
-| Name         | Description                         |
-| ------------ | ----------------------------------- |
-| `fsdp1`      | Fully Sharded Data Parallel Stage 1 |
-| `fsdp2`      | Fully Sharded Data Parallel Stage 2 |
-| `zero1`      | DeepSpeed ZeRO Stage 1              |
-| `zero2`      | DeepSpeed ZeRO Stage 2              |
-| `zero3`      | DeepSpeed ZeRO Stage 3              |
-| `multi_gpu`  | Multi-GPU training                  |
-| `single_gpu` | Single-GPU training                 |
+| Name | Description |
+| --- | --- |
+| `fsdp1` | Fully Sharded Data Parallel Stage 1 |
+| `fsdp2` | Fully Sharded Data Parallel Stage 2 |
+| `zero1` | DeepSpeed ZeRO Stage 1 |
+| `zero2` | DeepSpeed ZeRO Stage 2 |
+| `zero3` | DeepSpeed ZeRO Stage 3 |
+| `multi_gpu` | Multi-GPU training |
+| `single_gpu` | Single-GPU training |
 
 To use one of these, just pass the name to `--accelerate_config`. TRL will automatically load the corresponding config file from `trl/accelerate_config/`.
 
 #### Example Usage
 
-<hfoptions id="accelerate_config">
-<hfoption id="SFT inline">
+<hfoptions id="trainer">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -176,8 +386,7 @@ trl sft \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="SFT w/ config file">
+or, with a config file:
 
 ```yaml
 # sft_config.yaml
@@ -193,7 +402,7 @@ trl sft --config sft_config.yaml
 ```
 
 </hfoption>
-<hfoption id="DPO inline">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
@@ -202,8 +411,7 @@ trl dpo \
   --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
-</hfoption>
-<hfoption id="DPO w/ config file">
+or, with a config file:
 
 ```yaml
 # dpo_config.yaml
@@ -217,6 +425,113 @@ Launch with:
 ```bash
 trl dpo --config dpo_config.yaml
 ```
+
+</hfoption>
+<hfoption id="Reward">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+or, with a config file:
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```bash
+trl grpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+or, with a config file:
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```bash
+trl rloo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name HuggingFaceH4/Polaris-Dataset-53K \
+  --reward_funcs accuracy_reward \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+or, with a config file:
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: HuggingFaceH4/Polaris-Dataset-53K
+reward_funcs:
+  - accuracy_reward
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```bash
+trl kto \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/kto-mix-14k \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+or, with a config file:
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/kto-mix-14k
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
+```
+
 </hfoption>
 </hfoptions>
 
@@ -224,7 +539,7 @@ trl dpo --config dpo_config.yaml
 
 You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
 
-<hfoptions id="accelerate_config">
+<hfoptions id="trainer">
 <hfoption id="SFT">
 
 ```yaml
@@ -256,6 +571,78 @@ Launch with:
 
 ```bash
 trl dpo --config dpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/tldr-preference
+  - path: trl-lib/lm-human-preferences-sentiment
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+```yaml
+# grpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: HuggingFaceH4/Polaris-Dataset-53K
+  - path: trl-lib/DeepMath-103K
+reward_funcs:
+  - accuracy_reward
+```
+
+Launch with:
+
+```bash
+trl grpo --config grpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```yaml
+# rloo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: HuggingFaceH4/Polaris-Dataset-53K
+  - path: trl-lib/DeepMath-103K
+reward_funcs:
+  - accuracy_reward
+```
+
+Launch with:
+
+```bash
+trl rloo --config rloo_config.yaml
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+```yaml
+# kto_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/kto-mix-14k
+  - path: argilla/ultrafeedback-binarized-preferences-cleaned
+```
+
+Launch with:
+
+```bash
+trl kto --config kto_config.yaml
 ```
 
 </hfoption>

@@ -12,31 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 from unittest.mock import patch
 
+import pytest
 import torch
 from datasets import load_dataset
-from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-from transformers.testing_utils import require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_vllm
+from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-class RLOOTrainerTester(TrlTestCase):
+class TestRLOOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -46,7 +44,7 @@ class RLOOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_training(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
@@ -69,12 +67,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -85,6 +83,30 @@ class RLOOTrainerTester(TrlTestCase):
             per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
+            eval_strategy="steps",
+            eval_steps=2,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
+
+    def test_training_with_num_generations_eval(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_generations_eval=1,
             eval_strategy="steps",
             eval_steps=2,
             report_to="none",
@@ -122,12 +144,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_training_peft(self):
@@ -155,15 +177,15 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_training_peft_with_gradient_checkpointing(self):
@@ -197,22 +219,22 @@ class RLOOTrainerTester(TrlTestCase):
         )
 
         # Verify gradient checkpointing is enabled
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         # Store initial parameters to check which ones change
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that only LoRA parameters have changed, base model parameters remain unchanged
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if "lora" in n.lower():  # LoRA parameters should change
-                self.assertFalse(torch.equal(param, new_param), f"LoRA parameter {n} has not changed.")
+                assert not torch.equal(param, new_param), f"LoRA parameter {n} has not changed."
             else:  # Base model parameters should not change
-                self.assertTrue(torch.equal(param, new_param), f"Base parameter {n} has changed.")
+                assert torch.equal(param, new_param), f"Base parameter {n} has changed."
 
     def test_training_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
@@ -246,12 +268,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_reward_func_standard(self):
         # Test if trainer can handle reward function with standard format
@@ -280,12 +302,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_reward_func_conversational(self):
         # Test if trainer can handle reward function with conversational format
@@ -315,12 +337,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_reward_funcs(self):
         # Test that RLOOTrainer can be instantiated with multiple reward functions
@@ -353,12 +375,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_reward_funcs_with_None_output(self):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
@@ -397,12 +419,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_reward_funcs_with_weights(self):
         """Test that RLOOTrainer can handle multiple reward functions with weights."""
@@ -437,16 +459,16 @@ class RLOOTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that training logs contain both reward metrics
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-        self.assertIn("rewards/reward_func1/mean", trainer.state.log_history[-1])
-        self.assertIn("rewards/reward_func1/std", trainer.state.log_history[-1])
-        self.assertIn("rewards/reward_func2/mean", trainer.state.log_history[-1])
-        self.assertIn("rewards/reward_func2/std", trainer.state.log_history[-1])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert "rewards/reward_func1/mean" in trainer.state.log_history[-1]
+        assert "rewards/reward_func1/std" in trainer.state.log_history[-1]
+        assert "rewards/reward_func2/mean" in trainer.state.log_history[-1]
+        assert "rewards/reward_func2/std" in trainer.state.log_history[-1]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_mixed_reward_funcs(self):
         # Test if the trainer can handle a mix of reward functions and reward models
@@ -475,12 +497,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_reward_func_additional_column(self):
         # Test if trainer can handle reward function that rely on additional columns in the dataset
@@ -492,7 +514,9 @@ class RLOOTrainerTester(TrlTestCase):
 
         def reward_func(completions, some_values, **kwargs):
             """Reward function that rewards completions with lengths closer to the values in some_values."""
-            return [float(abs(len(completion) - value)) for completion, value in zip(completions, some_values)]
+            return [
+                float(abs(len(completion) - value)) for completion, value in zip(completions, some_values, strict=True)
+            ]
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
@@ -513,12 +537,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_sync_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -544,12 +568,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_beta_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -573,16 +597,16 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
     @require_vllm
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
@@ -615,19 +639,19 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n and "original_module" not in n:
                 # We expect the peft params to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_structured_outputs(self):
         """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -653,12 +677,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_additional_generation_kwargs(self):
         """Test that training works with additional generation kwargs."""
@@ -688,15 +712,15 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -726,12 +750,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_normalized_advantages(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -756,12 +780,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_clipped_rewards(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -786,12 +810,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @patch("transformers.generation.utils.GenerationMixin.generate")
     def test_training_with_mask_truncated_completions(self, mock_generate):
@@ -836,12 +860,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_mask_truncated_completions_all_masked(self):
         """
@@ -874,14 +898,14 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
+            assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
-    def test_warning_raised_all_rewards_none(self):
+    def test_warning_raised_all_rewards_none(self, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -904,11 +928,11 @@ class RLOOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-        with self.assertLogs("trl.trainer.rloo_trainer", level="WARNING") as cm:
+        with caplog.at_level("WARNING", logger="trl.trainer.rloo_trainer"):
             trainer.train()
 
         expected_warning = "All reward functions returned None for the following kwargs:"
-        self.assertIn(expected_warning, cm.output[0])
+        assert expected_warning in caplog.text
 
     def test_training_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -933,12 +957,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_dataloader_workers(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -963,12 +987,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_generation_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -993,12 +1017,12 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_reward_func_accessing_trainer_state(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1070,20 +1094,24 @@ class RLOOTrainerTester(TrlTestCase):
         with patch.object(RLOOTrainer, "training_step", wraps=trainer.training_step) as mock_prepare:
             trainer.train()
             # 3 epochs * 2 iterations * 2 generation batches to cover the dataset * 4 steps_per_generation
-            self.assertEqual(mock_prepare.call_count, 48)
+            assert mock_prepare.call_count == 48
             for i in range(0, 8):  # Generation batch repeated 8 times (steps_per_generation*num_iterations)
                 assert mock_prepare.call_args_list[i].args[1] == expected_first_generation_batch
             for i in range(8, 16):
                 assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
 
-    @parameterized.expand(
+    @pytest.mark.parametrize(
+        "model_id",
         [
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",), seems not to support bf16 properly
-        ]
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
+            ),
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+        ],
     )
     @require_vision
     def test_training_vlm(self, model_id):
@@ -1113,7 +1141,7 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
@@ -1128,10 +1156,16 @@ class RLOOTrainerTester(TrlTestCase):
             if n.startswith(params_to_skip):
                 continue
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_training_vlm_beta_non_zero(self):
+    def test_training_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1148,7 +1182,7 @@ class RLOOTrainerTester(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -1158,7 +1192,7 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
@@ -1168,14 +1202,21 @@ class RLOOTrainerTester(TrlTestCase):
             if n.startswith(params_to_skip):
                 continue
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
+            ),
+        ],
+    )
     @require_vision
     @require_peft
-    def test_training_vlm_peft(self):
-        model = AutoModelForImageTextToText.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
-        )
+    def test_training_vlm_peft(self, model_id):
+        model = AutoModelForImageTextToText.from_pretrained(model_id)
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1203,66 +1244,26 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
-    @require_vision
-    def test_training_vlm_and_prompt_truncation(self):
-        # If not handled properly, prompt truncation may truncate image token
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
-
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
-        training_args = RLOOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            max_prompt_length=18,
-            report_to="none",
-        )
-        trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs=reward_func,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        # Check that the params have changed
-        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = ("model.visual.",)
-        for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
-            new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        ],
+    )
     @require_vision
     @require_vllm
-    @parameterized.expand(
-        [
-            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-        ]
-    )
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1292,18 +1293,21 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     @require_vision
-    def test_training_vlm_multi_image(self):
+    def test_training_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
-
-        # For now, mixing image+text and text-only examples is not supported, so we filter out text-only examples
-        dataset = dataset.filter(lambda x: len(x["images"]) > 0)
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
@@ -1319,7 +1323,7 @@ class RLOOTrainerTester(TrlTestCase):
             report_to="none",
         )
         trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -1329,11 +1333,42 @@ class RLOOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_training_with_chat_template_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            bf16=False,
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_mismatched_reward_processing_classes_length(self):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
@@ -1352,7 +1387,7 @@ class RLOOTrainerTester(TrlTestCase):
 
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
 
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError, match="must match"):
             RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=reward_models,
@@ -1360,8 +1395,6 @@ class RLOOTrainerTester(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
-
-        self.assertIn("must match", str(context.exception))
 
     def test_correct_reward_processing_classes_list(self):
         """Test that correct list of reward_processing_classes works properly."""
@@ -1392,7 +1425,7 @@ class RLOOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-        self.assertEqual(len(trainer.reward_processing_classes), len(reward_models))
+        assert len(trainer.reward_processing_classes) == len(reward_models)
 
     def test_single_reward_model_with_single_processing_class(self):
         """Test that single reward model with single processing class works."""
@@ -1416,9 +1449,5 @@ class RLOOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-        self.assertEqual(len(trainer.reward_processing_classes), 1)
-        self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert len(trainer.reward_processing_classes) == 1
+        assert trainer.reward_processing_classes[0] == single_processing_class

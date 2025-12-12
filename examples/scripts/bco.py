@@ -85,7 +85,8 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
-from trl import BCOConfig, BCOTrainer, ModelConfig, ScriptArguments, get_peft_config
+from trl import ModelConfig, ScriptArguments, get_peft_config
+from trl.experimental.bco import BCOConfig, BCOTrainer
 
 
 # Enable logging in a Hugging Face Space

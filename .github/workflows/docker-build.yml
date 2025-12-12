@@ -13,7 +13,8 @@ concurrency:
 jobs:
   trl:
     name: "Build and push TRL Docker image"
-    runs-on: ubuntu-latest
+    runs-on:
+      group: aws-general-8-plus
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -52,7 +53,8 @@ jobs:
 
   trl-dev:
     name: "Build and push TRL Dev Docker image"
-    runs-on: ubuntu-latest
+    runs-on:
+      group: aws-general-8-plus
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

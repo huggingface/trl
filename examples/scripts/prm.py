@@ -58,13 +58,12 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgum
 
 from trl import (
     ModelConfig,
-    PRMConfig,
-    PRMTrainer,
     ScriptArguments,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.prm import PRMConfig, PRMTrainer
 
 
 logger = logging.get_logger(__name__)

@@ -1,6 +1,6 @@
 # ORPO Trainer
 
-[![](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl) [![](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
+[![model badge](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl) [![model badge](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
 
 ## Overview
 
@@ -34,7 +34,7 @@ Below is the script to train the model:
 ```python
 # train_orpo.py
 from datasets import load_dataset
-from trl import ORPOConfig, ORPOTrainer
+from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -54,7 +54,7 @@ accelerate launch train_orpo.py
 
 Distributed across 8 GPUs, the training takes approximately 30 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/orpo-qwen2-reward-margin.png)
+![orpo qwen2 reward margin](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/orpo-qwen2-reward-margin.png)
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-ORPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
@@ -64,11 +64,11 @@ What is the best programming language?
 
 <strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-ORPO&gt;:</span></strong>
 It's challenging to determine the best programming language as no one language is perfect, as the complexity of a task and the type of project are significant factors. Some popular languages include Java, Python, JavaScript, and
-C++. If you have specific needs or requirements for a specific project, it's important to choose the language that best suits those needs.                                                                                          
+C++. If you have specific needs or requirements for a specific project, it's important to choose the language that best suits those needs.
 
 Here are some other factors to consider when choosing a programming language for a project:
 
- <strong><span style="color: green;">• Language proficiency:</span></strong> A good programming language is more likely to be easy to understand and use, and will allow developers to collaborate on projects more efficiently.                                     
+ <strong><span style="color: green;">• Language proficiency:</span></strong> A good programming language is more likely to be easy to understand and use, and will allow developers to collaborate on projects more efficiently.
  <strong><span style="color: green;">• Ease of use:</span></strong> There are tools and libraries available to make programming more accessible, so developers should choose a language that can help them get started easier.
  <strong><span style="color: green;">• Code readability:</span></strong> A clear and concise codebase should be easy to read and understand, especially when working with large projects.
  <strong><span style="color: green;">• Tool and framework support:</span></strong> There are numerous libraries available for Python, Java, and JavaScript, along with tools like IDEs and static code analysis tools.
@@ -79,9 +79,9 @@ Here are some other factors to consider when choosing a programming language for
 
 ## Expected dataset type
 
-ORPO requires a [preference dataset](dataset_formats#preference). The [`ORPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+ORPO requires a [preference dataset](dataset_formats#preference). The [`experimental.orpo.ORPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-Although the [`ORPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
+Although the [`experimental.orpo.ORPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
 
 ## Example script
 
@@ -118,14 +118,14 @@ While training and evaluating, we record the following reward metrics:
 - `log_odds_chosen`: the mean log odds ratio of the chosen responses over the rejected responses
 - `log_odds_ratio`: the mean of the `log(sigmoid(log_odds_chosen))`
 - `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
- 
+
 ## ORPOTrainer
 
-[[autodoc]] ORPOTrainer
+[[autodoc]] experimental.orpo.ORPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## ORPOConfig
 
-[[autodoc]] ORPOConfig
+[[autodoc]] experimental.orpo.ORPOConfig

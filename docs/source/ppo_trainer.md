@@ -1,10 +1,17 @@
 # PPO Trainer
 
-[![](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo,trl)
+<Tip warning={true}>
+
+**Deprecation Notice**: PPOTrainer and PPOConfig have been moved to `trl.experimental.ppo` and will be removed from `trl.trainer` in TRL 0.29.0. Please update your imports to use `from trl.experimental.ppo import PPOConfig, PPOTrainer` instead. See [issue #4466](https://github.com/huggingface/trl/issues/4466) for more information.
+
+</Tip>
+
+[![model badge](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo,trl)
 
 TRL supports training LLMs with [Proximal Policy Optimization (PPO)](https://huggingface.co/papers/1707.06347).
 
 References:
+
 - [Fine-Tuning Language Models from Human Preferences](https://github.com/openai/lm-human-preferences)
 - [Learning to Summarize from Human Feedback](https://github.com/openai/summarize-from-feedback)
 - [The N Implementation Details of RLHF with PPO](https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo)
@@ -31,49 +38,45 @@ python examples/scripts/ppo/ppo.py \
     --missing_eos_penalty 1.0
 ```
 
-
 ## Explanation of the logged metrics
 
 The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
-* `eps`: Tracks the number of episodes per second.
-* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
-* `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
-* `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
-* `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
-* `objective/scores`: The mean scores returned by the reward model / environment.
-* `policy/approxkl_avg`: The average approximate KL divergence between consecutive PPO policies. Note that this is not the same as `objective/kl`.
-* `policy/clipfrac_avg`: The average fraction of policy updates that are clipped, indicating how often the policy updates are constrained to prevent large changes.
-* `loss/policy_avg`: The average policy loss, indicating how well the policy is performing.
-* `loss/value_avg`: The average value loss, indicating the difference between the predicted value and the actual reward.
-* `val/clipfrac_avg`: The average fraction of value function updates that are clipped, similar to policy/clipfrac_avg but for the value function.
-* `policy/entropy_avg`: The average entropy of the policy during training, indicating how diverse the policy's actions are.
-* `val/ratio`: The mean ratio of the current policy probability to the old policy probability, providing a measure of how much the policy has changed.
-* `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
-* `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
-* `lr`: lr: The current learning rate used by the optimizer.
-* `episode`: episode: The current episode count in the training process.
-
+- `eps`: Tracks the number of episodes per second.
+- `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
+- `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
+- `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
+- `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
+- `objective/scores`: The mean scores returned by the reward model / environment.
+- `policy/approxkl_avg`: The average approximate KL divergence between consecutive PPO policies. Note that this is not the same as `objective/kl`.
+- `policy/clipfrac_avg`: The average fraction of policy updates that are clipped, indicating how often the policy updates are constrained to prevent large changes.
+- `loss/policy_avg`: The average policy loss, indicating how well the policy is performing.
+- `loss/value_avg`: The average value loss, indicating the difference between the predicted value and the actual reward.
+- `val/clipfrac_avg`: The average fraction of value function updates that are clipped, similar to policy/clipfrac_avg but for the value function.
+- `policy/entropy_avg`: The average entropy of the policy during training, indicating how diverse the policy's actions are.
+- `val/ratio`: The mean ratio of the current policy probability to the old policy probability, providing a measure of how much the policy has changed.
+- `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
+- `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
+- `lr`: lr: The current learning rate used by the optimizer.
+- `episode`: episode: The current episode count in the training process.
 
 ## Cookbook
 
-* Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
-* Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try understand why this is happening and try to fix it.
-* Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
-* Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
-* Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
-
+- Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
+- Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try understand why this is happening and try to fix it.
+- Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
+- Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
+- Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
 
 ## What is my model doing exactly?
 
 To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
+![ppov2_completions](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
 
+In the logs the sampled generations look like
 
-In the logs the sampled generations look like 
-
-```
+```txt
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
 ┃ query                           ┃ model response                  ┃ score    ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
@@ -177,7 +180,7 @@ This PPO implementation is based on the [The N+ Implementation Details of RLHF w
 
 To validate the PPO implementation works, we ran experiment on the 1B model. Here are the command we used to run the experiment. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
-```
+```shell
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
     --output_dir models/minimal/ppo_tldr \
@@ -212,8 +215,7 @@ The PPO checkpoint gets a 64.7% preferred rate vs the 33.0% preference rate of t
 
 Metrics:
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2.png)
-
+![PPO v2](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2.png)
 
 ```bash
 # pip install openrlbenchmark==0.2.1a5
@@ -232,11 +234,31 @@ python -m openrlbenchmark.rlops_multi_metrics \
 
 ## PPOTrainer
 
-[[autodoc]] PPOTrainer
+[[autodoc]] experimental.ppo.PPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## PPOConfig
 
-[[autodoc]] PPOConfig
+[[autodoc]] experimental.ppo.PPOConfig
+
+## PreTrainedModelWrapper
+
+[[autodoc]] experimental.ppo.PreTrainedModelWrapper
+
+## AutoModelForCausalLMWithValueHead
+
+[[autodoc]] experimental.ppo.AutoModelForCausalLMWithValueHead
+    - __init__
+    - forward
+    - generate
+    - _init_weights
+
+## AutoModelForSeq2SeqLMWithValueHead
+
+[[autodoc]] experimental.ppo.AutoModelForSeq2SeqLMWithValueHead
+    - __init__
+    - forward
+    - generate
+    - _init_weights
