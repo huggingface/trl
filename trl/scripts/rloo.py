@@ -40,7 +40,7 @@ from trl import (
     get_dataset,
     get_peft_config,
 )
-from trl.rewards import accuracy_reward, get_soft_overlong_punishment, think_format_reward
+from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
 
 
 logger = logging.get_logger(__name__)
@@ -51,6 +51,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 reward_funcs_registry = {
     "accuracy_reward": accuracy_reward,
+    "reasoning_accuracy_reward": reasoning_accuracy_reward,
     "think_format_reward": think_format_reward,
     "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
 }
@@ -67,8 +68,8 @@ class RLOOScriptArguments(ScriptArguments):
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
         reward_funcs (`list[str]`, *optional*):
             Reward functions to use. Supported values are:
-
                 - `"accuracy_reward"`
+                - `"reasoning_accuracy_reward"`
                 - `"think_format_reward"`
                 - `"get_soft_overlong_punishment"` (used value are `max_completion_len=1280`, `soft_punish_cache=256`)
                 - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
@@ -84,8 +85,8 @@ class RLOOScriptArguments(ScriptArguments):
     reward_funcs: list[str] | None = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. Supported values are: `accuracy_reward`, `think_format_reward`, "
-            "`get_soft_overlong_punishment` (used value are `max_completion_len=1280`, `soft_punish_cache=256`), or "
+            "help": "Reward functions to use. Supported values are: `accuracy_reward`,  `reasoning_accuracy_reward`, `think_format_reward`, "
+            "`get_soft_overlong_punishment` (used values are `max_completion_len=1280`, `soft_punish_cache=256`), or "
             "any dotted import path (e.g., `'my_lib.rewards.custom_reward'`)."
         },
     )

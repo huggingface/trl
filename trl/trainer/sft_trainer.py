@@ -39,6 +39,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
+from ..chat_template_utils import clone_chat_template
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -48,7 +49,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
     truncate_dataset,
 )
-from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
+from ..models import get_act_offloading_ctx_manager
 from .base_trainer import BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
@@ -63,7 +64,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, PeftType
+    from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
 
 logger = logging.get_logger(__name__)
@@ -693,12 +694,34 @@ class SFTTrainer(BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
+        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+            # If the model is already a PeftModel, we need to merge and unload it.
+            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+            model = model.merge_and_unload()
+
+        # Create PEFT model
+        if peft_config is not None:
+            model = get_peft_model(model, peft_config)
+
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
         # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
         self.num_virtual_tokens = 0
-
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
+        if is_peft_available() and isinstance(model, PeftModel):
             if model.active_adapter in model.peft_config:
                 peft_model_config = model.peft_config[model.active_adapter]
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
@@ -1071,6 +1094,11 @@ class SFTTrainer(BaseTrainer):
 
                 dataset = dataset.select_columns(columns)
 
+                # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
+                # packing as well to avoid correlations between sequences packed together.
+                if args.shuffle_dataset:
+                    dataset = dataset.shuffle(seed=args.seed)
+
                 # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
@@ -1082,6 +1110,9 @@ class SFTTrainer(BaseTrainer):
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
                 column_names = get_dataset_column_names(dataset)
                 dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
+
+        if args.shuffle_dataset:
+            dataset = dataset.shuffle(seed=args.seed)
 
         return dataset
 
@@ -1110,7 +1141,8 @@ class SFTTrainer(BaseTrainer):
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
-        labels = inputs["labels"]
+        # When using CP or SP, labels are pre-shifted, we must use shift_labels instead.
+        labels = inputs["labels"] if "shift_labels" not in inputs else None
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
@@ -1164,7 +1196,7 @@ class SFTTrainer(BaseTrainer):
             # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():
                 if "shift_labels" in inputs:
-                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # When using CP or SP, labels are pre-shifted. We must use these (and cannot manually shift) because:
                     # - The first discarded token from inputs["labels"] actually belongs to process n-1
                     # - The last logits require the label from process n+1
                     shift_logits = outputs.logits.contiguous()

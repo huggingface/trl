@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 
 
@@ -180,25 +179,10 @@ class ModelConfig:
         default=None,
         metadata={"help": "Quantization storage dtype"},
     )
-    # Deprecated params
-    torch_dtype: str | None = field(
-        default=None,
-        metadata={
-            "help": "Override the default `torch.dtype` and load the model under this dtype.",
-            "choices": ["auto", "bfloat16", "float16", "float32"],
-        },
-    )
 
     def __post_init__(self):
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
-
-        if self.torch_dtype and not self.dtype:
-            warnings.warn(
-                "`torch_dtype` is deprecated and will be removed in version 0.27.0, please use `dtype` instead.",
-                FutureWarning,
-            )
-            self.dtype = self.torch_dtype
 
         if hasattr(self.lora_target_modules, "__len__") and len(self.lora_target_modules) == 1:
             self.lora_target_modules = self.lora_target_modules[0]

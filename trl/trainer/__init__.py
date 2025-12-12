@@ -23,7 +23,6 @@ _import_structure = {
     "callbacks": [
         "BEMACallback",
         "LogCompletionsCallback",
-        "MergeModelCallback",
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WeaveCallback",
@@ -66,13 +65,7 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
-    "utils": [
-        "RunningMoments",
-        "compute_accuracy",
-        "disable_dropout_in_model",
-        "empty_cache",
-        "peft_module_casting_to_bf16",
-    ],
+    "utils": ["RunningMoments", "disable_dropout_in_model", "empty_cache", "peft_module_casting_to_bf16"],
     "xpo_config": ["XPOConfig"],
     "xpo_trainer": ["XPOTrainer"],
 }
@@ -83,7 +76,6 @@ if TYPE_CHECKING:
     from .callbacks import (
         BEMACallback,
         LogCompletionsCallback,
-        MergeModelCallback,
         RichProgressCallback,
         SyncRefModelCallback,
         WeaveCallback,
@@ -126,13 +118,7 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
-    from .utils import (
-        RunningMoments,
-        compute_accuracy,
-        disable_dropout_in_model,
-        empty_cache,
-        peft_module_casting_to_bf16,
-    )
+    from .utils import RunningMoments, disable_dropout_in_model, empty_cache, peft_module_casting_to_bf16
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
 else:

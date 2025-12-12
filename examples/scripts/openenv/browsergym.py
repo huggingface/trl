@@ -93,7 +93,7 @@ def parse_args() -> argparse.Namespace:
         help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
     parser.add_argument(
-        "--env-image", type=str, default="openspiel-env:latest", help="Docker image for the OpenSpiel environment."
+        "--env-image", type=str, default="browsergym-env:latest", help="Docker image for the BrowserGym environment."
     )
     parser.add_argument(
         "--benchmark",
@@ -458,6 +458,7 @@ def main() -> None:
         print("🌍 Using existing BrowserGym Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
+        client = BrowserGymEnv(base_url=env_url)
         print(f"🌍 Using Hugging Face Space environment at: {env_url}")
     else:
         raise ValueError(f"Unknown environment mode: {args.env_mode}")

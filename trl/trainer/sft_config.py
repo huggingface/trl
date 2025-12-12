@@ -64,6 +64,8 @@ class SFTConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
+        shuffle_dataset (`bool`, *optional*, defaults to `False`):
+            Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
@@ -196,6 +198,10 @@ class SFTConfig(TrainingArguments):
             "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
             "sequence length."
         },
+    )
+    shuffle_dataset: bool = field(
+        default=False,
+        metadata={"help": "Whether to shuffle the dataset."},
     )
     packing: bool = field(
         default=False,

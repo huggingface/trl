@@ -374,8 +374,7 @@ After training your reward adapter and pushing it to the Hub:
 
 ```python
 from peft import LoraConfig
-from trl import AutoModelForCausalLMWithValueHead
-from trl.experimental.ppo import PPOTrainer
+from trl.experimental.ppo import PPOTrainer, AutoModelForCausalLMWithValueHead
 
 model_name = "huggyllama/llama-7b"
 rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
@@ -822,6 +821,6 @@ model = AutoModelForCausalLM.from_pretrained(
 
 ### Research Papers
 
-- [LoRA Paper](https://arxiv.org/abs/2106.09685) - Original LoRA methodology and results
-- [QLoRA Paper](https://arxiv.org/abs/2305.14314) - Efficient finetuning with 4-bit quantization
-- [Prompt Tuning Paper](https://arxiv.org/abs/2104.08691) - The Power of Scale for Parameter-Efficient Prompt Tuning
+- [LoRA Paper](https://huggingface.co/papers/2106.09685) - Original LoRA methodology and results
+- [QLoRA Paper](https://huggingface.co/papers/2305.14314) - Efficient finetuning with 4-bit quantization
+- [Prompt Tuning Paper](https://huggingface.co/papers/2104.08691) - The Power of Scale for Parameter-Efficient Prompt Tuning

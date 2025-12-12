@@ -43,7 +43,6 @@ def _build_colocate_sampling_params(
         "top_k": -1 if trainer.top_k is None else trainer.top_k,
         "min_p": 0.0 if trainer.min_p is None else trainer.min_p,
         "max_tokens": trainer.max_completion_length,
-        "truncate_prompt_tokens": trainer.max_prompt_length,
         "guided_decoding": guided_decoding,
     }
     if trainer.repetition_penalty is not None:
@@ -101,6 +100,8 @@ def generate_rollout_completions(
 
     if trainer.args.vllm_enable_sleep_mode:
         trainer.llm.wake_up(tags=["kv_cache"])
+        # Work around for https://github.com/vllm-project/vllm/issues/29341
+        trainer.llm.collective_rpc("reload_weights")
 
     with profiling_context(trainer, "vLLM.generate_rollout"):
         if as_chat:

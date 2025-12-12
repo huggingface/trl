@@ -220,7 +220,7 @@ def apply_chat_template(
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
         last_role = example["prompt"][-1]["role"]
-        if last_role == "user":
+        if last_role in ["user", "tool"]:
             add_generation_prompt = True
             continue_final_message = False
         elif last_role == "assistant":
@@ -602,7 +602,7 @@ class _SegmentTree:
     A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger
     value for a given input within the range [1, maxval].
 
-    See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
+    See [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830) for more details.
     """
 
     def __init__(self, maxval: int):

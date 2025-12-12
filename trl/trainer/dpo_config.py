@@ -222,16 +222,6 @@ class DPOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to generate and log completions from both the model and the reference model to W&B or Comet during
             evaluation.
-
-        > Deprecated parameters
-
-        padding_value:
-
-            <Deprecated version="0.24.0">
-
-            This parameter is deprecated and will be removed in version 0.26.0. Use `pad_token` (`str`) instead.
-
-            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
@@ -506,12 +496,6 @@ class DPOConfig(TrainingArguments):
             "help": "Whether to generate and log completions from both the model and the reference model to W&B, MLFLow "
             "or Comet during evaluation."
         },
-    )
-
-    # Deprecated arguments
-    padding_value: int | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `pad_token` (str) instead."},
     )
 
     def __post_init__(self):

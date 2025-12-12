@@ -36,14 +36,9 @@ from transformers.utils import is_peft_available
 from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
-from ...trainer.utils import (
-    SIMPLE_CHAT_TEMPLATE,
-    empty_cache,
-    get_reward,
-    selective_log_softmax,
-    truncate_right,
-)
+from ...trainer.utils import empty_cache, get_reward, selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
+from ..utils import SIMPLE_CHAT_TEMPLATE, truncate_right
 from .xpo_config import XPOConfig
 
 
@@ -60,7 +55,7 @@ class XPOTrainer(OnlineDPOTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model ([`PreTrainedModelWrapper`]):
+        ref_model ([`~transformers.PreTrainedModel`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
@@ -73,8 +68,8 @@ class XPOTrainer(OnlineDPOTrainer):
             The XPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
