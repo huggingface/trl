@@ -788,41 +788,22 @@ SFTConfig(
 
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
+For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
+
 ### LoRA: Low-Rank Adaptation of Large Language Models
 
 **📜 Paper**: https://huggingface.co/papers/2106.09685
 
-Parameter-efficient fine-tuning via **low-rank adapters**, cutting trainable parameters and memory while preserving quality (see PEFT integration in TRL).
+Low-Rank Adaptation (LoRA) reduces the number of trainable parameters and GPU memory usage in large-scale pre-trained models while maintaining or improving performance on downstream tasks. TRL integrates LoRA via the [PEFT library](https://huggingface.co/docs/peft/index) and can be easily enabled in any TRL trainer by passing a [`~peft.LoraConfig`] to the `peft_config` argument. Here is an example of using LoRA with the [`SFTTrainer`]:
+
 ```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTTrainer, SFTConfig
+from trl import SFTTrainer
 from peft import LoraConfig
 
-# minimal, self-contained setup
-model_id = "meta-llama/Llama-3.1-8B-Instruct"  # any causal LM
-tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
-model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
-
-# only the essential PEFT info; keep the rest at defaults
-peft_cfg = LoraConfig(task_type="CAUSAL_LM")
-# If a model needs explicit targets, uncomment and adjust:
-# peft_cfg = LoraConfig(task_type="CAUSAL_LM", target_modules=["q_proj","k_proj","v_proj","o_proj"])
-
-training_args = SFTConfig(  # lean config; defaults otherwise
-    max_seq_length=2048,
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=8,
-)
-
 trainer = SFTTrainer(
-    model=model,
-    tokenizer=tok,
-    args=training_args,
-    peft_config=peft_cfg,
-    train_dataset=...,  # your dataset
+    ...,
+    peft_config=LoraConfig(),
 )
-trainer.train()
-
 ```
 
 ## Reinforce Leave-One-Out
@@ -920,106 +901,21 @@ def add_margin(example):
 
 dataset = dataset.map(add_margin)
 ```
-### Solving Math Word Problems with Process- and Outcome-Based Feedback
-**📜 Paper**: https://huggingface.co/papers/2211.14275
 
-Shows benefits of **process supervision** (step-level) alongside outcome labels for math reasoning, motivating richer feedback signals for alignment.
-```python
-# Combine step-level (process) and final-answer (outcome) rewards
-from trl import GRPOConfig, GRPOTrainer
-
-def process_reward(sample) -> float:
-    # e.g., +1 for each verified-correct reasoning step (paper-specific)
-    return sample.get("num_correct_steps", 0) / max(1, sample.get("num_steps", 1))
-
-def outcome_reward(sample) -> float:
-    return 1.0 if sample.get("is_correct") else 0.0
-
-def fused_reward(sample) -> float:
-    return 0.5 * process_reward(sample) + 0.5 * outcome_reward(sample)
-
-args = GRPOConfig(loss_type="grpo", beta=0.0, steps_per_generation=4, num_generations=4)
-trainer = GRPOTrainer(model=..., args=args, tokenizer=..., train_dataset=..., reward_funcs=[fused_reward])
-trainer.train()
-
-```
-
-## Distillation / Post-training (Background)
-
-### On-Policy Distillation of Language Models
-**📜 Paper**: https://huggingface.co/papers/2306.13649
-
-Introduces **GKD**, aligning student with teacher **on-policy** to stabilize/boost instruction tuning and integrate cleanly with RLHF pipelines.
-```python
-# 1) Have the TEACHER generate outputs on current prompts (on-policy)
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTTrainer, SFTConfig
-
-teacher = AutoModelForCausalLM.from_pretrained("teacher-model"); tok = AutoTokenizer.from_pretrained("teacher-model")
-def teacher_label(prompt):
-    out = teacher.generate(**tok(prompt, return_tensors="pt").to(teacher.device), max_new_tokens=256)
-    return tok.decode(out[0], skip_special_tokens=True)
-
-distill_ds = prompts_ds.map(lambda ex: {"prompt": ex["prompt"], "response": teacher_label(ex["prompt"])})
-
-# 2) Train STUDENT with SFT on those on-policy pairs
-student = AutoModelForCausalLM.from_pretrained("student-model")
-args = SFTConfig(max_seq_length=2048, per_device_train_batch_size=4, learning_rate=5e-5)
-trainer = SFTTrainer(model=student, args=args, tokenizer=tok, train_dataset=distill_ds)
-trainer.train()
-
-```
-
-## Foundations & Systems (Background)
-
-### Proximal Policy Optimization Algorithms
-**📜 Paper**: https://huggingface.co/papers/1707.06347
-
-Foundational **PPO** objective with clipped ratios and minibatch epochs—baseline for many RL/RLHF variants used in TRL.
-```python
-from trl import GRPOConfig, GRPOTrainer
-args = GRPOConfig(
-    loss_type="grpo",
-    epsilon=0.2, epsilon_high=0.2,  # classic PPO-style symmetric clip
-    beta=0.01,                      # KL coef if you want explicit KL
-    steps_per_generation=4, num_generations=8,
-)
-trainer = GRPOTrainer(model=..., args=args, tokenizer=..., train_dataset=...)
-trainer.train()
-
-```
+## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion-Parameter Models
+
 **📜 Paper**: https://huggingface.co/papers/1910.02054
 
-**ZeRO** partitions optimizer states/gradients/params to scale training efficiently; relevant when configuring DeepSpeed/Accelerate with TRL.
-```python
-# Most TRL configs forward to HF TrainingArguments under the hood.
-# Supply a DeepSpeed ZeRO config via the "deepspeed" argument/path.
-from trl import DPOConfig, DPOTrainer
-
-args = DPOConfig(
-    loss_type="sigmoid",
-    beta=0.1,
-    deepspeed="ds_zero_stage2.json",  # path to your ZeRO config
-    bf16=True,
-)
-
-# ds_zero_stage2.json (very small sketch)
-# {
-#   "zero_optimization": { "stage": 2 },
-#   "train_micro_batch_size_per_gpu": 4,
-#   "gradient_accumulation_steps": 8
-# }
-
-trainer = DPOTrainer(model=..., args=args, tokenizer=..., train_dataset=...)
-trainer.train()
-
+**ZeRO** partitions optimizer states/gradients/params to scale training efficiently. TRL relies on [DeepSpeed](https://www.deepspeed.ai/) for ZeRO support. See the [DeepSpeed Integration](deepspeed_integration) guide for details.
 
 ## Distillation
+
 Papers relating to training a student model with the help of a teacher model.
 
 ### On-Policy Distillation
+
 **📰 Blog**: https://thinkingmachines.ai/blog/on-policy-distillation/
 
 On-Policy Distillation involves a student model generating rollouts for each batch of training data. We subsequently obtain the probability distributions for each token of the rollouts from both the student and teacher models. The student model is then optimized to minimize the negative Kullback-Leibler (KL) divergence between its own token distributions and those of the teacher model.
