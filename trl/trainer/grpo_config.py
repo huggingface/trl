@@ -137,6 +137,9 @@ class GRPOConfig(TrainingArguments):
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
 
         > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
 
@@ -159,7 +162,8 @@ class GRPOConfig(TrainingArguments):
 
         beta (`float`, *optional*, defaults to `0.0`):
             KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and improving
-            training speed.
+            training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement
+            learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -271,6 +275,10 @@ class GRPOConfig(TrainingArguments):
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
             Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
             ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+        use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
+            Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
+            KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
+            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
 
         > Parameters that control the logging
 
@@ -292,15 +300,6 @@ class GRPOConfig(TrainingArguments):
 
             Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
             filter your dataset before training to ensure that prompts do not exceed your desired length.
-
-            </Deprecated>
-
-        wandb_log_unique_prompts (`bool`, *optional*):
-
-            <Deprecated version="0.26.0">
-
-            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.27.0. Use
-            `log_unique_prompts` instead.
 
             </Deprecated>
     """
@@ -546,6 +545,13 @@ class GRPOConfig(TrainingArguments):
             "after the timeout, a `ConnectionError` is raised."
         },
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group. This is used to communicate with the vLLM server. "
+            "Unless the port is occupied, there is no need to change it.",
+        },
+    )
 
     # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
@@ -577,7 +583,8 @@ class GRPOConfig(TrainingArguments):
         default=0.0,
         metadata={
             "help": "KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and "
-            "improving training speed."
+            "improving training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement "
+            "learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`."
         },
     )
     num_iterations: int = field(
@@ -753,6 +760,14 @@ class GRPOConfig(TrainingArguments):
             "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
+    use_bias_correction_kl: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
+            "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
+            "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -781,10 +796,6 @@ class GRPOConfig(TrainingArguments):
             "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
             "desired length."
         },
-    )
-    wandb_log_unique_prompts: bool | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
     )
 
     def __post_init__(self):
@@ -817,11 +828,14 @@ class GRPOConfig(TrainingArguments):
             )
 
         if self.do_eval and self.eval_strategy != "no":
+            # Determine the number of generations to use for evaluation
+            num_generations = self.num_generations_eval or self.num_generations
+
             # Just ensure the value is divisible by the global batch size
-            if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
+            if (self.per_device_eval_batch_size * num_processes) % num_generations != 0:
                 raise ValueError(
                     f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
-                    f"divisible by num_generations ({self.num_generations})."
+                    f"divisible by the number of generations used for evaluation ({num_generations})."
                 )
 
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
@@ -858,12 +872,3 @@ class GRPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
-
-        if self.wandb_log_unique_prompts is not None:
-            warnings.warn(
-                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.27.0. Please "
-                "use `log_unique_prompts` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.log_unique_prompts = self.wandb_log_unique_prompts

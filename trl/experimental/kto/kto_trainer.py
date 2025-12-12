@@ -50,16 +50,16 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_liger_kernel_available
-from ...models import create_reference_model, prepare_deepspeed
+from ...models.utils import create_reference_model, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    DPODataCollatorWithPadding,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from ..utils import DPODataCollatorWithPadding
 from .kto_config import KTOConfig
 
 
@@ -282,7 +282,7 @@ class KTOTrainer(BaseTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
-        ref_model ([`PreTrainedModelWrapper`]):
+        ref_model ([`~transformers.PreTrainedModel`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
@@ -298,8 +298,8 @@ class KTOTrainer(BaseTrainer):
             reuse the fine-tuned model.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
@@ -1100,14 +1100,18 @@ class KTOTrainer(BaseTrainer):
                 "examples for which an output sequence was predicted."
             )
 
-        chosen_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True]
-        rejected_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False]
+        # Use torch.nonzero for efficient tensor index selection
+        device = completion_logits.device
+        labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+        chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+        rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
-        chosen_logps = completion_logps[chosen_idx, ...]
-        rejected_logps = completion_logps[rejected_idx, ...]
+        # Use index_select for efficient CUDA operations
+        chosen_logps = completion_logps.index_select(0, chosen_idx)
+        rejected_logps = completion_logps.index_select(0, rejected_idx)
 
-        chosen_logits = completion_logits[chosen_idx, ...]
-        rejected_logits = completion_logits[rejected_idx, ...]
+        chosen_logits = completion_logits.index_select(0, chosen_idx)
+        rejected_logits = completion_logits.index_select(0, rejected_idx)
 
         if self.aux_loss_enabled:
             return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
@@ -1399,11 +1403,15 @@ class KTOTrainer(BaseTrainer):
 
             # if reference_logps in batch use them, otherwise use the reference model
             if "reference_logps" in batch:
-                chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
-                rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is False]
+                # Convert Python lists to tensor indices for efficient CUDA operations
+                device = batch["reference_logps"].device
+                labels = torch.as_tensor(batch["label"], dtype=torch.bool, device=device)
+                chosen_idx = torch.nonzero(labels, as_tuple=False).view(-1)
+                rejected_idx = torch.nonzero(~labels, as_tuple=False).view(-1)
 
-                reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
-                reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
+                # Use index_select for efficient CUDA operations
+                reference_chosen_logps = batch["reference_logps"].index_select(0, chosen_idx)
+                reference_rejected_logps = batch["reference_logps"].index_select(0, rejected_idx)
                 if self.calculate_KL:
                     reference_KL_logps = batch["reference_KL_logps"]
                 else:

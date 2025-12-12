@@ -39,6 +39,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
+from ..chat_template_utils import clone_chat_template
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
@@ -48,7 +49,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
     truncate_dataset,
 )
-from ..models import clone_chat_template, get_act_offloading_ctx_manager
+from ..models import get_act_offloading_ctx_manager
 from .base_trainer import BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
