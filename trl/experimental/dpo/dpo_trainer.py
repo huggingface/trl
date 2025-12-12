@@ -25,6 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState, logging
 from accelerate.utils import is_peft_model
+from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from datasets.fingerprint import Hasher
 from transformers import (
@@ -55,7 +56,7 @@ from ...trainer.utils import (
     selective_log_softmax,
 )
 from .dpo_config import DPOConfig
-from .utils import (
+from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
@@ -69,15 +70,15 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 FLASH_ATTENTION_VARIANTS = {
     "flash_attention_2",
     "flash_attention_3",
-    "kernels-community/flash-attn",
-    "kernels-community/vllm-flash-attn3",
+    "kernels-community/flash-attn2",
     "kernels-community/flash-attn3",
+    "kernels-community/vllm-flash-attn3",
 }
 
 
@@ -180,17 +181,18 @@ class DPOTrainer(BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method. This algorithm was initially proposed in the paper [Direct
     Preference Optimization: Your Language Model is Secretly a Reward Model](https://huggingface.co/papers/2305.18290).
+    This class is a wrapper around the [`~transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Example:
 
     ```python
-    from datasets import load_dataset
     from trl import DPOTrainer
+    from datasets import load_dataset
 
     dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
     trainer = DPOTrainer(
-        model="Qwen/Qwen2-0.5B-Instruct",
+        model="Qwen/Qwen2.5-0.5B-Instruct",
         train_dataset=dataset,
     )
     trainer.train()
@@ -203,8 +205,8 @@ class DPOTrainer(BaseTrainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
-              `args.model_init_kwargs`.
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
@@ -213,7 +215,7 @@ class DPOTrainer(BaseTrainer):
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
             [`~trainer.dpo_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. It supports both [language modeling](#language-modeling) type and
+            Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
@@ -232,9 +234,9 @@ class DPOTrainer(BaseTrainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
-            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
-            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
@@ -284,23 +286,13 @@ class DPOTrainer(BaseTrainer):
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
 
-        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
-        # Inspect the forward method before we wrap the model with PEFT
-        self.model_kwarg_keys = (
-            inspect.signature(model.forward).parameters.keys()
-            if not hasattr(model, "get_base_model")
-            else inspect.signature(model.get_base_model().forward).parameters.keys()
-        )
-
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
-            )
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -346,9 +338,27 @@ class DPOTrainer(BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
 
-        # Dataset
-        self.shuffle_dataset = args.shuffle_dataset
+        # Data collator
+        if data_collator is None and not self._is_vision_dataset:
+            # Get the pad token: if not provided, use the one from the processing class or the eos token
+            # if the processing class does not have a pad token.
+            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
+            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
+            if pad_token_id is None:
+                raise ValueError(
+                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
+                    "in the vocabulary before using it as a padding token."
+                )
+            data_collator = DataCollatorForPreference(
+                pad_token_id=pad_token_id,
+                pad_to_multiple_of=args.pad_to_multiple_of,
+            )
+        elif data_collator is None and self._is_vision_dataset:
+            raise NotImplementedError("VLM training is not yet implemented.")
 
+
+        # Dataset
         dataset_sample = next(iter(train_dataset))
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
@@ -370,25 +380,6 @@ class DPOTrainer(BaseTrainer):
                     }
                 else:
                     eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
-
-        # Data collator
-        if data_collator is None and not self._is_vision_dataset:
-            # Get the pad token: if not provided, use the one from the processing class or the eos token
-            # if the processing class does not have a pad token.
-            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
-            if pad_token_id is None:
-                raise ValueError(
-                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
-                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
-                    "in the vocabulary before using it as a padding token."
-                )
-            data_collator = DataCollatorForPreference(
-                pad_token_id=pad_token_id,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
-        elif data_collator is None and self._is_vision_dataset:
-            raise NotImplementedError("VLM training is not yet implemented.")
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
@@ -473,7 +464,7 @@ class DPOTrainer(BaseTrainer):
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
-        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         args: DPOConfig,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
@@ -814,7 +805,7 @@ class DPOTrainer(BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs.update(metrics)
+        logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
