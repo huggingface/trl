@@ -362,9 +362,6 @@ def cap_exp(value, cap=-1):
     return torch.exp(torch.clamp(value, max=cap))
 
 
-SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
-
-
 def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     """
     Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving the position of the
@@ -494,35 +491,6 @@ def prepare_deepspeed(
     model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
     model.eval()
     return model
-
-
-def truncate_right(
-    input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Truncates the input tensor from the right side after the first occurrence of the stop token.
-
-    Args:
-        input_ids (`torch.Tensor`):
-            The tensor containing the responses to be truncated
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs
-        pad_token_id (`int`):
-            The token ID representing the pad token used to fill the truncated responses
-
-    Returns:
-        tuple:
-            - `output_ids` (`torch.Tensor`):
-                The truncated responses tensor with pad tokens filled after the stop token
-            - `mask` (`torch.Tensor`):
-                The mask tensor to indicate the padding tokens
-    """
-    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
-    new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
-    idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
-    output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
-    mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
-    return output_ids, mask
 
 
 def empty_cache() -> None:
