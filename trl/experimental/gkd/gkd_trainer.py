@@ -271,9 +271,6 @@ class GKDTrainer(SFTTrainer):
             # Compute the Generalized Jensen-Shannon Divergence
             jsd = beta * kl_teacher + (1 - beta) * kl_student
 
-        # Sum over the vocabulary dimension
-        jsd = jsd.sum(dim=-1)
-
         # Masking
         if labels is not None:
             mask = labels != -100
