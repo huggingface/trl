@@ -872,10 +872,9 @@ class GOLDTrainer(SFTTrainer):
             "top_k": args.top_k,
             "pad_token_id": self.processing_class.pad_token_id,
         }
-        # Create training-specific generation config from the model's original generation config
-        # Then overwrite it with the training-specific generation kwargs
-        self.generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
-        self.generation_config.update(**generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
+        self.generation_kwargs = generation_kwargs
         if (
             hasattr(self.model.generation_config, "eos_token_id")
             and self.model.generation_config.eos_token_id is not None
@@ -1921,7 +1920,7 @@ class GOLDTrainer(SFTTrainer):
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
             else:
                 with unwrap_model_for_generation(
-                    model, self.accelerator, generation_config=self.generation_config
+                    model, self.accelerator, generation_kwargs=self.generation_kwargs
                 ) as unwrapped_model:
                     result = self.generate_on_policy_outputs(
                         unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
