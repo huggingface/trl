@@ -608,10 +608,7 @@ class PPOTrainer(BaseTrainer):
             "top_p": 1.0,
             "do_sample": True,
         }
-        # Create training-specific generation config from the model's original generation config
-        # Then overwrite it with the training-specific generation kwargs
-        generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
-        generation_config.update(**generation_kwargs)
+        generation_config = GenerationConfig(**generation_kwargs)
 
         accelerator.print("===training policy===")
         start_time = time.time()
@@ -670,7 +667,7 @@ class PPOTrainer(BaseTrainer):
                     self.model,
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-                    generation_config=generation_config,
+                    generation_kwargs=generation_kwargs,
                 ) as unwrapped_model:
                     query_responses, logitss = batch_generation(
                         unwrapped_model.policy,
@@ -942,17 +939,14 @@ class PPOTrainer(BaseTrainer):
             "top_p": 1.0,
             "do_sample": True,
         }
-        # Create training-specific generation config from the model's original generation config
-        # Then overwrite it with the training-specific generation kwargs
-        generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
-        generation_config.update(**generation_kwargs)
+        generation_config = GenerationConfig(**generation_kwargs)
 
         table = defaultdict(list)
         with unwrap_model_for_generation(
             self.model,
             self.accelerator,
             gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-            generation_config=generation_config,
+            generation_kwargs=generation_kwargs,
         ) as unwrapped_model:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
