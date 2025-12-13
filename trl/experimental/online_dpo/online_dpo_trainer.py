@@ -542,10 +542,9 @@ class OnlineDPOTrainer(BaseTrainer):
                 generation_kwargs.update(args.generation_kwargs)
             # Remove None values
             generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
-            # Create training-specific generation config from the model's original generation config
-            # Then overwrite it with the training-specific generation kwargs
-            self.generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
-            self.generation_config.update(**generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs)
+            # Keep training-specific generation kwargs to overwrite model's original generation config
+            self.generation_kwargs = generation_kwargs
 
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
@@ -1111,7 +1110,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     model,
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-                    generation_config=self.generation_config,
+                    generation_kwargs=self.generation_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
