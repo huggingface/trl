@@ -787,8 +787,8 @@ def pack_dataset(
 def truncate_dataset(
     dataset: DatasetType,
     max_length: int,
-    columns: Union[str, list[str]] = "all",
-    map_kwargs: Optional[dict[str, Any]] = None,
+    columns: str | list[str] = "all",
+    map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
     Truncate sequences in a dataset to a specified `max_length`.
