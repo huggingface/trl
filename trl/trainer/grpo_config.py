@@ -628,6 +628,13 @@ class GRPOConfig(TrainingArguments):
             "paper](https://huggingface.co/papers/2511.20347)."
         },
     )
+    off_policy_mask_threshold: float | None = field(
+        default=None,
+        metadata={
+            "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
+            "TODO @casinca"
+        },
+    )
     importance_sampling_level: str = field(
         default="token",
         metadata={
