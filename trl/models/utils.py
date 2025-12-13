@@ -139,7 +139,7 @@ def _unwrap_model_for_generation(
 
 
 @contextmanager
-def _override_model_generation_config(model, generation_config):
+def _override_model_generation_config(model, generation_config=None, generation_kwargs=None):
     """
     Context manager to temporarily override a model's generation_config with training config.
 
@@ -154,14 +154,18 @@ def _override_model_generation_config(model, generation_config):
         model: The model (typically unwrapped_model) whose generation_config to temporarily override.
         generation_config (GenerationConfig): Generation config to be used to override model's one.
     """
-    if generation_config is None:
+    if generation_config is None and generation_kwargs is None:
         yield model
         return
-
     # If it is a PEFT model, override the underlying base model
     if hasattr(model, "get_base_model"):
         model = model.get_base_model()
     original_config = model.generation_config
+    if generation_kwargs:
+        # Create training-specific generation config from the model's original generation config
+        # Then overwrite it with the training-specific generation kwargs
+        generation_config = GenerationConfig.from_dict(model.generation_config.to_dict())
+        generation_config.update(**generation_kwargs)
     model.generation_config = generation_config
     try:
         yield
@@ -174,7 +178,8 @@ def unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
-    generation_config: GenerationConfig = None,
+    generation_config: GenerationConfig | None = None,
+    generation_kwargs: dict | None = None,
 ):
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
@@ -204,7 +209,9 @@ def unwrap_model_for_generation(
         _unwrap_model_for_generation(
             model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
         ) as unwrapped_model,
-        _override_model_generation_config(unwrapped_model, generation_config),
+        _override_model_generation_config(
+            unwrapped_model, generation_config=generation_config, generation_kwargs=generation_kwargs
+        ),
     ):
         yield unwrapped_model
 
