@@ -18,6 +18,7 @@ import json
 import os
 import random
 import socket
+import zlib
 from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -28,7 +29,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
@@ -1229,6 +1229,17 @@ def create_model_from_path(
         architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
+
+
+def hash_module(module: torch.nn.Module) -> str:
+    h = zlib.adler32(b"")
+    for _, tensor in sorted(module.state_dict().items()):
+        tensor = tensor.cpu()
+        h = zlib.adler32(str(tensor.dtype).encode(), h)
+        if tensor.dtype in (torch.bfloat16, torch.float8_e4m3fn, torch.float8_e5m2):
+            tensor = tensor.to(torch.float32)
+        h = zlib.adler32(tensor.numpy().tobytes(), h)
+    return f"{h:08x}"
 
 
 def get_config_model_id(config: PretrainedConfig) -> str:
