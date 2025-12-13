@@ -243,7 +243,7 @@ class NashMDTrainer(OnlineDPOTrainer):
     def _generate_completions(self, model, prompts):
         # Generate completions from the policy model.
         with unwrap_model_for_generation(
-            model, self.accelerator, generation_config=self.generation_config
+            model, self.accelerator, generation_kwargs=self.generation_kwargs
         ) as unwrapped_policy_for_gen_ctx:
             model_output = unwrapped_policy_for_gen_ctx.generate(
                 input_ids=prompts["input_ids"],
