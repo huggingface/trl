@@ -309,6 +309,5 @@ class TestGKDTrainer(TrlTestCase):
         # evaluate() calls compute_loss with return_outputs=True
         # This should not raise UnboundLocalError
         eval_results = trainer.evaluate()
-        
         assert "eval_loss" in eval_results
         assert eval_results["eval_loss"] is not None
