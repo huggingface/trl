@@ -73,7 +73,7 @@ if is_wandb_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -976,7 +976,7 @@ class GOLDTrainer(SFTTrainer):
                 self.accelerator.wait_for_everyone()
             else:
                 raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
-            self.vllm_guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.vllm_structured_outputs_regex = args.vllm_structured_outputs_regex
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
 
@@ -1673,7 +1673,7 @@ class GOLDTrainer(SFTTrainer):
                     top_k=top_k,
                     min_p=min_p,
                     max_tokens=max_completion_length,
-                    guided_decoding_regex=self.vllm_guided_decoding_regex,
+                    structured_outputs_regex=self.vllm_structured_outputs_regex,
                 )["completion_ids"]
             else:
                 completion_ids = [None] * len(all_prompts_text)
@@ -1684,10 +1684,10 @@ class GOLDTrainer(SFTTrainer):
             )
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
-            if self.vllm_guided_decoding_regex:
-                guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.vllm_guided_decoding_regex)
+            if self.vllm_structured_outputs_regex:
+                structured_outputs = StructuredOutputsParams(backend="outlines", regex=self.vllm_structured_outputs_regex)
             else:
-                guided_decoding = None
+                structured_outputs = None
             sampling_params = SamplingParams(
                 n=1,
                 repetition_penalty=repetition_penalty,
@@ -1696,7 +1696,7 @@ class GOLDTrainer(SFTTrainer):
                 top_k=top_k,
                 min_p=min_p,
                 max_tokens=max_completion_length,
-                guided_decoding=guided_decoding,
+                structured_outputs=structured_outputs,
             )
 
             if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:

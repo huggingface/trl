@@ -84,8 +84,8 @@ class GOLDConfig(SFTConfig):
             to set this to a low value if the student and teacher models share the same GPU.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Tensor parallel size for the colocated student vLLM engine (if `vllm_mode="colocate"`).
-        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
-            Regex for vLLM guided decoding for the student model.
+        vllm_structured_outputs_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM structured outputs for the student model.
         vllm_sync_frequency (`int`, *optional*, defaults to `1`):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
             every step.
@@ -300,9 +300,9 @@ class GOLDConfig(SFTConfig):
         default=1,
         metadata={"help": 'Tensor parallel size for the colocated vLLM engine when `vllm_mode="colocate"`.'},
     )
-    vllm_guided_decoding_regex: str | None = field(
+    vllm_structured_outputs_regex: str | None = field(
         default=None,
-        metadata={"help": "Regex pattern used for vLLM guided decoding (optional)."},
+        metadata={"help": "Regex pattern used for vLLM structured outputs (optional)."},
     )
     vllm_sync_frequency: int = field(
         default=1,
