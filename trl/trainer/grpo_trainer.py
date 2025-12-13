@@ -709,10 +709,9 @@ class GRPOTrainer(BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
-            # Create training-specific generation config from the model's original generation config
-            # Then overwrite it with the training-specific generation kwargs
-            self.generation_config = GenerationConfig.from_dict(self.model.generation_config.to_dict())
-            self.generation_config.update(**generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs)
+            # Keep training-specific generation kwargs to overwrite model's original generation config
+            self.generation_kwargs = generation_kwargs
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -1491,7 +1490,7 @@ class GRPOTrainer(BaseTrainer):
                     self.model_wrapped,
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-                    generation_config=self.generation_config,
+                    generation_kwargs=self.generation_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
