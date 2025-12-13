@@ -7,6 +7,25 @@
 TRL is a full stack library where we provide a set of tools to train transformer language models with methods like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO), Reward Modeling, and more.
 The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
 
+<div class="mt-10">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb">
+      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" class="mt-0">
+      <p class="text-gray-700">Supervised Fine-Tuning (SFT) Ministral-3 with QLoRA</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb">
+      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" class="mt-0">
+      <p class="text-gray-700">GRPO Ministral-3 with QLoRA</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/docs/trl/main/en/openenv">
+      <img src="https://pbs.twimg.com/media/G6geuwEXEAA9ngv?format=jpg&name=small" alt="thumbnail" class="mt-0">
+      <p class="text-gray-700">OpenEnv Integration Guide</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb">
+      <img src="https://pbs.twimg.com/media/G6geuwEXEAA9ngv?format=jpg&name=small" alt="thumbnail" class="mt-0">
+      <p class="text-gray-700">OpenEnv Wordle with GRPO</p>
+    </a>
+</div>
+
 ## 🎉 What's New
 
 **OpenEnv Integration:** TRL now supports **[OpenEnv](https://huggingface.co/blog/openenv)**, the open-source framework from Meta for defining, deploying, and interacting with environments in reinforcement learning and agentic workflows.
