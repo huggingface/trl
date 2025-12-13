@@ -197,14 +197,17 @@ class GKDTrainer(SFTTrainer):
         self.temperature = args.temperature
         self.seq_kd = args.seq_kd
 
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            do_sample=True,
-            top_k=0,
-            use_cache=False if args.gradient_checkpointing else True,
-            pad_token_id=self.processing_class.pad_token_id,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "do_sample": True,
+            "top_k": 0,
+            "use_cache": False if args.gradient_checkpointing else True,
+            "pad_token_id": self.processing_class.pad_token_id,
+        }
+        self.generation_config = GenerationConfig(**generation_kwargs)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
+        self.generation_kwargs = generation_kwargs
         # Set custom EOS tokens if they are specified by the model's generation
         # config. This is important for models with the Llama 3 chat template,
         # which use special tokens <|eot_id|> and <|eom_id|> to mark the end of
@@ -421,9 +424,8 @@ class GKDTrainer(SFTTrainer):
         the original inputs.
         """
         if self.seq_kd:
-            # TODO: Fix generation_config
             with unwrap_model_for_generation(
-                self.teacher_model, self.accelerator, generation_config=self.generation_config
+                self.teacher_model, self.accelerator, generation_kwargs=self.generation_kwargs
             ) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
                     unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
@@ -432,9 +434,8 @@ class GKDTrainer(SFTTrainer):
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
         if random.random() <= self.lmbda:
-            # TODO: Fix generation_config
             with unwrap_model_for_generation(
-                model, self.accelerator, generation_config=self.generation_config
+                model, self.accelerator, generation_kwargs=self.generation_kwargs
             ) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
                     unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
