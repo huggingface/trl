@@ -185,10 +185,11 @@ class XPOTrainer(OnlineDPOTrainer):
             return self._alpha
 
     def _generate_completions(self, prompts, model):
-        # TODO: Fix generation_config
         with (
             unwrap_model_for_generation(
-                model, self.accelerator, generation_config=self.generation_config
+                model,
+                self.accelerator,
+                generation_kwargs=self.generation_kwargs,
             ) as unwrapped_policy_model_for_gen,
         ):
             model_output = unwrapped_policy_model_for_gen.generate(
@@ -208,10 +209,11 @@ class XPOTrainer(OnlineDPOTrainer):
         else:
             actual_model_for_ref_generation = self.accelerator.unwrap_model(self.ref_model)
 
-        # TODO: Fix generation_config
         with (
             unwrap_model_for_generation(
-                actual_model_for_ref_generation, self.accelerator, generation_config=self.generation_config
+                actual_model_for_ref_generation,
+                self.accelerator,
+                generation_kwargs=self.generation_kwargs,
             ) as final_ref_model_for_gen,
         ):
             ref_output = final_ref_model_for_gen.generate(
