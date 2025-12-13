@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import textwrap
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,16 +21,14 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState, logging
-from accelerate.utils import is_peft_model
+from accelerate import PartialState
 from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from datasets.fingerprint import Hasher
 from transformers import (
     AutoProcessor,
-    BaseImageProcessor,
     DataCollator,
-    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -46,24 +42,18 @@ from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_
 from ...models import prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
+    create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
     flush_left,
     flush_right,
+    get_config_model_id,
     hash_module,
     pad,
     remove_none_values,
     selective_log_softmax,
 )
 from .dpo_config import DPOConfig
-from ...trainer.utils import (
-    create_model_from_path,
-    disable_dropout_in_model,
-    entropy_from_logits,
-    get_config_model_id,
-    pad,
-    selective_log_softmax,
-)
 
 
 if is_peft_available():
@@ -356,7 +346,6 @@ class DPOTrainer(BaseTrainer):
             )
         elif data_collator is None and self._is_vision_dataset:
             raise NotImplementedError("VLM training is not yet implemented.")
-
 
         # Dataset
         dataset_sample = next(iter(train_dataset))

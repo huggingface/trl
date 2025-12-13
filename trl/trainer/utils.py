@@ -18,7 +18,6 @@ import json
 import os
 import random
 import socket
-import warnings
 import zlib
 from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass
@@ -1241,6 +1240,8 @@ def hash_module(module: torch.nn.Module) -> str:
             tensor = tensor.to(torch.float32)
         h = zlib.adler32(tensor.numpy().tobytes(), h)
     return f"{h:08x}"
+
+
 def get_config_model_id(config: PretrainedConfig) -> str:
     """
     Retrieve the model identifier from a given model configuration.
