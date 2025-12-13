@@ -137,6 +137,33 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
+Alternatively, in the [SAPO paper](https://huggingface.co/papers/2511.20347), the Qwen team proposes replacing the "hard" clipping mechanism of GRPO with a smooth, temperature-controlled soft gating mechanism. While GRPO zeroes out gradients when the policy deviates too far from the reference, SAPO uses a soft trust region that smoothly decays the gradient weight. This allows the model to retain useful learning signals from "near-on-policy" tokens while suppressing noise from extreme deviations.
+
+The loss function is defined as:
+
+$$
+\mathcal{L}_{\text{SAPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} f_{i,t} \left( \frac{\pi_\theta(o_{i,t} | q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t} | q, o_{i,<t})} \right) \hat{A}_{i,t}
+$$
+
+The soft-gating function  \\( f_{i,t} \\) is defined using the sigmoid function  \\( \sigma \\) as:
+
+$$
+f_{i,t}(x) = \sigma \left( \tau_{i,t} (x - 1) \right) \cdot \frac{4}{\tau_{i,t}}
+$$
+
+The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
+
+$$
+\tau_{i,t} = \begin{cases} 
+\tau_{\text{pos}}, & \text{if } \hat{A}_{i,t} > 0 \\
+\tau_{\text{neg}}, & \text{otherwise}
+\end{cases}
+$$
+
+They recommends using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
+
+To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
+
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
@@ -159,14 +186,10 @@ While training and evaluating, we record the following reward metrics:
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
-- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
-  $$
-  \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
-  $$
-  A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization

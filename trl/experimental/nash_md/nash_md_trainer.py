@@ -24,6 +24,7 @@ from datasets import Dataset, IterableDataset
 from transformers import (
     BaseImageProcessor,
     FeatureExtractionMixin,
+    GenerationMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -34,16 +35,74 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available
 
 from ...data_utils import is_conversational, maybe_apply_chat_template
-from ...models.modeling_base import GeometricMixtureWrapper
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
-from ...trainer.utils import SIMPLE_CHAT_TEMPLATE, empty_cache, get_reward, selective_log_softmax, truncate_right
+from ...trainer.utils import empty_cache, get_reward, selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
+from ..utils import SIMPLE_CHAT_TEMPLATE, truncate_right
 from .nash_md_config import NashMDConfig
 
 
 if is_peft_available():
     from peft import PeftModel
+
+
+class GeometricMixtureWrapper(GenerationMixin):
+    """
+    Geometric Mixture generation wrapper that samples from the logits of two model's geometric mixture.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]): The model to be wrapped.
+        ref_model ([`~transformers.PreTrainedModel`]): The reference model.
+        generation_config ([`~transformers.GenerationConfig`]): The generation config.
+        mixture_coef (`float`, *optional* - default: 0.5): The mixture coefficient.
+    """
+
+    main_input_name = "input_ids"
+    _supports_cache_class = False
+    _supports_static_cache = False
+    _is_stateful = False
+
+    def __init__(self, model, ref_model, generation_config, mixture_coef=0.5, device=None):
+        super().__init__()
+
+        self.model = model
+        self.config = model.config
+        self.ref_model = ref_model
+        self.generation_config = generation_config
+        self.mixture_coef = mixture_coef
+        self.device = device
+        if hasattr(self.model, "_is_stateful"):
+            self._is_stateful = self.model._is_stateful
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    @torch.inference_mode()
+    def forward(self, *args, **kwargs):
+        model_outputs = self.model(*args, **kwargs)
+        model_logits = model_outputs.logits
+        ref_model_logits = self.ref_model(*args, **kwargs).logits
+
+        model_outputs.logits = torch.nn.functional.log_softmax(
+            self.mixture_coef * ref_model_logits + (1 - self.mixture_coef) * model_logits, dim=-1
+        )
+
+        return model_outputs
+
+    def prepare_inputs_for_generation(self, *args, **kwargs):
+        # turn off cache in the generation config
+        kwargs["use_cache"] = False
+        model_inputs = self.model.prepare_inputs_for_generation(*args, **kwargs)
+        _ = self.ref_model.prepare_inputs_for_generation(*args, **kwargs)
+
+        return model_inputs
+
+    def _validate_model_class(self):
+        self.model._validate_model_class()
+
+    def _validate_model_kwargs(self, model_kwargs):
+        return self.model._validate_model_kwargs(model_kwargs)
 
 
 class NashMDTrainer(OnlineDPOTrainer):
@@ -68,8 +127,8 @@ class NashMDTrainer(OnlineDPOTrainer):
             The NashMD config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):

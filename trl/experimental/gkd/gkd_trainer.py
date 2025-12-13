@@ -38,7 +38,8 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
+from ...trainer.utils import disable_dropout_in_model, empty_cache
+from ..utils import DataCollatorForChatML
 from .gkd_config import GKDConfig
 
 
@@ -64,8 +65,8 @@ class GKDTrainer(SFTTrainer):
         args ([`experimental.gkd.GKDConfig`], *optional*):
             Training arguments.
         data_collator ([`~transformers.DataCollator`], *optional*):
-            Data collator to batch samples from the dataset. It defaults to a [`DataCollatorForChatML`] using the
-            `processing_class`.
+            Data collator to batch samples from the dataset. It defaults to a
+            [`experimental.utils.DataCollatorForChatML`] using the `processing_class`.
         train_dataset ([`~datasets.Dataset`], *optional*):
             Dataset for training.
         eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
