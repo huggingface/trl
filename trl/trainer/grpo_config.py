@@ -226,6 +226,11 @@ class GRPOConfig(TrainingArguments):
               paper](https://huggingface.co/papers/2506.13585). Replaces hard clipping with a smooth,
               temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
               learning signals.
+        off_policy_mask_threshold (`float`, *optional*, defaults to `None`):
+            Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled.
+            When set, sequences with negative advantages and high KL divergence are masked out to stabilize training.
+            This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.1).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -632,7 +637,9 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
-            "TODO @casinca"
+            "When set, sequences with negative advantages and high KL divergence are masked out to stabilize training. "
+            "This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.1)."
         },
     )
     importance_sampling_level: str = field(
