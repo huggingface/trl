@@ -1920,6 +1920,11 @@ class TestGRPOTrainer(TrlTestCase):
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
 
+    def test_invalid_off_policy_threshold(self):
+        """Test that a negative threshold raises a ValueError."""
+        with pytest.raises(ValueError, match="off_policy_mask_threshold must be >= 0"):
+            GRPOConfig(output_dir="tmp", off_policy_mask_threshold=-0.1)
+
 
 @pytest.mark.slow
 @require_torch_accelerator
