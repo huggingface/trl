@@ -599,7 +599,7 @@ class SFTTrainer(BaseTrainer):
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            dict_args.pop("push_to_hub_token")
+            dict_args.pop("push_to_hub_token" , None)
             args = SFTConfig(**dict_args)
 
         # Model
