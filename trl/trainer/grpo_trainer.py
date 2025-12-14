@@ -450,6 +450,7 @@ class GRPOTrainer(BaseTrainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
+        self.off_policy_mask_threshold = args.off_policy_mask_threshold
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -2185,6 +2186,16 @@ class GRPOTrainer(BaseTrainer):
         # for importance sampling
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+
+        if self.off_policy_mask_threshold is not None:
+            off_policy_mask = self._get_off_policy_mask(
+                advantages,
+                per_token_logps,
+                old_per_token_logps,
+                mask,
+                self.off_policy_mask_threshold,
+            )
+            mask = mask * off_policy_mask
 
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
