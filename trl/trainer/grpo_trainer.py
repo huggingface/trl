@@ -2121,6 +2121,28 @@ class GRPOTrainer(BaseTrainer):
         sapo_token_loss = sigmoid_smoothed_loss * 4 / temperature
         return sapo_token_loss
 
+    @staticmethod
+    def _get_off_policy_mask(
+        advantages: torch.Tensor,
+        per_token_logps: torch.Tensor,
+        old_per_token_logps: torch.Tensor,
+        mask: torch.Tensor,
+        off_policy_threshold: float,
+    ) -> torch.Tensor:
+        """
+        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2.
+        Returns a (B, 1) tensor where 1.0 indicates "Keep" and 0.0 indicates "Drop".
+        """
+        # K1 estimator: log(pi_old) - log(pi_theta)
+        k1_divergence = old_per_token_logps - per_token_logps.detach()
+        # Sequence-level Mean KL (ignoring prompt+padding)
+        seq_kl_sum = (k1_divergence * mask).sum(dim=1, keepdim=True)
+        avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        # Keep if (Advantage >= 0) OR (KL <= delta)
+        is_pos_adv = advantages >= 0
+        is_low_kl = avg_seq_kl <= off_policy_threshold
+        return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
