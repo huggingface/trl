@@ -113,8 +113,8 @@ class TestAccuracyReward:
         assert rewards[0] == 0.0
 
     @require_math_latex
-    def test_accuracy_reward_unparseable_gold(self):
-        """Test accuracy_reward with an unparseable gold solution."""
+    def test_accuracy_reward_unparsable_gold(self):
+        """Test accuracy_reward with an unparsable gold solution."""
         completion = [
             [{"content": "Answer is forty two."}],
             [{"content": r"Some other content. \boxed{43}."}],
@@ -181,7 +181,7 @@ class TestReasoningAccuracyReward:
         assert rewards[1] == 0.0
 
     @require_math_latex
-    def test_unparseable_gold_solution_yields_none_reward(self):
+    def test_unparsable_gold_solution_yields_none_reward(self):
         completions = [
             [{"content": r"<think> Reasoning content </think> \boxed{42}"}],
         ]

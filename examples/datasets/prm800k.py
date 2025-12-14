@@ -68,7 +68,7 @@ def process_example(example):
                 labels = previous_labels[:] + [label]
                 outputs.append({"prompt": prompt, "completions": completions, "labels": labels})
 
-        # Now, exapand the previous completions and labels
+        # Now, expand the previous completions and labels
         if step["chosen_completion"] is not None:
             chosen_completion = step["completions"][step["chosen_completion"]]
             label = chosen_completion["rating"] == 1
