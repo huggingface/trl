@@ -890,3 +890,6 @@ class GRPOConfig(TrainingArguments):
         if self.off_policy_mask_threshold is not None and self.off_policy_mask_threshold < 0:
             raise ValueError(
                 f"off_policy_mask_threshold must be >= 0, got {self.off_policy_mask_threshold}.")
+
+        if self.off_policy_mask_threshold is not None and self.use_liger_kernel:
+            raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
