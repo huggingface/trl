@@ -1927,7 +1927,7 @@ class TestGRPOTrainer(TrlTestCase):
 
     def test_liger_kernel_compatibility_with_off_policy_masking(self):
             """Test that use_liger_kernel and off_policy_mask_threshold are incompatible. At least not at the moment."""
-            with pytest.raises(ValueError, match="compatible"):
+            with pytest.raises(ValueError, match="does not support"):
                 GRPOConfig(
                     output_dir="tmp",
                     use_liger_kernel=True,
