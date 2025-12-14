@@ -1925,6 +1925,14 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="off_policy_mask_threshold must be >= 0"):
             GRPOConfig(output_dir="tmp", off_policy_mask_threshold=-0.1)
 
+    def test_liger_kernel_compatibility_with_off_policy_masking(self):
+            """Test that use_liger_kernel and off_policy_mask_threshold are incompatible. At least not at the moment."""
+            with pytest.raises(ValueError, match="compatible"):
+                GRPOConfig(
+                    output_dir="tmp",
+                    use_liger_kernel=True,
+                    off_policy_mask_threshold=0.1
+                )
 
 @pytest.mark.slow
 @require_torch_accelerator
