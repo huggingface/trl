@@ -433,10 +433,10 @@ class GRPOConfig(TrainingArguments):
             "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: int | None = field(
-        default=None,
+    top_k: int = field(
+        default=0,
         metadata={
-            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
