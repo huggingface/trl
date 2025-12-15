@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
@@ -31,13 +32,13 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
 from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages, truncate_dataset
-from ...models import prepare_deepspeed, prepare_fsdp
+from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
@@ -334,6 +335,13 @@ class DPOTrainer(BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
+        dataset_sample = next(iter(train_dataset))
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -357,14 +365,6 @@ class DPOTrainer(BaseTrainer):
         self.label_smoothing = args.label_smoothing
 
         # Dataset
-        dataset_sample = next(iter(train_dataset))
-        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
-        if self._is_vision_dataset and not self._is_vlm:
-            raise ValueError(
-                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided model "
-                "does not seem to be a vision-language model. Please check your model and dataset."
-            )
-
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
         # and done on the fly instead.
         skip_prepare_dataset = self._is_vision_dataset
@@ -397,6 +397,12 @@ class DPOTrainer(BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # Initialize activation offloading context
+        if self.args.activation_offloading:
+            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
+        else:
+            self.maybe_activation_offload_context = contextlib.nullcontext()
 
         # Reference model
         self.beta = args.beta

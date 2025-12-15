@@ -90,7 +90,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     max_prompt_length: int | None = field(
-        default=512,
+        default=None,
         metadata={"help": "Maximum length of the prompt part of the sequence. If `None`, no truncation is applied."},
     )
     max_completion_length: int | None = field(
