@@ -561,9 +561,10 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="exo_pair", # Section 3.2 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B of the paper
-    learning_rate=1e-6, # learning rate in Section B of the paper
-    beta=0.1, # $\beta_r$ in Section B of the paper
+    # From Section B of the paper
+    per_device_train_batch_size=64
+    learning_rate=1e-6,
+    beta=0.1,
 )
 ```
 
@@ -624,16 +625,36 @@ training_args = DPOConfig(
 
 Theoretical analysis and a new algorithm, Binary Classifier Optimization, explain and enhance the alignment of large language models using binary feedback signals. To reproduce the paper's setting, use this configuration:
 
+BCO reframes language-model alignment as behavioral cloning from an optimal reward-weighted distribution, yielding simple supervised objectives that avoid RL while remaining theoretically grounded.
+It supports both unpaired reward data and pairwise preference data, with a reward-shift–invariant formulation that reduces to a DPO-style loss in the preference setting.
+
+For the pairwise preference setting, the BCO loss is defined as:
+
+$$
+\mathcal{L}_{\text{bco\_pair}}(\pi_\theta) =
+\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+-\log \sigma\Big(
+\beta[(\log\pi_\theta-\log\pi_{\text{ref}})(y_w)
+-
+(\log\pi_\theta-\log\pi_{\text{ref}})(y_l)]
+\Big)
+\right]
+$$
+
+To reproduce the paper in this setting, use this configuration:
+
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="bco_pair", # Section 4 of the paper
-    per_device_train_batch_size=128, #  batch size in Section C of the paper
-    learning_rate=5e-7, # learning rate in Section C of the paper
-    beta=0.01, # $\beta$ in Section C of the paper,
-    max_prompt_length=1536, # max prompt length in Section C of the paper
-    max_completion_length=512, # max completion length in Section C of the paper
+    loss_type="bco_pair",
+    # From Section C of the paper
+    per_device_train_batch_size=128,
+    learning_rate=5e-7,
+    beta=0.01,
+    max_prompt_length=1536,
+    max_completion_length=512,
 )
 ```
 

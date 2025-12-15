@@ -772,10 +772,15 @@ class DPOTrainer(BaseTrainer):
                     (1 - self.label_smoothing) * per_sequence_loss - self.label_smoothing * per_sequence_loss
                 ) / (1 - 2 * self.label_smoothing)
 
+            elif loss_type == "bco_pair":
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
+                per_sequence_loss = -F.logsigmoid(chosen_rewards) - F.logsigmoid(-rejected_rewards)
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                    "'nca_pair', 'robust']"
+                    "'nca_pair', 'robust', 'bco_pair']"
                 )
 
             loss += per_sequence_loss.mean()
