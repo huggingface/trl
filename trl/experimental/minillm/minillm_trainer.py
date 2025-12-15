@@ -18,8 +18,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
-from transformers import AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
-from transformers.trainer_callback import TrainerCallback
+from transformers import (
+    AutoModelForCausalLM,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+)
 from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
