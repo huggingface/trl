@@ -230,7 +230,7 @@ class GRPOConfig(TrainingArguments):
             Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled.
             When set, sequences with negative advantages and high KL divergence are masked out to stabilize training.
             This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
-            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.1).
+            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -639,7 +639,7 @@ class GRPOConfig(TrainingArguments):
             "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
             "When set, sequences with negative advantages and high KL divergence are masked out to stabilize training. "
             "This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2 "
-            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.1)."
+            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5)."
         },
     )
     importance_sampling_level: str = field(
