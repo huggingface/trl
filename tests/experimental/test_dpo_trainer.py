@@ -140,7 +140,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            report_to="none",
+        )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
         # Save the initial parameters to compare them later
@@ -163,7 +167,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/harmony", "preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            report_to="none",
+        )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
         )
@@ -190,7 +198,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            report_to="none",
+        )
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
 
         # Save the initial parameters to compare them later
@@ -218,6 +230,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
             loss_type=loss_type,
             report_to="none",
             eval_strategy="steps",
@@ -290,7 +303,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=1.0,  # increase the learning rate to speed up the test
+            report_to="none",
+        )
 
         trainer = DPOTrainer(
             model=model_id,
@@ -327,7 +344,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            report_to="none",
+        )
 
         trainer = DPOTrainer(
             model=model_id,
@@ -370,7 +391,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            report_to="none",
+        )
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
 
         # Save the initial parameters to compare them later
@@ -401,7 +426,12 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            gradient_checkpointing=True,
+            report_to="none",
+        )
 
         trainer = DPOTrainer(
             model=model_id,
@@ -438,7 +468,12 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            gradient_checkpointing=True,
+            report_to="none",
+        )
 
         trainer = DPOTrainer(
             model=model_id,
@@ -476,7 +511,12 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            gradient_checkpointing=True,
+            report_to="none",
+        )
 
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
 
@@ -506,7 +546,12 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            use_liger_kernel=True,
+            report_to="none",
+        )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )

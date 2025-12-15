@@ -128,7 +128,7 @@ class DPOConfig(TrainingArguments):
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
     precompute_ref_log_probs: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
             "before training. This allows to save memory during training, as the reference model does not need to be "

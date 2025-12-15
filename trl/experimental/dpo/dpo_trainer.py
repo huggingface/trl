@@ -361,7 +361,8 @@ class DPOTrainer(BaseTrainer):
             raise NotImplementedError("VLM training is not yet implemented.")
 
         # Training arguments
-        self.loss_type = [args.loss_type] if isinstance(args.loss_type, str) else args.loss_type
+        self.precompute_ref_logps = args.precompute_ref_log_probs
+        self.loss_types = [args.loss_type] if isinstance(args.loss_type, str) else args.loss_type
         self.label_smoothing = args.label_smoothing
 
         # Dataset
@@ -702,12 +703,13 @@ class DPOTrainer(BaseTrainer):
         if self.precompute_ref_logps:
             ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
         else:
-            if is_peft_model(model):
-                # Disable PEFT adapters to get the reference model behavior
-                with model.disable_adapters():
-                    ref_outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
-            else:
-                ref_outputs = self.ref_model(input_ids, attention_mak=attention_mask, use_cache=False)
+            with torch.no_grad():
+                if is_peft_model(model):
+                    # Disable PEFT adapters to get the reference model behavior
+                    with model.disable_adapter():
+                        ref_outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
+                else:
+                    ref_outputs = self.ref_model(input_ids, attention_mak=attention_mask, use_cache=False)
             ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
             ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
