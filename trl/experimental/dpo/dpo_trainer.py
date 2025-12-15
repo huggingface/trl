@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.logging import get_logger
@@ -35,12 +34,12 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
 from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages, truncate_dataset
 from ...models import prepare_deepspeed, prepare_fsdp
 from ...trainer.base_trainer import BaseTrainer
+from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
@@ -105,14 +104,23 @@ class DataCollatorForPreference(DataCollatorMixin):
     >>> from trl.trainer.dpo_trainer import DataCollatorForPreference
 
     >>> collator = DataCollatorForPreference(pad_token_id=0)
-    >>> examples = [{"prompt_ids": [1, 2, 3], {"chosen_ids": [4, 5], "rejected_ids": [6]}]
+    >>> examples = [
+    ...     {"prompt_ids": [1, 2, 3], "chosen_ids": [4, 5], "rejected_ids": [6]},
+    ...     {"prompt_ids": [7, 8], "chosen_ids": [9], "rejected_ids": [10, 11]},
+    ... ]
     >>> collator(examples)
     {'input_ids': tensor([[ 1,  2,  3,  4,  5],
-                          [ 1,  2,  3,  6,  0]]),
+                          [ 7,  8,  9,  0,  0],
+                          [ 1,  2,  3,  6,  0],
+                          [ 7,  8, 10, 11,  0]]),
      'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 0, 0],
+                               [1, 1, 1, 1, 0],
                                [1, 1, 1, 1, 0]]),
      'completion_mask': tensor([[0, 0, 0, 1, 1],
-                                [0, 0, 0, 1, 0]])}
+                                [0, 0, 1, 0, 0],
+                                [0, 0, 0, 1, 0],
+                                [0, 0, 1, 1, 0]])}
     ```
     """
 
@@ -325,9 +333,6 @@ class DPOTrainer(BaseTrainer):
                 if param.requires_grad:
                     param.data = param.data.to(torch.bfloat16)
 
-        # Training arguments
-        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
-
         # Data collator
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
@@ -347,13 +352,17 @@ class DPOTrainer(BaseTrainer):
         elif data_collator is None and self._is_vision_dataset:
             raise NotImplementedError("VLM training is not yet implemented.")
 
+        # Training arguments
+        self.loss_type = [args.loss_type] if isinstance(args.loss_type, str) else args.loss_type
+        self.label_smoothing = args.label_smoothing
+
         # Dataset
         dataset_sample = next(iter(train_dataset))
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
             raise ValueError(
-                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
-                "model does not seem to be a vision-language model. Please check your model and dataset."
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided model "
+                "does not seem to be a vision-language model. Please check your model and dataset."
             )
 
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -391,12 +400,9 @@ class DPOTrainer(BaseTrainer):
 
         # Reference model
         self.beta = args.beta
-        if self.beta == 0.0:
-            # If beta is 0.0, the reference model is not needed
-            self.ref_model = None
-        elif is_peft_model(model):
-            # If PEFT is used, the reference model is not needed since the adapter can be disabled
-            # to revert to the initial model.
+        if is_peft_model(model):
+            # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
+            # initial model.
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
@@ -416,11 +422,6 @@ class DPOTrainer(BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
-
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
@@ -435,20 +436,23 @@ class DPOTrainer(BaseTrainer):
         if args.sync_ref_model:
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        if self.args.precompute_ref_log_probs:
-            self.train_dataset = self._precompute_ref_logps(
-                ref_model, self.train_dataset, self.args.per_device_train_batch_size, "train"
-            )
-            if self.eval_dataset is not None:
-                if isinstance(self.eval_dataset, dict):
-                    self.eval_dataset = {
-                        key: self._precompute_ref_logps(ref_model, dataset, self.args.per_device_eval_batch_size, key)
-                        for key, dataset in self.eval_dataset.items()
-                    }
-                else:
-                    self.eval_dataset = self._precompute_ref_logps(
-                        self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
-                    )
+        #
+
+        # if self.args.precompute_ref_log_probs:
+
+        #     self.train_dataset = self._precompute_ref_logps(
+        #         ref_model, self.train_dataset, self.args.per_device_train_batch_size, "train"
+        #     )
+        #     if self.eval_dataset is not None:
+        #         if isinstance(self.eval_dataset, dict):
+        #             self.eval_dataset = {
+        #                 key: self._precompute_ref_logps(ref_model, dataset, self.args.per_device_eval_batch_size, key)
+        #                 for key, dataset in self.eval_dataset.items()
+        #             }
+        #         else:
+        #             self.eval_dataset = self._precompute_ref_logps(
+        #                 self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
+        #             )
 
     def _prepare_dataset(
         self,
@@ -656,16 +660,7 @@ class DPOTrainer(BaseTrainer):
         )
         return dataset
 
-    def compute_loss(
-        self,
-        model: nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        return_outputs: bool = False,
-        num_items_in_batch: torch.Tensor | None = None,
-    ):
-        """
-        Compute training loss and additionally compute token accuracies
-        """
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
 
         input_ids = inputs["input_ids"]
@@ -697,20 +692,42 @@ class DPOTrainer(BaseTrainer):
         per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
         logps = per_token_logps.sum(dim=1)  # sum over sequence length
         chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
-        ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
+
+        if self.precompute_ref_logps:
+            ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
+        else:
+            if is_peft_model(model):
+                # Disable PEFT adapters to get the reference model behavior
+                with model.disable_adapters():
+                    ref_outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
+            else:
+                ref_outputs = self.ref_model(input_ids, attention_mak=attention_mask, use_cache=False)
+            ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
+            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
+            ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+            ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
+            ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)  # batch is [chosen, rejected]
 
         # Get the log ratios for the chosen and rejected responses
         chosen_logratios = chosen_logps - ref_chosen_logps
         rejected_logratios = rejected_logps - ref_rejected_logps
 
-        loss = 0
-
-        for loss_type in self.loss_type:
+        loss = 0.0
+        for loss_type in self.loss_types:
             if loss_type == "sigmoid":
-                per_sequence_loss = -F.logsigmoid(self.beta * chosen_logratios - self.beta * rejected_logratios)
+                per_sequence_loss = -F.logsigmoid(self.beta * (chosen_logratios - rejected_logratios))
 
             elif loss_type == "hinge":
-                per_sequence_loss = torch.relu(1 - (self.beta * chosen_logratios - self.beta * rejected_logratios))
+                per_sequence_loss = torch.relu(1 - self.beta * (chosen_logratios - rejected_logratios))
+
+            elif loss_type == "robust":
+                # {(1-\varepsilon)\mathcal{L}_{\text{DPO}} - \varepsilon\mathcal{L}_{\text{DPO}}}/{1-2\varepsilon}
+                per_sequence_loss = -F.logsigmoid(self.beta * (chosen_logratios - rejected_logratios))
+                per_sequence_loss = (
+                    (1 - self.label_smoothing) * per_sequence_loss - self.label_smoothing * per_sequence_loss
+                ) / (1 - 2 * self.label_smoothing)
+            else:
+                raise ValueError(f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'robust']")
 
             loss += per_sequence_loss.mean()
 

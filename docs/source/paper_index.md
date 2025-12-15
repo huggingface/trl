@@ -538,20 +538,28 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2403.00409
 
-The paper introduces a robust direct preference optimization (rDPO) framework to address noise in preference-based feedback for language models, proving its sub-optimality gap and demonstrating its effectiveness through experiments. To reproduce the paper's setting, use this configuration:
+DPO breaks under noisy human preferences because label flips bias the objective. Robust DPO fixes this by analytically debiasing the DPO loss under a simple noise model, with provable guarantees.
+
+$$
+\mathcal{L}_{\text{robust}}(\pi_\theta) = \frac{(1-\varepsilon)\mathcal{L}_{\text{DPO}} - \varepsilon\mathcal{L}_{\text{DPO}}}
+{1-2\varepsilon}
+$$
+
+Where  \\( \mathcal{L}_{\text{DPO}} \\) is the DPO loss defined in [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](#direct-preference-optimization-your-language-model-is-secretly-a-reward-model) and  \\( \varepsilon \\) is the probability of a label flip.
+
+This single correction turns noisy preference data into an unbiased estimator of the clean DPO objective.
 
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="robust", # Section 3.1 of the paper
-    per_device_train_batch_size=16, #  batch size in Section B of the paper
-    learning_rate=1e-3, # learning rate in Section B of the paper
-    beta=0.01, # $\beta$ in Section B of the paper,
-    max_prompt_length=128, # max prompt length in Section B of the paper
-    max_length=512, # max length in Section B of the paper
-    label_smoothing=0.1 # label smoothing $\epsilon$ in section 6 of the paper
-
+    loss_type="robust",
+    per_device_train_batch_size=16,  # batch size in Section B of the paper
+    learning_rate=1e-3,  # learning rate in Section B of the paper
+    beta=0.1,  # $\beta$ in Section B of the paper,
+    max_prompt_length=128,  # max prompt length in Section B of the paper
+    max_length=512,  # max length in Section B of the paper
+    label_smoothing=0.1  # label smoothing $\varepsilon$ in Section 6 of the paper
 )
 ```
 

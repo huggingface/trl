@@ -32,55 +32,7 @@ class DPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        > Parameters that control the model and reference model
-
-        model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`DPOTrainer`] is provided as a string.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model and reference model.
-
-        > Parameters that control the data preprocessing
-
-        dataset_num_proc (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        pad_token (`str`, *optional*):
-            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
-            it falls back to `processing_class.eos_token`.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt part of the sequence. If `None`, no truncation is applied.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
-            Maximum length of the completion part of the sequence. If `None`, no truncation is applied.
-        max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
-            If `None`, no truncation is applied.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
-            `"keep_start"`.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
-            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
-            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the sequences will be padded to a multiple of this value.
-        precompute_ref_log_probs (`bool`, *optional*, defaults to `True`):
-            Whether to precompute the reference model log probabilities for the entire training dataset before
-            training. This allows to save memory during training, as the reference model does not need to be kept in
-            memory.
-
-        > Parameters that control the training
-
-        loss_type (`str` or `list[str]`, *optional*, defaults to `"sigmoid"`):
-            Type of loss to use. Possible values are:
-
-                - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
-                - `"hinge"`: hinge loss on the normalized likelihood from the
-                [SLiC](https://huggingface.co/papers/2305.10425) paper.
-        beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
-            reference model.
-        activation_offloading (`bool`, *optional*, defaults to `False`):
-            Whether to offload the activations to the CPU.
+        TODO
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -188,7 +140,16 @@ class DPOConfig(TrainingArguments):
     loss_type: list[str] = field(
         default_factory=lambda: ["sigmoid"],
         metadata={
-            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`.",
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'robust'`.",
+        },
+    )
+    label_smoothing: float = field(
+        default=0.0,
+        metadata={
+            "help": (
+                "Label smoothing parameter used in Robust DPO, interpreted as the probability that a preference "
+                "label is flipped. Must lie in [0.0, 0.5). A typical value recommended by the Robust DPO paper is 0.1."
+            ),
         },
     )
     beta: float = field(
@@ -201,6 +162,13 @@ class DPOConfig(TrainingArguments):
     activation_offloading: bool = field(
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
+    )
+    sync_ref_model: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to synchronize the reference model with the main model at each training step. This is "
+            "useful when training with PEFT methods, where the main model's weights change during training."
+        },
     )
 
     def __post_init__(self):
