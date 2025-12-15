@@ -61,9 +61,7 @@ from trl.experimental.openenv import generate_rollout_completions
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run GRPO training for BrowserGym MiniWoB using OpenEnv environment."
-    )
+    parser = argparse.ArgumentParser(description="Run GRPO training for BrowserGym MiniWoB using OpenEnv environment.")
     parser.add_argument(
         "--tokenizer-id",
         default="Qwen/Qwen3-0.6B",
@@ -483,7 +481,7 @@ def main() -> None:
     print(f"Benchmark: {args.benchmark}")
     print(f"Task: {args.task_name}")
     print(f"Model: {args.model_id}")
-    print(f"Mode: LLM (text-only, using accessibility tree)")
+    print("Mode: LLM (text-only, using accessibility tree)")
     print(f"Using {args.num_generations} rollouts per dataset prompt")
     print(f"Output directory: {output_dir}")
     print("=" * 80)
