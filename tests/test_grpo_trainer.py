@@ -1367,10 +1367,7 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
-            ),
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
     )
@@ -1468,10 +1465,7 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
-            ),
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
     @require_vision
