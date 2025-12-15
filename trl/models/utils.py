@@ -75,7 +75,6 @@ def iter_params(module, recurse=False):
 def add_hooks(model: "DeepSpeedEngine") -> None:
     """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
     import deepspeed
-    
     if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
         return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
