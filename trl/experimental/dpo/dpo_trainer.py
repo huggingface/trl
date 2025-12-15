@@ -757,6 +757,15 @@ class DPOTrainer(BaseTrainer):
                 log_pl = torch.log(epsilon)
                 per_sequence_loss = qw * (log_qw - log_pw) + ql * (log_ql - log_pl)
 
+            elif loss_type == "nca_pair":
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
+                per_sequence_loss = (
+                    -F.logsigmoid(chosen_rewards)
+                    - 0.5 * F.logsigmoid(-chosen_rewards)
+                    - 0.5 * F.logsigmoid(-rejected_rewards)
+                )
+
             elif loss_type == "robust":
                 per_sequence_loss = -F.logsigmoid(self.beta * delta_log_odds)
                 per_sequence_loss = (
@@ -766,9 +775,9 @@ class DPOTrainer(BaseTrainer):
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                    "'robust']"
+                    "'nca_pair', 'robust']"
                 )
-            
+
             loss += per_sequence_loss.mean()
 
         # Log the metrics
@@ -814,8 +823,8 @@ class DPOTrainer(BaseTrainer):
         self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         # Rewards for chosen and rejected completions
-        chosen_rewards = self.beta * (chosen_logps.detach() - ref_chosen_logps)
-        rejected_rewards = self.beta * (rejected_logps.detach() - ref_rejected_logps)
+        chosen_rewards = self.beta * chosen_logratios.detach()
+        rejected_rewards = self.beta * rejected_logratios.detach()
         agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
         agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
         self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())

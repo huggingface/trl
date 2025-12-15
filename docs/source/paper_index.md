@@ -571,16 +571,21 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2402.05369
 
-A framework using Noise Contrastive Estimation enhances language model alignment with both scalar rewards and pairwise preferences, demonstrating advantages over Direct Preference Optimization. To reproduce the paper's setting, use this configuration:
+The paper reframes language-model alignment as a *noise-contrastive classification* problem, proposing InfoNCA to learn a policy from explicit rewards (or preferences) by matching a reward-induced target distribution over responses, and showing DPO is a special binary case. It then introduces NCA, which adds an absolute likelihood term to prevent the likelihood collapse seen in purely relative (contrastive) objectives.
+
+With pairwise preferences, treat the chosen/rejected \\( K=2 \\), define scores \\( r=\beta(\log\pi_\theta-\log\pi_{\text{ref}}) \\), and apply the NCA preference loss \\( -\log\sigma(r_w)-\tfrac12\log\sigma(-r_w)-\tfrac12\log\sigma(-r_l) \\).
+
+To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="nca_pair", # Section 4.1 of the paper
-    per_device_train_batch_size=32, #  batch size in Section C of the paper
-    learning_rate=5e-6, # learning rate in Section C of the paper
-    beta=0.01, # $\alpha$ in Section C of the paper
+    loss_type="nca_pair",
+    # From Section C of the paper
+    per_device_train_batch_size=32,
+    learning_rate=5e-6,
+    beta=0.01,
 )
 ```
 
