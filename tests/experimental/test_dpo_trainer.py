@@ -575,7 +575,12 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train", streaming=True)
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            max_steps=3,
+            report_to="none",
+        )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -603,6 +608,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
             padding_free=True,
             model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
@@ -693,7 +699,12 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            gradient_checkpointing=True,
+            report_to="none",
+        )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
