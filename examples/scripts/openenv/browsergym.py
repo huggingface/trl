@@ -15,9 +15,11 @@
 """
 Simple script to run GRPO training with OpenEnv's BrowserGym environment and vLLM.
 
-This example automatically detects and uses vision capabilities when VLM models are used.
-Screenshots from BrowserGym are collected and passed to the model during training. The GRPO
-trainer auto-detects multimodal support by checking for images in the rollout data.
+This example supports both VLM (Vision Language Models) and LLM (Language Models):
+- VLM mode (default): Screenshots from BrowserGym are collected and passed to the model.
+- LLM mode (--no-vlm): Screenshots are skipped; the model only sees the accessibility tree text.
+
+Use --no-vlm when training with text-only language models to optimize memory and performance.
 
 Setup:
 
@@ -38,12 +40,17 @@ docker run -d -p 8000:8000 \
   browsergym-env:latest
 ```
 
-# Option 1: Colocated vLLM (1 GPU required)
+# Option 1: VLM with colocated vLLM (1 GPU required)
 ```sh
 python examples/scripts/openenv/browsergym.py --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: LLM mode (no screenshots, text-only) - optimized for language models
+```sh
+python examples/scripts/openenv/browsergym.py --vllm-mode colocate --no-vlm --model-id Qwen/Qwen3-0.6B
+```
+
+# Option 3: Separate vLLM server (2 GPUs required)
 
 # Spin up vLLM server (Terminal 1)
 ```sh
@@ -245,6 +252,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Enable verbose debugging output during rollouts.",
     )
+    parser.add_argument(
+        "--no-vlm",
+        action="store_true",
+        default=False,
+        help="Disable VLM mode (skip screenshot collection). Use this when training with text-only LLMs.",
+    )
     return parser.parse_args()
 
 
@@ -261,14 +274,17 @@ You must complete the given web task by interacting with the page.
 
 Available actions:
 - noop() - Do nothing
-- click(bid) - Click element with BrowserGym ID
-- fill(bid, text) - Fill input field
+- click(bid) - Click element with BrowserGym ID (the number in brackets)
+- fill(bid, text) - Fill input field with text
 - send_keys(text) - Send keyboard input
 - scroll(direction) - Scroll up/down
 
+The page structure shows elements as: [bid] element_type 'element_text'
+For example: [13] button 'Click Me!' means bid='13'
+
 Reply with exactly ONE action on a single line, e.g.:
-click('123')
-fill('456', 'text')
+click('13')
+fill('42', 'hello world')
 noop()
 
 Do not include explanations or multiple actions."""
@@ -320,8 +336,14 @@ def rollout_once(
     max_steps: int,
     image_size: int = 0,
     debug: bool = False,
+    use_vlm: bool = True,
 ) -> dict[str, list]:
-    """Run one episode and collect training data."""
+    """Run one episode and collect training data.
+    
+    Args:
+        use_vlm: If True, collect screenshots for VLM training. If False, skip
+                 screenshot collection for optimized LLM training.
+    """
     result = env.reset()
     observation = result.observation
 
@@ -341,8 +363,8 @@ def rollout_once(
         axtree = observation.axtree_txt or ""
         error = observation.error if observation.last_action_error else ""
 
-        # Collect screenshot if available (for VLM support)
-        if observation.screenshot is not None:
+        # Collect screenshot if available (for VLM support) - skip for LLM mode
+        if use_vlm and observation.screenshot is not None:
             screenshot_array = np.array(observation.screenshot, dtype=np.uint8)
             screenshot_image = Image.fromarray(screenshot_array)
 
@@ -350,14 +372,15 @@ def rollout_once(
             if image_size > 0:
                 # Preserve aspect ratio while resizing
                 screenshot_image.thumbnail((image_size, image_size), Image.LANCZOS)
-                print(
-                    f"[DEBUG] Step {step_num + 1}: Collected and resized screenshot from {screenshot_array.shape} to {screenshot_image.size}"
-                )
-            else:
+                if debug:
+                    print(
+                        f"[DEBUG] Step {step_num + 1}: Collected and resized screenshot from {screenshot_array.shape} to {screenshot_image.size}"
+                    )
+            elif debug:
                 print(f"[DEBUG] Step {step_num + 1}: Collected screenshot, shape={screenshot_array.shape}")
 
             images.append(screenshot_image)
-        else:
+        elif debug and use_vlm:
             print(f"[DEBUG] Step {step_num + 1}: No screenshot available")
 
         user_prompt = make_user_prompt(goal, step_num, axtree, error)
@@ -414,8 +437,8 @@ def rollout_once(
         "completion_reward": final_reward,
     }
 
-    # Include images if available (GRPO trainer will auto-detect VLM support)
-    if images:
+    # Include images if available and VLM mode is enabled
+    if use_vlm and images:
         result_dict["images"] = images
 
     return result_dict
@@ -496,6 +519,8 @@ def main() -> None:
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
 
+    use_vlm = not args.no_vlm
+
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
@@ -503,10 +528,12 @@ def main() -> None:
         completion_rewards: list[float] = []
         episode_images: list[list[Image.Image]] = []
 
-        print(f"\n[DEBUG] rollout_func called with {len(prompts)} prompts")
+        if args.debug:
+            print(f"\n[DEBUG] rollout_func called with {len(prompts)} prompts (VLM mode: {use_vlm})")
 
         for i, prompt_text in enumerate(prompts):
-            print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
+            if args.debug:
+                print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
             episode = rollout_once(
                 trainer=trainer,
                 env=client,
@@ -515,6 +542,7 @@ def main() -> None:
                 max_steps=args.max_steps,
                 image_size=args.image_size,
                 debug=args.debug,
+                use_vlm=use_vlm,
             )
             episode_prompt_ids.append(episode["prompt_ids"])
             episode_completion_ids.append(episode["completion_ids"])
@@ -522,10 +550,11 @@ def main() -> None:
             completion_rewards.append(episode["completion_reward"])
 
             # Collect images if available (for VLM support)
-            if "images" in episode:
-                print(f"[DEBUG] Episode {i + 1} has {len(episode['images'])} images")
+            if use_vlm and "images" in episode:
+                if args.debug:
+                    print(f"[DEBUG] Episode {i + 1} has {len(episode['images'])} images")
                 episode_images.append(episode["images"])
-            else:
+            elif args.debug and use_vlm:
                 print(f"[DEBUG] Episode {i + 1} has NO images")
 
         result = {
@@ -535,12 +564,13 @@ def main() -> None:
             "completion_reward": completion_rewards,
         }
 
-        # Include images if any episode had screenshots (GRPO trainer auto-detects VLM)
-        if episode_images:
+        # Include images if VLM mode is enabled and any episode had screenshots
+        if use_vlm and episode_images:
             result["images"] = episode_images
-            print(f"[DEBUG] rollout_func returning with images: {len(episode_images)} episodes")
-        else:
-            print("[DEBUG] rollout_func returning WITHOUT images")
+            if args.debug:
+                print(f"[DEBUG] rollout_func returning with images: {len(episode_images)} episodes")
+        elif args.debug:
+            print(f"[DEBUG] rollout_func returning WITHOUT images (VLM mode: {use_vlm})")
 
         return result
 
@@ -558,6 +588,7 @@ def main() -> None:
     print(f"Benchmark: {args.benchmark}")
     print(f"Task: {args.task_name}")
     print(f"Model: {args.model_id}")
+    print(f"Mode: {'VLM (with screenshots)' if use_vlm else 'LLM (text-only, no screenshots)'}")
     print(f"Using {args.num_generations} rollouts per dataset prompt")
     print(f"Output directory: {output_dir}")
     print("=" * 80)
