@@ -140,23 +140,25 @@ class DPOConfig(TrainingArguments):
     loss_type: list[str] = field(
         default_factory=lambda: ["sigmoid"],
         metadata={
-            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'robust'`.",
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
+            "`'robust'`.",
         },
     )
     label_smoothing: float = field(
         default=0.0,
         metadata={
-            "help": (
-                "Label smoothing parameter used in Robust DPO, interpreted as the probability that a preference "
-                "label is flipped. Must lie in [0.0, 0.5). A typical value recommended by the Robust DPO paper is 0.1."
-            ),
+            "help": "Label smoothing parameter used in Robust DPO and EXO. In Robust DPO, it is interpreted as the "
+            "probability that a preference label is flipped and must lie in [0.0, 0.5); a typical value recommended "
+            "by the Robust DPO paper is 0.1. In EXO, it corresponds to the ε label smoothing parameter, for which the "
+            "paper recommends a typical value of 1e-3."
         },
     )
     beta: float = field(
         default=0.1,
         metadata={
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
-            "the reference model."
+            "the reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter "
+            "denoted by τ in the [paper](https://huggingface.co/papers/2310.12036)."
         },
     )
     activation_offloading: bool = field(

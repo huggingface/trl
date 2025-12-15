@@ -464,23 +464,7 @@ training_args = DPOConfig(
 )
 ```
 
-### A General Theoretical Paradigm to Understand Learning from Human Preferences
-
-**📜 Paper**: https://huggingface.co/papers/2310.12036
-
-A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    loss_type="ipo", # Section 5.1 of the paper
-    per_device_train_batch_size=90, #  mini-batch size in Section C.1 of the paper
-    learning_rate=1e-2, # learning rate in Section C.1 of the paper
-)
-```
-
-These parameters only appear in the [published version](https://proceedings.mlr.press/v238/gheshlaghi-azar24a/gheshlaghi-azar24a.pdf)
+<!-- DPO loss types are sorted by publish dates -->
 
 ### SLiC-HF: Sequence Likelihood Calibration with Human Feedback
 
@@ -500,11 +484,77 @@ training_args = DPOConfig(
 
 These parameters only appear in the [published version](https://openreview.net/pdf?id=0qSOodKmJaN)
 
+### Statistical Rejection Sampling Improves Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2309.06657
+
+Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC. They also introduce a new loss defined as:
+
+$$
+\mathcal{L}_{\text{hinge-norm}}(\pi_\theta)
+= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+\max\left(0,\; 1 - \left[\gamma \log \frac{\pi_\theta(y_w \mid x)}{\pi_\text{ref}(y_w \mid x)} - \gamma \log \frac{\pi_\theta(y_l \mid x)}{\pi_\text{ref}(y_l \mid x)}\right]\right)
+\right]
+$$
+
+To train with RSO-filtered data and the hinge-norm loss, you can use the following code:
+
+```python
+from trl import DPOConfig, DPOTrainer
+
+dataset = ...
+
+def rso_accept(example):  # replace with your actual filter/score logic
+    return example["rso_keep"]
+
+train_dataset = train_dataset.filter(rso_accept)
+
+training_args = DPOConfig(
+    loss_type="hinge",
+    beta=0.05,  # correspond to gamma in the paper
+)
+
+trainer = DPOTrainer(
+    ...,
+    args=training_args,
+    train_dataset=train_dataset,
+)
+trainer.train()
+```
+
+### A General Theoretical Paradigm to Understand Learning from Human Preferences
+
+**📜 Paper**: https://huggingface.co/papers/2310.12036
+
+Learning from human preferences can be written as a single KL-regularized objective over pairwise preference probabilities,
+
+$$
+\max_\pi ;\mathbb{E}\big[\Psi\left(p^*(y \succ y' \mid x)\right)\big] - \tau\mathrm{KL}(\pi||\pi_{\text{ref}}),
+$$
+
+which reveals RLHF and DPO as special cases corresponding to the logit choice of  \\( \Psi \\).
+The paper shows that this logit transform amplifies near-deterministic preferences and effectively weakens KL regularization, explaining overfitting.
+Using the **Identity transform (IPO)** avoids this pathology by optimizing preferences directly, without assuming a Bradley–Terry reward model.
+To reproduce the paper's setting, use this configuration: 
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="ipo",  # Section 5.1 of the paper
+    per_device_train_batch_size=90,  #  mini-batch size in Section C.1 of the paper
+    learning_rate=1e-2,  # learning rate in Section C.1 of the paper
+)
+```
+
+These parameters only appear in the [published version](https://proceedings.mlr.press/v238/gheshlaghi-azar24a/gheshlaghi-azar24a.pdf)
+
 ### Towards Efficient and Exact Optimization of Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2402.00856
 
-Efficient exact optimization (EXO) method is proposed to align language models with human preferences, providing a guaranteed and efficient alternative to reinforcement learning and direct preference optimization. To reproduce the paper's setting, use this configuration:
+The paper shows that direct preference methods like DPO optimize the wrong KL direction, leading to blurred preference capture, and proposes EXO as an efficient way to exactly optimize the human‑preference alignment objective by leveraging reverse KL probability matching rather than forward KL approximations. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
@@ -675,46 +725,6 @@ training_args = DPOConfig(
 ```
 
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
-
-### Statistical Rejection Sampling Improves Preference Optimization
-
-**📜 Paper**: https://huggingface.co/papers/2309.06657
-
-Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC. They also introduce a new loss defined as:
-
-$$
-\mathcal{L}_{\text{hinge-norm}}(\pi_\theta)
-= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
-\left[
-\max\left(0,\; 1 - \left[\gamma \log \frac{\pi_\theta(y_w \mid x)}{\pi_\text{ref}(y_w \mid x)} - \gamma \log \frac{\pi_\theta(y_l \mid x)}{\pi_\text{ref}(y_l \mid x)}\right]\right)
-\right]
-$$
-
-To train with RSO-filtered data and the hinge-norm loss, you can use the following code:
-
-```python
-from trl import DPOConfig, DPOTrainer
-
-dataset = ...
-
-def rso_accept(example):  # replace with your actual filter/score logic
-    return example["rso_keep"]
-
-train_dataset = train_dataset.filter(rso_accept)
-
-training_args = DPOConfig(
-    loss_type="hinge",
-    beta=0.05,  # correspond to gamma in the paper
-)
-
-trainer = DPOTrainer(
-    ...,
-    args=training_args,
-    train_dataset=train_dataset,
-)
-trainer.train()
-
-```
 
 ## Kahneman–Tversky Optimization
 

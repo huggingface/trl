@@ -364,6 +364,16 @@ class DPOTrainer(BaseTrainer):
         self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_types = [args.loss_type] if isinstance(args.loss_type, str) else args.loss_type
         self.label_smoothing = args.label_smoothing
+        if "robust" in self.loss_types and not (0.0 <= self.label_smoothing < 0.5):
+            logger.warning(
+                "The `label_smoothing` parameter should lie in [0.0, 0.5) for the 'robust' loss. You provided "
+                f"{self.label_smoothing}."
+            )
+        if "exo_pair" in self.loss_types and self.label_smoothing == 0.0:
+            raise ValueError(
+                "Label smoothing must be greater than 0.0 when using 'exo_pair' loss. The EXO paper recommends a "
+                "value of 1e-3."
+            )
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -669,6 +679,7 @@ class DPOTrainer(BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
+        device = self.accelerator.device
 
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
@@ -719,24 +730,45 @@ class DPOTrainer(BaseTrainer):
         # Get the log ratios for the chosen and rejected responses
         chosen_logratios = chosen_logps - ref_chosen_logps
         rejected_logratios = rejected_logps - ref_rejected_logps
+        delta_log_odds = chosen_logratios - rejected_logratios
 
         loss = 0.0
         for loss_type in self.loss_types:
             if loss_type == "sigmoid":
-                per_sequence_loss = -F.logsigmoid(self.beta * (chosen_logratios - rejected_logratios))
+                per_sequence_loss = -F.logsigmoid(self.beta * delta_log_odds)
 
             elif loss_type == "hinge":
-                per_sequence_loss = torch.relu(1 - self.beta * (chosen_logratios - rejected_logratios))
+                per_sequence_loss = torch.relu(1 - self.beta * delta_log_odds)
+
+            elif loss_type == "ipo":
+                # (Eq. 17) of the paper where beta is the regularization parameter for the IPO loss, denoted by τ.
+                per_sequence_loss = (delta_log_odds - 1 / (2 * self.beta)) ** 2
+
+            elif loss_type == "exo_pair":
+                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
+                # Minimize KL(p_fθ || p_rh) for K=2; p_fθ = softmax(βπ * (log πθ − log π_ref)) over {chosen, rejected}
+                # p_rh = [(1−ε), ε]; expanded KL gives the weighted logsigmoid form below
+                epsilon = torch.tensor(self.label_smoothing, device=device)
+                qw = F.sigmoid(self.beta * delta_log_odds)
+                log_qw = F.logsigmoid(self.beta * delta_log_odds)
+                log_pw = torch.log1p(-epsilon)
+                ql = F.sigmoid(-self.beta * delta_log_odds)
+                log_ql = F.logsigmoid(-self.beta * delta_log_odds)
+                log_pl = torch.log(epsilon)
+                per_sequence_loss = qw * (log_qw - log_pw) + ql * (log_ql - log_pl)
 
             elif loss_type == "robust":
-                # {(1-\varepsilon)\mathcal{L}_{\text{DPO}} - \varepsilon\mathcal{L}_{\text{DPO}}}/{1-2\varepsilon}
-                per_sequence_loss = -F.logsigmoid(self.beta * (chosen_logratios - rejected_logratios))
+                per_sequence_loss = -F.logsigmoid(self.beta * delta_log_odds)
                 per_sequence_loss = (
                     (1 - self.label_smoothing) * per_sequence_loss - self.label_smoothing * per_sequence_loss
                 ) / (1 - 2 * self.label_smoothing)
-            else:
-                raise ValueError(f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'robust']")
 
+            else:
+                raise ValueError(
+                    f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
+                    "'robust']"
+                )
+            
             loss += per_sequence_loss.mean()
 
         # Log the metrics
