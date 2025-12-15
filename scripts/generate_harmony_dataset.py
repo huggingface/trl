@@ -95,7 +95,7 @@ def main(test_size, push_to_hub, repo_id):
     language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling")
-    language_modeling_dataset.save_to_disk(repo_id + "/language_modeling")
+
     prompt_completion_dataset = Dataset.from_dict({
         "prompt": [
             [{"role": "user", "content": "What is better than ugly?"}],
@@ -164,7 +164,96 @@ def main(test_size, push_to_hub, repo_id):
     prompt_completion_dataset = prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         prompt_completion_dataset.push_to_hub(repo_id, config_name="prompt_completion")
-    prompt_completion_dataset.save_to_disk(repo_id + "/prompt_completion")
+
+    preference_dataset = Dataset.from_dict({
+        "prompt": [
+            [{"role": "user", "content": "What is better than ugly?"}],
+            [{"role": "user", "content": "What is better than implicit?"}],
+            [{"role": "user", "content": "What is better than complex?"}],
+            [{"role": "user", "content": "What is better than complicated?"}],
+            [{"role": "user", "content": "What is better than nested?"}],
+            [{"role": "user", "content": "What is better than dense?"}],
+            [{"role": "user", "content": "What counts?"}],
+            [{"role": "user", "content": "Are special cases enough to break the rules?"}],
+            [{"role": "user", "content": "What beats purity?"}],
+            [{"role": "user", "content": "What should never pass silently?"}],
+            [{"role": "user", "content": "When can errors pass silently?"}],
+            [{"role": "user", "content": "What should you do in the face of ambiguity?"}],
+            [{"role": "user", "content": "How many ways should there be to do it?"}],
+            [{"role": "user", "content": "For whom may the way not be obvious at first?"}],
+            [{"role": "user", "content": "What is better than never?"}],
+            [{"role": "user", "content": "Is never better than *right* now?"}],
+            [{"role": "user", "content": "What does it mean if the implementation is hard to explain?"}],
+            [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}],
+            [{"role": "user", "content": "Any great ideas?"}],
+        ],
+        "chosen": [
+            [{"role": "assistant", "thinking": "Beauty improves clarity and appeal.", "content": "Beautiful."}],
+            [{"role": "assistant", "thinking": "Clarity avoids confusion.", "content": "Explicit."}],
+            [{"role": "assistant", "thinking": "Simplicity is easier to manage.", "content": "Simple."}],
+            [{"role": "assistant", "thinking": "Complexity has structure; complication doesn’t.", "content": "Complex."}],
+            [{"role": "assistant", "thinking": "Flat structures are easier to read.", "content": "Flat."}],
+            [{"role": "assistant", "thinking": "Spacing aids understanding.", "content": "Sparse."}],
+            [{"role": "assistant", "thinking": "Readable code lasts longer.", "content": "Readability."}],
+            [{"role": "assistant", "thinking": "Consistency is more valuable.", "content": "No, special cases aren't special enough to break the rules."}],
+            [{"role": "assistant", "thinking": "Real-world needs outweigh ideals.", "content": "Practicality."}],
+            [{"role": "assistant", "thinking": "Silent errors cause hidden issues.", "content": "Errors."}],
+            [{"role": "assistant", "thinking": "Silence must be intentional.", "content": "When explicitly silenced."}],
+            [{"role": "assistant", "thinking": "Guessing leads to wrong choices.", "content": "Refuse the temptation to guess."}],
+            [{"role": "assistant", "thinking": "One way reduces confusion.", "content": "One, and preferably only one."}],
+            [{"role": "assistant", "thinking": "A playful nod to Python’s creator.", "content": "Dutch."}],
+            [{"role": "assistant", "thinking": "Action is better than endless delay.", "content": "Now is better than never."}],
+            [{"role": "assistant", "thinking": "Rushed action can be worse.", "content": "Yes, often."}],
+            [{"role": "assistant", "thinking": "Good ideas should be clear.", "content": "It means it's a bad idea."}],
+            [{"role": "assistant", "thinking": "Clarity suggests soundness.", "content": "It means it may be a good idea."}],
+            [{"role": "assistant", "thinking": "Namespaces prevent conflicts.", "content": "Namespaces are one honking great idea."}],
+        ],
+        "rejected": [
+            [{"role": "assistant", "content": "Beautiful is better than the moon."}],
+            [{"role": "assistant", "content": "Explicit is worse than nothing."}],
+            [{"role": "assistant", "content": "Simple is better than a long vacation."}],
+            [{"role": "assistant", "content": "Complex is always the answer."}],
+            [{"role": "assistant", "content": "Flat is better than chocolate."}],
+            [{"role": "assistant", "content": "Sparse is better without any context."}],
+            [{"role": "assistant", "content": "Readability is optional."}],
+            [{"role": "assistant", "content": "Special cases aren't special enough to become unicorns."}],
+            [{"role": "assistant", "content": "Although practicality beats reality."}],
+            [{"role": "assistant", "content": "Errors should never pass their driving test."}],
+            [{"role": "assistant", "content": "Unless explicitly forgotten."}],
+            [{"role": "assistant", "content": "In the face of ambiguity, refuse the opportunity to laugh."}],
+            [{"role": "assistant", "content": "There should be one-- and preferably two or more confusing methods."}],
+            [{"role": "assistant", "content": "Although that way may not be obvious at first unless you're a time traveler."}],
+            [{"role": "assistant", "content": "Now is never better."}],
+            [{"role": "assistant", "content": "Although never is often not even a possibility."}],
+            [{"role": "assistant", "content": "If the implementation is hard to explain, it's clearly the best choice."}],
+            [{"role": "assistant", "content": "If the implementation is easy to explain, it's probably magic."}],
+            [{"role": "assistant", "content": "Namespaces are one honking great watermelon -- let's plant some!"}],
+        ],
+        "chat_template_kwargs": [
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+        ],
+    })
+    preference_dataset = preference_dataset.train_test_split(test_size=test_size, shuffle=False)
+    if push_to_hub:
+        preference_dataset.push_to_hub(repo_id, config_name="preference")
     # fmt: on
 
 
