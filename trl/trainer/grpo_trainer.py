@@ -2131,7 +2131,7 @@ class GRPOTrainer(BaseTrainer):
         off_policy_threshold: float,
     ) -> torch.Tensor:
         """
-        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2.
+        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper.
         Returns a (B, 1) tensor where 1.0 indicates "Keep" and 0.0 indicates "Drop".
         """
         # K1 estimator: log(pi_old) - log(pi_theta)
@@ -2189,13 +2189,12 @@ class GRPOTrainer(BaseTrainer):
 
         if self.off_policy_mask_threshold is not None:
             off_policy_mask = self._get_off_policy_mask(
-                advantages,
-                per_token_logps,
-                old_per_token_logps,
-                mask,
-                self.off_policy_mask_threshold,
+                advantages=advantages,
+                per_token_logps=per_token_logps,
+                old_per_token_logps=old_per_token_logps,
+                mask=mask,
+                off_policy_threshold=self.off_policy_mask_threshold,
             )
-            mask = mask * off_policy_mask
 
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
@@ -2247,6 +2246,9 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss = -per_token_loss * advantages
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
+
+        if self.off_policy_mask_threshold is not None:
+            per_token_loss = per_token_loss * off_policy_mask
 
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
