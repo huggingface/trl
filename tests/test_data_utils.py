@@ -585,7 +585,7 @@ class TestApplyChatTemplate(TrlTestCase):
         # Define test case
         test_case = {
             "prompt": [
-                {"content": "Whats the temperature in London?", "role": "user"},
+                {"content": "What's the temperature in London?", "role": "user"},
             ]
         }
         # Test with tools
