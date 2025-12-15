@@ -391,6 +391,14 @@ class OnlineDPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+        if self.top_k is None:
+            self.top_k = 0
+            warnings.warn(
+                "The value `None` for `top_k` is deprecated and will raise an error in TRL 0.30. "
+                "Use `top_k=0` to disable top-k filtering instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
 
         super().__post_init__()
 
