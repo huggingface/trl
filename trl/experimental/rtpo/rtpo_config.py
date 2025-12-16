@@ -70,3 +70,4 @@ class RTPOConfig(GRPOConfig):
                 self.values = [0.2, 0.5, 0.8, 1.0]
         elif self.schedule_type == "constant" and self.value is None:
             self.value = 1.0
+        super().__post_init__()
