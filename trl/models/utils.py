@@ -140,6 +140,7 @@ def _unwrap_model_for_generation(
         unwrapped_model.gradient_checkpointing_enable()
 
 
+# TODO: Remove generation_config
 @contextmanager
 def _override_model_generation_config(model, generation_config=None, generation_kwargs=None):
     """
@@ -186,6 +187,7 @@ def unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
+    # TODO: Remove generation_config
     generation_config: GenerationConfig | None = None,
     generation_kwargs: dict | None = None,
 ):
