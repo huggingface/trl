@@ -192,6 +192,15 @@ class DPOConfig(TrainingArguments):
             "used. We recommend using the `max_length` parameter to control the total sequence length.",
         },
     )
+    ref_model_init_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. The reference model is "
+            "instantiated with the same keyword arguments as the main model. If you need to customize the reference "
+            "model initialization, we recommend instantiating the reference model yourself and passing it to the "
+            "`DPOTrainer`."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -372,7 +381,6 @@ class DPOConfig(TrainingArguments):
         },
     )
 
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
@@ -399,6 +407,15 @@ class DPOConfig(TrainingArguments):
                 "The `max_completion_length` argument is deprecated and will be removed in version 0.29.0. This "
                 "parameter is no longer used. We recommend using the `max_length` parameter to control the total "
                 "sequence length.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.ref_model_init_kwargs is not None:
+            warnings.warn(
+                "The `ref_model_init_kwargs` argument is deprecated and will be removed in version 0.29.0. The "
+                "reference model is instantiated with the same keyword arguments as the main model. If you need to "
+                "customize the reference model initialization, we recommend instantiating the reference model "
+                "yourself and passing it to the `DPOTrainer`.",
                 FutureWarning,
                 stacklevel=2,
             )
