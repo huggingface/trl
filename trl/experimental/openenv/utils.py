@@ -40,7 +40,7 @@ def _build_colocate_sampling_params(
     generation_kwargs: dict[str, Any] = {
         "n": 1,
         "temperature": trainer.temperature,
-        "top_k": -1 if trainer.top_k is None else trainer.top_k,
+        "top_k": trainer.top_k,
         "min_p": 0.0 if trainer.min_p is None else trainer.min_p,
         "max_tokens": trainer.max_completion_length,
         "guided_decoding": guided_decoding,
