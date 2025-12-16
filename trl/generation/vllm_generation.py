@@ -104,6 +104,20 @@ class VLLMGeneration:
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
 
+            # TODO: improve
+            # Calculate max_model_len: use vllm_max_model_length if available, otherwise compute from prompt+completion
+            if hasattr(args, "vllm_max_model_length") and args.vllm_max_model_length is not None:
+                max_model_len = args.vllm_max_model_length
+            elif (
+                hasattr(self.trainer, "max_prompt_length")
+                and self.trainer.max_prompt_length is not None
+                and hasattr(self.trainer, "max_completion_length")
+                and self.trainer.max_completion_length is not None
+            ):
+                max_model_len = self.trainer.max_prompt_length + self.trainer.max_completion_length
+            else:
+                max_model_len = None
+
             vllm_quantization = None
             if is_bitsandbytes_available():
                 for _, module in model.named_modules():
@@ -112,25 +126,30 @@ class VLLMGeneration:
                         break
                     elif isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
-            self.llm = LLM(
-                model=model.name_or_path,
-                tensor_parallel_size=args.vllm_tensor_parallel_size,
-                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
-                max_num_seqs=args.per_device_train_batch_size
+
+            # Build LLM initialization kwargs
+            llm_kwargs = {
+                "model": model.name_or_path,
+                "tensor_parallel_size": args.vllm_tensor_parallel_size,
+                "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
+                "max_num_seqs": args.per_device_train_batch_size
                 * args.vllm_tensor_parallel_size
                 * args.steps_per_generation,
-                max_model_len=args.vllm_max_model_length,
-                distributed_executor_backend="external_launcher",
-                # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                seed=accelerator.process_index // args.vllm_tensor_parallel_size,
-                # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
-                max_num_batched_tokens=4096,
-                model_impl=args.vllm_model_impl,
-                enable_sleep_mode=args.vllm_enable_sleep_mode,
-                # Important so temperature scaling/logit tweaking affects the TIS log probs
-                logprobs_mode="processed_logprobs",
-                quantization=vllm_quantization,
-            )
+                "max_model_len": max_model_len,
+                "distributed_executor_backend": "external_launcher",
+                "seed": accelerator.process_index // args.vllm_tensor_parallel_size,
+                "max_num_batched_tokens": 4096,
+                "model_impl": args.vllm_model_impl,
+                "enable_sleep_mode": args.vllm_enable_sleep_mode,
+                "quantization": vllm_quantization,
+            }
+
+            # TODO: improve
+            # Add logprobs_mode only for GRPO (not used in RLOO)
+            if "grpo" in type(self.trainer).__name__.lower():
+                llm_kwargs["logprobs_mode"] = "processed_logprobs"
+
+            self.llm = LLM(**llm_kwargs)
             if args.vllm_enable_sleep_mode:
                 self.llm.sleep(level=2)
         else:
