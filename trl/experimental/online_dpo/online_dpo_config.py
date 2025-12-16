@@ -67,7 +67,7 @@ class OnlineDPOConfig(TrainingArguments):
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
             `1.0` to consider all tokens.
-        top_k (`int`, defaults to `0`):
+        top_k (`int`, *optional*, defaults to `0`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
             disabled and all tokens are considered.
         min_p (`float`, *optional*):
