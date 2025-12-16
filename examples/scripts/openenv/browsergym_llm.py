@@ -395,9 +395,6 @@ def reward_completion(completions: list[str], **kwargs) -> list[float]:
 def main() -> None:
     args = parse_args()
 
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_id)
-    tokenizer.pad_token = tokenizer.eos_token
-
     # Connect to BrowserGym environment via Hugging Face Space
     client = BrowserGymEnv(base_url=args.space_url)
     print(f"🌍 Using Hugging Face Space environment at: {args.space_url}")
