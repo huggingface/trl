@@ -22,8 +22,10 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
+import transformers
 from accelerate.utils import is_peft_model
 from packaging import version
+from packaging.version import Version
 from transformers import GenerationConfig, PreTrainedModel, TrainingArguments
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
@@ -154,7 +156,10 @@ def _override_model_generation_config(model, generation_config=None, generation_
         model: The model (typically unwrapped_model) whose generation_config to temporarily override.
         generation_config (GenerationConfig): Generation config to be used to override model's one.
     """
-    if generation_config is None and generation_kwargs is None:
+    # Issue fixed in transformers v5 by PR transformers#42702
+    if (Version(transformers.__version__) >= Version("5.0.0.dev0")) or (
+        generation_config is None and generation_kwargs is None
+    ):
         yield model
         return
     # If it is a PEFT model, override the underlying base model
