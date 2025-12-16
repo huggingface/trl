@@ -157,6 +157,7 @@ def _override_model_generation_config(model, generation_config=None, generation_
     Args:
         model: The model (typically unwrapped_model) whose generation_config to temporarily override.
         generation_config (GenerationConfig): Generation config to be used to override model's one.
+        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
     """
     # Issue fixed in transformers v5 by PR transformers#42702
     if (Version(transformers.__version__) >= Version("5.0.0.dev0")) or (
@@ -205,6 +206,10 @@ def unwrap_model_for_generation(
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
         generation_config ([`~transformers.GenerationConfig`], *optional*):
+            If provided, temporarily overrides the model's generation_config during generation.
+            The original config is automatically restored when exiting the context. This is
+            useful for using different generation parameters during training vs. inference.
+        generation_kwargs (dict, *optional*):
             If provided, temporarily overrides the model's generation_config during generation.
             The original config is automatically restored when exiting the context. This is
             useful for using different generation parameters during training vs. inference.
