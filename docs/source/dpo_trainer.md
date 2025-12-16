@@ -21,7 +21,7 @@ This process is illustrated in the sketch below (from [Figure 1 of the DPO paper
 
 ![Figure 1 DPO](https://github.com/huggingface/trl/assets/49240599/9150fac6-3d88-4ca2-8ec6-2a6f3473216d)
 
-Read more about DPO algorithm in the [original paper](https://huggingface.co/papers/2305.18290).
+This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif) and later refactored by [Quentin Gallouédec](https://huggingface.co/qgallouedec).
 
 ## Quick start
 
