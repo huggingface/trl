@@ -1105,6 +1105,26 @@ class SFTTrainer(BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+                eos_id = (
+                    processing_class.tokenizer.eos_token_id
+                    if hasattr(processing_class, "tokenizer")
+                    else None
+                )
+                if eos_id is not None:
+                    def _ensure_eos_batch(examples):
+                        input_ids = examples.get("input_ids")
+                        if input_ids is None:
+                            return examples
+                        for seq in input_ids:
+                            # If sequence was long enough to be truncated (>= max_length), force last token to EOS
+                            if seq and len(seq) >= args.max_length:
+                                if seq[-1] != eos_id:
+                                    seq[-1] = eos_id
+                        examples["input_ids"] = input_ids
+                        return examples
+                
+                    dataset = dataset.map(_ensure_eos_batch, batched=True, **map_kwargs)
+
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
