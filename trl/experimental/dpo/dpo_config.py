@@ -64,6 +64,16 @@ class DPOConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
+    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | None = field(
@@ -94,7 +104,7 @@ class DPOConfig(TrainingArguments):
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the right. If `None`, no truncation is applied."
+            "the left or right depending on the `truncation_mode`. If `None`, no truncation is applied."
         },
     )
     truncation_mode: str = field(
@@ -117,14 +127,6 @@ class DPOConfig(TrainingArguments):
     pad_to_multiple_of: int | None = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
-    )
-    precompute_ref_log_probs: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
-            "before training. This allows to save memory during training, as the reference model does not need to be "
-            "kept in memory."
-        },
     )
 
     # Parameters that control the training
@@ -190,6 +192,186 @@ class DPOConfig(TrainingArguments):
             "used. We recommend using the `max_length` parameter to control the total sequence length.",
         },
     )
+
+    # Parameters that need to be implemented
+    precompute_ref_log_probs: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
+            "before training. This allows to save memory during training, as the reference model does not need to be "
+            "kept in memory."
+        },
+    )
+    ref_model_init_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument "
+            "of the `DPOTrainer` is provided as a string."
+        },
+    )
+    model_adapter_name: str | None = field(
+        default=None,
+        metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
+    )
+    ref_adapter_name: str | None = field(
+        default=None,
+        metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
+    )
+    force_use_ref_model: bool = field(
+        default=False,
+        metadata={
+            "help": "If you provide a PEFT model as the active model and wish to use a different model for the "
+            "`ref_model`, set this flag to `True`."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
+    )
+    use_logits_to_keep: bool = field(
+        default=False,
+        metadata={
+            "help": "If `True`, only a specified number of logits are computed in the forward pass. This can be "
+            "useful for saving memory and speeding up training by not computing the logits for all tokens, especially "
+            "in scenarios when working with very long prompts where labels are ignored (-100)."
+        },
+    )
+    pad_token: str | None = field(
+        default=None,
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
+        },
+    )
+    label_pad_token_id: int = field(
+        default=-100,
+        metadata={"help": "Padding value to use for labels."},
+    )
+    max_prompt_length: int | None = field(
+        default=512,
+        metadata={"help": "Maximum length of the prompt."},
+    )
+    max_completion_length: int | None = field(
+        default=None,
+        metadata={"help": "Maximum length of the completion."},
+    )
+    max_length: int | None = field(
+        default=1024,
+        metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
+            "and `'keep_start'`.",
+            "choices": ["keep_end", "keep_start"],
+        },
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
+            "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
+            "handle the flattened batch structure."
+        },
+    )
+    precompute_ref_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
+        },
+    )
+    tools: list[dict] | None = field(
+        default=None,
+        metadata={
+            "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
+            "not support function calling, this argument will have no effect."
+        },
+    )
+    use_liger_loss: bool = field(
+        default=None,
+        metadata={"help": "Whether to use Liger loss."},
+    )
+    base_model_attribute_name: str = field(
+        default="model",
+        metadata={
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
+            "model  from the model when the model does not have a `get_decoder` method in the case when "
+            "`use_liger_kernel` is `True`."
+        },
+    )
+    f_divergence_type: str = field(
+        default="FDivergenceType.REVERSE_KL",
+        metadata={
+            "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
+            "model."
+        },
+    )
+    f_alpha_divergence_coef: float = field(
+        default=1.0,
+        metadata={"help": "α coefficient in the α-divergence u^-α regularization function for DPO loss."},
+    )
+    reference_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to ignore the provided reference model and implicitly use a reference model that assigns "
+            "equal probability to all responses."
+        },
+    )
+    use_weighting: bool = field(
+        default=False,
+        metadata={"help": "Whether to weight the loss as done in the WPO paper."},
+    )
+    rpo_alpha: float | None = field(
+        default=None,
+        metadata={
+            "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
+            "If `None`, no weighting is applied and the loss is the same as the DPO loss. The paper recommends "
+            "`rpo_alpha=1.0`."
+        },
+    )
+    ld_alpha: float | None = field(
+        default=None,
+        metadata={
+            "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
+            "log-probabilities in responses. If `None`, no weighting is applied to the verbose part, and the loss is "
+            "equivalent to the standard DPO loss. The paper recommends setting `ld_alpha` between `0.0` and `1.0`.",
+        },
+    )
+    loss_weights: list[float] | None = field(
+        default=None,
+        metadata={
+            "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
+            "Example: `[0.8, 0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss "
+            "types."
+        },
+    )
+    ref_model_mixup_alpha: float = field(
+        default=0.6,
+        metadata={
+            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
+            "previous reference policy during updates. The reference policy is updated according to the equation: "
+            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    ref_model_sync_steps: int = field(
+        default=512,
+        metadata={
+            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
+            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    generate_during_eval: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to generate and log completions from both the model and the reference model to W&B, MLFLow "
+            "or Comet during evaluation."
+        },
+    )
+
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
