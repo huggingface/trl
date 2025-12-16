@@ -38,16 +38,15 @@ Below is the script to train the model:
 
 ```python
 # train_dpo.py
+from trl import DPOTrainer
 from datasets import load_dataset
-from trl import DPOConfig, DPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO")
-trainer = DPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
+trainer = DPOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    train_dataset=train_dataset
+)
 trainer.train()
 ```
 
@@ -76,30 +75,6 @@ Huggingface is a platform that allows users to access a variety of open-source m
 DPO requires a [preference dataset](dataset_formats#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 Although the [`DPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
-
-### Special considerations for vision-language models
-
-The [`DPOTrainer`] supports fine-tuning vision-language models (VLMs). For these models, a vision dataset is required. To learn more about the specific format for vision datasets, refer to the [Vision dataset format](dataset_formats#vision-datasets) section.
-
-Additionally, unlike standard text-based models where a `tokenizer` is used, for VLMs, you should replace the `tokenizer` with a `processor`.
-
-```diff
-- model = AutoModelForCausalLM.from_pretrained(model_id)
-+ model = AutoModelForImageTextToText.from_pretrained(model_id)
-
-- tokenizer = AutoTokenizer.from_pretrained(model_id)
-+ processor = AutoProcessor.from_pretrained(model_id)
-
-  trainer = DPOTrainer(
-      model,
-      args=training_args,
-      train_dataset=train_dataset,
--     processing_class=tokenizer,
-+     processing_class=processor,
-)
-```
-
-For a complete example of fine-tuning a vision-language model, refer to the script in [`examples/scripts/dpo_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo_vlm.py).
 
 ## Example script
 
@@ -200,21 +175,25 @@ First install `unsloth` according to the [official documentation](https://github
 
 ```diff
   from datasets import load_dataset
-  from trl import DPOConfig, DPOTrainer
-- from transformers import AutoModelForCausalLM, AutoTokenizer
+  from trl import DPOTrainer
 + from unsloth import FastLanguageModel
 
-- model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-- tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+- model = "Qwen/Qwen2-0.5B-Instruct"
 + model, tokenizer = FastLanguageModel.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 + model = FastLanguageModel.get_peft_model(model)
+
   train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 - training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO")
 + training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", bf16=True)
-  trainer = DPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
-  trainer.train()
 
+  trainer = DPOTrainer(
+      model=model,
+      args=training_args,
++     processing_class=tokenizer,
+      train_dataset=train_dataset
+  )
+  trainer.train()
 ```
 
 The saved model is fully compatible with Hugging Face's transformers library. Learn more about unsloth in their [official repository](https://github.com/unslothai/unsloth).
