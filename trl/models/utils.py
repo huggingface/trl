@@ -140,9 +140,8 @@ def _unwrap_model_for_generation(
         unwrapped_model.gradient_checkpointing_enable()
 
 
-# TODO: Remove generation_config
 @contextmanager
-def _override_model_generation_config(model, generation_config=None, generation_kwargs=None):
+def _override_model_generation_config(model, generation_kwargs=None):
     """
     Context manager to temporarily override a model's generation_config with training config.
 
@@ -157,13 +156,10 @@ def _override_model_generation_config(model, generation_config=None, generation_
 
     Args:
         model: The model (typically unwrapped_model) whose generation_config to temporarily override.
-        generation_config (GenerationConfig): Generation config to be used to override model's one.
         generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
     """
     # Issue fixed in transformers v5 by PR transformers#42702
-    if (Version(transformers.__version__) >= Version("5.0.0.dev0")) or (
-        generation_config is None and generation_kwargs is None
-    ):
+    if Version(transformers.__version__) >= Version("5.0.0.dev0") or generation_kwargs is None:
         yield model
         return
     # If it is a PEFT model, override the underlying base model
@@ -187,8 +183,6 @@ def unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
-    # TODO: Remove generation_config
-    generation_config: GenerationConfig | None = None,
     generation_kwargs: dict | None = None,
 ):
     """
@@ -207,10 +201,6 @@ def unwrap_model_for_generation(
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
-        generation_config ([`~transformers.GenerationConfig`], *optional*):
-            If provided, temporarily overrides the model's generation_config during generation.
-            The original config is automatically restored when exiting the context. This is
-            useful for using different generation parameters during training vs. inference.
         generation_kwargs (dict, *optional*):
             If provided, temporarily overrides the model's generation_config during generation.
             The original config is automatically restored when exiting the context. This is
@@ -223,9 +213,7 @@ def unwrap_model_for_generation(
         _unwrap_model_for_generation(
             model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
         ) as unwrapped_model,
-        _override_model_generation_config(
-            unwrapped_model, generation_config=generation_config, generation_kwargs=generation_kwargs
-        ),
+        _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
     ):
         yield unwrapped_model
 

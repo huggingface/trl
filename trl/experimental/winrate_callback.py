@@ -62,8 +62,8 @@ def _generate_completions(
         list[str]: A list of generated text completions corresponding to the input prompts.
     """
     completions = []
-    # TODO: What if generation_config does not override model.generation_config?
-    with unwrap_model_for_generation(model, accelerator, generation_config=generation_config) as unwrapped_model:
+    # TODO: Override model.generation_config with generation_kwargs
+    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         for idx in range(0, len(prompts), batch_size):
             batch = prompts[idx : idx + batch_size]
             tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
