@@ -63,11 +63,6 @@ from trl.experimental.openenv import generate_rollout_completions
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run GRPO training for BrowserGym MiniWoB using OpenEnv environment.")
     parser.add_argument(
-        "--tokenizer-id",
-        default="Qwen/Qwen3-0.6B",
-        help="Model identifier used to load the tokenizer.",
-    )
-    parser.add_argument(
         "--model-id",
         default="Qwen/Qwen3-0.6B",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
