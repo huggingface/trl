@@ -46,8 +46,6 @@ class RLOOConfig(TrainingArguments):
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int`, *optional*, defaults to `2`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
@@ -201,6 +199,17 @@ class RLOOConfig(TrainingArguments):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+
+        > Deprecated arguments
+
+        max_prompt_length:
+
+            <Deprecated version="0.26.0">
+
+            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
+            filter your dataset before training to ensure that prompts do not exceed your desired length.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -266,12 +275,6 @@ class RLOOConfig(TrainingArguments):
         metadata={
             "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
             "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
-        },
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
         },
     )
     num_generations: int | None = field(
@@ -559,6 +562,15 @@ class RLOOConfig(TrainingArguments):
         },
     )
 
+    # Deprecated arguments
+    max_prompt_length: int | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
+            "desired length."
+        },
+    )
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
         if self.top_k is None:
@@ -617,4 +629,13 @@ class RLOOConfig(TrainingArguments):
             raise ValueError(
                 "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
+            )
+
+        if self.max_prompt_length is not None:
+            warnings.warn(
+                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
+                "instead filter your dataset before training to ensure that prompts do not exceed your desired "
+                "length.",
+                FutureWarning,
+                stacklevel=2,
             )
