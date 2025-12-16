@@ -146,8 +146,10 @@ def _override_model_generation_config(model, generation_config=None, generation_
     Context manager to temporarily override a model's generation_config with training config.
 
     This works around transformers' config merging logic that would otherwise overwrite
-    values matching global defaults with model-specific values. By temporarily setting
-    the model's generation_config to match the passed generation_config, we avoid the conflict.
+    values matching global defaults with model-specific values. See upstream issue: transformers#42762.
+
+    By temporarily setting the model's generation_config to match the passed generation_config,
+    we avoid the conflict.
 
     The model's original generation_config is preserved outside this context, ensuring
     that saved/pushed models retain their intended inference behavior.
