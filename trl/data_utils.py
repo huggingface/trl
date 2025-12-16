@@ -673,7 +673,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
             frag_info.append((row_idx, split_start, frag_len))
             expanded_indices.append(row_idx)
 
-    # Rebuild list columns with fragments and duplicate non-list columns accordingly.
+    # Rebuild list columns with fragments
     offsets_type = list_column.offsets.type
     new_offsets = np.empty(len(frag_lengths) + 1, dtype=offsets_type.to_pandas_dtype())
     new_offsets[0] = 0
