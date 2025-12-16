@@ -189,7 +189,7 @@ class XPOTrainer(OnlineDPOTrainer):
             unwrap_model_for_generation(
                 model,
                 self.accelerator,
-                generation_kwargs=self.generation_kwargs,
+                generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
             ) as unwrapped_policy_model_for_gen,
         ):
             model_output = unwrapped_policy_model_for_gen.generate(
@@ -213,7 +213,7 @@ class XPOTrainer(OnlineDPOTrainer):
             unwrap_model_for_generation(
                 actual_model_for_ref_generation,
                 self.accelerator,
-                generation_kwargs=self.generation_kwargs,
+                generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
             ) as final_ref_model_for_gen,
         ):
             ref_output = final_ref_model_for_gen.generate(
