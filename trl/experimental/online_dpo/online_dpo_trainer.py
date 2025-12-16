@@ -506,7 +506,7 @@ class OnlineDPOTrainer(BaseTrainer):
                 "repetition_penalty": self.repetition_penalty,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
-                "top_k": -1 if self.top_k is None else self.top_k,
+                "top_k": self.top_k,
                 "min_p": 0.0 if self.min_p is None else self.min_p,
                 "max_tokens": args.max_new_tokens,
                 "detokenize": False,  # to avoid vllm to decode (we don't need it)
