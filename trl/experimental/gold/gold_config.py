@@ -116,7 +116,10 @@ class GOLDConfig(SFTConfig):
     )
     top_k: int = field(
         default=0,
-        metadata={"help": "The number of highest probability vocabulary tokens to keep for top-k-filtering."},
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
+            "top-k-filtering is disabled and all tokens are considered."
+        },
     )
     lmbda: float = field(
         default=0.5,
