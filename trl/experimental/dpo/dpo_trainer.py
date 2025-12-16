@@ -39,6 +39,7 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages, truncate_dataset
 from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
+from ...models.utils import disable_gradient_checkpointing
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
@@ -714,7 +715,10 @@ class DPOTrainer(BaseTrainer):
         if self.precompute_ref_logps:
             ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
         else:
-            with torch.no_grad():
+            # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+            # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
+            # Temporarily disable checkpointing to avoid this warning during inference.
+            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(model):
                     # Disable PEFT adapters to get the reference model behavior
                     with model.disable_adapter():
@@ -806,10 +810,26 @@ class DPOTrainer(BaseTrainer):
                     - F.logsigmoid(-self.beta * delta) * self.label_smoothing
                 )
 
+            elif loss_type == "apo_zero":
+                # Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
+                # Use this loss when you believe the chosen outputs are better than your model's default output
+                # Increase chosen likelihood and decrease rejected likelihood
+                losses_chosen = 1 - F.sigmoid(self.beta * chosen_logratios)
+                losses_rejected = F.sigmoid(self.beta * rejected_logratios)
+                per_sequence_loss = losses_chosen + losses_rejected
+
+            elif loss_type == "apo_down":
+                # Eqn (8) of the APO paper (https://huggingface.co/papers/2408.06266)
+                # Use this loss when you believe the chosen outputs are worse than your model's default output.
+                # Decrease chosen likelihood and decrease rejected likelihood more
+                losses_chosen = F.sigmoid(self.beta * chosen_logratios)
+                losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
+                per_sequence_loss = losses_chosen + losses_rejected
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                    "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired']"
+                    "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down']"
                 )
 
             loss += per_sequence_loss.mean()

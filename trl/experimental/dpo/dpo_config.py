@@ -142,8 +142,9 @@ class DPOConfig(TrainingArguments):
         default_factory=lambda: ["sigmoid"],
         metadata={
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
-            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`. If multiple loss types "
-            "are provided, they will be combined using the weights specified in `loss_weights`.",
+            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, "
+            "`'apo_down'`. If multiple loss types are provided, they will be combined using the weights specified in "
+            "`loss_weights`.",
         },
     )
     label_smoothing: float = field(

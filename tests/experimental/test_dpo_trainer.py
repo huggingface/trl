@@ -221,7 +221,20 @@ class TestDPOTrainer(TrlTestCase):
 
     @pytest.mark.parametrize(
         "loss_type",
-        ["sigmoid", "hinge", "ipo", "exo_pair", "nca_pair", "robust", "bco_pair", "sppo_hard", "aot", "aot_unpaired"],
+        [
+            "sigmoid",
+            "hinge",
+            "ipo",
+            "exo_pair",
+            "nca_pair",
+            "robust",
+            "bco_pair",
+            "sppo_hard",
+            "aot",
+            "aot_unpaired",
+            "apo_zero",
+            "apo_down",
+        ],
     )
     def test_train_loss_types(self, loss_type):
         # Get the dataset

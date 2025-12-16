@@ -706,6 +706,40 @@ training_args = DPOConfig(
 
 There is no additional hyperparameter in the paper.
 
+### Anchored Preference Optimization and Contrastive Revisions: Addressing Underspecification in Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2408.06266
+
+CLAIR and APO enhance LLM alignment through more contrastive preference pairs and controlled alignment objectives, improving model performance close to GPT4-turbo. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="apo_zero",  # Section 4 of the paper
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
+    beta=0.1,  # $\beta$ in Section 5.2 of the paper,
+    max_prompt_length=512,  # prompt length in Section 5.2 of the paper
+    max_completion_length=512,  # completion length in Section 5.2 of the paper
+)
+```
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="apo_down",  # Section 4 of the paper
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
+    beta=0.1,  # $\beta$ in Section 5.2 of the paper,
+    max_prompt_length=512,  # prompt length in Section 5.2 of the paper
+    max_completion_length=512,  # completion length in Section 5.2 of the paper
+)
+```
+
+These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
+
 ### Discovering Preference Optimization Algorithms with and for Large Language Models
 
 **📜 Paper**: https://huggingface.co/papers/2406.08414
@@ -723,40 +757,6 @@ training_args = DPOConfig(
     discopop_tau=0.05 # $\tau$ in Section E of the paper
 )
 ```
-
-### Anchored Preference Optimization and Contrastive Revisions: Addressing Underspecification in Alignment
-
-**📜 Paper**: https://huggingface.co/papers/2408.06266
-
-CLAIR and APO enhance LLM alignment through more contrastive preference pairs and controlled alignment objectives, improving model performance close to GPT4-turbo. To reproduce the paper's setting, use this configuration:
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    loss_type="apo_zero", # Section 4 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-    learning_rate=2e-7, # learning rate in Section 5.2 of the paper
-    beta=0.1, # $\beta$ in Section 5.2 of the paper,
-    max_prompt_length=512, # prompt length in Section 5.2 of the paper
-    max_completion_length=512, # completion length in Section 5.2 of the paper
-)
-```
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    loss_type="apo_down", # Section 4 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-    learning_rate=2e-7, # learning rate in Section 5.2 of the paper
-    beta=0.1, # $\beta$ in Section 5.2 of the paper,
-    max_prompt_length=512, # prompt length in Section 5.2 of the paper
-    max_completion_length=512, # completion length in Section 5.2 of the paper
-)
-```
-
-These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
 ## Kahneman–Tversky Optimization
 
