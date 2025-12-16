@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -141,7 +142,8 @@ class DPOConfig(TrainingArguments):
         default_factory=lambda: ["sigmoid"],
         metadata={
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
-            "`'nca_pair'`, `'robust'`, `'bco_pair'`.",
+            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`. If multiple loss types "
+            "are provided, they will be combined using the weights specified in `loss_weights`.",
         },
     )
     label_smoothing: float = field(
@@ -176,7 +178,14 @@ class DPOConfig(TrainingArguments):
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
-        # Normalize loss_type to string format for internal use
-        if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
-            self.loss_type = self.loss_type[0]
+        if isinstance(self.loss_type, str):
+            self.loss_type = [self.loss_type]
+
+        if "aot_pair" in self.loss_type:
+            warnings.warn(
+                "`loss_type='aot_pair'` is deprecated and will be removed in a version 0.28.0. Please use "
+                "`loss_type='aot_unpaired'` instead.",
+                DeprecationWarning,
+            )
+
         super().__post_init__()

@@ -670,9 +670,11 @@ A self-play method called SPPO for language model alignment achieves state-of-th
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="sppo_hard", # Section 3 of the paper
-    per_device_train_batch_size=64, #  batch size in Section C of the paper
-    learning_rate=5e-7, # learning rate in Section C of the paper
+    loss_type="sppo_hard",
+    # From Section 5 of the paper
+    beta=0.001,  # β = η^−1
+    per_device_train_batch_size=64,
+    learning_rate=5e-7,
 )
 ```
 
@@ -686,15 +688,19 @@ Alignment via Optimal Transport (AOT) aligns large language models distributiona
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="aot", # Section 3 of the paper
+    loss_type="aot",
+    beta=0.01,  # from the caption of Figure 2
 )
 ```
+
+or, for the unpaired version:
 
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="aot_pair", # Section 3 of the paper
+    loss_type="aot_unpaired",
+    beta=0.01,  # from the caption of Figure 2
 )
 ```
 

@@ -362,7 +362,7 @@ class DPOTrainer(BaseTrainer):
 
         # Training arguments
         self.precompute_ref_logps = args.precompute_ref_log_probs
-        self.loss_types = [args.loss_type] if isinstance(args.loss_type, str) else args.loss_type
+        self.loss_types = args.loss_type  # args.loss_type is already a list
         self.label_smoothing = args.label_smoothing
         if "robust" in self.loss_types and not (0.0 <= self.label_smoothing < 0.5):
             logger.warning(
@@ -777,10 +777,39 @@ class DPOTrainer(BaseTrainer):
                 rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = -F.logsigmoid(chosen_rewards) - F.logsigmoid(-rejected_rewards)
 
+            elif loss_type == "sppo_hard":
+                # In the paper (https://huggingface.co/papers/2405.00675), SPPO employs a soft probability approach,
+                # estimated using the PairRM score. The probability calculation is conducted outside of the trainer
+                # class. The version described here is the hard probability version, where P in Equation (4.7) of
+                # Algorithm 1 is set to 1 for the winner and 0 for the loser.
+                winner_margin_error = (chosen_logratios - 0.5 / self.beta) ** 2
+                loser_margin_error = (rejected_logratios + 0.5 / self.beta) ** 2
+                per_sequence_loss = winner_margin_error + loser_margin_error
+
+            elif loss_type == "aot":
+                logratios = chosen_logps - rejected_logps
+                ref_logratios = ref_chosen_logps - ref_rejected_logps
+                logratios_sorted, _ = torch.sort(logratios, dim=0)
+                ref_logratios_sorted, _ = torch.sort(ref_logratios, dim=0)
+                delta = logratios_sorted - ref_logratios_sorted
+                per_sequence_loss = (
+                    -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
+                    - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+                )
+
+            elif loss_type == "aot_unpaired":
+                chosen_logratios_sorted, _ = torch.sort(chosen_logratios, dim=0)
+                rejected_logratios_sorted, _ = torch.sort(rejected_logratios, dim=0)
+                delta = chosen_logratios_sorted - rejected_logratios_sorted
+                per_sequence_loss = (
+                    -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
+                    - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+                )
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                    "'nca_pair', 'robust', 'bco_pair']"
+                    "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired']"
                 )
 
             loss += per_sequence_loss.mean()

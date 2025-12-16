@@ -221,7 +221,7 @@ class TestDPOTrainer(TrlTestCase):
 
     @pytest.mark.parametrize(
         "loss_type",
-        ["sigmoid", "hinge", "ipo", "exo_pair", "nca_pair", "robust", "bco_pair"],
+        ["sigmoid", "hinge", "ipo", "exo_pair", "nca_pair", "robust", "bco_pair", "sppo_hard", "aot", "aot_unpaired"],
     )
     def test_train_loss_types(self, loss_type):
         # Get the dataset
@@ -232,6 +232,7 @@ class TestDPOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             loss_type=loss_type,
+            label_smoothing=1e-3 if loss_type == "exo_pair" else 0.0,
             report_to="none",
             eval_strategy="steps",
             eval_steps=3,
