@@ -98,7 +98,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     truncation_mode: str = field(
-        default="keep_end",
+        default="keep_start",
         metadata={
             "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
             "and `'keep_start'`.",
