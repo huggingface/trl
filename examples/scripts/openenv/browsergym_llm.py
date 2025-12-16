@@ -442,7 +442,7 @@ def main() -> None:
             episode = rollout_once(
                 trainer=trainer,
                 env=client,
-                tokenizer=tokenizer,
+                tokenizer=trainer.processing_class,
                 dataset_prompt=prompt_text,
                 max_steps=args.max_steps,
                 debug=args.debug,
