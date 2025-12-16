@@ -86,13 +86,11 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
     
     # Invalidate parameter coordinator trace to prevent stale state
     # after generation forward passes (fixes ZeRO-3 + GKD compatibility)
-    if hasattr(optimizer_offload, "param_coordinator"):
+    if hasattr(optimizer_offload, "param_coordinator"): # param_coordinator only exists in ZeRO stage 3
         coordinator = optimizer_offload.param_coordinator
         # Only invalidate if trace is not already invalid
-        is_invalid = getattr(coordinator, "is_invalid_trace", lambda: False)()
-        if not is_invalid:
-            if hasattr(coordinator, "_invalidate_trace"):
-                coordinator._invalidate_trace()
+        if not coordinator.is_invalid_trace():
+            coordinator._invalidate_trace()
     
     if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
