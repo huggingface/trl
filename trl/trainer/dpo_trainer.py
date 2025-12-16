@@ -39,6 +39,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations import (
@@ -47,7 +48,6 @@ from transformers.integrations import (
     is_wandb_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
@@ -434,7 +434,7 @@ class DPOTrainer(BaseTrainer):
             if args.per_device_train_batch_size == 1:
                 logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "of 1 annihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
         self.padding_free = args.padding_free
