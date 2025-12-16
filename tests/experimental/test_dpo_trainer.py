@@ -234,6 +234,7 @@ class TestDPOTrainer(TrlTestCase):
             "aot_unpaired",
             "apo_zero",
             "apo_down",
+            "discopop",
         ],
     )
     def test_train_loss_types(self, loss_type):

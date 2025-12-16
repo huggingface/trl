@@ -826,10 +826,23 @@ class DPOTrainer(BaseTrainer):
                 losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
                 per_sequence_loss = losses_chosen + losses_rejected
 
+            elif loss_type == "discopop":
+                # Eqn (5) of the DiscoPOP paper (https://huggingface.co/papers/2406.08414)
+                logits = delta_log_odds * self.beta
+                # Modulate the mixing coefficient based on the log ratio magnitudes
+                log_ratio_modulation = torch.sigmoid(logits / self.args.discopop_tau)
+                logistic_component = -F.logsigmoid(logits)
+                exp_component = torch.exp(-logits)
+                # Blend between logistic and exponential component based on log ratio modulation
+                per_sequence_loss = (
+                    logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
+                )
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                    "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down']"
+                    "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down', "
+                    "'discopop']"
                 )
 
             loss += per_sequence_loss.mean()

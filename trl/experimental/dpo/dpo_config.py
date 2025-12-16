@@ -143,8 +143,8 @@ class DPOConfig(TrainingArguments):
         metadata={
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
             "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, "
-            "`'apo_down'`. If multiple loss types are provided, they will be combined using the weights specified in "
-            "`loss_weights`.",
+            "`'apo_down'`, `'discopop'`. If multiple loss types are provided, they will be combined using the weights "
+            "specified in `loss_weights`.",
         },
     )
     label_smoothing: float = field(
@@ -162,6 +162,14 @@ class DPOConfig(TrainingArguments):
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
             "the reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter "
             "denoted by τ in the [paper](https://huggingface.co/papers/2310.12036)."
+        },
+    )
+    discopop_tau: float = field(
+        default=0.05,
+        metadata={
+            "help": "τ/temperature parameter from the DiscoPOP paper, which controls the shape of the log-ratio "
+            "modulated loss when using `loss_type='discopop'`. The paper recommends the default value "
+            "`discopop_tau=0.05`."
         },
     )
     activation_offloading: bool = field(

@@ -750,11 +750,11 @@ An LLM-driven method automatically discovers performant preference optimization 
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="discopop", # Section 3 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-    learning_rate=5e-7, # learning rate in Section B.1 of the paper
-    beta=0.05, # $\beta$ in Section B.1 of the paper,
-    discopop_tau=0.05 # $\tau$ in Section E of the paper
+    loss_type="discopop",
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=5e-7,  # learning rate in Section B.1 of the paper
+    beta=0.05,  # $\beta$ in Section B.1 of the paper,
+    discopop_tau=0.05  # $\tau$ in Section E of the paper
 )
 ```
 
