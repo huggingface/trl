@@ -508,10 +508,6 @@ class RLOOTrainer(BaseTrainer):
                 # Ensure distributed rendezvous variables are set without colliding across concurrent runs
                 ensure_master_addr_port()
 
-                if self.max_prompt_length is not None and self.max_completion_length is not None:
-                    max_model_len = self.max_prompt_length + self.max_completion_length
-                else:
-                    max_model_len = None
                 vllm_quantization = None
                 if is_bitsandbytes_available():
                     for _, module in model.named_modules():
@@ -527,7 +523,7 @@ class RLOOTrainer(BaseTrainer):
                     max_num_seqs=self.args.per_device_train_batch_size
                     * self.vllm_tensor_parallel_size
                     * self.args.steps_per_generation,
-                    max_model_len=max_model_len,
+                    max_model_len=self.args.vllm_max_model_length,
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
