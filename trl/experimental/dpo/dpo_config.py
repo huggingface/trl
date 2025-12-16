@@ -90,16 +90,6 @@ class DPOConfig(TrainingArguments):
             "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
-    max_prompt_length: int | None = field(
-        default=None,
-        metadata={"help": "Maximum length of the prompt part of the sequence. If `None`, no truncation is applied."},
-    )
-    max_completion_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the completion part of the sequence. If `None`, no truncation is applied."
-        },
-    )
     max_length: int | None = field(
         default=1024,
         metadata={
@@ -143,8 +133,8 @@ class DPOConfig(TrainingArguments):
         metadata={
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
             "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, "
-            "`'apo_down'`, `'discopop'`. If multiple loss types are provided, they will be combined using the weights "
-            "specified in `loss_weights`.",
+            "`'apo_down'`, `'discopop'`, `'sft'`. If multiple loss types are provided, they will be combined using "
+            "the weights specified in `loss_weights`.",
         },
     )
     label_smoothing: float = field(
@@ -184,6 +174,23 @@ class DPOConfig(TrainingArguments):
         },
     )
 
+    # Deprecated parameters
+    max_prompt_length: int | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer "
+            "used. We recommend filtering out samples that exceed your desired prompt length during dataset "
+            "preprocessing.",
+        },
+    )
+    max_completion_length: int | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer "
+            "used. We recommend using the `max_length` parameter to control the total sequence length.",
+        },
+    )
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
@@ -194,7 +201,24 @@ class DPOConfig(TrainingArguments):
             warnings.warn(
                 "`loss_type='aot_pair'` is deprecated and will be removed in a version 0.28.0. Please use "
                 "`loss_type='aot_unpaired'` instead.",
-                DeprecationWarning,
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.max_prompt_length is not None:
+            warnings.warn(
+                "The `max_prompt_length` argument is deprecated and will be removed in version 0.29.0. This parameter "
+                "is no longer used. We recommend filtering out samples that exceed your desired prompt length during "
+                "dataset preprocessing.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.max_completion_length is not None:
+            warnings.warn(
+                "The `max_completion_length` argument is deprecated and will be removed in version 0.29.0. This "
+                "parameter is no longer used. We recommend using the `max_length` parameter to control the total "
+                "sequence length.",
+                FutureWarning,
+                stacklevel=2,
             )
 
         super().__post_init__()

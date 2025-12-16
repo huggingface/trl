@@ -37,7 +37,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
-from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages, truncate_dataset
+from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages
 from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ...models.utils import disable_gradient_checkpointing
 from ...trainer.base_trainer import BaseTrainer
@@ -580,20 +580,6 @@ class DPOTrainer(BaseTrainer):
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
-            # Truncate
-            if args.max_prompt_length is not None:
-                raise NotImplementedError("Prompt truncation is not yet implemented.")
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating prompt in {dataset_name} dataset"
-                dataset = truncate_dataset(
-                    dataset, args.max_prompt_length, columns=["prompt_ids"], map_kwargs=map_kwargs
-                )
-            if args.max_completion_length is not None:
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating completions in {dataset_name} dataset"
-                dataset = truncate_dataset(
-                    dataset, args.max_completion_length, columns=["chosen_ids", "rejected_ids"], map_kwargs=map_kwargs
-                )
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "completion_mask"}
@@ -838,11 +824,20 @@ class DPOTrainer(BaseTrainer):
                     logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
                 )
 
+            elif loss_type == "sft":
+                chosen_logits, _ = shift_logits.chunk(2, dim=0)
+                chosen_labels, _ = shift_labels.chunk(2, dim=0)
+                chosen_mask, _ = shift_completion_mask.chunk(2, dim=0)
+                batch_loss = F.cross_entropy(chosen_logits[chosen_mask.bool()], chosen_labels[chosen_mask.bool()])
+                # Implementation convenience: expand the scalar SFT loss to a per-sequence tensor so it matches the
+                # shape of other losses; only the mean is used, so this is a no-op numerically.
+                per_sequence_loss = batch_loss.expand(chosen_logits.size(0))
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
                     "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down', "
-                    "'discopop']"
+                    "'discopop', 'sft']"
                 )
 
             loss += per_sequence_loss.mean()
