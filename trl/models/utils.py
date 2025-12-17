@@ -157,12 +157,12 @@ def _override_model_generation_config(model, generation_kwargs=None):
     # If it is a PEFT model, override the underlying base model
     if hasattr(model, "get_base_model"):
         model = model.get_base_model()
+    # Keep original model generation_config
     original_config = model.generation_config
-    if generation_kwargs:
-        # Create training-specific generation config from the model's original generation config
-        # Then overwrite it with the training-specific generation kwargs
-        generation_config = GenerationConfig.from_dict(model.generation_config.to_dict())
-        generation_config.update(**generation_kwargs)
+    # Create training-specific generation config from the model's original generation config
+    # Then overwrite it with the training-specific generation kwargs
+    generation_config = GenerationConfig.from_dict(model.generation_config.to_dict())
+    generation_config.update(**generation_kwargs)
     model.generation_config = generation_config
     try:
         yield
