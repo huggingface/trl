@@ -147,7 +147,7 @@ class GRPOConfig(TrainingArguments):
             Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
-        vllm_max_model_length (`int`, *optional*, defaults to `None`):
+        vllm_max_model_length (`int`, *optional*):
             Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus
             `max_completion_length`; if omitted, it is inferred from the model config.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
@@ -294,7 +294,7 @@ class GRPOConfig(TrainingArguments):
 
         > Deprecated arguments
 
-        max_prompt_length (`bool`, *optional*):
+        max_prompt_length:
 
             <Deprecated version="0.26.0">
 

@@ -26,15 +26,13 @@ import datasets
 import pandas as pd
 import torch
 import torch.utils.data
-import transformers
-from accelerate import logging
+from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
-    AutoConfig,
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
@@ -56,13 +54,14 @@ from ..data_utils import (
 )
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..import_utils import is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
 from .utils import (
     RepeatSampler,
+    create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
     get_config_model_id,
@@ -81,7 +80,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_vllm_available():
     from ..generation.vllm_generation import VLLMGeneration
@@ -93,7 +92,7 @@ if is_trackio_available():
     import trackio
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -109,23 +108,17 @@ class RLOOTrainer(BaseTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
     from trl import RLOOTrainer
+    from trl.rewards import accuracy_reward
+    from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/tldr", split="train")
-
-
-    def reward_func(completions, **kwargs):
-        # Dummy reward function that rewards completions with more unique letters.
-        return [float(len(set(completion))) for completion in completions]
-
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
     trainer = RLOOTrainer(
-        model="Qwen/Qwen2-0.5B-Instruct",
-        reward_funcs=reward_func,
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        reward_funcs=accuracy_reward,
         train_dataset=dataset,
     )
-
     trainer.train()
     ```
 
@@ -136,8 +129,8 @@ class RLOOTrainer(BaseTrainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
-              `args.model_init_kwargs`.
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         reward_funcs (`RewardFunc | list[RewardFunc]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -195,9 +188,9 @@ class RLOOTrainer(BaseTrainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
-            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
-            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
@@ -222,8 +215,8 @@ class RLOOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel = None,
-        reward_funcs: RewardFunc | list[RewardFunc] = None,
+        model: str | PreTrainedModel,
+        reward_funcs: RewardFunc | list[RewardFunc],
         args: RLOOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -239,28 +232,14 @@ class RLOOTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = RLOOConfig(f"{model_name}-RLOO")
 
-        # Models
-        # Trained model
-        model_init_kwargs = args.model_init_kwargs or {}
+        # Model
         if isinstance(model, str):
-            model_id = model
-            dtype = model_init_kwargs.get("dtype", "auto")
-            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-                pass  # dtype is already a torch.dtype or "auto" or None
-            elif isinstance(dtype, str):  # it's a str, but not "auto"
-                dtype = getattr(torch, dtype)
-                model_init_kwargs["dtype"] = dtype
-            else:
-                raise ValueError(
-                    "Invalid `dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
-                    f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
-                )
-            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
-            model_id = get_config_model_id(model.config)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RLOOConfig`, but your model is already instantiated. "
@@ -275,12 +254,11 @@ class RLOOTrainer(BaseTrainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
-
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config), truncation_side="left")
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -297,12 +275,40 @@ class RLOOTrainer(BaseTrainer):
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
 
+        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+            # If the model is already a PeftModel, we need to merge and unload it.
+            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+            model = model.merge_and_unload()
+
+        # Create PEFT model
+        if peft_config is not None:
+            model = get_peft_model(model, peft_config)
+
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
+        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.data.to(torch.bfloat16)
+
         # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
+                model_init_kwargs = args.model_init_kwargs or {}
+                # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+                if args.distributed_state.distributed_type == "DEEPSPEED":
+                    model_init_kwargs["device_map"] = None
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -350,10 +356,9 @@ class RLOOTrainer(BaseTrainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
-        self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
-        self.num_generations_eval = args.num_generations_eval or args.num_generations
+        self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -424,9 +429,11 @@ class RLOOTrainer(BaseTrainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            if self.args.distributed_state.distributed_type == "DEEPSPEED":
+                model_init_kwargs["device_map"] = None
+            self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
@@ -508,9 +515,9 @@ class RLOOTrainer(BaseTrainer):
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs.
-        # In RLOOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by the `training_step` method, hence the override.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask"). In RLOOTrainer, we preprocess data, so using the model's signature columns doesn't
+        # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
             self._signature_columns = ["prompt", "image", "images"]
 
@@ -793,22 +800,16 @@ class RLOOTrainer(BaseTrainer):
             )
 
         elif self.use_transformers_paged:
-            processor_kwargs = {
-                "max_length": self.max_prompt_length,
-                "truncation": True,
-                "add_special_tokens": False,
-            }
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
                     add_generation_prompt=True,
                     tokenize=True,
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
+                processor_outputs = self.processing_class(text=prompts)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -834,25 +835,21 @@ class RLOOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            processor_kwargs = {
-                "return_tensors": "pt",
-                "padding": True,
-                "padding_side": "left",
-                "max_length": self.max_prompt_length,
-                "truncation": True,
-                "add_special_tokens": False,
-            }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
                     add_generation_prompt=True,
                     tokenize=True,
+                    padding=True,
+                    padding_side="left",
+                    return_tensors="pt",
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
+                generate_inputs = self.processing_class(
+                    text=prompts, padding=True, padding_side="left", return_tensors="pt"
+                )
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
