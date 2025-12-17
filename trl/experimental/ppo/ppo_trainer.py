@@ -398,9 +398,12 @@ class PPOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_confg, we merge and unload it first
             if isinstance(self.policy_model, PeftModel):
-                self.policy_model = self.policy_model.merge_and_unload()
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
+                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
+                    "model along with the new `peft_config` to the trainer."
+                )
 
             # get peft model with the given config
             self.policy_model = get_peft_model(self.policy_model, peft_config)
