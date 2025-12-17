@@ -1783,7 +1783,14 @@ class GRPOTrainer(BaseTrainer):
         prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
         prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
-        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        
+        # Allow custom completion_mask from rollout_func for multi-turn training
+        # This allows masking out non-trainable tokens (e.g., tool results, observations) in the completion
+        if "completion_mask" in extra_fields:
+            completion_mask_list = extra_fields.pop("completion_mask")
+            completion_mask = [torch.tensor(m, device=device, dtype=torch.long) for m in completion_mask_list]
+        else:
+            completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
         if sampling_per_token_logps_list is not None:

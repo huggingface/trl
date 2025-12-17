@@ -1,0 +1,29 @@
+model_name: "Qwen/Qwen3-4B-Instruct-2507"
+dataset_path: "train-workplace.jsonl"
+
+agent_name: "simple_agent"
+
+output_dir: "outputs/trl_nemo_gym_workplace"
+run_name: "workplace_assistant_qwen3_4b_instruct_2507"
+project_name: "cmunley-nemo-gym-trl-int"
+
+learning_rate: 1.0e-5
+max_steps: 1000000
+
+# these params are confusing! i just want to set responses per prompt (num_generations), prompts per step, and global batch size like Nemo RL.
+# i think the below is doing: rpp 16, pps 8, gbs 128
+num_generations: 16
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 128
+
+max_seq_length: 30000
+
+temperature: 1.0
+top_p: 0.999
+weight_decay: 0.01
+warmup_ratio: 0.0
+lr_scheduler_type: "linear"
+optim: "adamw_8bit"
+
+save_steps: 900000
+report_to: "wandb"

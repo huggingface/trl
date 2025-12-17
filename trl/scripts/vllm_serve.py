@@ -14,8 +14,12 @@
 
 import argparse
 import base64
+import json
 import logging
 import os
+import re
+import time
+import uuid
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -628,6 +632,7 @@ def main(script_args: ScriptArguments):
         guided_decoding_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
+        tools: list[dict] | None = None
 
     class ChatResponse(BaseModel):
         prompt_ids: list[list[int]]
@@ -732,7 +737,11 @@ def main(script_args: ScriptArguments):
                 "messages": messages,
                 "sampling_params": sampling_params,
                 "chat_template_kwargs": request.chat_template_kwargs,
+                "tools": request.tools if request.tools else None,
+                # "tool_choice": request.tool_choice,
+                # "parallel_tool_calls": request.parallel_tool_calls,
             }
+            
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 
         # Receive results
@@ -835,8 +844,192 @@ def main(script_args: ScriptArguments):
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
         return {"message": "Request received, closing communicator"}
 
-    # Start the server
-    uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
+    class ChatCompletionRequest(BaseModel):
+        messages: list[dict]
+        model: str | None = None
+        temperature: float = 1.0
+        top_p: float = 1.0
+        max_completion_tokens: int | None = None
+        max_tokens: int | None = None
+        n: int = 1
+        stop: str | list[str] | None = None
+        presence_penalty: float = 0.0
+        frequency_penalty: float = 0.0
+        logprobs: bool = False
+        top_logprobs: int | None = None
+        tools: list[dict] | None = None
+        tool_choice: str | dict = "auto"
+        parallel_tool_calls: bool = True
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: ChatCompletionRequest):
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        created_at = int(time.time())
+
+        messages = []
+        for msg in request.messages:
+            role = msg.get("role", "")
+            if role not in ["system", "user", "assistant", "tool"]:
+                logger.warning(f"Unknown message role: {role}")
+            messages.append(msg)
+
+        max_tokens = request.max_completion_tokens or request.max_tokens or 512
+        
+        sampling_kwargs = {
+            "n": request.n,
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "max_tokens": max_tokens,
+            "presence_penalty": request.presence_penalty,
+            "frequency_penalty": request.frequency_penalty,
+            "stop": request.stop,
+        }
+
+        if request.logprobs or request.top_logprobs:
+            sampling_kwargs["logprobs"] = request.top_logprobs if request.top_logprobs else 1
+
+        sampling_params = SamplingParams(**sampling_kwargs)
+
+        chat_template_kwargs = {}
+        if request.tool_choice and request.tool_choice != "auto":
+            chat_template_kwargs["tool_choice"] = request.tool_choice
+
+        chunked_messages = chunk_list([messages], script_args.data_parallel_size)
+
+        for connection, message_chunk in zip(connections, chunked_messages, strict=True):
+            if not message_chunk:
+                message_chunk = [[{"role": "user", "content": "<placeholder>"}]]
+            kwargs = {
+                "messages": message_chunk,
+                "sampling_params": sampling_params,
+                "tools": request.tools,
+                "chat_template_kwargs": chat_template_kwargs
+            }
+            connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
+
+        all_outputs = [connection.recv() for connection in connections]
+        all_outputs = [output for output, msg_chunk in zip(all_outputs, chunked_messages, strict=True) if msg_chunk]
+        all_outputs = list(chain.from_iterable(all_outputs))
+
+        choices = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        for idx, output in enumerate(all_outputs):
+            total_input_tokens += len(output.prompt_token_ids)
+
+            for gen_output in output.outputs:
+                total_output_tokens += len(gen_output.token_ids)
+                text = gen_output.text if hasattr(gen_output, "text") else ""
+
+                tool_calls = None
+                finish_reason = "stop"
+
+                if hasattr(gen_output, "tool_calls") and gen_output.tool_calls:
+                    tool_calls = gen_output.tool_calls
+                    finish_reason = "tool_calls"
+                elif request.tools and text:
+                    # If no native tool call parser, try XML
+                    # TODO: figure out how to use a tool call parser, or handle tool call parsing in Nemo Gym maybe?? 
+                    # or implement real async vllm engine and openai api server rather than faking the endpoint here
+                    pattern = r'<tool_call>(.*?)</tool_call>'
+                    matches = re.findall(pattern, text, re.DOTALL)
+                    if matches:
+                        tool_calls = []
+                        for match in matches:
+                            try:
+                                data = json.loads(match.strip())
+                                tool_calls.append({
+                                    "id": f"call_{uuid.uuid4().hex[:24]}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": data.get("name", ""),
+                                        "arguments": json.dumps(data.get("arguments", {}))
+                                    }
+                                })
+                            except json.JSONDecodeError:
+                                continue
+                        if tool_calls:
+                            finish_reason = "tool_calls"
+                            text = re.sub(pattern, "", text, flags=re.DOTALL).strip()
+
+                if not request.parallel_tool_calls and tool_calls and len(tool_calls) > 1:
+                    tool_calls = [tool_calls[0]]
+
+                logprobs_data = None
+                if request.logprobs and hasattr(gen_output, "logprobs") and gen_output.logprobs:
+                    logprobs_data = {
+                        "content": [
+                            {
+                                "token": str(token_id),
+                                "logprob": float(list(logprob_dict.values())[0].logprob) if logprob_dict else 0.0,
+                                "bytes": None,
+                                "top_logprobs": []
+                            }
+                            for token_id, logprob_dict in zip(gen_output.token_ids, gen_output.logprobs)
+                        ]
+                    }
+
+                choices.append({
+                    "index": idx,
+                    "message": {
+                        "role": "assistant",
+                        "content": text if not tool_calls else None,
+                        "tool_calls": tool_calls
+                    },
+                    "logprobs": logprobs_data,
+                    "finish_reason": finish_reason
+                })
+
+        return {
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": created_at,
+            "model": request.model or script_args.model,
+            "choices": choices,
+            "usage": {
+                "prompt_tokens": total_input_tokens,
+                "completion_tokens": total_output_tokens,
+                "total_tokens": total_input_tokens + total_output_tokens
+            }
+        }
+
+    class TokenizeRequest(BaseModel):
+        model: str | None = None
+        messages: list[dict]
+        tools: list[dict] | None = None
+
+    @app.post("/tokenize")
+    async def tokenize(request: TokenizeRequest):
+        kwargs = {
+            "messages": [request.messages],
+            "tools": request.tools,
+            "add_generation_prompt": True,
+            "chat_template_kwargs": {}
+        }
+
+        connections[0].send({"type": "call", "method": "preprocess_chat", "kwargs": kwargs})
+        preprocessed_prompts = connections[0].recv()
+
+        if preprocessed_prompts and len(preprocessed_prompts) > 1:
+            logger.warning(f"More than one tokenized message returned from preprocess_chat inside tokenize, double check results!")
+            
+        if preprocessed_prompts and len(preprocessed_prompts) > 0:
+            return {
+                "tokens": preprocessed_prompts[0]["prompt_token_ids"],
+                "model": request.model or script_args.model
+            }
+        return {"tokens": [], "model": request.model or script_args.model}
+
+    uvicorn.run(
+        app,
+        host=script_args.host,
+        port=script_args.port,
+        log_level=script_args.log_level,
+        limit_concurrency=256,
+        backlog=4096,
+        timeout_keep_alive=60
+    )
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None):
