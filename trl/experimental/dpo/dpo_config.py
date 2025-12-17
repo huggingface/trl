@@ -218,13 +218,6 @@ class DPOConfig(TrainingArguments):
             "kept in memory."
         },
     )
-    ref_model_init_kwargs: dict[str, Any] | None = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument "
-            "of the `DPOTrainer` is provided as a string."
-        },
-    )
     model_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
