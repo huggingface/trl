@@ -127,14 +127,10 @@ class VLLMGeneration:
                 "max_num_batched_tokens": 4096,
                 "model_impl": args.vllm_model_impl,
                 "enable_sleep_mode": args.vllm_enable_sleep_mode,
+                # Important so temperature scaling/logit tweaking affects the TIS log probs
+                "logprobs_mode": "processed_logprobs",
                 "quantization": vllm_quantization,
             }
-
-            # TODO: improve
-            # Add logprobs_mode only for GRPO (not used in RLOO)
-            if "grpo" in type(self.trainer).__name__.lower():
-                llm_kwargs["logprobs_mode"] = "processed_logprobs"
-
             self.llm = LLM(**llm_kwargs)
             if args.vllm_enable_sleep_mode:
                 self.llm.sleep(level=2)
