@@ -201,6 +201,13 @@ class DPOConfig(TrainingArguments):
             "`DPOTrainer`."
         },
     )
+    generate_during_eval: bool | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. Please use a dedicated "
+            "callback, like `LogCompletionsCallback`."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -373,13 +380,7 @@ class DPOConfig(TrainingArguments):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
-    generate_during_eval: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to generate and log completions from both the model and the reference model to W&B, MLFLow "
-            "or Comet during evaluation."
-        },
-    )
+   
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -419,5 +420,13 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
+        if self.generate_during_eval is not None:
+            warnings.warn(
+                "The `generate_during_eval` argument is deprecated and will be removed in version 0.29.0. Please use "
+                "a dedicated callback, like `LogCompletionsCallback`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        
 
         super().__post_init__()
