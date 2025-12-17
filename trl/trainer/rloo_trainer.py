@@ -365,7 +365,6 @@ class RLOOTrainer(BaseTrainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
-        self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
         self.num_generations_eval = args.num_generations_eval or self.num_generations
@@ -1044,7 +1043,6 @@ class RLOOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "truncate_prompt_tokens": self.max_prompt_length,
                         "guided_decoding_regex": self.guided_decoding_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
@@ -1091,7 +1089,6 @@ class RLOOTrainer(BaseTrainer):
                     "top_k": self.top_k,
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
-                    "truncate_prompt_tokens": self.max_prompt_length,
                     "guided_decoding": guided_decoding,
                 }
                 if self.args.generation_kwargs is not None:
@@ -1135,22 +1132,16 @@ class RLOOTrainer(BaseTrainer):
                     self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
-            processor_kwargs = {
-                "max_length": self.max_prompt_length,
-                "truncation": True,
-                "add_special_tokens": False,
-            }
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
                     add_generation_prompt=True,
                     tokenize=True,
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                processor_outputs = self.processing_class(text=prompts, **processor_kwargs)
+                processor_outputs = self.processing_class(text=prompts)
 
             with (
                 profiling_context(self, "transformers.generate_batch"),
@@ -1176,25 +1167,21 @@ class RLOOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            processor_kwargs = {
-                "return_tensors": "pt",
-                "padding": True,
-                "padding_side": "left",
-                "max_length": self.max_prompt_length,
-                "truncation": True,
-                "add_special_tokens": False,
-            }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    **processor_kwargs,
                     add_generation_prompt=True,
                     tokenize=True,
+                    padding=True,
+                    padding_side="left",
+                    return_tensors="pt",
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
             else:
-                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
+                generate_inputs = self.processing_class(
+                    text=prompts, padding=True, padding_side="left", return_tensors="pt"
+                )
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (

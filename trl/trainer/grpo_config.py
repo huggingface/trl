@@ -294,7 +294,7 @@ class GRPOConfig(TrainingArguments):
 
         > Deprecated arguments
 
-        max_prompt_length (`bool`, *optional*):
+        max_prompt_length:
 
             <Deprecated version="0.26.0">
 
