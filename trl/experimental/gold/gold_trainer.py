@@ -29,7 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer, is_bitsandbytes_available
+from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -38,7 +38,6 @@ from transformers.integrations.integration_utils import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import (
     is_flash_attn_2_available,
@@ -55,13 +54,13 @@ from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
-    DataCollatorForChatML,
     create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
     pad,
 )
+from ..utils import DataCollatorForChatML
 from .gold_config import GOLDConfig
 
 
