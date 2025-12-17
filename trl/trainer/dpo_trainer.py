@@ -563,7 +563,6 @@ class DPOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_config, we merge and unload it first
             if isinstance(model, PeftModel):
                 raise ValueError(
                     "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "

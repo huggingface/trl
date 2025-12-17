@@ -463,8 +463,6 @@ def prepare_peft_model(
     if not is_peft_available():
         raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
 
-    # If the model is already a PeftModel, we need to merge and unload it.
-    # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
     if isinstance(model, PeftModel) and peft_config is not None:
         raise ValueError(
             "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge and "
