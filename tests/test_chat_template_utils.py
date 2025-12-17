@@ -244,7 +244,7 @@ class TestParseResponse:
             "content": "",
             "tool_calls": [
                 {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
-                {"type": "function", "function": {"name": "addition", "arguments": {"a": 3, "b": 4}}}
+                {"type": "function", "function": {"name": "addition", "arguments": {"a": 3, "b": 4}}},
             ],
         }
         assert parsed == expected
