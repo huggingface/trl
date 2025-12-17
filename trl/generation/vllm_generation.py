@@ -104,20 +104,6 @@ class VLLMGeneration:
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
 
-            # TODO: improve
-            # Calculate max_model_len: use vllm_max_model_length if available, otherwise compute from prompt+completion
-            if hasattr(args, "vllm_max_model_length") and args.vllm_max_model_length is not None:
-                max_model_len = args.vllm_max_model_length
-            elif (
-                hasattr(self.trainer, "max_prompt_length")
-                and self.trainer.max_prompt_length is not None
-                and hasattr(self.trainer, "max_completion_length")
-                and self.trainer.max_completion_length is not None
-            ):
-                max_model_len = self.trainer.max_prompt_length + self.trainer.max_completion_length
-            else:
-                max_model_len = None
-
             vllm_quantization = None
             if is_bitsandbytes_available():
                 for _, module in model.named_modules():
@@ -135,7 +121,7 @@ class VLLMGeneration:
                 "max_num_seqs": args.per_device_train_batch_size
                 * args.vllm_tensor_parallel_size
                 * args.steps_per_generation,
-                "max_model_len": max_model_len,
+                "max_model_len": args.vllm_max_model_length,
                 "distributed_executor_backend": "external_launcher",
                 "seed": accelerator.process_index // args.vllm_tensor_parallel_size,
                 "max_num_batched_tokens": 4096,
