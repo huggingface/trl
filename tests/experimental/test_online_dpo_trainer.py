@@ -360,7 +360,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         # Test generation parameters
         assert config.top_p == 1.0
-        assert config.top_k is None
+        assert config.top_k == 0
         assert config.min_p is None
         assert config.repetition_penalty == 1.0
         assert not config.use_transformers_paged
