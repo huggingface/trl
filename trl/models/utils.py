@@ -138,7 +138,8 @@ def _override_model_generation_config(model, generation_kwargs=None):
     Context manager to temporarily override a model's generation_config with training config.
 
     This works around transformers' config merging logic that would otherwise overwrite
-    values matching global defaults with model-specific values. See upstream issue: transformers#42762.
+    values matching global defaults with model-specific values (see upstream issue transformers#42762;
+    fixed in transformers v5 by PR `transformers#42702`).
 
     By temporarily setting the model's generation_config to match the passed generation_config,
     we avoid the conflict.
@@ -151,7 +152,7 @@ def _override_model_generation_config(model, generation_kwargs=None):
         generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
     """
     # Issue fixed in transformers v5 by PR transformers#42702
-    if Version(transformers.__version__) >= Version("5.0.0.dev0") or generation_kwargs is None:
+    if Version(transformers.__version__) >= Version("5.0.0") or generation_kwargs is None:
         yield model
         return
     # If it is a PEFT model, override the underlying base model
