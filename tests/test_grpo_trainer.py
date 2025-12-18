@@ -1305,7 +1305,8 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            generation_kwargs={"do_sample": True, "top_k": 50, "length_penalty": -0.1},  # Add some gen kwargs
+            # Pass gen kwargs
+            generation_kwargs={"do_sample": True, "top_k": 50, "num_beams": 2, "length_penalty": -0.1},
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1408,10 +1409,7 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
-            ),
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
     )
@@ -1509,10 +1507,7 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
-            ),
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
     @require_vision
