@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import inspect
 import textwrap
 import time
@@ -500,6 +501,8 @@ class RLOOTrainer(BaseTrainer):
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs)
+            # Keep training-specific generation kwargs to overwrite model's original generation config
+            self.generation_kwargs = generation_kwargs
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -648,7 +651,6 @@ class RLOOTrainer(BaseTrainer):
 
             # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
-
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
                 rows_per_sample = torch.split(rows_per_image, num_images)
@@ -683,7 +685,6 @@ class RLOOTrainer(BaseTrainer):
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -734,7 +735,6 @@ class RLOOTrainer(BaseTrainer):
                 generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
                 self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
-            self._step += 1
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
             # local generation batch == local eval batch
@@ -872,7 +872,10 @@ class RLOOTrainer(BaseTrainer):
             with (
                 profiling_context(self, "transformers.generate"),
                 unwrap_model_for_generation(
-                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    self.model_wrapped,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model,
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
@@ -900,7 +903,17 @@ class RLOOTrainer(BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
+        # Copy the prompts to avoid modifying the original list
+        prompts = copy.deepcopy(prompts)
+
         prompt_ids, completion_ids = self._generate_single_turn(prompts)
+
+        # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
+        if is_conversational({"prompt": prompts[0]}):
+            contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+            completions = [[{"role": "assistant", "content": content}] for content in contents]
+        else:
+            completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -916,7 +929,6 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
-        agg_completion_lengths = self.accelerator.gather(completion_lengths)
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
@@ -933,7 +945,7 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids
+        return prompt_ids, completion_ids, completions
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
@@ -962,7 +974,7 @@ class RLOOTrainer(BaseTrainer):
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
-        prompt_ids_list, completion_ids_list = self._generate(prompts)
+        prompt_ids_list, completion_ids_list, completions = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -1053,16 +1065,6 @@ class RLOOTrainer(BaseTrainer):
         # Decode
         prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        if is_conversational(inputs[0]):
-            completions = []
-            for prompt, completion in zip(prompts, completions_text, strict=True):
-                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
-                if isinstance(bootstrap, list):  # for VLM, the format might be [{"type": "text", "text": "..."}]
-                    assert len(bootstrap) == 1 and bootstrap[0]["type"] == "text"
-                    bootstrap = bootstrap[0]["text"]
-                completions.append([{"role": "assistant", "content": bootstrap + completion}])
-        else:
-            completions = completions_text
 
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
