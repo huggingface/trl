@@ -27,7 +27,7 @@ else
 fi
 echo "Available GPU count: $gpu_count"
 
-GROUP_NAME=sft/openr1-math-220k/qwen2.5-1.5B/lr2e-4_wm200_cos
+GROUP_NAME=sft/openr1-math-220k/qwen2.5-1.5B/lr3e-4_wm200_cos_e10
 JOB_TYPE=train
 RUN_NAME=${JOB_TYPE}/${GROUP_NAME}
 OUTPUT_DIR=results/${RUN_NAME}
