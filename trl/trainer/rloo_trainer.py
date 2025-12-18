@@ -334,9 +334,10 @@ class RLOOTrainer(BaseTrainer):
 
         self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
         if self._has_async_reward_funcs:
-            self.async_reward_loop_thread, self.async_reward_loop = start_event_loop_as_daemon(
-                name="RLOOTrainer-AsyncRewardLoop"
+            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
+                start_event_loop_as_daemon(name="RLOOTrainer-AsyncRewardLoop")
             )
+            self.async_reward_loop_ready_event.wait()
             atexit.register(shutdown_event_loop_as_daemon, self.async_reward_loop_thread, self.async_reward_loop)
 
         # Reward weights

@@ -1179,10 +1179,7 @@ def start_event_loop_as_daemon(
     name: str | None = None,
 ) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
     """
-    Start the given asyncio event loop in a separate thread.
-
-    This function creates a new thread that runs the provided event loop. The thread is set as a daemon, meaning it
-    will not prevent the program from exiting.
+    This function creates a new daemon thread that runs the provided event loop.
 
     Args:
         loop (`asyncio.AbstractEventLoop`):
@@ -1192,17 +1189,20 @@ def start_event_loop_as_daemon(
             The thread running the event loop.
         `asyncio.AbstractEventLoop`:
             The event loop being run in the thread.
+        `threading.Event`:
+            An event that is set when the loop is ready.
     """
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    loop_ready_event = threading.Event()
 
     def run_loop():
         asyncio.set_event_loop(loop)
+        loop_ready_event.set()
         loop.run_forever()
 
     thread = threading.Thread(target=run_loop, name=name, daemon=True)
     thread.start()
-    return thread, loop
+    return thread, loop, loop_ready_event
 
 
 def shutdown_event_loop_as_daemon(
