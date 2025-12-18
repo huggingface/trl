@@ -863,14 +863,17 @@ class GOLDTrainer(SFTTrainer):
                 teacher_tokenizer=self.teacher_tokenizer,
             )
 
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_completion_length,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            do_sample=True,
-            top_k=args.top_k,
-            pad_token_id=self.processing_class.pad_token_id,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.max_completion_length,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "do_sample": True,
+            "top_k": args.top_k,
+            "pad_token_id": self.processing_class.pad_token_id,
+        }
+        self.generation_config = GenerationConfig(**generation_kwargs)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
+        self.generation_kwargs = generation_kwargs
         if (
             hasattr(self.model.generation_config, "eos_token_id")
             and self.model.generation_config.eos_token_id is not None
@@ -1915,7 +1918,13 @@ class GOLDTrainer(SFTTrainer):
                 )
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
             else:
-                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                with (
+                    unwrap_model_for_generation(
+                        model,
+                        self.accelerator,
+                        generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    ) as unwrapped_model
+                ):
                     result = self.generate_on_policy_outputs(
                         unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
                     )

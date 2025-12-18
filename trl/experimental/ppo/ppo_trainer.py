@@ -51,14 +51,13 @@ from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
-    first_true_indices,
-    get_reward,
     log_table_to_comet_experiment,
     pad,
     peft_module_casting_to_bf16,
     prepare_deepspeed,
     selective_log_softmax,
 )
+from ..utils import first_true_indices, get_reward
 from .ppo_config import PPOConfig
 
 
@@ -601,13 +600,14 @@ class PPOTrainer(BaseTrainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        generation_config = GenerationConfig(
-            max_new_tokens=args.response_length,
-            temperature=(args.temperature + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.response_length,
+            "temperature": (args.temperature + 1e-7),
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+        }
+        generation_config = GenerationConfig(**generation_kwargs)
 
         accelerator.print("===training policy===")
         start_time = time.time()
@@ -662,9 +662,14 @@ class PPOTrainer(BaseTrainer):
                 scores = []
                 sequence_lengths = []
                 values = []
-                with unwrap_model_for_generation(
-                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-                ) as unwrapped_model:
+                with (
+                    unwrap_model_for_generation(
+                        self.model,
+                        self.accelerator,
+                        gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                        generation_kwargs=generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    ) as unwrapped_model
+                ):
                     query_responses, logitss = batch_generation(
                         unwrapped_model.policy,
                         queries,
@@ -928,18 +933,24 @@ class PPOTrainer(BaseTrainer):
     def generate_completions(self, sampling: bool = False):
         args = self.args
         processing_class = self.processing_class
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.response_length,
-            temperature=(0.01 + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.response_length,
+            "temperature": (0.01 + 1e-7),
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+        }
+        generation_config = GenerationConfig(**generation_kwargs)
 
         table = defaultdict(list)
-        with unwrap_model_for_generation(
-            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-        ) as unwrapped_model:
+        with (
+            unwrap_model_for_generation(
+                self.model,
+                self.accelerator,
+                gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                generation_kwargs=generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+            ) as unwrapped_model
+        ):
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
                 with torch.no_grad():
