@@ -26,73 +26,58 @@ from transformers.utils.import_utils import _is_package_available
 
 LIGER_KERNEL_MIN_VERSION = "0.6.4"
 
-# Use same as transformers.utils.import_utils
-_deepspeed_available = _is_package_available("deepspeed")
-_fastapi_available = _is_package_available("fastapi")
-_is_jmespath_available = _is_package_available("jmespath")
-_joblib_available = _is_package_available("joblib")
-_liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
-_llm_blender_available = _is_package_available("llm_blender")
-_math_verify_available = _is_package_available("math_verify")
-_mergekit_available = _is_package_available("mergekit")
-_pydantic_available = _is_package_available("pydantic")
-_requests_available = _is_package_available("requests")
-_unsloth_available = _is_package_available("unsloth")
-_uvicorn_available = _is_package_available("uvicorn")
-_vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
-_vllm_ascend_available = _is_package_available("vllm_ascend")
-_weave_available = _is_package_available("weave")
-
 
 def is_deepspeed_available() -> bool:
-    return _deepspeed_available
+    return _is_package_available("deepspeed")
 
 
 def is_fastapi_available() -> bool:
-    return _fastapi_available
+    return _is_package_available("fastapi")
 
 
 def is_jmespath_available() -> bool:
-    return _is_jmespath_available
+    return _is_package_available("jmespath")
 
 
 def is_joblib_available() -> bool:
-    return _joblib_available
+    return _is_package_available("joblib")
 
 
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
+    _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
     return _liger_kernel_available and version.parse(_liger_kernel_version) >= version.parse(min_version)
 
 
 def is_llm_blender_available() -> bool:
-    return _llm_blender_available
+    return _is_package_available("llm_blender")
 
 
 def is_math_verify_available() -> bool:
-    return _math_verify_available
+    return _is_package_available("math_verify")
 
 
 def is_mergekit_available() -> bool:
-    return _mergekit_available
+    return _is_package_available("mergekit")
 
 
 def is_pydantic_available() -> bool:
-    return _pydantic_available
+    return _is_package_available("pydantic")
 
 
 def is_requests_available() -> bool:
-    return _requests_available
+    return _is_package_available("requests")
 
 
 def is_unsloth_available() -> bool:
-    return _unsloth_available
+    return _is_package_available("unsloth")
 
 
 def is_uvicorn_available() -> bool:
-    return _uvicorn_available
+    return _is_package_available("uvicorn")
 
 
 def is_vllm_available() -> bool:
+    _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
         if not (version.parse("0.10.2") <= version.parse(_vllm_version) <= version.parse("0.11.2")):
             warnings.warn(
@@ -105,11 +90,11 @@ def is_vllm_available() -> bool:
 
 
 def is_vllm_ascend_available() -> bool:
-    return _vllm_ascend_available
+    return _is_package_available("vllm_ascend")
 
 
 def is_weave_available() -> bool:
-    return _weave_available
+    return _is_package_available("weave")
 
 
 class TRLExperimentalWarning(UserWarning):
