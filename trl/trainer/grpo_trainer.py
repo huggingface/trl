@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import asyncio
 import copy
 import inspect
@@ -1199,24 +1200,17 @@ class GRPOTrainer(BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+            elif asyncio.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+                async_funcs_info.append((i, reward_func, reward_func_name))
             else:
-                # Separate async reward functions to run them in parallel later
-                if asyncio.iscoroutinefunction(reward_func):
-                    async_funcs_info.append((i, reward_func, reward_func_name))
-                else:
-                    # Run synchronous reward function
-                    with profiling_context(self, reward_func_name):
-                        output_reward_func = reward_func(
-                            prompts=prompts,
-                            completions=completions,
-                            completion_ids=completion_ids_list,
-                            **reward_kwargs,
-                        )
-                        # Convert None values to NaN
-                        output_reward_func = [
-                            reward if reward is not None else torch.nan for reward in output_reward_func
-                        ]
-                        rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+                # Run synchronous reward function
+                with profiling_context(self, reward_func_name):
+                    output_reward_func = reward_func(
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                    )
+                    # Convert None values to NaN
+                    output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                    rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Execute async custom functions in parallel using asyncio.gather
         if async_funcs_info:
@@ -1224,10 +1218,7 @@ class GRPOTrainer(BaseTrainer):
             async def _invoke_async_reward(index, func, func_name):
                 with profiling_context(self, func_name):
                     output = await func(
-                        prompts=prompts,
-                        completions=completions,
-                        completion_ids=completion_ids_list,
-                        **reward_kwargs,
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
                     output = [r if r is not None else torch.nan for r in output]
                     return index, output
