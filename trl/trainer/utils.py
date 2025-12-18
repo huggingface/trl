@@ -1182,8 +1182,8 @@ def start_event_loop_as_daemon(
     This function creates a new daemon thread that runs the provided event loop.
 
     Args:
-        loop (`asyncio.AbstractEventLoop`):
-            The asyncio event loop to run in a separate thread.
+        name (`str` or `None`, *optional*):
+            Name of the thread. If `None`, the default thread naming will be used.
     Returns:
         `threading.Thread`:
             The thread running the event loop.
