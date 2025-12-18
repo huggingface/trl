@@ -576,13 +576,13 @@ trainer = GRPOTrainer(
 )
 ```
 
-If you have multiple reward functions, you can pass them as a list:
+You can pass several reward functions as a list; this list may include both synchronous and asynchronous functions:
 
 ```python
 from trl import GRPOTrainer
 
 trainer = GRPOTrainer(
-    reward_funcs=[reward_func1, reward_func2],
+    reward_funcs=[reward_func, async_reward_func1, async_reward_func2],
     ...,
 )
 ```
