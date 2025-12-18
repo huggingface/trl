@@ -230,8 +230,7 @@ class TestParseResponse:
     def test_parse_response_multiple_tool_calls(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
-        text = textwrap.dedent(r"""
-        <tool_call>
+        text = textwrap.dedent(r"""<tool_call>
         {"name": "multiply", "arguments": {"a": 3, "b": 4}}
         </tool_call>
         <tool_call>
