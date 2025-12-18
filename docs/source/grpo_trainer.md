@@ -569,6 +569,10 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+### Rapid Experimentation for GRPO
+
+RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple GRPO configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
+
 ## Agent Training
 
 GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
