@@ -61,6 +61,8 @@ from .utils import (
     remove_none_values,
     selective_log_softmax,
 )
+import transformers
+from packaging.version import Version
 
 
 if is_peft_available():
@@ -599,7 +601,8 @@ class SFTTrainer(BaseTrainer):
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            dict_args.pop("push_to_hub_token" , None)
+            if not Version(transformers.__version__) < Version("5.0.0.dev0"):
+                dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
         # Model
