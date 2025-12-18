@@ -541,10 +541,6 @@ In this example, the `math_reward_func` and `coding_reward_func` are designed to
 
 Note that the [`GRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
-### Rapid Experimentation for GRPO
-
-RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple GRPO configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
-
 #### Passing the reward function to the trainer
 
 To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
@@ -572,6 +568,10 @@ trainer = GRPOTrainer(
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+
+### Rapid Experimentation for GRPO
+
+RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple GRPO configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
 
 ## Agent Training
 
