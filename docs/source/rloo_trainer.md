@@ -469,7 +469,7 @@ Note that the [`RLOOTrainer`] will ignore the `None` rewards returned by the rew
 
 #### Example 5: Asynchronous reward functions
 
-Custom reward functions can also be defined as `async def` coroutines. This is useful if your reward depends on slow I/O (for example, calling a remote service). When you pass multiple async reward functions, [`GRPOTrainer`] executes them concurrently so their latency overlaps.
+Custom reward functions can also be defined as `async def` coroutines. This is useful if your reward depends on slow I/O (for example, calling a remote service). When you pass multiple async reward functions, [`RLOOTrainer`] executes them concurrently so their latency overlaps.
 
 Below is a minimal example of an async reward function that simulates an I/O-bound operation:
 
