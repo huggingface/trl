@@ -585,7 +585,7 @@ class TestApplyChatTemplate(TrlTestCase):
         # Define test case
         test_case = {
             "prompt": [
-                {"content": "Whats the temperature in London?", "role": "user"},
+                {"content": "What's the temperature in London?", "role": "user"},
             ]
         }
         # Test with tools
@@ -1000,13 +1000,11 @@ class TestPackDatasetBfd(TrlTestCase):
     def test_simple(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
-            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
@@ -1015,30 +1013,41 @@ class TestPackDatasetBfd(TrlTestCase):
     def test_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
-            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         num_examples = len(examples[next(iter(examples))])
         assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
 
-    def test_with_truncation(self):
+    def test_with_overlong_0(self):
         examples = {
             "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
-            "attention_mask": [[1, 1, 1, 1, 1], [1, 1], [1, 1, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
         seq_length = 4
         expected_output = {
-            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
-            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
-            "seq_lengths": [[4], [4], [2, 1]],
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
+            "seq_lengths": [[4], [4], [2, 1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        assert dataset.to_dict() == expected_output
+
+    def test_with_overlong_two_coluns(self):
+        examples = {
+            "col1": [[1, -2, 3, -4, 5, -6], [7, -8, 9], [-10, 11, -12], [13, -14, 15, -16]],
+            "col2": [[-1, 2, -3, 4, -5, 6], [-7, 8, -9], [10, -11, 12], [-13, 14, -15, 16]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "col1": [[1, -2, 3, -4], [13, -14, 15, -16], [7, -8, 9], [-10, 11, -12], [5, -6]],
+            "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
+            "seq_lengths": [[4], [4], [3], [3], [2]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
@@ -1046,13 +1055,11 @@ class TestPackDatasetBfd(TrlTestCase):
     def test_with_non_power_of_2(self):
         examples = {
             "input_ids": [[1, 2, 3, 4, 5], [6], [7, 8, 9, 10], [11, 12, 13]],
-            "attention_mask": [[1, 0, 0, 1, 1], [0], [0, 1, 0, 0], [1, 0, 1]],
         }
         dataset = Dataset.from_dict(examples)
         seq_length = 5
         expected_output = {
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
-            "attention_mask": [[1, 0, 0, 1, 1], [0, 1, 0, 0, 0], [1, 0, 1]],
             "seq_lengths": [[5], [4, 1], [3]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
