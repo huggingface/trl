@@ -461,7 +461,7 @@ $$
 \mathcal{L}_{GRPO}(\theta) = -\mathbb{E} \left[ \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left( \min \left( \frac{\pi_\theta(o_{i,t} \dots)}{\pi_{\text{old}}(o_{i,t} \dots)} \hat{A}_{i,t}, \text{clip}(\dots) \hat{A}_{i,t} \right) \textcolor{red}{M_{i,t}} - \beta D_{KL} \right) \right]
 $$
 
-To enable this feature, use the `off_policy_mask_threshold` (corresponding to $\textcolor{blue}{\delta}$) in the [`GRPOConfig`]:
+To enable this feature, use the `off_policy_mask_threshold` (corresponding to  \\( \textcolor{blue}{\delta}$ \\) in the [`GRPOConfig`]:
 
 ```python
 from trl import GRPOConfig
@@ -472,11 +472,10 @@ training_args = GRPOConfig(
 )
 ```
 
-While the paper doesn't specify a $\textcolor{blue}{\delta}$ value used, a good starting point could be
-$\textcolor{blue}{\delta} = 0.5$. If training seems too conservative or too many sequences are masked, you can increase
+While the paper doesn't specify a  \\( \textcolor{blue}{\delta} \\) value used, a good starting point could be. \\( \textcolor{blue}{\delta} = 0.5 \\). If training seems too conservative or too many sequences are masked, you can increase
 the value.  
-For reference, $\textcolor{blue}{\delta} = 1.0$ corresponds to an average log-ratio divergence of 1 nat per token, i.e.
-on sequences where this threshold is exceeded, the old policy was on average $e^1 \approx 2.7$ times more likely to
+For reference, \\( \textcolor{blue}{\delta} = 1.0 \\) corresponds to an average log-ratio divergence of 1 nat per token, i.e.
+on sequences where this threshold is exceeded, the old policy was on average  \\( e^1 \approx 2.7 \\) times more likely to
 generate these tokens than the current policy.
 
 ## Direct Policy Optimization

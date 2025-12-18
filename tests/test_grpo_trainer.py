@@ -1961,15 +1961,6 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="off_policy_mask_threshold must be >= 0"):
             GRPOConfig(output_dir="tmp", off_policy_mask_threshold=-0.1)
 
-    def test_liger_kernel_compatibility_with_off_policy_masking(self):
-        """Test that use_liger_kernel and off_policy_mask_threshold are incompatible. At least not at the moment."""
-        with pytest.raises(ValueError, match="does not support"):
-            GRPOConfig(
-                    output_dir="tmp",
-                    use_liger_kernel=True,
-                    off_policy_mask_threshold=0.1
-                )
-
     def test_get_off_policy_mask(self):
         """
         Test the logic of off-policy masking:
@@ -1977,21 +1968,21 @@ class TestGRPOTrainer(TrlTestCase):
         - Keep if KL <= threshold
         - Drop if Advantage < 0 AND KL > threshold
         """
-        mask = torch.ones((3, 4)) # B=3 sequences, T=4 tokens
+        mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
 
         advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
         old_per_token_logps = torch.zeros((3, 4))
         per_token_logps = torch.zeros((3, 4))
 
-        per_token_logps[0, :] = -2.0 # Pos adv + High KL (0−(−2)=2) -> Keep
-        per_token_logps[1, :] = -0.5 # Neg adv + Low KL (0.5) -> Keep
-        per_token_logps[2, :] = -2.0 # Neg adv + High KL (2.0) -> Drop
+        per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
+        per_token_logps[1, :] = -0.5  # Neg adv + Low KL (0.5) -> Keep
+        per_token_logps[2, :] = -2.0  # Neg adv + High KL (2.0) -> Drop
 
         off_policy_threshold = 1.0
 
         expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
 
-        off_policy_mask = GRPOTrainer._get_off_policy_mask(
+        off_policy_mask = GRPOTrainer.get_off_policy_mask(
             advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
         )
 
@@ -2018,7 +2009,7 @@ class TestGRPOTrainer(TrlTestCase):
         # Avg KL on valid tokens = (2+2)/2 = 2.0 > 1.0 -> Drop
         expected_mask = torch.tensor([[0.0]])
 
-        off_policy_mask = GRPOTrainer._get_off_policy_mask(
+        off_policy_mask = GRPOTrainer.get_off_policy_mask(
             advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
         )
 
@@ -2030,7 +2021,7 @@ class TestGRPOTrainer(TrlTestCase):
         # Avg KL = 0.5 <= 1.0 -> Keep
         expected_mask_keep = torch.tensor([[1.0]])
 
-        off_policy_mask_keep = GRPOTrainer._get_off_policy_mask(
+        off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
             advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
         )
 
@@ -2047,6 +2038,38 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             report_to="none",
             off_policy_mask_threshold=0.5,
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @pytest.mark.xfail(reason="Off-Policy Masking isn't compatible with Liger yet.")
+    def test_training_with_off_policy_mask_with_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+            off_policy_mask_threshold=0.5,
+            use_liger_kernel=True,
         )
 
         trainer = GRPOTrainer(

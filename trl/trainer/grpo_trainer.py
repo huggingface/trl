@@ -2154,7 +2154,7 @@ class GRPOTrainer(BaseTrainer):
         return sapo_token_loss
 
     @staticmethod
-    def _get_off_policy_mask(
+    def get_off_policy_mask(
         advantages: torch.Tensor,
         per_token_logps: torch.Tensor,
         old_per_token_logps: torch.Tensor,
@@ -2219,7 +2219,7 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         if self.off_policy_mask_threshold is not None:
-            off_policy_mask = self._get_off_policy_mask(
+            off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
                 per_token_logps=per_token_logps,
                 old_per_token_logps=old_per_token_logps,
