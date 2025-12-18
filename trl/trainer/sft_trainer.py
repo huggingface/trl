@@ -22,9 +22,11 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from transformers import (
     AutoProcessor,
     DataCollator,
@@ -60,8 +62,6 @@ from .utils import (
     remove_none_values,
     selective_log_softmax,
 )
-import transformers
-from packaging.version import Version
 
 
 if is_peft_available():
