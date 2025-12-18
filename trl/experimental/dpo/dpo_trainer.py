@@ -723,7 +723,7 @@ class DPOTrainer(BaseTrainer):
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                if is_peft_model(model):
+                if is_peft_model(model) and self.ref_model is None:
                     # Disable PEFT adapters to get the reference model behavior
                     with model.disable_adapter():
                         ref_outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)

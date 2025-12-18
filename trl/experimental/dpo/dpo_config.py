@@ -208,6 +208,13 @@ class DPOConfig(TrainingArguments):
             "callback, like `LogCompletionsCallback`."
         },
     )
+    force_use_ref_model: bool = field(
+        default=False,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. If you provide a PEFT model "
+            "along with a `ref_model`, the `ref_model` will be automatically used as the reference model."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
