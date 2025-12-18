@@ -151,8 +151,12 @@ def _override_model_generation_config(model, generation_kwargs=None):
         model: The model (typically unwrapped_model) whose generation_config to temporarily override.
         generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
     """
-    # Issue fixed in transformers v5 by PR transformers#42702
-    if Version(transformers.__version__) >= Version("5.0.0") or generation_kwargs is None:
+    if (
+        # Issue fixed in transformers v5 by PR transformers#42702
+        Version(transformers.__version__) >= Version("5.0.0")
+        or generation_kwargs is None
+        or not hasattr(model, "generation_config")
+    ):
         yield model
         return
     # If it is a PEFT model, override the underlying base model
