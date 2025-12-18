@@ -75,6 +75,7 @@ def iter_params(module, recurse=False):
 def add_hooks(model: "DeepSpeedEngine") -> None:
     """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
     import deepspeed
+
     if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
         return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
@@ -83,15 +84,15 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer
     else:
         raise RuntimeError("The model optimizer is None, which is not yet supported.")
-    
+
     # Invalidate parameter coordinator trace to prevent stale state
     # after generation forward passes (fixes ZeRO-3 + GKD compatibility)
-    if hasattr(optimizer_offload, "param_coordinator"): # param_coordinator only exists in ZeRO stage 3
+    if hasattr(optimizer_offload, "param_coordinator"):  # param_coordinator only exists in ZeRO stage 3
         coordinator = optimizer_offload.param_coordinator
         # Only invalidate if trace is not already invalid
         if not coordinator.is_invalid_trace():
             coordinator._invalidate_trace()
-    
+
     if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
         optimizer_offload._register_deepspeed_module(optimizer_offload.module)
