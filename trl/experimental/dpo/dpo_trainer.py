@@ -208,6 +208,18 @@ class DPOTrainer(BaseTrainer):
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+        ref_model (`PreTrainedModel`, *optional*):
+            Reference model used to compute the reference log probabilities.
+
+            - If provided, this model is used directly as the reference policy.
+            - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
+              state before DPO training starts.
+
+            This behavior holds in all cases except when `model` is a `PeftModel` with a **pretrained adapter** (i.e.,
+            this exception does not apply when the adapter is freshly initialized by passing a `peft_config`, or by
+            initializing the PEFT model yourself before training). In that case, the reference model is the base model
+            with the adapter unloaded, which does not correspond to the initial policy represented by `model`; relying
+            on this behavior is typically only appropriate if explicitly intended.
         args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -261,6 +273,7 @@ class DPOTrainer(BaseTrainer):
     def __init__(
         self,
         model: str | PreTrainedModel,
+        ref_model: PreTrainedModel | None = None,
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -364,6 +377,7 @@ class DPOTrainer(BaseTrainer):
             raise NotImplementedError("VLM training is not yet implemented.")
 
         # Training arguments
+        self.beta = args.beta
         self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_types = args.loss_type  # args.loss_type is already a list
         self.label_smoothing = args.label_smoothing
@@ -419,18 +433,20 @@ class DPOTrainer(BaseTrainer):
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
         # Reference model
-        self.beta = args.beta
-        if is_peft_model(model):
-            # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
-            # initial model.
-            self.ref_model = None
+        if ref_model is None:
+            if is_peft_model(self.model):
+                # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
+                # initial model.
+                self.ref_model = None
+            else:
+                # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
+                model_init_kwargs = args.ref_model_init_kwargs or args.ref_model_init_kwargs or {}
+                # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+                if self.args.distributed_state.distributed_type == "DEEPSPEED":
+                    model_init_kwargs["device_map"] = None
+                self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         else:
-            # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            model_init_kwargs = args.ref_model_init_kwargs or args.ref_model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if self.args.distributed_state.distributed_type == "DEEPSPEED":
-                model_init_kwargs["device_map"] = None
-            self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
+            self.ref_model = ref_model
 
         # Disable dropout in the models
         if args.disable_dropout:

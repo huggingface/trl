@@ -256,14 +256,6 @@ class DPOConfig(TrainingArguments):
         default=-100,
         metadata={"help": "Padding value to use for labels."},
     )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={"help": "Maximum length of the prompt."},
-    )
-    max_completion_length: int | None = field(
-        default=None,
-        metadata={"help": "Maximum length of the completion."},
-    )
     max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
@@ -373,7 +365,6 @@ class DPOConfig(TrainingArguments):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
-   
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -420,6 +411,5 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
-        
 
         super().__post_init__()
