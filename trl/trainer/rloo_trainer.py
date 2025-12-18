@@ -1041,7 +1041,6 @@ class RLOOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "truncate_prompt_tokens": self.max_prompt_length,
                         "structured_outputs_regex": self.structured_outputs_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
@@ -1088,7 +1087,6 @@ class RLOOTrainer(BaseTrainer):
                     "top_k": self.top_k,
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
-                    "truncate_prompt_tokens": self.max_prompt_length,
                     "structured_outputs": structured_outputs,
                 }
                 if self.args.generation_kwargs is not None:
