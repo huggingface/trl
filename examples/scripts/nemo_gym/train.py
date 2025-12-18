@@ -2,12 +2,6 @@ import os
 import sys 
 import numpy as np
 
-# trl_path = os.path.join(os.path.dirname(__file__), "..", "trl")
-# if os.path.exists(trl_path):
-#     sys.path.insert(0, trl_path)
-#     print(f"Using local TRL from: {trl_path}")
-# else:
-#     from trl import GRPOConfig, GRPOTrainer
 from trl import GRPOConfig, GRPOTrainer
 
 import argparse
@@ -22,6 +16,7 @@ from dataclasses import dataclass
 
 from datasets import Dataset, load_dataset
 from trl import GRPOConfig, GRPOTrainer
+from tqdm import tqdm
 
 from transformers import AutoTokenizer
 
@@ -72,6 +67,7 @@ class TrainingConfig:
     model_name: str
     dataset_path: str
 
+    task: Optional[str] = None
     agent_name: Optional[str] = None
 
     learning_rate: float = 5e-6
@@ -106,12 +102,11 @@ def reward_fn(completions: List[str], **kwargs) -> List[float]:
     print(f"Received {len(env_rewards)} rewards from Nemo Gym")
     print(f"Mean reward: {sum(env_rewards)/len(env_rewards):.3f}")
     print(f"Reward std dev: {np.std(env_rewards):.3f}")
-    print(f"Min/max reward: {min(env_rewards):.3f}/{max(env_rewards):.3f}")
 
     return [float(r) for r in env_rewards]
 
 
-def get_tool_result_tokens_via_eos(
+def replace_prefix_tokens(
     tokenizer,
     seen_token_ids: List[int],
     new_prompt_ids: List[int],
@@ -190,9 +185,12 @@ async def call_nemo_gym_agent(
             )
             tasks.append(task)
 
-        print(f"Awaiting {len(tasks)} HTTP requests...")
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        print(f"Got {len(responses)} responses")
+        responses = []
+        with tqdm(total=len(tasks), desc="Agent requests") as pbar:
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                responses.append(result)
+                pbar.update(1)
 
         results = []
         for i, response in enumerate(responses):
@@ -374,7 +372,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
                         tool_result_tokens = item_prompt_ids[len(seen_token_ids):]
                     else:
                         # Retokenization changed the prefix - use nemo RL _replace_prefix_tokens approach
-                        tool_result_tokens = get_tool_result_tokens_via_eos(
+                        tool_result_tokens = replace_prefix_tokens(
                             tokenizer, seen_token_ids, item_prompt_ids
                         )
                         if tool_result_tokens:
@@ -547,6 +545,22 @@ def main():
     if config.project_name:
         os.environ["WANDB_PROJECT"] = config.project_name
 
+    if config.run_name is None:
+        task = config.task or os.path.basename(config.dataset_path).replace('.jsonl', '').replace('.json', '')
+        model_short = config.model_name.split("/")[-1]
+        config.run_name = (
+            f"{task}_{model_short}"
+            f"_ng{config.num_generations}"
+            f"_dbs{config.per_device_train_batch_size}"
+            f"_ga{config.gradient_accumulation_steps}"
+            f"_maxlen{config.max_seq_length}"
+            f"_lr{config.learning_rate}"
+            f"_temp{config.temperature}"
+            f"_topp{config.top_p}"
+            f"_wd{config.weight_decay}"
+            f"_wu{config.warmup_ratio}"
+        )
+
     print(f"\n\nModel: {config.model_name}")
     print(f"Dataset: {config.dataset_path}")
     print(f"Nemo Gym Agent: {agent_server}")
@@ -592,6 +606,7 @@ def main():
         run_name=config.run_name,  # wandb 
         
         epsilon=0.2,
+        epsilon_high=0.28,
         loss_type="grpo",
         mask_truncated_completions=True,
         log_completions=False,

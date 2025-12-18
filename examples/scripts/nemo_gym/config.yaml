@@ -1,10 +1,10 @@
 model_name: "Qwen/Qwen3-4B-Instruct-2507"
 dataset_path: "train-workplace.jsonl"
 
+task: "workplace-assistant"  # used in run_name if not set
 agent_name: "simple_agent"
 
 output_dir: "outputs/trl_nemo_gym_workplace"
-run_name: "workplace_assistant_qwen3_4b_instruct_2507"
 project_name: "cmunley-nemo-gym-trl-int"
 
 learning_rate: 1.0e-5
@@ -16,7 +16,7 @@ num_generations: 16
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 128
 
-max_seq_length: 30000
+max_seq_length: 16384
 
 temperature: 1.0
 top_p: 0.999
