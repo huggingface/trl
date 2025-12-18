@@ -1035,7 +1035,7 @@ class GRPOTrainer(BaseTrainer):
             # Generate using vLLM
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             prompt_ids, completion_ids, logprobs, extra_fields = self.vllm_generation.generate(
-                prompts=prompts, num_generations=num_generations, mode=mode
+                prompts=prompts, num_generations=num_generations
             )
 
         elif self.use_transformers_paged:

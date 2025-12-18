@@ -344,13 +344,12 @@ class VLLMGeneration:
         elif args.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
-    def generate(self, prompts, num_generations, mode="train"):
+    def generate(self, prompts, num_generations):
         """Generate completions using vLLM.
 
         Args:
             prompts: List of prompts (strings or chat conversations)
             num_generations: Number of generations per prompt
-            mode: "train" or "eval"
 
         Returns:
             Tuple of (prompt_ids, completion_ids, logprobs, extra_fields)
