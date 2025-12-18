@@ -1066,7 +1066,6 @@ class TestRLOOTrainer(TrlTestCase):
             return [float(len(set(completion))) for completion in completions]
 
         training_args = RLOOConfig(
-            fp16=True,
             output_dir=self.tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=3,
