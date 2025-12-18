@@ -81,10 +81,10 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
     shuffle_sequence_dict,
-    shutdown_event_loop_as_daemon,
+    shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
-    start_event_loop_as_daemon,
+    start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
 )
 
@@ -335,10 +335,11 @@ class RLOOTrainer(BaseTrainer):
         self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
         if self._has_async_reward_funcs:
             self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
-                start_event_loop_as_daemon(name="RLOOTrainer-AsyncRewardLoop")
+                start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
             )
+            # wait until the event loop is running in the daemon thread
             self.async_reward_loop_ready_event.wait()
-            atexit.register(shutdown_event_loop_as_daemon, self.async_reward_loop_thread, self.async_reward_loop)
+            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
 
         # Reward weights
         if args.reward_weights is not None:

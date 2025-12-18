@@ -1175,7 +1175,7 @@ def get_config_model_id(config: PretrainedConfig) -> str:
     return getattr(config, "_name_or_path", "")
 
 
-def start_event_loop_as_daemon(
+def start_event_loop_in_daemon(
     name: str | None = None,
 ) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
     """
@@ -1205,7 +1205,7 @@ def start_event_loop_as_daemon(
     return thread, loop, loop_ready_event
 
 
-def shutdown_event_loop_as_daemon(
+def shutdown_event_loop_in_daemon(
     thread: threading.Thread | None,
     loop: asyncio.AbstractEventLoop | None,
 ) -> None:
