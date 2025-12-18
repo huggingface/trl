@@ -45,21 +45,70 @@ class VLLMGeneration:
     from trainers into a separate, testable class.
     """
 
-    def __init__(self, trainer):
+    def __init__(
+        self,
+        model,
+        args,
+        accelerator,
+        is_fsdp_enabled,
+        generation_kwargs,
+        processing_class,
+        chat_template_kwargs: dict | None = None,
+        tools: list | None = None,
+        chat_template: str | None = None,
+        profiler=None,
+        rollout_func=None,
+        trainer_reference=None,
+    ):
         """Initialize vLLM generation.
 
         Args:
-            trainer: Reference to parent trainer for accessing config, model, accelerator, etc.
+            model: The model to use for generation
+            args: Training arguments containing vLLM configuration
+            accelerator: Accelerator instance for distributed training
+            is_fsdp_enabled: Whether FSDP is enabled
+            generation_kwargs: Dict containing generation parameters:
+                - temperature: Sampling temperature
+                - top_p: Top-p sampling parameter
+                - top_k: Top-k sampling parameter
+                - min_p: Min-p sampling parameter
+                - repetition_penalty: Repetition penalty
+                - max_completion_length: Maximum completion length
+            processing_class: Tokenizer or processor for the model
+            chat_template_kwargs: Chat template kwargs
+            tools: Optional tools for function calling
+            chat_template: Optional chat template
+            profiler: Optional profiler object for performance tracking (can be None)
+            rollout_func: Optional custom rollout function
+            trainer_reference: Optional trainer reference for custom rollout functions (can be None)
         """
-        self.trainer = trainer
+        self.model = model
+        self.args = args
+        self.accelerator = accelerator
+        self.is_fsdp_enabled = is_fsdp_enabled
+        self.processing_class = processing_class
+        self.chat_template = chat_template
+        self.chat_template_kwargs = chat_template_kwargs or {}
+        self.tools = tools
+        self.profiler = profiler
+        self.rollout_func = rollout_func
+        self.trainer_reference = trainer_reference
+
+        # Unpack generation config
+        self.temperature = generation_kwargs.get("temperature")
+        self.top_p = generation_kwargs.get("top_p")
+        self.top_k = generation_kwargs.get("top_k")
+        self.min_p = generation_kwargs.get("min_p")
+        self.repetition_penalty = generation_kwargs.get("repetition_penalty")
+        self.max_completion_length = generation_kwargs.get("max_completion_length")
+
         self._init_vllm()
 
     def _init_vllm(self):
         """Initialize vLLM in server or colocate mode."""
-        # Access trainer attributes for convenience
-        args = self.trainer.args
-        model = self.trainer.model
-        accelerator = self.trainer.accelerator
+        args = self.args
+        model = self.model
+        accelerator = self.accelerator
 
         if not is_vllm_available():
             raise ImportError(
@@ -156,8 +205,8 @@ class VLLMGeneration:
     def _sync_fsdp1_params_to_vllm(self, module, prefix="", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
-        args = self.trainer.args
-        accelerator = self.trainer.accelerator
+        args = self.args
+        accelerator = self.accelerator
 
         if visited is None:
             visited = set()
@@ -185,9 +234,9 @@ class VLLMGeneration:
 
     def _sync_fsdp2_params_to_vllm(self, module):
         """FSDP2-specific parameter synchronization (lines 1025-1046)."""
-        args = self.trainer.args
-        accelerator = self.trainer.accelerator
-        model = self.trainer.model
+        args = self.args
+        accelerator = self.accelerator
+        model = self.model
 
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
@@ -217,10 +266,10 @@ class VLLMGeneration:
 
         Handles FSDP, DeepSpeed, PEFT weight synchronization.
         """
-        model = self.trainer.model
-        args = self.trainer.args
-        accelerator = self.trainer.accelerator
-        is_fsdp_enabled = self.trainer.is_fsdp_enabled
+        model = self.model
+        args = self.args
+        accelerator = self.accelerator
+        is_fsdp_enabled = self.is_fsdp_enabled
 
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = accelerator.state.deepspeed_plugin
@@ -306,20 +355,19 @@ class VLLMGeneration:
         Returns:
             Tuple of (prompt_ids, completion_ids, logprobs, extra_fields)
         """
-        # Access trainer attributes
-        args = self.trainer.args
-        accelerator = self.trainer.accelerator
-        rollout_func = self.trainer.rollout_func
-        temperature = self.trainer.temperature
-        top_p = self.trainer.top_p
-        top_k = self.trainer.top_k
-        min_p = self.trainer.min_p
-        repetition_penalty = self.trainer.repetition_penalty
-        max_completion_length = self.trainer.max_completion_length
-        processing_class = self.trainer.processing_class
-        chat_template_kwargs = self.trainer.chat_template_kwargs
-        tools = self.trainer.tools
-        chat_template = self.trainer.chat_template
+        args = self.args
+        accelerator = self.accelerator
+        rollout_func = self.rollout_func
+        temperature = self.temperature
+        top_p = self.top_p
+        top_k = self.top_k
+        min_p = self.min_p
+        repetition_penalty = self.repetition_penalty
+        max_completion_length = self.max_completion_length
+        processing_class = self.processing_class
+        chat_template_kwargs = self.chat_template_kwargs
+        tools = self.tools
+        chat_template = self.chat_template
 
         # Wake up colocated vLLM instances if needed
         if args.vllm_mode == "colocate" and args.vllm_enable_sleep_mode:
@@ -362,7 +410,7 @@ class VLLMGeneration:
                     "guided_decoding_regex": self.guided_decoding_regex,
                     "generation_kwargs": args.generation_kwargs,
                 }
-                with profiling_context(self.trainer, "vLLM.generate"):
+                with profiling_context(self.profiler, "vLLM.generate"):
                     if rollout_func is not None:
                         rollout_prompts = ordered_set_of_prompts
                         if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
@@ -370,7 +418,7 @@ class VLLMGeneration:
                                 apply_chat_template({"prompt": p}, processing_class, **chat_template_kwargs)["prompt"]
                                 for p in rollout_prompts
                             ]
-                        output = rollout_func(rollout_prompts, self.trainer)
+                        output = rollout_func(rollout_prompts, self.trainer_reference)
                     else:
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                             output = self.vllm_client.chat(
@@ -422,7 +470,7 @@ class VLLMGeneration:
                         apply_chat_template({"prompt": prompt}, processing_class, **chat_template_kwargs)["prompt"]
                         for prompt in rollout_prompts
                     ]
-                output = rollout_func(rollout_prompts, self.trainer)
+                output = rollout_func(rollout_prompts, self.trainer_reference)
                 required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                 extra_fields = {k: v for k, v in output.items() if k not in required_keys}
                 prompt_ids = output["prompt_ids"]
@@ -462,7 +510,7 @@ class VLLMGeneration:
                 if args.vllm_enable_sleep_mode:
                     self.llm.wake_up(tags=["kv_cache"])
 
-                with profiling_context(self.trainer, "vLLM.generate"):
+                with profiling_context(self.profiler, "vLLM.generate"):
                     if is_conversational({"prompt": prompts[0]}):
                         all_outputs = self.llm.chat(
                             all_prompts,

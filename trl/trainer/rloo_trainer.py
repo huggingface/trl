@@ -464,7 +464,24 @@ class RLOOTrainer(BaseTrainer):
 
         if self.use_vllm:
             # Initialize vLLM generation backend
-            self.vllm_generation = VLLMGeneration(self)
+            generation_kwargs = {
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "min_p": self.min_p,
+                "repetition_penalty": self.repetition_penalty,
+                "max_completion_length": self.max_completion_length,
+            }
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                args=self.args,
+                accelerator=self.accelerator,
+                is_fsdp_enabled=self.is_fsdp_enabled,
+                generation_kwargs=generation_kwargs,
+                processing_class=self.processing_class,
+                chat_template_kwargs=self.chat_template_kwargs,
+                profiler=self,  # TODO: Pass trainer for profiling
+            )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
             generation_kwargs = {
