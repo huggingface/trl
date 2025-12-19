@@ -1426,8 +1426,8 @@ class TestDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",

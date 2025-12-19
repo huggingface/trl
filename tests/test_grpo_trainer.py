@@ -1410,11 +1410,13 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+            "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",
         ],
     )
     @require_vision
     def test_training_vlm(self, model_id):
+        if model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration":
+            pytest.xfail("LlavaNext is currently broken, see https://github.com/huggingface/transformers/issues/42968")
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):

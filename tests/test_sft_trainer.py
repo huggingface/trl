@@ -1347,13 +1347,13 @@ class TestSFTTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
                 marks=pytest.mark.skipif(
