@@ -31,8 +31,8 @@ class ProfilingContext:
     """
     Context manager for profiling code blocks with configurable logging.
 
-    This class handles timing of code execution and logging metrics to various backends
-    (Weights & Biases, MLflow) without being coupled to the Trainer class.
+    This class handles timing of code execution and logging metrics to various backends (Weights & Biases, MLflow)
+    without being coupled to the Trainer class.
 
     Args:
         name (`str`):
@@ -40,8 +40,7 @@ class ProfilingContext:
         report_to (`list` of `str`):
             List of integrations to report metrics to (e.g., ["wandb", "mlflow"]).
         is_main_process (`bool`, *optional*, defaults to `True`):
-            Whether this is the main process in distributed training. Metrics are only
-            logged from the main process.
+            Whether this is the main process in distributed training. Metrics are only logged from the main process.
         step (`int` or `None`, *optional*):
             Training step to associate with the logged metrics.
         metric_prefix (`str`, *optional*, defaults to `"profiling/Time taken"`):
@@ -56,7 +55,7 @@ class ProfilingContext:
         name="MyClass.expensive_operation",
         report_to=["wandb"],
         is_main_process=True,
-        step=100
+        step=100,
     ):
         # Code to profile
         result = expensive_computation()
@@ -64,6 +63,7 @@ class ProfilingContext:
     # With Trainer (backwards compatible via profiling_context function)
     from transformers import Trainer
     from trl.extras.profiling import profiling_context
+
 
     class MyTrainer(Trainer):
         def some_method(self):
@@ -126,8 +126,8 @@ def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
     """
     Factory function to create a ProfilingContext from a Trainer instance.
 
-    This function maintains backwards compatibility with existing code while using
-    the decoupled ProfilingContext class internally.
+    This function maintains backwards compatibility with existing code while using the decoupled ProfilingContext class
+    internally.
 
     Args:
         trainer (`~transformers.Trainer`):
