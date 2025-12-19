@@ -57,7 +57,6 @@ class VLLMGeneration:
         tools: list | None = None,
         chat_template: str | None = None,
         rollout_func=None,
-        trainer_reference=None,
     ):
         """Initialize vLLM generation.
 
@@ -77,8 +76,12 @@ class VLLMGeneration:
             chat_template_kwargs: Chat template kwargs
             tools: Optional tools for function calling
             chat_template: Optional chat template
-            rollout_func: Optional custom rollout function
-            trainer_reference: Optional trainer reference for custom rollout functions (can be None)
+            rollout_func: Optional custom rollout function that accepts prompts and returns
+                a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields.
+                Should be a single-argument callable: rollout_func(prompts) -> dict.
+                To pass additional context (e.g., trainer), use a closure or functools.partial:
+                    rollout_func = lambda prompts: my_custom_rollout(prompts, trainer)
+                The closure will hold a reference to trainer and see its state updates.
         """
         self.model = model
         self.args = args
@@ -89,7 +92,6 @@ class VLLMGeneration:
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.tools = tools
         self.rollout_func = rollout_func
-        self.trainer_reference = trainer_reference
 
         # Unpack generation config
         self.temperature = generation_kwargs.get("temperature")
@@ -416,7 +418,7 @@ class VLLMGeneration:
                                 apply_chat_template({"prompt": p}, processing_class, **chat_template_kwargs)["prompt"]
                                 for p in rollout_prompts
                             ]
-                        output = rollout_func(rollout_prompts, self.trainer_reference)
+                        output = rollout_func(rollout_prompts)
                     else:
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                             output = self.vllm_client.chat(
@@ -468,7 +470,7 @@ class VLLMGeneration:
                         apply_chat_template({"prompt": prompt}, processing_class, **chat_template_kwargs)["prompt"]
                         for prompt in rollout_prompts
                     ]
-                output = rollout_func(rollout_prompts, self.trainer_reference)
+                output = rollout_func(rollout_prompts)
                 required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                 extra_fields = {k: v for k, v in output.items() if k not in required_keys}
                 prompt_ids = output["prompt_ids"]

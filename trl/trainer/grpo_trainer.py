@@ -604,7 +604,6 @@ class GRPOTrainer(BaseTrainer):
         if self.use_vllm:
             # Initialize vLLM generation backend
             generation_kwargs = {
-                # "rollout_func": self.rollout_func,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -612,6 +611,13 @@ class GRPOTrainer(BaseTrainer):
                 "repetition_penalty": self.repetition_penalty,
                 "max_completion_length": self.max_completion_length,
             }
+            # Wrap rollout_func to capture trainer context if provided
+            rollout_func = None
+            if self.rollout_func is not None:
+
+                def rollout_func(prompts):
+                    return self.rollout_func(prompts, self)
+
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 args=self.args,
@@ -622,8 +628,7 @@ class GRPOTrainer(BaseTrainer):
                 chat_template=self.chat_template,
                 chat_template_kwargs=self.chat_template_kwargs,
                 tools=self.tools,
-                rollout_func=self.rollout_func,
-                trainer_reference=self,  # TODO: Pass trainer for custom rollout functions
+                rollout_func=rollout_func,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
