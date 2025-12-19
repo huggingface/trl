@@ -18,6 +18,7 @@
 
 import torch
 from huggingface_hub import HfApi, ModelCard
+from peft import LoraConfig, get_peft_model
 from torch import nn
 from transformers import (
     AutoConfig,
@@ -376,3 +377,17 @@ for model_id, model_class in [
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=torch.bfloat16)
     push_to_hub(model, processor, generation_config, "tiny")
+
+# PEFT models
+model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
+model = get_peft_model(model, LoraConfig())
+tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+push_to_hub(model, tokenizer, generation_config, "tiny", force=True)
+
+# Same model, but different weights
+model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
+model = get_peft_model(model, LoraConfig())
+tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+push_to_hub(model, tokenizer, generation_config, "tiny", "2", force=True)

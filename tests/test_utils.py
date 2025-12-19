@@ -48,7 +48,9 @@ if is_peft_available():
 @require_peft
 class TestUseAdapter(TrlTestCase):
     def test_disables_on_none(self):
-        model = AutoPeftModelForCausalLM.from_pretrained("my_local_adapter", adapter_name="my_adapter")
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
         with model.disable_adapter():
             expected = model(input_ids).logits
@@ -59,7 +61,9 @@ class TestUseAdapter(TrlTestCase):
         assert torch.equal(output, expected)
 
     def test_restores_previous_adapter(self):
-        model = AutoPeftModelForCausalLM.from_pretrained("my_local_adapter", adapter_name="my_adapter")
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
         expected = model(input_ids).logits
         with use_adapter(model, "my_adapter"):
@@ -73,8 +77,10 @@ class TestUseAdapter(TrlTestCase):
         assert torch.equal(output, expected)
 
     def test_with_multiple_adapters(self):
-        model = AutoPeftModelForCausalLM.from_pretrained("my_local_adapter", adapter_name="my_adapter_1")
-        model.load_adapter("my_other_local_adapter", "my_adapter_2")
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter_1"
+        )
+        model.load_adapter("trl-internal-testing/tiny-PeftModel-2", "my_adapter_2")
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
 
         model.set_adapter("my_adapter_1")  # should be a no-op, but let's keep it for clarity
