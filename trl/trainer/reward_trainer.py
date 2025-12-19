@@ -268,7 +268,7 @@ class RewardTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel | "PeftModel",
+        model: "str | PreTrainedModel | PeftModel",
         args: RewardConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
