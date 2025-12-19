@@ -481,7 +481,6 @@ class RLOOTrainer(BaseTrainer):
                 generation_kwargs=generation_kwargs,
                 processing_class=self.processing_class,
                 chat_template_kwargs=self.chat_template_kwargs,
-                profiler=self,  # TODO: Pass trainer for profiling
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
@@ -813,7 +812,8 @@ class RLOOTrainer(BaseTrainer):
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             prompt_ids, completion_ids, _, _ = self.vllm_generation.generate(
-                prompts=prompts, num_generations=num_generations
+                prompts=prompts,
+                num_generations=num_generations,  # TODO: pass profiler=profiling_context(self, "vLLM.generate"); see PR #4717
             )
 
         elif self.use_transformers_paged:

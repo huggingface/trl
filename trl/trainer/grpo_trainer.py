@@ -622,7 +622,6 @@ class GRPOTrainer(BaseTrainer):
                 chat_template=self.chat_template,
                 chat_template_kwargs=self.chat_template_kwargs,
                 tools=self.tools,
-                profiler=self,  # TODO: Pass trainer for profiling
                 rollout_func=self.rollout_func,
                 trainer_reference=self,  # TODO: Pass trainer for custom rollout functions
             )
@@ -1063,7 +1062,8 @@ class GRPOTrainer(BaseTrainer):
             # Generate using vLLM
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             prompt_ids, completion_ids, logprobs, extra_fields = self.vllm_generation.generate(
-                prompts=prompts, num_generations=num_generations
+                prompts=prompts,
+                num_generations=num_generations,  # TODO: pass profiler=profiling_context(self, "vLLM.generate"); see PR #4717
             )
 
         elif self.use_transformers_paged:

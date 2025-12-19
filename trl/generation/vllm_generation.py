@@ -24,7 +24,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import is_bitsandbytes_available
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages_vllm
-from ..extras.profiling import profiling_context, profiling_decorator
+from ..extras.profiling import profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
@@ -56,7 +56,6 @@ class VLLMGeneration:
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         chat_template: str | None = None,
-        profiler=None,
         rollout_func=None,
         trainer_reference=None,
     ):
@@ -78,7 +77,6 @@ class VLLMGeneration:
             chat_template_kwargs: Chat template kwargs
             tools: Optional tools for function calling
             chat_template: Optional chat template
-            profiler: Optional profiler object for performance tracking (can be None)
             rollout_func: Optional custom rollout function
             trainer_reference: Optional trainer reference for custom rollout functions (can be None)
         """
@@ -90,7 +88,6 @@ class VLLMGeneration:
         self.chat_template = chat_template
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.tools = tools
-        self.profiler = profiler
         self.rollout_func = rollout_func
         self.trainer_reference = trainer_reference
 
@@ -344,16 +341,18 @@ class VLLMGeneration:
         elif args.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
-    def generate(self, prompts, num_generations):
+    def generate(self, prompts, num_generations, profiler=None):
         """Generate completions using vLLM.
 
         Args:
             prompts: List of prompts (strings or chat conversations)
             num_generations: Number of generations per prompt
+            profiler: Optional profiler for performance tracking
 
         Returns:
             Tuple of (prompt_ids, completion_ids, logprobs, extra_fields)
         """
+        profiler = profiler or nullcontext()
         args = self.args
         accelerator = self.accelerator
         rollout_func = self.rollout_func
@@ -409,7 +408,7 @@ class VLLMGeneration:
                     "guided_decoding_regex": self.guided_decoding_regex,
                     "generation_kwargs": args.generation_kwargs,
                 }
-                with profiling_context(self.profiler, "vLLM.generate"):
+                with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
                     if rollout_func is not None:
                         rollout_prompts = ordered_set_of_prompts
                         if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
@@ -509,7 +508,7 @@ class VLLMGeneration:
                 if args.vllm_enable_sleep_mode:
                     self.llm.wake_up(tags=["kv_cache"])
 
-                with profiling_context(self.profiler, "vLLM.generate"):
+                with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
                     if is_conversational({"prompt": prompts[0]}):
                         all_outputs = self.llm.chat(
                             all_prompts,
