@@ -37,7 +37,11 @@ dependencies = [
     "latex2sympy2",
     "wandb",
     "vllm==0.11.2",
-    "deepspeed"
+    "deepspeed",
+    "latex2sympy2",
+    "pebble",
+    "word2number",
+    "time_decorator"
 ]
 dynamic = ["version"]
 
