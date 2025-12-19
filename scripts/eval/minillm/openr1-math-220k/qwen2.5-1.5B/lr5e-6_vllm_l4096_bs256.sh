@@ -65,7 +65,6 @@ trl/evaluation/math_eval.py \
     --wandb_group ${MODEL_TAG} \
     --wandb_run_name ${JOB_TYPE}/${MODEL_TAG} \
     --wandb_job_type ${JOB_TYPE} \
-    --dummy_output_steps 0 \
     --gpu_memory_utilization 0.8
 EOF
 
