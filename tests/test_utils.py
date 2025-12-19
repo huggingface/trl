@@ -18,15 +18,11 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
 from trl.trainer.utils import (
-    DataCollatorForChatML,
     RepeatSampler,
-    batch_generation,
     entropy_from_logits,
     flush_left,
     flush_right,
@@ -210,152 +206,6 @@ class TestGenerateModelCard(TrlTestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
-
-
-class TestDataCollatorForChatML(TrlTestCase):
-    def setup_method(self):
-        # Initialize the tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # Define token IDs
-        self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
-        self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
-        # Token ID for "true", the last assistant's response in the example:
-        self.ignore_index = -100
-        self.max_length = 1024
-        self.messages_key = "messages"
-
-        # Example input
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        self.examples = dataset.to_list()
-
-        # Initialize the data collator
-        self.collator = DataCollatorForChatML(
-            tokenizer=self.tokenizer,
-            max_length=self.max_length,
-            ignore_index=self.ignore_index,
-        )
-
-    def test_data_collator_for_chatml(self):
-        # Process the data
-        data = self.collator(self.examples)
-
-        # Verify basic shapes and types
-        assert "input_ids" in data
-        assert "attention_mask" in data
-        assert "labels" in data
-        assert "prompts" in data
-        assert "prompt_attention_mask" in data
-
-        # Decode input_ids and labels for verification
-        input_ids = data["input_ids"][0].tolist()
-        labels = data["labels"][0].tolist()
-        prompt_only = data["prompts"][0].tolist()
-
-        # Get the last assistant's response for comparison
-        last_message = self.examples[0][self.messages_key][-1]
-        assert last_message["role"] == "assistant", "Last message should be from assistant"
-        last_assistant_response = last_message["content"]
-
-        # Verify that input_ids contain both prompt and response
-        decoded_input = self.tokenizer.decode(input_ids)
-        assert last_assistant_response in decoded_input, "Input should contain assistant's response"
-
-        # Verify that prompts only contain the conversation up to the last response
-        decoded_prompt = self.tokenizer.decode(prompt_only)
-        assert last_assistant_response not in decoded_prompt, "Prompt should not contain assistant's response"
-
-        # Verify labels are -100 for non-assistant parts
-        prompt_length = len(prompt_only)
-        assert all(label == self.ignore_index for label in labels[:prompt_length]), (
-            "Labels should be ignore_index for prompt tokens"
-        )
-
-        # Verify labels match assistant response after prompt
-        # Add a filter to remove any trailing tokens after the first <|im_end|>
-        last_assistant_response_with_end = last_assistant_response + self.tokenizer.eos_token
-        last_assistant_response_tokens = self.tokenizer.encode(
-            last_assistant_response_with_end, add_special_tokens=False
-        )
-
-        response_labels = []
-        for label in labels[prompt_length:]:
-            if label == self.ignore_index:
-                continue
-            response_labels.append(label)
-            if label == self.tokenizer.convert_tokens_to_ids("<|im_end|>"):
-                break
-        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
-
-        # Verify there isn't a generation prompt at the end
-        generation_prompt = "<|im_start|>assistant"
-        assert not decoded_input.strip().endswith(generation_prompt), (
-            f"Input should not end with generation prompt '{generation_prompt}'"
-        )
-
-        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
-
-
-class TestBatchGeneration(TrlTestCase):
-    def setup_method(self):
-        # Initialize the tokenizer
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id).to(self.device)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-
-        self.generation_config = GenerationConfig(
-            max_new_tokens=128,
-            temperature=0.5,
-            do_sample=True,
-            top_k=0,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
-
-        # Example input
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        self.examples = dataset["messages"]
-        self.mini_batch_size = 3
-
-    def test_mini_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, self.mini_batch_size, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        assert max_length_query > context_length
-        assert query_responses.shape == (bs, max_length_query)
-        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
-
-    def test_single_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, bs, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        assert max_length_query > context_length
-        assert query_responses.shape == (bs, max_length_query)
-        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
 
 
 class TestFlushLeft(TrlTestCase):

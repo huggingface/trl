@@ -644,23 +644,71 @@ class _SegmentTree:
 
 def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
+    # Identify the list column and prepare all columns
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
-        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-            column = pc.list_slice(column, 0, seq_length)
-            if list_column_idx is None:
-                list_column_idx = idx
+        if isinstance(column, pa.ChunkedArray):
+            column = column.combine_chunks()
+        if not (pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type)):
+            raise TypeError("pack_dataset(bfd) requires all columns to be list-like.")
+        if list_column_idx is None:
+            list_column_idx = idx
         columns.append(column)
-    examples = pa.Table.from_arrays(columns, names=examples.column_names)
 
-    ids = np.arange(len(examples))
     assert list_column_idx is not None
+    list_column = columns[list_column_idx]
+    offsets = np.asarray(list_column.offsets)
+    values = list_column.values
+
+    # Split every list row into fragments of length <= seq_length (so long rows become multiple samples).
+    frag_lengths: list[int] = []
+    frag_info: list[tuple[int, int, int]] = []  # (row_idx, split_start, frag_len)
+    expanded_indices: list[int] = []
+    for row_idx, (row_start, row_end) in enumerate(zip(offsets[:-1], offsets[1:], strict=False)):
+        length = row_end - row_start
+        for split_start in range(0, length, seq_length):
+            frag_len = min(seq_length, length - split_start)
+            frag_lengths.append(frag_len)
+            frag_info.append((row_idx, split_start, frag_len))
+            expanded_indices.append(row_idx)
+
+    # Rebuild list columns with fragments
+    offsets_type = list_column.offsets.type
+    new_offsets = np.empty(len(frag_lengths) + 1, dtype=offsets_type.to_pandas_dtype())
+    new_offsets[0] = 0
+    new_offsets[1:] = np.cumsum(frag_lengths, dtype=offsets_type.to_pandas_dtype())
+    new_offsets_array = pa.array(new_offsets, type=offsets_type)
+
+    for idx, column in enumerate(columns):
+        if idx == list_column_idx:
+            slices = [
+                values.slice(offsets[row_idx] + split_start, frag_len) for row_idx, split_start, frag_len in frag_info
+            ]
+            new_values = pa.concat_arrays(slices)
+            columns[idx] = type(column).from_arrays(new_offsets_array, new_values)
+            continue
+
+        column_offsets = np.asarray(column.offsets)
+        column_values = column.values
+        slices = []
+        for row_idx, split_start, frag_len in frag_info:
+            row_len = column_offsets[row_idx + 1] - column_offsets[row_idx]
+            if row_len < split_start + frag_len:
+                raise ValueError("List columns must have matching lengths when packing datasets.")
+            start = column_offsets[row_idx] + split_start
+            slices.append(column_values.slice(start, frag_len))
+        column_offsets_array = pa.array(new_offsets, type=column.offsets.type)
+        columns[idx] = type(column).from_arrays(column_offsets_array, pa.concat_arrays(slices))
+
+    examples = pa.Table.from_arrays(columns, names=examples.column_names)
+    ids = np.arange(len(examples))
     lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
     examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
     lengths = pc.make_struct(lengths, ids)
     lengths = lengths.sort("descending", by=0)
 
+    # Greedy BFD binning using a segment tree to quickly find best-fit remaining space.
     segment_tree = _SegmentTree(seq_length)
     segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
     space_to_bin = defaultdict(deque)
@@ -689,8 +737,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
             segment_tree.add(space)
 
     examples = pc.take(examples, [id_ for bin in bins for id_ in bin["ids"]])
-    offsets = np.array([0] + [bin["length"] for bin in bins])
-    offsets = np.cumsum(offsets)
+    offsets = np.cumsum([0] + [bin["length"] for bin in bins])
 
     assert all(
         column.num_chunks == 1 for column in examples.columns
@@ -742,8 +789,8 @@ def pack_dataset(
         strategy (`str`, *optional*, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
-            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
-                middle.
+            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries inside each packed sample. If a
+                single sequence exceeds `seq_length` it is split into multiple samples.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
         map_kwargs (`dict`, *optional*):
@@ -759,15 +806,15 @@ def pack_dataset(
     >>> from trl import pack_dataset
 
     >>> examples = {
-    ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
-    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]],
+    ...     "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10], [11]],
+    ...     "attention_mask": [[1, 1, 1, 0, 0], [1, 0], [1, 1, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 9], [6, 7, 8], [4, 5]],
-    'attention_mask': [[1, 1, 0, 1], [1, 0, 0], [1, 0]],
-    'seq_lengths': [[3, 1], [3], [2]]}
+    {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 5], [6, 7, 11]],
+     'attention_mask': [[1, 1, 1, 0], [0, 1, 1, 0], [1, 1, 1]],
+     'seq_lengths': [[4], [3, 1], [2, 1]]}
     ```
     """
     if map_kwargs is None:
