@@ -208,11 +208,22 @@ class DPOConfig(TrainingArguments):
             "callback, like `LogCompletionsCallback`."
         },
     )
-    force_use_ref_model: bool = field(
-        default=False,
+    force_use_ref_model: bool | None = field(
+        default=None,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.29.0. If you provide a PEFT model "
-            "along with a `ref_model`, the `ref_model` will be automatically used as the reference model."
+            "along with a `ref_model`, the `ref_model` will be automatically used as the reference model. If you used "
+            "this parameter to train a pretrained PEFT adapter, you can now safely just pass the PEFT model as the "
+            "`model` argument and leave `ref_model` as `None`, the trainer will automatically make a copy of the "
+            "adapter to use as the reference model."
+        },
+    )
+    use_logits_to_keep: bool = field(
+        default=False,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. The trainer now "
+            "automatically uses a more efficient method than using `use_logits_to_keep`. You can safely ignore this "
+            "parameter."
         },
     )
 
@@ -233,56 +244,9 @@ class DPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
     )
-    force_use_ref_model: bool = field(
-        default=False,
-        metadata={
-            "help": "If you provide a PEFT model as the active model and wish to use a different model for the "
-            "`ref_model`, set this flag to `True`."
-        },
-    )
-    disable_dropout: bool = field(
-        default=True,
-        metadata={"help": "Whether to disable dropout in the model and reference model."},
-    )
-    use_logits_to_keep: bool = field(
-        default=False,
-        metadata={
-            "help": "If `True`, only a specified number of logits are computed in the forward pass. This can be "
-            "useful for saving memory and speeding up training by not computing the logits for all tokens, especially "
-            "in scenarios when working with very long prompts where labels are ignored (-100)."
-        },
-    )
-    pad_token: str | None = field(
-        default=None,
-        metadata={
-            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token`."
-        },
-    )
     label_pad_token_id: int = field(
         default=-100,
         metadata={"help": "Padding value to use for labels."},
-    )
-    max_length: int | None = field(
-        default=1024,
-        metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
-    )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
-            "and `'keep_start'`.",
-            "choices": ["keep_end", "keep_start"],
-        },
-    )
-    padding_free: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
-            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
-            "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
-            "handle the flattened batch structure."
-        },
     )
     precompute_ref_batch_size: int | None = field(
         default=None,
@@ -415,6 +379,24 @@ class DPOConfig(TrainingArguments):
             warnings.warn(
                 "The `generate_during_eval` argument is deprecated and will be removed in version 0.29.0. Please use "
                 "a dedicated callback, like `LogCompletionsCallback`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.force_use_ref_model:
+            warnings.warn(
+                "The `force_use_ref_model` argument is deprecated and will be removed in version 0.29.0. If you "
+                "provide a PEFT model along with a `ref_model`, the `ref_model` will be automatically used as the "
+                "reference model. If you used this argument to train a pretrained PEFT adapter, you can now safely "
+                "just pass the PEFT model as the `model` argument and leave `ref_model` as `None`, the trainer will "
+                "automatically make a copy of the adapter to use as the reference model.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.use_logits_to_keep:
+            warnings.warn(
+                "The `use_logits_to_keep` argument is deprecated and will be removed in version 0.29.0. The trainer "
+                "now automatically uses a more efficient method than using `use_logits_to_keep`. You can safely "
+                "ignore this parameter.",
                 FutureWarning,
                 stacklevel=2,
             )

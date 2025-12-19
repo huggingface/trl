@@ -20,6 +20,7 @@ import random
 import socket
 import zlib
 from collections.abc import Mapping, Sequence, Sized
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
@@ -63,7 +64,7 @@ if is_comet_available():
     import comet_ml
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = logging.get_logger(__name__)
@@ -1182,3 +1183,21 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@contextmanager
+def use_adapter(model: PeftModel, adapter_name: str | None):
+    if not is_peft_available():
+        raise ImportError(
+            "You're trying to use a PEFT adapter but PEFT is not installed. Please install it with `pip install peft`."
+        )
+    if adapter_name is None:
+        with model.disable_adapter():
+            yield
+    else:
+        previous_adapter = model.active_adapter
+        model.set_adapter(adapter_name)
+        try:
+            yield
+        finally:
+            model.set_adapter(previous_adapter)

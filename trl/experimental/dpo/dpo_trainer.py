@@ -53,6 +53,7 @@ from ...trainer.utils import (
     pad,
     remove_none_values,
     selective_log_softmax,
+    use_adapter,
 )
 from .dpo_config import DPOConfig
 
@@ -199,7 +200,7 @@ class DPOTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`str | PreTrainedModel`):
+        model (`str | PreTrainedModel | PeftModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -208,18 +209,13 @@ class DPOTrainer(BaseTrainer):
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+            - A [`~peft.PeftModel`] object. Only causal language models are supported.
         ref_model (`PreTrainedModel`, *optional*):
             Reference model used to compute the reference log probabilities.
 
             - If provided, this model is used directly as the reference policy.
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before DPO training starts.
-
-            This behavior holds in all cases except when `model` is a `PeftModel` with a **pretrained adapter** (i.e.,
-            this exception does not apply when the adapter is freshly initialized by passing a `peft_config`, or by
-            initializing the PEFT model yourself before training). In that case, the reference model is the base model
-            with the adapter unloaded, which does not correspond to the initial policy represented by `model`; relying
-            on this behavior is typically only appropriate if explicitly intended.
         args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -272,7 +268,7 @@ class DPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: str | PreTrainedModel | PeftModel,
         ref_model: PreTrainedModel | None = None,
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,
@@ -324,12 +320,21 @@ class DPOTrainer(BaseTrainer):
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
 
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
                 "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                 "with the new `peft_config` to the trainer."
             )
+        if is_peft_available() and is_peft_model(model):
+            # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that
+            # is a copy of the "default" adapter, so that we can use it as the reference model during DPO training.
+            model.add_adapter("ref", model.peft_config["default"])
+            for name, param in model.named_parameters():
+                if ".default." in name:
+                    ref_name = name.replace(".default.", ".ref.")
+                    ref_param = model.get_parameter(ref_name)
+                    ref_param.data.copy_(param.data)
 
         # Create PEFT model
         if peft_config is not None:
@@ -724,11 +729,14 @@ class DPOTrainer(BaseTrainer):
             # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 if is_peft_model(model) and self.ref_model is None:
-                    # Disable PEFT adapters to get the reference model behavior
-                    with model.disable_adapter():
-                        ref_outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
+                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
+                    # - New adapter: disabling adapters yields the base model.
+                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                        ref_outputs = model(input_ids, attention_mask=attention_mask, use_cache=False)
                 else:
-                    ref_outputs = self.ref_model(input_ids, attention_mak=attention_mask, use_cache=False)
+                    ref_outputs = self.ref_model(input_ids, attention_mask=attention_mask, use_cache=False)
+
             ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
             ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
