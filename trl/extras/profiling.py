@@ -115,7 +115,7 @@ class ProfilingContext:
 
         # Log to Weights & Biases if configured
         if "wandb" in self.report_to and is_wandb_available() and wandb.run is not None:
-            wandb.log(metrics, step=self.step)
+            wandb.log(metrics)
 
         # Log to MLflow if configured
         if "mlflow" in self.report_to and is_mlflow_available() and mlflow.active_run() is not None:
