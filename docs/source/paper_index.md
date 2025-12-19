@@ -461,7 +461,7 @@ $$
 \mathcal{L}_{GRPO}(\theta) = -\mathbb{E} \left[ \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left( \min \left( \frac{\pi_\theta(o_{i,t} \dots)}{\pi_{\text{old}}(o_{i,t} \dots)} \hat{A}_{i,t}, \text{clip}(\dots) \hat{A}_{i,t} \right) \textcolor{red}{M_{i,t}} - \beta D_{KL} \right) \right]
 $$
 
-To enable this feature, use the `off_policy_mask_threshold` (corresponding to  \\( \textcolor{blue}{\delta}$ \\) in the [`GRPOConfig`]:
+To enable this feature, use the `off_policy_mask_threshold` (corresponding to  \\( \textcolor{blue}{\delta} \\)) in the [`GRPOConfig`]:
 
 ```python
 from trl import GRPOConfig
