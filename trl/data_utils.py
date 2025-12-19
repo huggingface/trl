@@ -16,13 +16,13 @@ import copy
 from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
 from itertools import takewhile
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, IterableDatasetDict
 from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
@@ -597,6 +597,29 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
 
 
+def _get_dataset_format(dataset: DatasetType) -> dict[str, Any]:
+    if isinstance(dataset, (DatasetDict, IterableDatasetDict)):
+        dataset = dataset[next(iter(dataset))]
+    if isinstance(dataset, Dataset):
+        format = dataset.format
+    else:
+        format_type = dataset.formatting.format_type if dataset._formatting is not None else None
+        format = {"type": format_type}
+    return format
+
+
+def _check_if_columns_can_be_packed(columns: list[pa.Array]):
+    first_column_offsets = None
+    for idx, column in enumerate(columns):
+        if not (pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type)):
+            raise TypeError("Packing requires all columns to be list-like.")
+
+        if idx == 0:
+            first_column_offsets = column.offsets
+        elif first_column_offsets != column.offsets:
+            raise ValueError("All columns must have values of the same length.")
+
+
 class _SegmentTree:
     """
     A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger
@@ -644,67 +667,27 @@ class _SegmentTree:
 
 def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
-    # Identify the list column and prepare all columns
-    columns = []
-    list_column_idx = None
-    for idx, column in enumerate(examples.columns):
-        if isinstance(column, pa.ChunkedArray):
-            column = column.combine_chunks()
-        if not (pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type)):
-            raise TypeError("pack_dataset(bfd) requires all columns to be list-like.")
-        if list_column_idx is None:
-            list_column_idx = idx
-        columns.append(column)
+    columns = [column.chunks[0] for column in examples.combine_chunks().columns]
+    _check_if_columns_can_be_packed(columns)
+    assert len(columns) > 0
 
-    assert list_column_idx is not None
-    list_column = columns[list_column_idx]
-    offsets = np.asarray(list_column.offsets)
-    values = list_column.values
+    lengths = pc.list_value_length(columns[0]).to_numpy()
 
-    # Split every list row into fragments of length <= seq_length (so long rows become multiple samples).
-    frag_lengths: list[int] = []
-    frag_info: list[tuple[int, int, int]] = []  # (row_idx, split_start, frag_len)
-    expanded_indices: list[int] = []
-    for row_idx, (row_start, row_end) in enumerate(zip(offsets[:-1], offsets[1:], strict=False)):
-        length = row_end - row_start
-        for split_start in range(0, length, seq_length):
-            frag_len = min(seq_length, length - split_start)
-            frag_lengths.append(frag_len)
-            frag_info.append((row_idx, split_start, frag_len))
-            expanded_indices.append(row_idx)
-
-    # Rebuild list columns with fragments
-    offsets_type = list_column.offsets.type
-    new_offsets = np.empty(len(frag_lengths) + 1, dtype=offsets_type.to_pandas_dtype())
-    new_offsets[0] = 0
-    new_offsets[1:] = np.cumsum(frag_lengths, dtype=offsets_type.to_pandas_dtype())
-    new_offsets_array = pa.array(new_offsets, type=offsets_type)
-
-    for idx, column in enumerate(columns):
-        if idx == list_column_idx:
-            slices = [
-                values.slice(offsets[row_idx] + split_start, frag_len) for row_idx, split_start, frag_len in frag_info
-            ]
-            new_values = pa.concat_arrays(slices)
-            columns[idx] = type(column).from_arrays(new_offsets_array, new_values)
-            continue
-
-        column_offsets = np.asarray(column.offsets)
-        column_values = column.values
-        slices = []
-        for row_idx, split_start, frag_len in frag_info:
-            row_len = column_offsets[row_idx + 1] - column_offsets[row_idx]
-            if row_len < split_start + frag_len:
-                raise ValueError("List columns must have matching lengths when packing datasets.")
-            start = column_offsets[row_idx] + split_start
-            slices.append(column_values.slice(start, frag_len))
-        column_offsets_array = pa.array(new_offsets, type=column.offsets.type)
-        columns[idx] = type(column).from_arrays(column_offsets_array, pa.concat_arrays(slices))
+    # Split sequences longer than `seq_length` into chunks (of length `seq_length` or less) while respecting sequence boundaries
+    num_fragments = np.ceil(lengths / seq_length).astype(int)
+    offsets = np.arange(np.sum(num_fragments) + 1, dtype=columns[0].offsets.type.to_pandas_dtype()) * seq_length
+    # Adjust the offsets to account for the last fragment of each original sequence being possibly shorter than `seq_length`
+    diff = np.zeros_like(offsets)
+    padding = lengths % seq_length
+    diff[np.cumsum(num_fragments)] = padding - seq_length * (padding != 0)
+    diff = np.cumsum(diff)
+    offsets += diff
+    columns = [type(column).from_arrays(offsets, column.values) for column in columns]
 
     examples = pa.Table.from_arrays(columns, names=examples.column_names)
-    ids = np.arange(len(examples))
-    lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
+    lengths = pc.list_value_length(columns[0])
     examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
+    ids = np.arange(len(examples))
     lengths = pc.make_struct(lengths, ids)
     lengths = lengths.sort("descending", by=0)
 
@@ -750,33 +733,35 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     columns = []
     for column in examples.columns:
         column = column.chunks[0]
-        if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
-            dtype = column.offsets.type.to_pandas_dtype()
-            column = type(column).from_arrays(offsets.astype(dtype), column.values)
+        assert pa.types.is_list(column.type) or pa.types.is_large_list(column.type)
+        dtype = column.offsets.type.to_pandas_dtype()
+        column = type(column).from_arrays(offsets.astype(dtype), column.values)
         columns.append(column)
     return pa.Table.from_arrays(columns + [lengths], names=examples.column_names + ["seq_lengths"])
 
 
 def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using a wrapped strategy."""
-    columns = []
-    for column in examples.columns:
-        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-            if isinstance(column, pa.ChunkedArray):
-                column = column.combine_chunks()
-            offsets, values = column.offsets, column.values
-            values = values[offsets[0].as_py() : offsets[-1].as_py()]
-            num_elements = len(values)
-            dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
-            offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
-            offsets = np.concatenate((offsets, [num_elements]))
-            column = type(column).from_arrays(offsets, values)
-        columns.append(column)
-    return pa.Table.from_arrays(columns, names=examples.column_names)
+    columns = [column.chunks[0] for column in examples.combine_chunks().columns]
+    _check_if_columns_can_be_packed(columns)
+    packed_columns = []
+    for column in columns:
+        offsets, values = column.offsets, column.values
+        values = values[offsets[0].as_py() : offsets[-1].as_py()]
+        num_elements = len(values)
+        dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
+        offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
+        offsets = np.concatenate((offsets, [num_elements]))
+        column = type(column).from_arrays(offsets, values)
+        packed_columns.append(column)
+    return pa.Table.from_arrays(packed_columns, names=examples.column_names)
 
 
 def pack_dataset(
-    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: dict[str, Any] | None = None
+    dataset: DatasetType,
+    seq_length: int,
+    strategy: Literal["bfd", "wrapped"] = "bfd",
+    map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
@@ -786,7 +771,7 @@ def pack_dataset(
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
-        strategy (`str`, *optional*, defaults to `"bfd"`):
+        strategy (`"bfd"` or `"wrapped"`, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
             - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries inside each packed sample. If a
@@ -819,7 +804,7 @@ def pack_dataset(
     """
     if map_kwargs is None:
         map_kwargs = {}
-    # Fast packing with pyarrow
+    format = _get_dataset_format(dataset)
     dataset = dataset.with_format("arrow")
     if strategy == "bfd":
         dataset = dataset.map(_pack_bfd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
@@ -827,7 +812,7 @@ def pack_dataset(
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
         raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
-    dataset = dataset.with_format(None)
+    dataset = dataset.with_format(**format)
     return dataset
 
 
@@ -863,34 +848,19 @@ def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str
     """
     if map_kwargs is None:
         map_kwargs = {}
-    if isinstance(dataset, Dataset):
-        # Fast truncation with pyarrow
-        def truncate(examples):
-            truncated_columns = []
-            for column in examples.columns:
-                if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-                    column = pc.list_slice(column, 0, max_length)
-                truncated_columns.append(column)
-            return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
 
-        dataset = dataset.with_format("arrow")
-        dataset = dataset.map(truncate, batched=True, **map_kwargs)
-        dataset = dataset.with_format(None)
-    else:
+    def truncate(examples):
+        truncated_columns = []
+        for column in examples.columns:
+            if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+                column = pc.list_slice(column, 0, max_length)
+            truncated_columns.append(column)
+        return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
 
-        def truncate(examples):
-            truncated_examples = {}
-            for key, column in examples.items():
-                if column and isinstance(column[0], list):
-                    column = [val[:max_length] for val in column]
-                truncated_examples[key] = column
-            return truncated_examples
-
-        dataset = dataset.map(
-            truncate,
-            batched=True,
-            **map_kwargs,
-        )
+    format = _get_dataset_format(dataset)
+    dataset = dataset.with_format("arrow")
+    dataset = dataset.map(truncate, batched=True, **map_kwargs)
+    dataset = dataset.with_format(**format)
     return dataset
 
 
