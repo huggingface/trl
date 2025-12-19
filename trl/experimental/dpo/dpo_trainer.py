@@ -200,7 +200,7 @@ class DPOTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`str | PreTrainedModel | PeftModel`):
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -268,7 +268,7 @@ class DPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel | PeftModel,
+        model: str | PreTrainedModel | "PeftModel",
         ref_model: PreTrainedModel | None = None,
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,
@@ -326,9 +326,9 @@ class DPOTrainer(BaseTrainer):
                 "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                 "with the new `peft_config` to the trainer."
             )
-        if is_peft_available() and is_peft_model(model):
-            # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that
-            # is a copy of the "default" adapter, so that we can use it as the reference model during DPO training.
+        if is_peft_available() and is_peft_model(model) and ref_model is None:
+            # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
+            # of the "default" adapter, so that we can use it as the reference model during DPO training.
             model.add_adapter("ref", model.peft_config["default"])
             for name, param in model.named_parameters():
                 if ".default." in name:
