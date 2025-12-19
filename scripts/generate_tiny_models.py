@@ -383,11 +383,11 @@ model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCaus
 model = get_peft_model(model, LoraConfig())
 tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
 generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-push_to_hub(model, tokenizer, generation_config, "tiny", force=True)
+push_to_hub(model, tokenizer, generation_config, "tiny")
 
 # Same model, but different weights
 model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
 model = get_peft_model(model, LoraConfig())
 tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
 generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-push_to_hub(model, tokenizer, generation_config, "tiny", "2", force=True)
+push_to_hub(model, tokenizer, generation_config, "tiny", "2")
