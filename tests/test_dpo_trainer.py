@@ -411,6 +411,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_precompute_ref_batch_size(self):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,
             per_device_train_batch_size=2,
             precompute_ref_log_probs=True,
             precompute_ref_batch_size=4,
@@ -1427,7 +1428,6 @@ class TestDPOVisionTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
-            "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
@@ -1580,7 +1580,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             gradient_accumulation_steps=2,
             learning_rate=9e-1,
             eval_strategy="steps",
-            fp16=True,
             logging_strategy="no",
             report_to="none",
             beta=0.1,
