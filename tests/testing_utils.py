@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import functools
-import random
 import signal
 import warnings
 from collections.abc import Callable
@@ -31,7 +30,6 @@ from transformers.utils import (
     is_vision_available,
 )
 
-from trl.experimental.judges import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import (
     is_joblib_available,
     is_liger_kernel_available,
@@ -95,27 +93,6 @@ def is_ampere_or_newer(device_index=0):
 
 
 require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
-
-
-class RandomBinaryJudge(BaseBinaryJudge):
-    """
-    Random binary judge, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [random.choice([0, 1, -1]) for _ in range(len(prompts))]
-
-
-class RandomPairwiseJudge(BasePairwiseJudge):
-    """
-    Random pairwise judge, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
-        if not return_scores:
-            return [random.randint(0, len(completion) - 1) for completion in completions]
-        else:
-            return [random.random() for _ in range(len(prompts))]
 
 
 class TrlTestCase:
