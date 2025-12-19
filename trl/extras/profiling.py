@@ -154,7 +154,7 @@ def profiling_context(trainer: Trainer, name: str) -> ProfilingContext:
     ```
     """
     context_name = f"{trainer.__class__.__name__}.{name}"
-    step = trainer.state.global_step if hasattr(trainer, "state") else None
+    step = trainer.state.global_step
 
     return ProfilingContext(
         name=context_name,
