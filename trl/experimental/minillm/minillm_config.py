@@ -185,7 +185,7 @@ class MiniLLMConfig(GRPOConfig):
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
 
         import torch.distributed as dist
-        if dist.get_rank() == 0:
+        if dist.is_initialized() and dist.get_rank() == 0:
             print(f"Per-device train batch size: {self.per_device_train_batch_size}")
             print(f"Global train batch size: {self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps}")
             print(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")

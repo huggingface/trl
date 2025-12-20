@@ -35,7 +35,8 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
-from ...models import prepare_deepspeed, clone_chat_template
+from ...models import prepare_deepspeed
+from ...chat_template_utils import clone_chat_template
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
 from ...trainer.utils import (
     disable_dropout_in_model, 
