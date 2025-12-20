@@ -1414,7 +1414,6 @@ class TestGRPOTrainer(TrlTestCase):
         ],
     )
     @require_vision
-    @pytest.mark.todo
     def test_training_vlm(self, model_id):
         if model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration":
             pytest.xfail("LlavaNext is currently broken, see https://github.com/huggingface/transformers/issues/42968")
@@ -1468,7 +1467,6 @@ class TestGRPOTrainer(TrlTestCase):
         ],
     )
     @require_vision
-    @pytest.mark.todo
     def test_training_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1516,7 +1514,6 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_vision
     @require_peft
-    @pytest.mark.todo
     def test_training_vlm_peft(self, model_id):
         model = AutoModelForImageTextToText.from_pretrained(model_id)
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -1563,7 +1560,6 @@ class TestGRPOTrainer(TrlTestCase):
         ],
     )
     @require_vision
-    @pytest.mark.todo
     def test_training_vlm_and_importance_sampling(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1611,7 +1607,6 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_vision
     @require_liger_kernel
-    @pytest.mark.todo
     def test_training_vlm_and_liger(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1702,7 +1697,6 @@ class TestGRPOTrainer(TrlTestCase):
         ],
     )
     @require_vision
-    @pytest.mark.todo
     def test_training_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
@@ -1738,7 +1732,6 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.todo
     def test_training_sequence_importance_sampling(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1770,7 +1763,6 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.todo
     def test_training_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
