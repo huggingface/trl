@@ -217,11 +217,11 @@ for model_id, config_class, model_class, dtype, suffix in [
 model_id = "databricks/dbrx-instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 generation_config = GenerationConfig.from_pretrained(model_id)
-config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=16, d_model=24)
+config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=6, d_model=24)
 # transformers mistakenly ignores ffn_config keys when loading from pretrained. We need to set them manually after
 # loading the config
 config.ffn_config.ffn_hidden_size = 24
-config.ffn_config.hidden_size = 24
+config.attn_config.kv_n_heads = 2
 model = DbrxForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 push_to_hub(model, tokenizer, generation_config, "tiny")
