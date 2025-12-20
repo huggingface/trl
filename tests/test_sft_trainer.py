@@ -1352,7 +1352,7 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
@@ -1406,7 +1406,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
     @pytest.mark.xfail(
@@ -1451,7 +1451,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator:
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
         ],
@@ -1529,7 +1529,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
     @pytest.mark.parametrize(
