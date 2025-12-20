@@ -135,7 +135,7 @@ class TestBatchGeneration(TrlTestCase):
 
 
 class BaseTester:
-        class VHeadModelTester(TrlTestCase):
+    class VHeadModelTester(TrlTestCase):
         all_model_names = None
         trl_model_class = None
         transformers_model_class = None

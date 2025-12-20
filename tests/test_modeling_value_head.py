@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-import pytest
 import torch
 
 from trl import AutoModelForCausalLMWithValueHead, create_reference_model

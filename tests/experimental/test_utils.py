@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-import pytest
 from datasets import load_dataset
 from transformers import AutoTokenizer
 

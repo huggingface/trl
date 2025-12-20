@@ -16,7 +16,6 @@ import json
 import os
 from unittest.mock import call, patch
 
-import pytest
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 

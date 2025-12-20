@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-import pytest
 import torch
 from datasets import load_dataset
 from transformers.utils import is_peft_available

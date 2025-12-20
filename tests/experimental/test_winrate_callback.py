@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-import pytest
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 from transformers.utils import is_peft_available
