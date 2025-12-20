@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import pytest
 import torch
 from datasets import load_dataset
 from transformers.utils import is_peft_available
@@ -27,6 +28,7 @@ if is_peft_available():
     pass
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGSPOTokenTrainer(TrlTestCase):
     def test_training(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

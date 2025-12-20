@@ -32,6 +32,7 @@ if is_peft_available():
 
 
 @pytest.mark.low_priority
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestBCOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "config_name",

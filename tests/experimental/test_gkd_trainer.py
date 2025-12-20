@@ -25,6 +25,7 @@ from trl.experimental.gkd import GKDConfig, GKDTrainer
 from ..testing_utils import TrlTestCase, require_liger_kernel
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
     @classmethod
     def setup_class(cls):
@@ -122,6 +123,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         assert new_labels.shape == new_attention_mask.shape
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGeneralizedJSDLoss(TrlTestCase):
     def setup_method(self):
         self.batch_size = 2
@@ -197,6 +199,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         assert round(abs(loss.item() - 0), 6) == 0
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGKDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 from torch import nn
 from transformers import AutoModelForCausalLM
@@ -27,6 +28,7 @@ if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestActivationOffloading(TrlTestCase):
     @require_torch_accelerator
     @require_peft

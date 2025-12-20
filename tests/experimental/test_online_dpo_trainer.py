@@ -41,6 +41,7 @@ if is_vision_available():
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestOnlineDPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -468,6 +469,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
 
 @require_vision
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestOnlineDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",

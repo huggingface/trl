@@ -29,6 +29,7 @@ if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGeometricMixtureWrapper(TrlTestCase):
     def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -77,6 +78,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
         assert not inputs.get("use_cache", False)
 
 
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestNashMDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

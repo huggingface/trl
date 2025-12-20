@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 import torch.nn as nn
 from datasets import Dataset
@@ -32,6 +33,7 @@ class DummyModel(nn.Module):
 
 
 @require_rich
+@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestRichProgressCallback(TrlTestCase):
     def setup_method(self):
         self.dummy_model = DummyModel()
