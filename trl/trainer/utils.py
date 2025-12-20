@@ -28,7 +28,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
@@ -41,6 +40,7 @@ from transformers import (
     PreTrainedModel,
     is_comet_available,
 )
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     is_peft_available,
@@ -1171,3 +1171,50 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+def forward_masked_logits(model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs) -> CausalLMOutputWithPast:
+    """
+    Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            A causal language model with `.model` and `.lm_head` modules.
+        logits_mask (`torch.LongTensor`):
+            Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
+            input sequence shape in `kwargs` (typically `[batch, seq_len]`).
+        **kwargs:
+            Keyword arguments forwarded to `model.model(...)` (e.g., `input_ids`, `attention_mask`, `past_key_values`).
+
+    Returns:
+        `transformers.modeling_outputs.CausalLMOutputWithPast`: Output with logits computed at masked positions and
+        zeros elsewhere, plus any returned past key values, hidden states, and attentions.
+
+    Raises:
+        ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
+    """
+    if kwargs.get("logits_to_keep") is not None:
+        raise ValueError("`logits_to_keep` is not supported by this forward helper.")
+    if kwargs.get("labels") is not None:
+        raise ValueError("`labels` is not yet supported by this forward helper.")
+
+    outputs: BaseModelOutputWithPast = model.get_decoder()(**kwargs)
+    hidden_states = outputs.last_hidden_state
+
+    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+    flat_logits = model.lm_head(hidden_states[logits_mask.bool()])
+    logits = torch.zeros(
+        hidden_states.shape[:-1] + flat_logits.shape[-1:], device=flat_logits.device, dtype=flat_logits.dtype
+    )
+    logits[logits_mask.bool()] = flat_logits
+    if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
+        logits = logits * model.logit_scale
+
+    return CausalLMOutputWithPast(
+        logits=logits,
+        past_key_values=outputs.get(
+            "past_key_values"
+        ),  # some models like FalconMambaForCausalLM don't return past_key_values
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.get("attentions"),  # some models like FalconMambaForCausalLM don't return attentions
+    )
