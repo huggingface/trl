@@ -34,7 +34,6 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestRLOOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset

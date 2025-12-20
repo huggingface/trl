@@ -44,7 +44,6 @@ if is_vision_available():
 
 
 @require_vision
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestPrepareMultimodalMessages:
     def test_basic_user_assistant_conversation(self):
         """Test basic conversation with user and assistant messages."""
@@ -204,7 +203,6 @@ class TestPrepareMultimodalMessages:
 
 
 @require_vision
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestPrepareMultimodalMessagesVLLM:
     def test_single_image_conversion(self):
         messages = [
@@ -296,7 +294,6 @@ class TestPrepareMultimodalMessagesVLLM:
         assert messages == original
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestIsConversational(TrlTestCase):
     conversational_examples = [
         {  # Language modeling
@@ -407,7 +404,6 @@ class TestIsConversational(TrlTestCase):
         assert not is_conversational(example)
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestIsConversationalFromValue(TrlTestCase):
     def test_positive_1(self):
         example = {
@@ -432,7 +428,6 @@ class TestIsConversationalFromValue(TrlTestCase):
         assert not is_conversational_from_value(example)
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
@@ -606,7 +601,6 @@ class TestApplyChatTemplate(TrlTestCase):
         assert "get_current_temperature" not in result_without_tools["prompt"]
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestApplyChatTemplateHarmony(TrlTestCase):
     def test_language_modeling(self):
         messages = {
@@ -833,7 +827,6 @@ class TestApplyChatTemplateHarmony(TrlTestCase):
         assert output["label"]
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestUnpairPreferenceDataset(TrlTestCase):
     paired_dataset = Dataset.from_dict(
         {
@@ -896,7 +889,6 @@ class TestUnpairPreferenceDataset(TrlTestCase):
         )
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestExtractPrompt(TrlTestCase):
     example_implicit_prompt_conversational = {
         "chosen": [
@@ -973,7 +965,6 @@ class TestExtractPrompt(TrlTestCase):
         assert example_extracted_prompt == self.example_explicit_prompt_standard, "The prompt should remain unchanged."
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestPackDatasetWrapped(TrlTestCase):
     def test_with_dataset(self):
         examples = {
@@ -1005,7 +996,6 @@ class TestPackDatasetWrapped(TrlTestCase):
         assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestPackDatasetBfd(TrlTestCase):
     def test_simple(self):
         examples = {
@@ -1076,7 +1066,6 @@ class TestPackDatasetBfd(TrlTestCase):
         assert dataset.to_dict() == expected_output
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestTruncateExamples(TrlTestCase):
     def test_with_dataset(self):
         examples = {
@@ -1124,7 +1113,6 @@ class TestTruncateExamples(TrlTestCase):
         assert dataset.to_dict() == expected_output
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestMaybeConvertToChatML(TrlTestCase):
     def test_with_conversations_key(self):
         # Particular case where the key is "conversations": we rename it to "messages"

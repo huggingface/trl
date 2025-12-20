@@ -28,7 +28,6 @@ if is_peft_available():
     pass
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGSPOTokenTrainer(TrlTestCase):
     def test_training(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

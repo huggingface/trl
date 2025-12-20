@@ -25,7 +25,6 @@ from trl import BEMACallback, LogCompletionsCallback
 from .testing_utils import TrlTestCase, require_comet, require_wandb
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestLogCompletionsCallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -119,7 +118,6 @@ class TestLogCompletionsCallback(TrlTestCase):
         assert all(table["fileName"] == "completions.csv" for table in tables)
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestBEMACallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

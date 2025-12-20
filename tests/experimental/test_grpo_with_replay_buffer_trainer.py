@@ -26,7 +26,6 @@ from ..testing_utils import TrlTestCase
 
 
 @pytest.mark.low_priority
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestReplayBuffer:
     def setup_method(self):
         self.replay_buffer = ReplayBuffer(max_size=5)
@@ -95,7 +94,6 @@ class TestReplayBuffer:
 
 
 @pytest.mark.low_priority
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestUpdateWithReplayBuffer:
     def setup_method(self):
         config = GRPOWithReplayBufferConfig(
@@ -253,7 +251,6 @@ class TestUpdateWithReplayBuffer:
 
 @pytest.mark.low_priority
 @pytest.mark.parametrize("scale_rewards", ["batch", "group"])
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGRPOWithReplayBufferTrainer(TrlTestCase):
     def test_training_with_replay_buffer(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

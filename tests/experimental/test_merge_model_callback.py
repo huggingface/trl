@@ -27,7 +27,6 @@ from ..testing_utils import TrlTestCase, require_mergekit
 
 
 @require_mergekit
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestMergeModelCallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

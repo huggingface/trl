@@ -22,7 +22,6 @@ from trl.experimental.utils import DataCollatorForChatML
 from ..testing_utils import TrlTestCase
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestDataCollatorForChatML(TrlTestCase):
     def setup_method(self):
         # Initialize the tokenizer

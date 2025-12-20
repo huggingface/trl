@@ -23,7 +23,6 @@ from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens, _
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, require_peft
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestKTOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

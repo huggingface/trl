@@ -22,7 +22,6 @@ from trl.experimental.judges import AllTrueJudge, HfPairwiseJudge, PairRMJudge
 from ..testing_utils import RandomBinaryJudge, TrlTestCase, require_llm_blender
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestJudges(TrlTestCase):
     def _get_prompts_and_pairwise_completions(self):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]

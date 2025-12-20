@@ -31,7 +31,6 @@ from .testing_utils import (
 )
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestChunkList(TrlTestCase):
     def test_even_split(self):
         assert chunk_list([1, 2, 3, 4, 5, 6], 2) == [[1, 2, 3], [4, 5, 6]]
@@ -61,7 +60,6 @@ class TestChunkList(TrlTestCase):
 @pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestVLLMClientServer(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -163,7 +161,6 @@ class TestVLLMClientServer(TrlTestCase):
 @pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -264,7 +261,6 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 @pytest.mark.slow
 @require_3_accelerators
 @require_vllm
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestVLLMClientServerTP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -348,7 +344,6 @@ class TestVLLMClientServerTP(TrlTestCase):
 @pytest.mark.slow
 @require_3_accelerators
 @require_vllm
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestVLLMClientServerDP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -432,7 +427,6 @@ class TestVLLMClientServerDP(TrlTestCase):
 @pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestVLLMClientServerDeviceParameter(TrlTestCase):
     """Test the device parameter functionality in init_communicator."""
 

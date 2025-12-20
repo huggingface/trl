@@ -18,7 +18,6 @@ from transformers import AutoModelForCausalLM
 from trl.models.utils import disable_gradient_checkpointing
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestDisableGradientCheckpointing:
     def test_when_disabled(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

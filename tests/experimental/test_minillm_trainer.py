@@ -22,7 +22,6 @@ from ..testing_utils import TrlTestCase
 
 
 @pytest.mark.low_priority
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestMiniLLMTrainer(TrlTestCase):
     def test_train(self):
         # Get the dataset

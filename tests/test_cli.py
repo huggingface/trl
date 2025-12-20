@@ -22,7 +22,6 @@ import yaml
 from .testing_utils import TrlTestCase
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestCLI(TrlTestCase):
     def test_dpo(self):
         from trl.cli import main

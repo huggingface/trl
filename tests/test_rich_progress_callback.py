@@ -33,7 +33,6 @@ class DummyModel(nn.Module):
 
 
 @require_rich
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestRichProgressCallback(TrlTestCase):
     def setup_method(self):
         self.dummy_model = DummyModel()

@@ -28,7 +28,6 @@ if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestActivationOffloading(TrlTestCase):
     @require_torch_accelerator
     @require_peft

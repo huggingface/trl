@@ -55,7 +55,6 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestTokenizeRow(TrlTestCase):
     def setup_method(self):
         # Set up the mock tokenizer with specific behaviors
@@ -160,7 +159,6 @@ class TestTokenizeRow(TrlTestCase):
         }
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestDPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -1301,7 +1299,6 @@ class TestDPOTrainer(TrlTestCase):
 
 
 @require_vision
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
@@ -1395,7 +1392,6 @@ class TestDPOVisionTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestDPOConfig(TrlTestCase):
     @pytest.mark.parametrize("as_string", [False, True])
     @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
@@ -1418,7 +1414,6 @@ class TestDPOConfig(TrlTestCase):
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestDPOTrainerSlow(TrlTestCase):
     def setup_method(self):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")

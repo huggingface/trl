@@ -27,7 +27,6 @@ if is_peft_available():
 
 
 @pytest.mark.low_priority
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestXPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

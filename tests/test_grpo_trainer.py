@@ -55,7 +55,6 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGetHighEntropyMask(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
         """Helper method to test the get_high_entropy_mask functionality."""
@@ -128,7 +127,6 @@ class TestGetHighEntropyMask(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
@@ -1963,7 +1961,6 @@ class TestGRPOTrainer(TrlTestCase):
 
 @pytest.mark.slow
 @require_torch_accelerator
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestGRPOTrainerSlow(TrlTestCase):
     def setup_method(self):
         self.train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

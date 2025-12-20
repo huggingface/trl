@@ -31,7 +31,6 @@ if is_peft_available():
     from peft import LoraConfig, TaskType
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestComputeAccuracy(TrlTestCase):
     def test_token_classification_task(self):
         eval_pred = (
@@ -99,7 +98,6 @@ class TestComputeAccuracy(TrlTestCase):
         assert expected_warning in caplog.text
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestTokenizeRow(TrlTestCase):
     def setup_method(self):
         # Set up the mock tokenizer with specific behaviors
@@ -274,7 +272,6 @@ class TestTokenizeRow(TrlTestCase):
         }
 
 
-@pytest.mark.skip(reason="Temporary skip while debugging CI issues")
 class TestPRMTrainer(TrlTestCase):
     def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
