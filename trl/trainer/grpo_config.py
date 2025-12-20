@@ -760,6 +760,11 @@ class GRPOConfig(TrainingArguments):
             "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
+
+    vllm_importance_sampling_min: float = field(
+        default=0.0,
+        metadata={"help": "TODO @casinca mention their defaults α = 0.5, β = 5"},
+    )
     use_bias_correction_kl: bool = field(
         default=False,
         metadata={
