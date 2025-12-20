@@ -24,4 +24,5 @@ ng_run "+config_paths=[resources_servers/workplace_assistant/configs/workplace_a
 CUDA_VISIBLE_DEVICES=0 python train.py --config config.yaml
 ```
 
-can do dp=7 with 7/8 gpus for vllm server. Havent gotten multigpu training backend to work despite docs says it works https://huggingface.co/docs/trl/main/en/vllm_integration#modes-of-using-vllm-during-training
+We should be able to do multinode, but im having issues with ngpu > 1 for training backend currently
+https://huggingface.co/docs/trl/main/en/vllm_integration#modes-of-using-vllm-during-training
