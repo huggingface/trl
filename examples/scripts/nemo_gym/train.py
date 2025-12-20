@@ -46,7 +46,7 @@ def get_agent_server(
             
             raise ValueError(f"Agent '{agent_name}' not found in any project's responses_api_agents")
         
-        # If no agent_name specified, try to find it
+        # If no agent_name specified, find it (usually is simple_agent)
         for project_name, project_config in global_config_dict.items():
             if hasattr(project_config, 'responses_api_agents'):
                 agents = project_config.responses_api_agents
@@ -120,6 +120,8 @@ def replace_prefix_tokens(
     
     Based on NeMo RL's _replace_prefix_tokens:
     https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
+    
+    NOTE: this is old and should go in vllm_serve.py not here.
     """
     if not seen_token_ids or not new_prompt_ids:
         return []
@@ -214,6 +216,8 @@ async def call_nemo_gym_agent(
 
 def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str, List]:
     """
+    Baseline implementation that is missing on policy tokenid correction (this would go in vllm_serve.py though)
+    
     Rollout function for Nemo Gym agent within TRL GRPOTrainer
     
     Builds interleaved action/observation sequence with masking of observations.
@@ -258,7 +262,6 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         for item in trainer.train_dataset:
             if item.get("prompt") == prompt:
                 matching_item = dict(item)
-                # Deserialize JSON strings back to dicts/lists
                 for key in ["responses_create_params", "expected_answers", "metadata", "ground_truth"]:
                     if key in matching_item and isinstance(matching_item[key], str):
                         try:
@@ -298,7 +301,6 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
 
     print(f"[nemo_gym_rollout_func] Received {len(responses)} responses from Nemo Gym")
 
-    # Save trajectories to JSONL
     trajectory_file = os.path.join(trainer.args.output_dir, "trajectories.jsonl")
     os.makedirs(trainer.args.output_dir, exist_ok=True)
 
@@ -338,11 +340,9 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         output_items = response.get("response", {}).get("output", [])
 
         # Build interleaved completion: [model_gen1, tool_result1, model_gen2, tool_result2, ...]
-        # with mask: 1 for model tokens (train), 0 for tool results (don't train)
-        # Each turn gives us (prompt_ids, gen_ids). The prompt grows each turn as tool results
-        # are appended. We extract tool_result = current_prompt - previous_seen_tokens.
-        # trying to implement the same logic as NeMo RL's _replace_prefix_tokens in RL/nemo_rl/models/generation/vllm/vllm_worker_async.py
-        # for less token id mismatch and logprop error
+        # with mask: 1 for model tokens, 0 for tool results
+        # Each turn gives us (prompt_ids, gen_ids). 
+        # tool_result = current_prompt - previous_seen_tokens.
         
         seen_token_ids: List[int] = []
         interleaved_completion: List[int] = []
@@ -365,21 +365,12 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
                 first_prompt = item_prompt_ids
                 seen_token_ids = list(item_prompt_ids)
             else:
-                # extract tool result tokens (delta between prompts)
+                # likely problematic due to retokenization. this is a baseline to compare against on-policy correction using _replace_prefix_tokens
+                # see https://docs.nvidia.com/nemo/gym/latest/contribute/rl-framework-integration/openai-compatible-http-server-on-policy-correction.html
+                # and https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
                 if len(item_prompt_ids) > len(seen_token_ids):
-                    if item_prompt_ids[:len(seen_token_ids)] == seen_token_ids:
-                        # Simple case: prefix matches, just slice off the new tokens
-                        tool_result_tokens = item_prompt_ids[len(seen_token_ids):]
-                    else:
-                        # Retokenization changed the prefix - use nemo RL _replace_prefix_tokens approach
-                        tool_result_tokens = replace_prefix_tokens(
-                            tokenizer, seen_token_ids, item_prompt_ids
-                        )
-                        if tool_result_tokens:
-                            print(f"[Turn {num_turns}] Using nemo RL _replace_prefix_tokens approach to extract observation/tool result tokens: {len(tool_result_tokens)} observation tokens")
-                        else:
-                            print(f"[Turn {num_turns}] WARNING: Could not extract observation tokens")
-                
+                    tool_result_tokens = item_prompt_ids[len(seen_token_ids):]
+
                 # Append tool results (mask=0)
                 if tool_result_tokens:
                     interleaved_completion.extend(tool_result_tokens)
@@ -610,7 +601,6 @@ def main():
         loss_type="grpo",
         mask_truncated_completions=True,
         log_completions=False,
-        # wandb_log_unique_prompts=True,
         
         max_prompt_length=config.max_prompt_length,
         max_completion_length=config.max_seq_length - config.max_prompt_length,
