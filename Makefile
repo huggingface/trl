@@ -5,7 +5,7 @@ check_dirs := examples tests trl
 ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
 
 test:
-	pytest -n auto -m "todo" -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504||not less than or equal to 0.01)' tests/
+	pytest -v -m "todo" -s -v tests/
 
 precommit:
 	python scripts/add_copyrights.py
