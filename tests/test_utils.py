@@ -835,11 +835,13 @@ class TestForwardMaskedLogits:
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ],
     )
     def test_vlm(self, model_id):
+        if model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration":
+            pytest.xfail("LlavaNext is currently broken, see https://github.com/huggingface/transformers/issues/42968")
         model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto")
         input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8))
         logits_mask = torch.tensor([[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]])

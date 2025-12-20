@@ -1212,9 +1212,8 @@ def forward_masked_logits(model: PreTrainedModel, logits_mask: torch.LongTensor,
 
     return CausalLMOutputWithPast(
         logits=logits,
-        past_key_values=outputs.get(
-            "past_key_values"
-        ),  # some models like FalconMambaForCausalLM don't return past_key_values
+        # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
+        past_key_values=outputs.get("past_key_values"),
         hidden_states=outputs.hidden_states,
-        attentions=outputs.get("attentions"),  # some models like FalconMambaForCausalLM don't return attentions
+        attentions=outputs.get("attentions"),
     )
