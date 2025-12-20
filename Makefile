@@ -5,7 +5,7 @@ check_dirs := examples tests trl
 ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
 
 test:
-	pytest -v -m "todo" -s -v tests/
+	pytest -v -m "todo" -s tests/
 
 precommit:
 	python scripts/add_copyrights.py
