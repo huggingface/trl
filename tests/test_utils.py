@@ -820,10 +820,9 @@ class TestForwardMaskedLogits:
         masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
 
         torch.testing.assert_close(
-            masked_outputs.logits[logits_mask.bool()],
+            masked_outputs.flat_logits,
             full_outputs.logits[logits_mask.bool()],
         )
-        assert torch.all(masked_outputs.logits[~logits_mask.bool()] == 0)
 
     @pytest.mark.parametrize(
         "model_id",
@@ -850,7 +849,6 @@ class TestForwardMaskedLogits:
         masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
 
         torch.testing.assert_close(
-            masked_outputs.logits[logits_mask.bool()],
+            masked_outputs.flat_logits,
             full_outputs.logits[logits_mask.bool()],
         )
-        assert torch.all(masked_outputs.logits[~logits_mask.bool()] == 0)

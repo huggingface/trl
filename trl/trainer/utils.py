@@ -1173,7 +1173,14 @@ def get_config_model_id(config: PretrainedConfig) -> str:
     return getattr(config, "_name_or_path", "")
 
 
-def forward_masked_logits(model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs) -> CausalLMOutputWithPast:
+@dataclass
+class CausalLMOutputWithPastAndFlatLogits(CausalLMOutputWithPast):
+    flat_logits: torch.Tensor | None = None
+
+
+def forward_masked_logits(
+    model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs
+) -> CausalLMOutputWithPastAndFlatLogits:
     """
     Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
 
@@ -1184,7 +1191,7 @@ def forward_masked_logits(model: PreTrainedModel, logits_mask: torch.LongTensor,
     masked_outputs = forward_masked_logits(model, mask, input_ids=input_ids)
 
     assert torch.equal(
-        masked_outputs.logits[mask.bool()],
+        masked_outputs.flat_logits,
         full_outputs.logits[mask.bool()],
     )
     ```
@@ -1199,8 +1206,7 @@ def forward_masked_logits(model: PreTrainedModel, logits_mask: torch.LongTensor,
             Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
 
     Returns:
-        `transformers.modeling_outputs.CausalLMOutputWithPast`: Output with logits computed at masked positions and
-        zeros elsewhere, plus any returned past key values, hidden states, and attentions.
+        `CausalLMOutputWithPastAndFlatLogits`: Output containing logits only for the unmasked positions.
 
     Raises:
         ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
@@ -1215,15 +1221,11 @@ def forward_masked_logits(model: PreTrainedModel, logits_mask: torch.LongTensor,
 
     # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
     flat_logits = model.lm_head(hidden_states[logits_mask.bool()])
-    logits = torch.zeros(
-        hidden_states.shape[:-1] + flat_logits.shape[-1:], device=flat_logits.device, dtype=flat_logits.dtype
-    )
-    logits[logits_mask.bool()] = flat_logits
     if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
-        logits = logits * model.logit_scale
+        flat_logits = flat_logits * model.logit_scale
 
-    return CausalLMOutputWithPast(
-        logits=logits,
+    return CausalLMOutputWithPastAndFlatLogits(
+        flat_logits=flat_logits,
         # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
         past_key_values=outputs.get("past_key_values"),
         hidden_states=outputs.hidden_states,
