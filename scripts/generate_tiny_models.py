@@ -373,6 +373,11 @@ for model_id, model_class, dtype in [
         vision_config["depth"] = 2
         vision_config["out_hidden_size"] = 16
 
+    if model_id == "llava-hf/llava-v1.6-mistral-7b-hf":
+        # Hotfix: llava-hf/llava-v1.6-mistral-7b-hf mistakesly sets text_config.dtype to "bfloat16".
+        # See https://huggingface.co/llava-hf/llava-v1.6-mistral-7b-hf/discussions/46
+        text_config["dtype"] = None
+
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=dtype)
     push_to_hub(model, processor, generation_config, "tiny")
