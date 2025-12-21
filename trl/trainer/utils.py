@@ -1177,14 +1177,26 @@ def forward_masked_logits(model: PreTrainedModel, logits_mask: torch.LongTensor,
     """
     Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
 
+    These are always equal:
+
+    ```python
+    full_outputs = model(input_ids=input_ids)
+    masked_outputs = forward_masked_logits(model, mask, input_ids=input_ids)
+
+    assert torch.equal(
+        masked_outputs.logits[mask.bool()],
+        full_outputs.logits[mask.bool()],
+    )
+    ```
+
     Args:
         model ([`~transformers.PreTrainedModel`]):
-            A causal language model with `.model` and `.lm_head` modules.
+            A causal language model.
         logits_mask (`torch.LongTensor`):
             Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
             input sequence shape in `kwargs` (typically `[batch, seq_len]`).
         **kwargs:
-            Keyword arguments forwarded to `model.model(...)` (e.g., `input_ids`, `attention_mask`, `past_key_values`).
+            Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
 
     Returns:
         `transformers.modeling_outputs.CausalLMOutputWithPast`: Output with logits computed at masked positions and
