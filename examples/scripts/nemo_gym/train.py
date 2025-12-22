@@ -1,9 +1,5 @@
 import os
-import sys 
 import numpy as np
-
-from trl import GRPOConfig, GRPOTrainer
-
 import argparse
 import asyncio
 import aiohttp
@@ -13,13 +9,11 @@ import requests
 from omegaconf import OmegaConf
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
-
 from datasets import Dataset, load_dataset
 from trl import GRPOConfig, GRPOTrainer
 from tqdm import tqdm
 
 from transformers import AutoTokenizer
-
 
 def get_agent_server(
     head_server_host: str = "127.0.0.1",
@@ -36,7 +30,7 @@ def get_agent_server(
         global_config_dict = OmegaConf.create(yaml.safe_load(global_config_yaml))
         
         if agent_name:
-            for project_name, project_config in global_config_dict.items():
+            for _, project_config in global_config_dict.items():
                 if hasattr(project_config, 'responses_api_agents'):
                     agents = project_config.responses_api_agents
                     if hasattr(agents, agent_name):
@@ -46,8 +40,7 @@ def get_agent_server(
             
             raise ValueError(f"Agent '{agent_name}' not found in any project's responses_api_agents")
         
-        # If no agent_name specified, find it (usually is simple_agent)
-        for project_name, project_config in global_config_dict.items():
+        for _, project_config in global_config_dict.items():
             if hasattr(project_config, 'responses_api_agents'):
                 agents = project_config.responses_api_agents
                 for name in agents.keys():
@@ -80,7 +73,7 @@ class TrainingConfig:
     max_prompt_length: int = None
 
     temperature: float = 1.0
-    top_p: float = 1.0
+    top_p: float = 0.999
     weight_decay: float = 0.01
     warmup_ratio: float = 0.1
     lr_scheduler_type: str = "linear"
@@ -99,54 +92,10 @@ def reward_fn(completions: List[str], **kwargs) -> List[float]:
         print(f"WARNING: No rewards from Nemo Gym, returning zeros for {len(completions)} completions")
         return [0.0] * len(completions)
 
-    print(f"Received {len(env_rewards)} rewards from Nemo Gym")
-    print(f"Mean reward: {sum(env_rewards)/len(env_rewards):.3f}")
-    print(f"Reward std dev: {np.std(env_rewards):.3f}")
+    print(f"[reward_fn] Mean reward: {sum(env_rewards)/len(env_rewards):.3f}")
+    print(f"[reward_fn] Reward std dev: {np.std(env_rewards):.3f}")
 
     return [float(r) for r in env_rewards]
-
-
-def replace_prefix_tokens(
-    tokenizer,
-    seen_token_ids: List[int],
-    new_prompt_ids: List[int],
-) -> List[int]:
-    """
-    Extract tool result tokens when simple prefix-slicing fails due to retokenization.
-    
-    The last EOS in seen_token_ids marks where the
-    previous model generation ended. Find that same EOS in new_prompt_ids, then return
-    everything after it (the new tool results / user messages).
-    
-    Based on NeMo RL's _replace_prefix_tokens:
-    https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
-    
-    NOTE: this is old and should go in vllm_serve.py not here.
-    """
-    if not seen_token_ids or not new_prompt_ids:
-        return []
-    
-    eos_token_id = tokenizer.eos_token_id
-    assert eos_token_id is not None, "Your tokenizer must have an EOS token ID!"
-    
-    # Find last EOS in new_prompt_ids within the "prefix" region (up to len(seen_token_ids))
-    # search backwards from the prefix boundary
-    # EOS marks where the previous model generation ended
-    new_eos_pos = -1
-    search_bound = min(len(seen_token_ids), len(new_prompt_ids))
-    for pos in reversed(range(search_bound)):
-        if new_prompt_ids[pos] == eos_token_id:
-            new_eos_pos = pos
-            break
-    
-    if new_eos_pos < 0:
-        return []
-    
-    new_content_start = new_eos_pos + 1
-    if new_content_start >= len(new_prompt_ids):
-        return []
-    
-    return new_prompt_ids[new_content_start:]
 
 
 async def call_nemo_gym_agent(
@@ -158,9 +107,9 @@ async def call_nemo_gym_agent(
     temperature: float = 1.0,
     top_p: float = 0.999,
 ) -> List[Dict[str, Any]]:
-    print(f"Calling Nemo Gym agent: {agent_server}")
-    print(f"Number of prompts: {len(prompts)}")
-    print(f"Max completion length: {max_completion_length}")
+    print(f"[call_nemo_gym_agent] Calling Nemo Gym agent at {agent_server}")
+    print(f"[call_nemo_gym_agent] len(prompts): {len(prompts)}")
+    print(f"[call_nemo_gym_agent] max_completion_length: {max_completion_length}")
 
     async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
         tasks = []
@@ -197,6 +146,8 @@ async def call_nemo_gym_agent(
         results = []
         for i, response in enumerate(responses):
             if isinstance(response, Exception):
+                # should we error instead
+                # might be needed for truncated 
                 print(f"WARNING: Request {i} failed: {response}")
                 results.append({"response": {"output": []}, "reward": 0.0, "error": str(response)})
             else:
@@ -216,8 +167,6 @@ async def call_nemo_gym_agent(
 
 def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str, List]:
     """
-    Baseline implementation that is missing on policy tokenid correction (this would go in vllm_serve.py though)
-    
     Rollout function for Nemo Gym agent within TRL GRPOTrainer
     
     Builds interleaved action/observation sequence with masking of observations.
@@ -234,25 +183,9 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
     current_step = trainer.state.global_step if hasattr(trainer, 'state') else 0
 
     print(f"\n{'='*80}")
-    print(f"[nemo_gym_rollout_func] Starting Nemo Gym rollout (Training Step: {current_step})")
-    print(f"[nemo_gym_rollout_func] Received {len(prompts)} prompts from TRL")
-    print(f"[nemo_gym_rollout_func] Num generations per prompt: {trainer.args.num_generations}")
 
-    unique_prompts_set = set(prompts)
-    print(f"DEBUG: Number of unique prompts in input: {len(unique_prompts_set)}")
-    print(f"DEBUG: Total number prompts: {len(prompts)}")
-
-    print(f"\nDEBUG: All unique prompts ({len(unique_prompts_set)} total):")
-    for i, prompt in enumerate(sorted(list(unique_prompts_set))[:10]):
-        print(f"  [{i}] {prompt}")
-
-    if len(unique_prompts_set) > 10:
-        print(f"  ... and {len(unique_prompts_set) - 10} more unique prompts")
-
-    print(f"{'='*80}\n")
-
-    num_generations = trainer.args.num_generations
-    print(f"[nemo_gym_rollout_func] Expanding prompts for {num_generations} generations per prompt...")
+    prompts_dedup = set(prompts)
+    print(f"[nemo_gym_rollout_func] Got {len(prompts)} prompts, {len(prompts_dedup)} unique prompts, {trainer.args.num_generations} generations per prompt")
 
     expanded_prompts = []
     expanded_dataset_items = []
@@ -262,6 +195,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         for item in trainer.train_dataset:
             if item.get("prompt") == prompt:
                 matching_item = dict(item)
+                # Deserialize JSON strings back to dicts/lists
                 for key in ["responses_create_params", "expected_answers", "metadata", "ground_truth"]:
                     if key in matching_item and isinstance(matching_item[key], str):
                         try:
@@ -274,11 +208,11 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
             print(f"WARNING: Could not find dataset item for prompt, using prompt only")
             matching_item = {"prompt": prompt}
 
-        for _ in range(num_generations):
+        for _ in range(trainer.args.num_generations):
             expanded_prompts.append(prompt)
             expanded_dataset_items.append(dict(matching_item))
 
-    print(f"[nemo_gym_rollout_func] Expanded to {len(expanded_prompts)} total requests ({len(prompts)} prompts × {num_generations} generations)")
+    print(f"[nemo_gym_rollout_func] Expanded to {len(expanded_prompts)} total requests ({len(prompts)} prompts × {trainer.args.num_generations} generations)")
 
     print("[nemo_gym_rollout_func] Calling Nemo Gym agent...")
     print(f"[nemo_gym_rollout_func] Using temperature: {trainer.args.temperature}, top_p: {trainer.args.top_p}")
@@ -299,7 +233,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
     finally:
         loop.close()
 
-    print(f"[nemo_gym_rollout_func] Received {len(responses)} responses from Nemo Gym")
+    print(f"[nemo_gym_rollout_func] Got {len(responses)} responses from Nemo Gym agent")
 
     trajectory_file = os.path.join(trainer.args.output_dir, "trajectories.jsonl")
     os.makedirs(trainer.args.output_dir, exist_ok=True)
@@ -315,34 +249,80 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
             }
             f.write(json.dumps(trajectory_data) + "\n")
 
-    print(f"[Rollout] Saved {len(responses)} trajectories to {trajectory_file}")
+    print(f"[nemo_gym_rollout_func] Saved {len(responses)} trajectories to {trajectory_file}")
 
-    tokenizer = AutoTokenizer.from_pretrained(trainer.model.name_or_path)
+    tokenizer = trainer.processing_class
     
     # interleaved completion with mask
     prompt_ids: List[List[int]] = []
     completion_ids: List[List[int]] = []
-    completion_mask: List[List[int]] = []  # 1 for model tokens, 0 for tool results
+    completion_mask: List[List[int]] = []  # 1 for action, 0 for observation
     logprobs: List[List[float]] = []
     env_rewards: List[float] = []
-    
+    num_turns_list: List[int] = []
+
     failed_count = 0
     success_count = 0
 
     for i, response in enumerate(responses):
-        if not isinstance(response, dict):
-            raise ValueError(f"Rollout {i} response is not a dict: {type(response)}")
+        expected_prompt = expanded_prompts[i]
+        expected_prompt_ids = tokenizer.encode(expected_prompt, add_special_tokens=False)
 
-        if "error" in response:
-            raise ValueError(f"Rollout {i} had error: {response['error']}")
+        rollout_failed = False
+        failure_reason = None
+
+        if not isinstance(response, dict):
+            rollout_failed = True
+            failure_reason = f"response is not a dict: {type(response)}"
+        elif "error" in response:
+            rollout_failed = True
+            failure_reason = f"had error: {response['error']}"
+        else:
+            output_items = response.get("response", {}).get("output", [])
+
+            if not output_items:
+                rollout_failed = True
+                failure_reason = "has no output items (we are masking and returing just eos for truncated rollouts right now)"
+            else:
+                has_content = False
+                for item in output_items:
+                    if item.get("type") == "message":
+                        content_list = item.get("content", [])
+                        for content_item in content_list:
+                            if content_item.get("type") == "output_text":
+                                text = content_item.get("text", "").strip()
+                                if text:
+                                    has_content = True
+                                    break
+                    elif item.get("type") == "function_call":
+                        has_content = True
+                        break
+                    if has_content:
+                        break
+
+                if not has_content:
+                    rollout_failed = True
+                    failure_reason = "has empty content in all output items (we are masking and returing just eos for truncated rollouts right now)"
+
+        # truncated or other failure - mask out
+        if rollout_failed:
+            failed_count += 1
+            print(f"[nemo_gym_rollout_func] WARNING: Rollout {i} {failure_reason}. Filling with eos and zero reward.")
+            eos_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
+            prompt_ids.append(expected_prompt_ids)
+            completion_ids.append([eos_token_id])
+            completion_mask.append([0])
+            logprobs.append([0.0])
+            env_rewards.append(0.0)
+            num_turns_list.append(0)
+            continue
 
         episode_reward = response.get("reward", 0.0)
         output_items = response.get("response", {}).get("output", [])
 
-        # Build interleaved completion: [model_gen1, tool_result1, model_gen2, tool_result2, ...]
-        # with mask: 1 for model tokens, 0 for tool results
-        # Each turn gives us (prompt_ids, gen_ids). 
-        # tool_result = current_prompt - previous_seen_tokens.
+        # Make interleaved completion: [model_gen1, tool_result1, model_gen2, tool_result2, ...] with mask 1 for generations, 0 for tool results (aka action, observation)
+        # Each turn has prompt_ids, gen_ids. Find tool_result = current_prompt - previous_seen_tokens and mask it 
+        # on policy tokenid correction replace_prefix_tokens is done in vllm server
         
         seen_token_ids: List[int] = []
         interleaved_completion: List[int] = []
@@ -354,52 +334,83 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         for item in output_items:
             if "prompt_token_ids" not in item or "generation_token_ids" not in item:
                 continue
-            
+
             num_turns += 1
             item_prompt_ids = item["prompt_token_ids"]
             item_gen_ids = item["generation_token_ids"]
             item_logprobs = item.get("generation_log_probs", [])
             tool_result_tokens = []
-            
+
             if first_prompt is None:
                 first_prompt = item_prompt_ids
                 seen_token_ids = list(item_prompt_ids)
             else:
-                # likely problematic due to retokenization. this is a baseline to compare against on-policy correction using _replace_prefix_tokens
-                # see https://docs.nvidia.com/nemo/gym/latest/contribute/rl-framework-integration/openai-compatible-http-server-on-policy-correction.html
-                # and https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
+                # Extract tool result tokens
                 if len(item_prompt_ids) > len(seen_token_ids):
+                    # Assert prefix matches
+                    if item_prompt_ids[:len(seen_token_ids)] != seen_token_ids:
+                        diverge_idx = -1
+                        for idx in range(min(len(seen_token_ids), len(item_prompt_ids))):
+                            if seen_token_ids[idx] != item_prompt_ids[idx]:
+                                diverge_idx = idx
+                                break
+
+                        # Show context around divergence
+                        # prob can delete this, was for debugging right 
+                        context_window = 20
+                        start = max(0, diverge_idx - context_window) if diverge_idx >= 0 else 0
+                        end = min(len(seen_token_ids), diverge_idx + context_window) if diverge_idx >= 0 else min(50, len(seen_token_ids))
+
+                        error_msg = (
+                            f"[Turn {num_turns}] Non-contiguous messages found! "
+                            f"This may be a tokenization issue.\n"
+                            f"Length of expected prefix: {len(seen_token_ids)}\n"
+                            f"Length of new prompt: {len(item_prompt_ids)}\n"
+                        )
+
+                        if diverge_idx >= 0:
+                            error_msg += (
+                                f"Tokens diverge at index {diverge_idx}:\n"
+                                f"Expected[{start}:{end}]: {seen_token_ids[start:end]}\n"
+                                f"Got[{start}:{end}]: {item_prompt_ids[start:end]}\n"
+                                f"Expected token at [{diverge_idx}]: {seen_token_ids[diverge_idx]}\n"
+                                f"Got token at [{diverge_idx}]: {item_prompt_ids[diverge_idx]}\n"
+                            )
+                        else:
+                            error_msg += (
+                                f"Prefix length mismatch but tokens match up to min length.\n"
+                                f"Expected (first 50): {seen_token_ids[:50]}\n"
+                                f"Got (first 50): {item_prompt_ids[:50]}\n"
+                            )
+
+                        raise ValueError(error_msg)
                     tool_result_tokens = item_prompt_ids[len(seen_token_ids):]
 
-                # Append tool results (mask=0)
                 if tool_result_tokens:
                     interleaved_completion.extend(tool_result_tokens)
                     interleaved_mask.extend([0] * len(tool_result_tokens))
                     interleaved_logprobs.extend([0.0] * len(tool_result_tokens))
             
-            # Append model generation (mask=1)
             interleaved_completion.extend(item_gen_ids)
             interleaved_mask.extend([1] * len(item_gen_ids))
             interleaved_logprobs.extend(
                 item_logprobs if len(item_logprobs) == len(item_gen_ids) else [0.0] * len(item_gen_ids)
             )
-            
-            if tool_result_tokens:
-                seen_token_ids = seen_token_ids + tool_result_tokens + list(item_gen_ids)
-            else:
-                seen_token_ids = list(item_prompt_ids) + list(item_gen_ids)
+
+            seen_token_ids = list(item_prompt_ids) + list(item_gen_ids)
 
         if not interleaved_completion or first_prompt is None:
             raise ValueError(f"Rollout {i} has no valid turns")
 
 
         success_count += 1
-        
+
         prompt_ids.append(first_prompt)
         completion_ids.append(interleaved_completion)
         completion_mask.append(interleaved_mask)
         logprobs.append(interleaved_logprobs)
         env_rewards.append(episode_reward)
+        num_turns_list.append(num_turns)
         
         model_tokens = sum(interleaved_mask)
         tool_tokens = len(interleaved_mask) - model_tokens
@@ -407,38 +418,39 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         print(f"\n{'='*60}")
         print(f"[nemo_gym_rollout_func] Turns: {num_turns}, Reward: {episode_reward:.3f}")
         print(f"[nemo_gym_rollout_func] Prompt tokens: {len(first_prompt)}")
-        print(f"[nemo_gym_rollout_func] Completion tokens: {len(interleaved_completion)} (model: {model_tokens}, tool: {tool_tokens})")
-        print(f"[nemo_gym_rollout_func] Completion preview: {tokenizer.decode(interleaved_completion)[:150]}...")
+        print(f"[nemo_gym_rollout_func] Rollout tokens: {len(interleaved_completion)} (model: {model_tokens}, tool: {tool_tokens})")
+        print(f"[nemo_gym_rollout_func] Rollout preview: {tokenizer.decode(interleaved_completion)[:150]}...")
         print(f"{'='*60}\n")
 
     print(f"\n{'='*80}")
     print(f"[nemo_gym_rollout_func] Success: {success_count}, Failed: {failed_count}")
-    print(f"[nemo_gym_rollout_func] Total episodes: {len(completion_ids)}")
 
     if not prompt_ids:
         raise RuntimeError(
             "No valid rollouts. Check Nemo Gym and vLLM logs."
         )
 
-    mean_reward = sum(env_rewards) / len(env_rewards) if env_rewards else 0.0
-    total_model_tokens = sum(sum(m) for m in completion_mask)
-    total_tool_tokens = sum(len(m) - sum(m) for m in completion_mask)
-    print(f"[nemo_gym_rollout_func] Mean reward: {mean_reward:.3f}")
-    print(f"[nemo_gym_rollout_func] Total model generation tokens (not masked): {total_model_tokens}")
-    print(f"[nemo_gym_rollout_func] Total tool tokens (masked): {total_tool_tokens}")
-    
+    print(f"[nemo_gym_rollout_func] Mean reward: {sum(env_rewards) / len(env_rewards) if env_rewards else 0.0:.3f}")
+    print(f"[nemo_gym_rollout_func] Total action tokens: {sum(sum(m) for m in completion_mask)}, total observation tokens: {sum(len(m) - sum(m) for m in completion_mask)}")
+
+    # log num turns to wandb
+    if num_turns_list:
+        import wandb
+        wandb.log({
+            "train/num_turns_mean": sum(num_turns_list) / len(num_turns_list),
+            "train/num_turns_min": min(num_turns_list),
+            "train/num_turns_max": max(num_turns_list),
+        })
+        print(f"[nemo_gym_rollout_func] Num turns mean: {sum(num_turns_list) / len(num_turns_list):.2f}, min: {min(num_turns_list)}, max: {max(num_turns_list)}")
+
     # We need to deduplicate prompt_ids to match TRL's current code that re-duplicates prompts
     # TRL deduplicates here: https://github.com/huggingface/trl/blob/main/trl/trainer/grpo_trainer.py#L1266 so we had to duplicate prompts for num_generations
     # TRL reduplicates here: https://github.com/huggingface/trl/blob/main/trl/trainer/grpo_trainer.py#L1314 so we need to dedup prompts
-    print(f"[nemo_gym_rollout_func] Deduplicating prompt_ids (keeping 1 per {num_generations} completions)...")
     unique_prompt_ids = []
-    for idx in range(0, len(prompt_ids), num_generations):
+    for idx in range(0, len(prompt_ids), trainer.args.num_generations):
         if idx < len(prompt_ids):
             unique_prompt_ids.append(prompt_ids[idx])
 
-    print(f"[nemo_gym_rollout_func] Deduplicated: {len(prompt_ids)} → {len(unique_prompt_ids)} unique prompt_ids")
-    print(f"[nemo_gym_rollout_func] Final counts: {len(unique_prompt_ids)} prompt_ids, {len(completion_ids)} completion_ids")
-    print(f"[nemo_gym_rollout_func] Expected ratio: {len(completion_ids) / len(unique_prompt_ids) if unique_prompt_ids else 0:.1f} completions per prompt")
     print(f"{'='*80}\n")
 
     return {
@@ -447,6 +459,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         "completion_mask": completion_mask,
         "logprobs": logprobs,
         "env_reward": env_rewards,
+        "num_turns": num_turns_list,
     }
 
 def get_max_prompt_length(dataset: Dataset, tokenizer) -> int:
@@ -454,9 +467,6 @@ def get_max_prompt_length(dataset: Dataset, tokenizer) -> int:
     prompt_lengths = [len(tokenizer.encode(item.get("prompt", ""))) for item in dataset if item.get("prompt", "")]
     prompt_lengths.sort()
     max_length = prompt_lengths[-1]
-    print(f"[get_max_prompt_length] Min length: {min(prompt_lengths)}")
-    print(f"[get_max_prompt_length] Max length: {max(prompt_lengths)}")
-    print(f"[get_max_prompt_length] Mean length: {sum(prompt_lengths) / len(prompt_lengths):.1f}")
     return max_length
 
 
@@ -487,7 +497,6 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
                             item["prompt"] = "\n\n".join(prompt_parts) if prompt_parts else ""
                         elif isinstance(input_data, str):
                             # Format as string (e.g. google_search)
-                            # Combine instructions field (system prompt) + input field (question)
                             prompt_parts = []
                             if instructions:
                                 prompt_parts.append(instructions)
@@ -518,10 +527,11 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
 
     return dataset
 
-
 def main():
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--config", required=True, help="Path to config YAML file")
+    parser.add_argument("--vllm_server_host", type=str, default="127.0.0.1",
+                        help="vLLM server hostname/IP")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -575,7 +585,7 @@ def main():
     training_args = GRPOConfig(
         use_vllm=True,
         vllm_mode="server",
-        vllm_server_host="127.0.0.1",
+        vllm_server_host=args.vllm_server_host,
         vllm_server_port=8000,
 
         temperature=config.temperature,

@@ -31,8 +31,10 @@ from multiprocessing.connection import Connection
 import torch
 import torch.distributed.distributed_c10d as c10d
 from transformers import is_torch_xpu_available, is_vision_available
+from transformers import AutoTokenizer
 
 from trl import TrlParser
+# from trl.chat_template_utils import add_response_schema  # For native tool call parsing
 from trl.import_utils import (
     is_fastapi_available,
     is_pydantic_available,
@@ -374,7 +376,23 @@ def llm_worker(
             method_name = command["method"]
             args, kwargs = command.get("args", ()), command.get("kwargs", {})
             method = getattr(llm, method_name)
-            result = method(*args, **kwargs)
+
+            try:
+                result = method(*args, **kwargs)
+            except ValueError as e:
+                error_msg = str(e)
+                if "longer than the maximum model length" in error_msg or "context length" in error_msg:
+                    logger.error(f"[Worker] Context length exceeded: {error_msg}")
+                    if method_name in ["generate", "chat"]:
+                        result = []
+                    else:
+                        raise
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"[Worker] Unexpected error in {method_name}: {e}")
+                raise
+
             if command["type"] == "call":
                 connection.send(result)
         elif command["type"] == "shutdown":
@@ -412,6 +430,80 @@ def sanitize_logprob(logprob):
     return value
 
 
+def _replace_prefix_tokens(
+    tokenizer,
+    model_prefix_token_ids: list[int],
+    template_prefix_token_ids: list[int],
+    template_token_ids: list[int],
+) -> list[int]:
+    """
+    Fixes up chat template-tokenized messages to match model output tokenization.
+
+    This preserves the monotonic tokens property for optimized multi-turn training by ensuring
+    that previously generated tokens are not retokenized differently by the chat template.
+
+    Based on NeMo RL's _replace_prefix_tokens:
+    https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
+
+    When model generates text that gets re-tokenized by chat template in subsequent turns,
+    the token IDs may differ due to tokenization ambiguity (e.g., whitespace, context).
+
+    Example:
+        Turn 1: Model outputs [220, 17] (decodes to " 4")
+        Turn 2: Template retokenizes as [1001] (also decodes to " 4")
+
+    This creates off-policy issues where training logprobs don't match generation logprobs.
+
+    This solves the issue by keeping exact model tokens up to the last EOS, then append new template tokens after EOS.
+    This ensures we preserve the actual tokens the model generated, not a retokenized version.
+
+    Args:
+        tokenizer: The tokenizer instance, must have eos_token_id
+        model_prefix_token_ids: Token IDs from actual model generation to preserve
+        template_prefix_token_ids: Chat template applied up to last assistant message
+        template_token_ids: Chat template applied to full conversation
+
+    Returns:
+        Combined token sequence: model_tokens[:-1] + template_tokens[after_eos:]
+
+    Example:
+        model_prefix_token_ids = [1, 2, 3, 220, 17, 2]  # Last 2 is EOS
+        template_prefix_token_ids = [1, 2, 3, 1001, 2]  # Up to last assistant
+        template_token_ids = [1, 2, 3, 1001, 2, 21, 22]  # Full conversation
+
+        Output: [1, 2, 3, 220, 17, 2, 21, 22]  # Keeps original [220, 17], adds new [21, 22]
+    """
+    if not model_prefix_token_ids:
+        return template_token_ids
+
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None:
+        logger.warning("Tokenizer has no EOS token ID, cannot apply _replace_prefix_tokens")
+        return template_token_ids
+
+    # Find where to cut the model prefix (before EOS if present at end)
+    model_cut_end = len(model_prefix_token_ids)
+    if model_prefix_token_ids and model_prefix_token_ids[-1] == eos_token_id:
+        model_cut_end -= 1
+
+    # Find the last EOS in template prefix
+    template_cut_start = -1
+    for pos in reversed(range(len(template_prefix_token_ids))):
+        if template_token_ids[pos] == eos_token_id:
+            template_cut_start = pos
+            break
+
+    if template_cut_start < 0:
+        logger.warning("No EOS token found in template prefix, cannot apply _replace_prefix_tokens")
+        return template_token_ids
+
+    result = (
+        model_prefix_token_ids[:model_cut_end] +
+        template_token_ids[template_cut_start:]
+    )
+
+    return result
+
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
@@ -442,8 +534,22 @@ def main(script_args: ScriptArguments):
         connections.append(parent_connection)
         processes.append(process)
 
+    cached_tokenizer = None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        nonlocal cached_tokenizer
+
+        logger.info(f"Loading tokenizer for {script_args.model}...")
+        cached_tokenizer = AutoTokenizer.from_pretrained(script_args.model, trust_remote_code=script_args.trust_remote_code)
+
+        # uncomment for native tool call parsing
+        # try:
+        #     cached_tokenizer = add_response_schema(cached_tokenizer)
+        #     logger.info("Response schema added - vLLM will use native tool call parsing")
+        # except (ValueError, AttributeError) as e:
+        #     logger.warning(f"Could not add response schema: {e}. Will fall back to XML parsing if tools are used.")
+
         # Wait for all workers to send "ready"
         ready_connections = set()
         while len(ready_connections) < script_args.data_parallel_size:
@@ -894,22 +1000,102 @@ def main(script_args: ScriptArguments):
         if request.tool_choice and request.tool_choice != "auto":
             chat_template_kwargs["tool_choice"] = request.tool_choice
 
-        chunked_messages = chunk_list([messages], script_args.data_parallel_size)
+        has_prefix_token_ids = any(
+            msg.get("role") == "assistant" and "prompt_token_ids" in msg
+            for msg in messages
+        )
 
-        for connection, message_chunk in zip(connections, chunked_messages, strict=True):
-            if not message_chunk:
-                message_chunk = [[{"role": "user", "content": "<placeholder>"}]]
-            kwargs = {
-                "messages": message_chunk,
-                "sampling_params": sampling_params,
-                "tools": request.tools,
-                "chat_template_kwargs": chat_template_kwargs
-            }
-            connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
+        if has_prefix_token_ids:
+            # do on policy token id correction and call generate instead of chat 
+            # see https://docs.nvidia.com/nemo/gym/latest/contribute/rl-framework-integration/openai-compatible-http-server-on-policy-correction.html
+            # and https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
+            logger.info(f"[/chat/completions] Detected prefix token IDs in assistant message, using _replace_prefix_tokens")
+            tokenizer = cached_tokenizer
+
+            # preprocess full conversation
+            connections[0].send({"type": "call", "method": "preprocess_chat", "kwargs": {
+                "messages": [messages], "chat_template_kwargs": chat_template_kwargs,
+                "tools": request.tools, "add_generation_prompt": True}})
+            template_prompts = connections[0].recv()
+            template_prompt = template_prompts[0]
+
+            # extract model prefix tokens from last assistant message
+            model_prefix_tokens = None
+            last_assistant_idx = None
+            for i in reversed(range(len(messages))):
+                if messages[i].get("role") == "assistant":
+                    last_assistant_idx = i
+                    if "prompt_token_ids" in messages[i]:
+                        model_prefix_tokens = messages[i]["prompt_token_ids"] + messages[i].get("generation_token_ids", [])
+                    break
+
+            if model_prefix_tokens and last_assistant_idx is not None:
+                messages_to_last_assistant = messages[:last_assistant_idx + 1]
+                connections[0].send({"type": "call", "method": "preprocess_chat", "kwargs": {
+                    "messages": [messages_to_last_assistant], "chat_template_kwargs": chat_template_kwargs,
+                    "tools": request.tools, "add_generation_prompt": False}})
+                template_prefix_prompts = connections[0].recv()
+                template_prefix_token_ids = template_prefix_prompts[0]["prompt_token_ids"]
+
+                logger.info(f"[/chat/completions] Calling _replace_prefix_tokens model_prefix len: {len(model_prefix_tokens)}, template_prefix len: {len(template_prefix_token_ids)}, template_full len: {len(template_prompt['prompt_token_ids'])}")
+
+                corrected_token_ids = _replace_prefix_tokens(
+                    tokenizer,
+                    model_prefix_tokens,
+                    template_prefix_token_ids,
+                    template_prompt["prompt_token_ids"]
+                )
+
+                logger.info(f"[/chat/completions] final len = {len(corrected_token_ids)}")
+            else:
+                logger.info(f"[/chat/completions] Skipping _replace_prefix_tokens, model_prefix_tokens={model_prefix_tokens is not None}, last_assistant_idx={last_assistant_idx}")
+                corrected_token_ids = template_prompt["prompt_token_ids"]
+
+            corrected_prompt = {"prompt_token_ids": corrected_token_ids}
+            chunked_prompts = chunk_list([corrected_prompt], script_args.data_parallel_size)
+
+            for connection, prompts in zip(connections, chunked_prompts, strict=True):
+                if not prompts:
+                    prompts = [{"prompt_token_ids": [tokenizer.eos_token_id]}]
+                connection.send({"type": "call", "method": "generate", "kwargs": {
+                    "prompts": prompts, "sampling_params": sampling_params}})
+        else:
+            # no prefix token IDs, use chat()
+            chunked_messages = chunk_list([messages], script_args.data_parallel_size)
+
+            for connection, message_chunk in zip(connections, chunked_messages, strict=True):
+                if not message_chunk:
+                    message_chunk = [[{"role": "user", "content": "<placeholder>"}]]
+                kwargs = {
+                    "messages": message_chunk,
+                    "sampling_params": sampling_params,
+                    "tools": request.tools,
+                    "chat_template_kwargs": chat_template_kwargs
+                }
+                connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 
         all_outputs = [connection.recv() for connection in connections]
-        all_outputs = [output for output, msg_chunk in zip(all_outputs, chunked_messages, strict=True) if msg_chunk]
+        if has_prefix_token_ids:
+            all_outputs = [o for o in all_outputs if o]
+        else:
+            all_outputs = [output for output, msg_chunk in zip(all_outputs, chunked_messages, strict=True) if msg_chunk]
         all_outputs = list(chain.from_iterable(all_outputs))
+
+        if not all_outputs:
+            logger.warning("[/chat/completions] All workers returned empty - max seq len probably exceeded. Returning empty msg with finish_reason=length")
+            return {
+                "id": completion_id,
+                "object": "chat.completion",
+                "created": created_at,
+                "model": request.model or script_args.model,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": "length",
+                    "logprobs": None
+                }],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            }
 
         choices = []
         total_input_tokens = 0
@@ -929,9 +1115,6 @@ def main(script_args: ScriptArguments):
                     tool_calls = gen_output.tool_calls
                     finish_reason = "tool_calls"
                 elif request.tools and text:
-                    # If no native tool call parser, try XML
-                    # TODO: figure out how to use a tool call parser, or handle tool call parsing in Nemo Gym maybe?? 
-                    # or implement real async vllm engine and openai api server rather than faking the endpoint here
                     pattern = r'<tool_call>(.*?)</tool_call>'
                     matches = re.findall(pattern, text, re.DOTALL)
                     if matches:
@@ -1001,8 +1184,15 @@ def main(script_args: ScriptArguments):
 
     @app.post("/tokenize")
     async def tokenize(request: TokenizeRequest):
+        messages = request.messages
+
+        has_prefix_token_ids = any(
+            msg.get("role") == "assistant" and "prompt_token_ids" in msg
+            for msg in messages
+        )
+
         kwargs = {
-            "messages": [request.messages],
+            "messages": [messages],
             "tools": request.tools,
             "add_generation_prompt": True,
             "chat_template_kwargs": {}
@@ -1013,13 +1203,55 @@ def main(script_args: ScriptArguments):
 
         if preprocessed_prompts and len(preprocessed_prompts) > 1:
             logger.warning(f"More than one tokenized message returned from preprocess_chat inside tokenize, double check results!")
-            
-        if preprocessed_prompts and len(preprocessed_prompts) > 0:
-            return {
-                "tokens": preprocessed_prompts[0]["prompt_token_ids"],
-                "model": request.model or script_args.model
-            }
-        return {"tokens": [], "model": request.model or script_args.model}
+
+        if not preprocessed_prompts or len(preprocessed_prompts) == 0:
+            return {"tokens": [], "model": request.model or script_args.model}
+
+        template_prompt = preprocessed_prompts[0]
+        result_tokens = template_prompt["prompt_token_ids"]
+
+        if has_prefix_token_ids:
+            tokenizer = cached_tokenizer
+
+            # Extract model prefix tokens from last assistant message
+            model_prefix_tokens = None
+            last_assistant_idx = None
+            for i in reversed(range(len(messages))):
+                if messages[i].get("role") == "assistant":
+                    last_assistant_idx = i
+                    if "prompt_token_ids" in messages[i]:
+                        model_prefix_tokens = messages[i]["prompt_token_ids"] + messages[i].get("generation_token_ids", [])
+                    break
+
+            if model_prefix_tokens and last_assistant_idx is not None:
+                # Preprocess up to last assistant
+                messages_to_last_assistant = messages[:last_assistant_idx + 1]
+                connections[0].send({"type": "call", "method": "preprocess_chat", "kwargs": {
+                    "messages": [messages_to_last_assistant],
+                    "tools": request.tools,
+                    "add_generation_prompt": False,
+                    "chat_template_kwargs": {}
+                }})
+                template_prefix_prompts = connections[0].recv()
+                template_prefix_token_ids = template_prefix_prompts[0]["prompt_token_ids"]
+
+                logger.info(f"[/tokenize] Calling _replace_prefix_tokens, model_prefix length: {len(model_prefix_tokens)}, template_prefix length: {len(template_prefix_token_ids)}, template_full length: {len(template_prompt['prompt_token_ids'])}")
+
+                result_tokens = _replace_prefix_tokens(
+                    tokenizer,
+                    model_prefix_tokens,
+                    template_prefix_token_ids,
+                    template_prompt["prompt_token_ids"]
+                )
+
+                logger.info(f"[/tokenize] final length = {len(result_tokens)}")
+            else:
+                logger.info(f"[/tokenize] Skipping _replace_prefix_tokens, one of model_prefix_tokens={model_prefix_tokens is not None}, last_assistant_idx={last_assistant_idx} is None")
+
+        return {
+            "tokens": result_tokens,
+            "model": request.model or script_args.model
+        }
 
     uvicorn.run(
         app,
@@ -1028,7 +1260,7 @@ def main(script_args: ScriptArguments):
         log_level=script_args.log_level,
         limit_concurrency=256,
         backlog=4096,
-        timeout_keep_alive=60
+        timeout_keep_alive=600
     )
 
 

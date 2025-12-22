@@ -1,4 +1,7 @@
+# model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+# model_name: "Qwen/Qwen3-0.6B"
 model_name: "Qwen/Qwen3-4B-Instruct-2507"
+# dataset_path: "/home/ubuntu/unsloth-gym-integration/Gym/resources_servers/reasoning_gym/data/train_knights_knaves.jsonl"
 dataset_path: "train-workplace.jsonl"
 
 task: "workplace-assistant"  # used in wandb run_name if not set explicitly
@@ -6,17 +9,18 @@ task: "workplace-assistant"  # used in wandb run_name if not set explicitly
 output_dir: "outputs/trl_nemo_gym_workplace"
 project_name: "cmunley-nemo-gym-trl-int"
 
-learning_rate: 1.0e-5
+learning_rate: 2.0e-5
 max_steps: 1000000
 
-num_generations: 16
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 128
+num_generations: 12
 
-max_seq_length: 16384
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 192
+
+max_seq_length: 8192
 
 temperature: 1.0
-top_p: 0.999
+top_p: 0.99
 weight_decay: 0.01
 warmup_ratio: 0.0
 lr_scheduler_type: "linear"

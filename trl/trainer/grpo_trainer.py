@@ -1785,7 +1785,6 @@ class GRPOTrainer(BaseTrainer):
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
         
         # Allow custom completion_mask from rollout_func for multi-turn training
-        # This allows masking out non-trainable tokens (e.g., tool results, observations) in the completion
         if "completion_mask" in extra_fields:
             completion_mask_list = extra_fields.pop("completion_mask")
             completion_mask = [torch.tensor(m, device=device, dtype=torch.long) for m in completion_mask_list]
