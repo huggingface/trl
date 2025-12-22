@@ -1182,8 +1182,9 @@ def start_event_loop_in_daemon(
     This function creates a new daemon thread that runs the provided event loop.
 
     Args:
-        name (`str` or `None`, *optional*):
+        name (`str`, *optional*):
             Name of the thread. If `None`, the default thread naming will be used.
+
     Returns:
         `threading.Thread`:
             The thread running the event loop.

@@ -362,7 +362,7 @@ class GRPOTrainer(BaseTrainer):
         self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
         if self._has_async_reward_funcs:
             self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
-                start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
+                start_event_loop_in_daemon(name="GRPOTrainer-AsyncRewardLoop")
             )
             # wait until the event loop is running in the daemon thread
             self.async_reward_loop_ready_event.wait()
