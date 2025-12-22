@@ -295,6 +295,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     # Special case for harmony
+    @pytest.mark.slow
     def test_train_gpt_oss(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/harmony", "language_modeling", split="train")
@@ -787,6 +788,7 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.slow
     def test_train_with_non_chatml_conversational_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -1081,6 +1083,7 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.slow
     def test_train_completion_only_harmony(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/harmony", "prompt_completion", split="train")
@@ -1105,6 +1108,7 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.slow
     def test_train_assistant_only_and_completion_only(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
@@ -1229,6 +1233,7 @@ class TestSFTTrainer(TrlTestCase):
             original_template_content = f.read()
         assert template_content == original_template_content, "Chat template content does not match the original"
 
+    @pytest.mark.slow
     def test_train_toolcall_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")
@@ -1363,6 +1368,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
         ],
     )
+    @pytest.mark.slow
     @require_vision
     def test_train_vlm(self, model_id):
         # Get the dataset
@@ -1415,6 +1421,7 @@ class TestSFTTrainer(TrlTestCase):
         strict=False,
     )
     @require_vision
+    @pytest.mark.slow
     def test_train_vlm_multi_image(self, model_id):
         # Get the dataset
         dataset = load_dataset(
@@ -1457,6 +1464,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     @require_vision
+    @pytest.mark.slow
     def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
@@ -1537,6 +1545,7 @@ class TestSFTTrainer(TrlTestCase):
         ["conversational_language_modeling", "conversational_prompt_completion", "standard_prompt_completion"],
     )
     @require_vision
+    @pytest.mark.slow
     def test_train_vlm_text_only_data(self, model_id, dataset_config):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", dataset_config, split="train")
