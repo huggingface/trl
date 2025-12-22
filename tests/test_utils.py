@@ -812,9 +812,13 @@ class TestForwardMaskedLogits:
         ],
     )
     def test_llm(self, model_id):
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto")
-        input_ids = torch.randint(0, model.config.vocab_size, (2, 8))
-        logits_mask = torch.tensor([[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]])
+        device = torch.device("cuda")
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+        logits_mask = torch.tensor(
+            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
+            device=device,
+        )
 
         full_outputs = model(input_ids=input_ids)
         masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
@@ -839,9 +843,13 @@ class TestForwardMaskedLogits:
         ],
     )
     def test_vlm(self, model_id):
-        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto")
-        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8))
-        logits_mask = torch.tensor([[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]])
+        device = torch.device("cuda")
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8), device=device)
+        logits_mask = torch.tensor(
+            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
+            device=device,
+        )
 
         full_outputs = model(input_ids=input_ids)
         masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
