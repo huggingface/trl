@@ -122,11 +122,11 @@ if TYPE_CHECKING:
         RunningMoments,
         disable_dropout_in_model,
         empty_cache,
+        ensure_master_addr_port,
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
         peft_module_casting_to_bf16,
-        ensure_master_addr_port,
     )
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer

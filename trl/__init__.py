@@ -43,48 +43,48 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "models": [
-        "AutoModelForCausalLMWithValueHead",
-        "AutoModelForSeq2SeqLMWithValueHead",
-        "PreTrainedModelWrapper",
+        "AutoModelForCausalLMWithValueHead",  # deprecated import
+        "AutoModelForSeq2SeqLMWithValueHead",  # deprecated import
+        "PreTrainedModelWrapper",  # deprecated import
         "create_reference_model",
     ],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
-        "AllTrueJudge",
-        "BaseBinaryJudge",
-        "BaseJudge",
-        "BasePairwiseJudge",
-        "BaseRankJudge",
-        "BCOConfig",
-        "BCOTrainer",
+        "AllTrueJudge",  # deprecated import
+        "BaseBinaryJudge",  # deprecated import
+        "BaseJudge",  # deprecated import
+        "BasePairwiseJudge",  # deprecated import
+        "BaseRankJudge",  # deprecated import
+        "BCOConfig",  # deprecated import
+        "BCOTrainer",  # deprecated import
         "BEMACallback",
-        "CPOConfig",
-        "CPOTrainer",
+        "CPOConfig",  # deprecated import
+        "CPOTrainer",  # deprecated import
         "DPOConfig",
         "DPOTrainer",
         "FDivergenceConstants",
         "FDivergenceType",
-        "GKDConfig",
-        "GKDTrainer",
+        "GKDConfig",  # deprecated import
+        "GKDTrainer",  # deprecated import
         "GRPOConfig",
         "GRPOTrainer",
-        "HfPairwiseJudge",
+        "HfPairwiseJudge",  # deprecated import
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
         "ModelConfig",
-        "NashMDConfig",
-        "NashMDTrainer",
-        "OnlineDPOConfig",
-        "OnlineDPOTrainer",
-        "OpenAIPairwiseJudge",
-        "ORPOConfig",
-        "ORPOTrainer",
-        "PairRMJudge",
-        "PPOConfig",
-        "PPOTrainer",
-        "PRMConfig",
-        "PRMTrainer",
+        "NashMDConfig",  # deprecated import
+        "NashMDTrainer",  # deprecated import
+        "OnlineDPOConfig",  # deprecated import
+        "OnlineDPOTrainer",  # deprecated import
+        "OpenAIPairwiseJudge",  # deprecated import
+        "ORPOConfig",  # deprecated import
+        "ORPOTrainer",  # deprecated import
+        "PairRMJudge",  # deprecated import
+        "PPOConfig",  # deprecated import
+        "PPOTrainer",  # deprecated import
+        "PRMConfig",  # deprecated import
+        "PRMTrainer",  # deprecated import
         "RewardConfig",
         "RewardTrainer",
         "RichProgressCallback",
@@ -94,9 +94,9 @@ _import_structure = {
         "SFTTrainer",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "WinRateCallback",
-        "XPOConfig",
-        "XPOTrainer",
+        "WinRateCallback",  # deprecated import
+        "XPOConfig",  # deprecated import
+        "XPOTrainer",  # deprecated import
         "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
@@ -121,48 +121,48 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .models import (
-        AutoModelForCausalLMWithValueHead,
-        AutoModelForSeq2SeqLMWithValueHead,
-        PreTrainedModelWrapper,
+        AutoModelForCausalLMWithValueHead,  # deprecated import
+        AutoModelForSeq2SeqLMWithValueHead,  # deprecated import
+        PreTrainedModelWrapper,  # deprecated import
         create_reference_model,
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
-        AllTrueJudge,
-        BaseBinaryJudge,
-        BaseJudge,
-        BasePairwiseJudge,
-        BaseRankJudge,
-        BCOConfig,
-        BCOTrainer,
+        AllTrueJudge,  # deprecated import
+        BaseBinaryJudge,  # deprecated import
+        BaseJudge,  # deprecated import
+        BasePairwiseJudge,  # deprecated import
+        BaseRankJudge,  # deprecated import
+        BCOConfig,  # deprecated import
+        BCOTrainer,  # deprecated import
         BEMACallback,
-        CPOConfig,
-        CPOTrainer,
+        CPOConfig,  # deprecated import
+        CPOTrainer,  # deprecated import
         DPOConfig,
         DPOTrainer,
         FDivergenceConstants,
         FDivergenceType,
-        GKDConfig,
-        GKDTrainer,
+        GKDConfig,  # deprecated import
+        GKDTrainer,  # deprecated import
         GRPOConfig,
         GRPOTrainer,
-        HfPairwiseJudge,
+        HfPairwiseJudge,  # deprecated import
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
         ModelConfig,
-        NashMDConfig,
-        NashMDTrainer,
-        OnlineDPOConfig,
-        OnlineDPOTrainer,
-        OpenAIPairwiseJudge,
-        ORPOConfig,
-        ORPOTrainer,
-        PairRMJudge,
-        PPOConfig,
-        PPOTrainer,
-        PRMConfig,
-        PRMTrainer,
+        NashMDConfig,  # deprecated import
+        NashMDTrainer,  # deprecated import
+        OnlineDPOConfig,  # deprecated import
+        OnlineDPOTrainer,  # deprecated import
+        OpenAIPairwiseJudge,  # deprecated import
+        ORPOConfig,  # deprecated import
+        ORPOTrainer,  # deprecated import
+        PairRMJudge,  # deprecated import
+        PPOConfig,  # deprecated import
+        PPOTrainer,  # deprecated import
+        PRMConfig,  # deprecated import
+        PRMTrainer,  # deprecated import
         RewardConfig,
         RewardTrainer,
         RichProgressCallback,
@@ -172,9 +172,9 @@ if TYPE_CHECKING:
         SFTTrainer,
         SyncRefModelCallback,
         WeaveCallback,
-        WinRateCallback,
-        XPOConfig,
-        XPOTrainer,
+        WinRateCallback,  # deprecated import
+        XPOConfig,  # deprecated import
+        XPOTrainer,  # deprecated import
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
