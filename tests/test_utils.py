@@ -826,7 +826,17 @@ class TestForwardMaskedLogits:
 
     @pytest.mark.parametrize(
         "model_id",
-        [],
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
+            # "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            # "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            # "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+            # "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        ],
     )
     def test_vlm(self, model_id):
         if model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration":
