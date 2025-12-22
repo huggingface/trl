@@ -73,7 +73,6 @@ _import_structure = {
         "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
-        "peft_module_casting_to_bf16",
     ],
     "xpo_config": ["XPOConfig"],  # deprecated import
     "xpo_trainer": ["XPOTrainer"],  # deprecated import
@@ -135,7 +134,6 @@ if TYPE_CHECKING:
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
-        peft_module_casting_to_bf16,
     )
     from .xpo_config import XPOConfig  # deprecated import
     from .xpo_trainer import XPOTrainer  # deprecated import
