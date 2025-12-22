@@ -1069,8 +1069,7 @@ class GRPOTrainer(BaseTrainer):
             # Generate using vLLM
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             prompt_ids, completion_ids, logprobs, extra_fields = self.vllm_generation.generate(
-                prompts=prompts,
-                num_generations=num_generations,  # TODO: pass profiler=profiling_context(self, "vLLM.generate"); see PR #4717
+                prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
 
         elif self.use_transformers_paged:
