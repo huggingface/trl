@@ -113,8 +113,9 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, f
         print(f"Model {repo_id} already exists, skipping")
     else:
         model.push_to_hub(repo_id)
-        tokenizer.push_to_hub(repo_id)
         model_card.push_to_hub(repo_id)
+        if tokenizer is not None:
+            tokenizer.push_to_hub(repo_id)
         if generation_config is not None:
             generation_config.push_to_hub(repo_id)
 
@@ -381,13 +382,11 @@ for model_id, model_class in [
 # PEFT models
 model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
 model = get_peft_model(model, LoraConfig())
-tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
 generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-push_to_hub(model, tokenizer, generation_config, "tiny")
+push_to_hub(model, None, None, "tiny")
 
 # Same model, but different weights
 model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
 model = get_peft_model(model, LoraConfig())
-tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
 generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-push_to_hub(model, tokenizer, generation_config, "tiny", "2")
+push_to_hub(model, None, None, "tiny", "2")
