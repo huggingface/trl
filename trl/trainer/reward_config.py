@@ -37,7 +37,7 @@ class RewardConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`RewardTrainer`] is provided as a string. If you're training a MoE architecture and want
-            to include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            to include the load balancing/auxiliary loss as a part of the final loss, remember to set
             `output_router_logits=True` in this dictionary.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
@@ -116,7 +116,9 @@ class RewardConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `RewardTrainer` is provided as a string."
+            "the `RewardTrainer` is provided as a string. If you're training a MoE architecture and want to include "
+            "the load balancing/auxiliary loss as a part of the final loss, remember to set "
+            "`output_router_logits=True` in this dictionary."
         },
     )
     chat_template_path: str | None = field(

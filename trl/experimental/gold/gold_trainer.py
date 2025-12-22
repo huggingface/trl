@@ -29,7 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer, is_bitsandbytes_available
+from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -38,7 +38,6 @@ from transformers.integrations.integration_utils import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import (
     is_flash_attn_2_available,
@@ -864,14 +863,17 @@ class GOLDTrainer(SFTTrainer):
                 teacher_tokenizer=self.teacher_tokenizer,
             )
 
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_completion_length,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            do_sample=True,
-            top_k=args.top_k,
-            pad_token_id=self.processing_class.pad_token_id,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.max_completion_length,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "do_sample": True,
+            "top_k": args.top_k,
+            "pad_token_id": self.processing_class.pad_token_id,
+        }
+        self.generation_config = GenerationConfig(**generation_kwargs)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
+        self.generation_kwargs = generation_kwargs
         if (
             hasattr(self.model.generation_config, "eos_token_id")
             and self.model.generation_config.eos_token_id is not None
@@ -1916,7 +1918,13 @@ class GOLDTrainer(SFTTrainer):
                 )
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
             else:
-                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                with (
+                    unwrap_model_for_generation(
+                        model,
+                        self.accelerator,
+                        generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    ) as unwrapped_model
+                ):
                     result = self.generate_on_policy_outputs(
                         unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
                     )

@@ -21,16 +21,7 @@ _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
     "modeling_base": ["PreTrainedModelWrapper"],
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
-    "utils": [
-        "create_reference_model",
-        "disable_gradient_checkpointing",
-        "peft_module_casting_to_bf16",
-        "prepare_deepspeed",
-        "prepare_fsdp",
-        "prepare_model_for_kbit_training",
-        "prepare_peft_model",
-        "unwrap_model_for_generation",
-    ],
+    "utils": ["create_reference_model", "prepare_deepspeed", "prepare_fsdp", "unwrap_model_for_generation"],
 }
 
 
@@ -38,16 +29,7 @@ if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
     from .modeling_base import PreTrainedModelWrapper
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
-    from .utils import (
-        create_reference_model,
-        disable_gradient_checkpointing,
-        peft_module_casting_to_bf16,
-        prepare_deepspeed,
-        prepare_fsdp,
-        prepare_model_for_kbit_training,
-        prepare_peft_model,
-        unwrap_model_for_generation,
-    )
+    from .utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 else:
     import sys
 

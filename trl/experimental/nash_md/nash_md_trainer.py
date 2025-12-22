@@ -37,9 +37,9 @@ from transformers.utils import is_peft_available
 from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
-from ...trainer.utils import empty_cache, get_reward, selective_log_softmax
+from ...trainer.utils import empty_cache, selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
-from ..utils import SIMPLE_CHAT_TEMPLATE, truncate_right
+from ..utils import SIMPLE_CHAT_TEMPLATE, get_reward, truncate_right
 from .nash_md_config import NashMDConfig
 
 
@@ -242,7 +242,13 @@ class NashMDTrainer(OnlineDPOTrainer):
 
     def _generate_completions(self, model, prompts):
         # Generate completions from the policy model.
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_for_gen_ctx:
+        with (
+            unwrap_model_for_generation(
+                model,
+                self.accelerator,
+                generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+            ) as unwrapped_policy_for_gen_ctx
+        ):
             model_output = unwrapped_policy_for_gen_ctx.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
@@ -280,6 +286,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 device=self.accelerator.device,
             )
 
+            # TODO: use self._override_model_generation_config for both models?
             mixture_output = mixture_model.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],

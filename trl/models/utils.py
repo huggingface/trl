@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import itertools
 import logging
 from collections.abc import Callable
@@ -22,16 +21,11 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
-from accelerate.utils import is_peft_model
+import transformers
 from packaging import version
-from transformers import PreTrainedModel, TrainingArguments
+from packaging.version import Version
+from transformers import GenerationConfig, PreTrainedModel
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
-
-
-if is_peft_available():
-    import peft
-    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 if TYPE_CHECKING:
@@ -92,7 +86,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 
 @contextmanager
-def unwrap_model_for_generation(
+def _unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
@@ -114,7 +108,7 @@ def unwrap_model_for_generation(
 
     Example:
     ```python
-    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+    with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         generated_outputs = unwrapped_model.generate(input_ids)
     ```
     """
@@ -136,6 +130,87 @@ def unwrap_model_for_generation(
         yield unwrapped_model
     if is_gradient_checkpointing:
         unwrapped_model.gradient_checkpointing_enable()
+
+
+@contextmanager
+def _override_model_generation_config(model, generation_kwargs=None):
+    """
+    Context manager to temporarily override a model's generation_config with training config.
+
+    This works around transformers' config merging logic that would otherwise overwrite values matching global defaults
+    with model-specific values (see upstream issue transformers#42762; fixed in transformers v5 by PR
+    `transformers#42702`).
+
+    By temporarily setting the model's generation_config to match the passed generation_config, we avoid the conflict.
+
+    The model's original generation_config is preserved outside this context, ensuring that saved/pushed models retain
+    their intended inference behavior.
+
+    Args:
+        model: The model (typically unwrapped_model) whose generation_config to temporarily override.
+        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
+    """
+    if (
+        # Issue fixed in transformers v5 by PR transformers#42702
+        Version(transformers.__version__) >= Version("5.0.0")
+        or generation_kwargs is None
+        or not hasattr(model, "generation_config")
+    ):
+        yield model
+        return
+    # If it is a PEFT model, override the underlying base model
+    if hasattr(model, "get_base_model"):
+        model = model.get_base_model()
+    # Keep original model generation_config
+    original_config = model.generation_config
+    # Create training-specific generation config from the model's original generation config
+    # Then overwrite it with the training-specific generation kwargs
+    generation_config = GenerationConfig.from_dict(model.generation_config.to_dict())
+    generation_config.update(**generation_kwargs)
+    model.generation_config = generation_config
+    try:
+        yield
+    finally:
+        model.generation_config = original_config
+
+
+@contextmanager
+def unwrap_model_for_generation(
+    model: "DistributedDataParallel | DeepSpeedEngine",
+    accelerator: "Accelerator",
+    gather_deepspeed3_params: bool = True,
+    generation_kwargs: dict | None = None,
+):
+    """
+    Context manager to unwrap distributed or accelerated models for generation tasks.
+
+    This function unwraps distributed models (FSDP, DeepSpeed) and optionally overrides the model's generation_config
+    temporarily during generation. This is useful for applying training-specific generation parameters without
+    permanently modifying the model's original generation_config.
+
+    Args:
+        model (`DistributedDataParallel | DeepSpeedEngine`):
+            Model to be unwrapped.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator instance managing the model.
+        gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
+            Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
+            can be more memory-efficient but may lead to slower generation times.
+        generation_kwargs (dict, *optional*):
+            If provided, temporarily overrides the model's generation_config during generation. The original config is
+            automatically restored when exiting the context. This is useful for using different generation parameters
+            during training vs. inference.
+
+    Yields:
+        Unwrapped model with optionally overridden generation_config.
+    """
+    with (
+        _unwrap_model_for_generation(
+            model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
+        ) as unwrapped_model,
+        _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
+    ):
+        yield unwrapped_model
 
 
 def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
@@ -258,72 +333,6 @@ class _ForwardRedirection:
         pass
 
 
-def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
-    r"""
-    Prepare a k-bit quantized transformers model for training (PEFT/QLoRA).
-    """
-    loaded_in_kbit = getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False)
-    quant_methods = ["gptq", "aqlm", "eetq", "torchao", "hqq"]
-    is_quantized = getattr(model, "quantization_method", None) in quant_methods or getattr(
-        model, "hqq_quantized", False
-    )
-
-    if gradient_checkpointing_kwargs is None:
-        gradient_checkpointing_kwargs = {}
-
-    for _, param in model.named_parameters():
-        # freeze all parameters
-        param.requires_grad = False
-
-    # Enable gradient checkpointing if needed
-    if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
-        else:
-            # backward-compatible hook
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-        supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
-            inspect.signature(model.gradient_checkpointing_enable).parameters
-        )
-        gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
-        model.gradient_checkpointing_enable(**gc_kwargs)
-
-    return model
-
-
-def enable_gradient_checkpointing(
-    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
-) -> PreTrainedModel:
-    """Enables gradient checkpointing for the model."""
-    # Enable gradient checkpointing on the base model for PEFT
-    if is_peft_model(model):
-        model.base_model.gradient_checkpointing_enable()
-    # Enable gradient checkpointing for non-PEFT models
-    else:
-        model.gradient_checkpointing_enable()
-
-    gradient_checkpointing_kwargs = gradient_checkpointing_kwargs or {}
-    use_reentrant = (
-        "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-    )
-
-    if use_reentrant:
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
-        else:
-
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-    return model
-
-
 def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
@@ -332,59 +341,6 @@ def peft_module_casting_to_bf16(model):
             if hasattr(module, "weight"):
                 if module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)
-
-
-def prepare_peft_model(
-    model: PreTrainedModel, peft_config: "PeftConfig | None", args: TrainingArguments
-) -> PreTrainedModel:
-    """Prepares a model for PEFT training."""
-    if not is_peft_available():
-        raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
-
-    # If the model is already a PeftModel, we need to merge and unload it.
-    # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-    if isinstance(model, PeftModel) and peft_config is not None:
-        model = model.merge_and_unload()
-
-    # Handle quantized models (QLoRA)
-    is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
-
-    is_sharded_qlora = False
-    if getattr(model, "is_loaded_in_4bit", False):
-        # Check if model is sharded (FSDP/DS-Zero3)
-        for _, param in model.named_parameters():
-            if param.__class__.__name__ == "Params4bit":
-                is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
-                break
-
-    # Prepare model for kbit training if needed
-    if is_qlora and not is_sharded_qlora and not isinstance(model, PeftModel):
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.gradient_checkpointing,
-            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
-        )
-        # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-        args.gradient_checkpointing = False
-    elif args.gradient_checkpointing:
-        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
-
-    # Create PEFT model
-    if peft_config is not None:
-        if (
-            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
-            and getattr(model, "is_loaded_in_4bit", False)
-            and is_sharded_qlora
-        ):
-            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
-        else:
-            model = get_peft_model(model, peft_config)
-
-    # Handle bf16 casting for 4-bit models
-    if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
-        peft_module_casting_to_bf16(model)
-
-    return model
 
 
 @contextmanager

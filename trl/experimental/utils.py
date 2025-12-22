@@ -14,14 +14,23 @@
 
 # This file contains utility classes and functions that are used across more than one experimental trainer or feature.
 
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
 import torch
+from accelerate.utils import is_peft_model
+from packaging import version
 from torch.nn.utils.rnn import pad_sequence
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainingArguments
+from transformers.utils import is_peft_available
 
-from ..trainer.utils import first_true_indices, pad
+from ..trainer.utils import pad, peft_module_casting_to_bf16
+
+
+if is_peft_available():
+    import peft
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 
 @dataclass
@@ -306,3 +315,197 @@ def add_eos_token_if_needed(
         rejected_tokens["input_ids"].append(eos_token_id)
         rejected_tokens["attention_mask"].append(1)
     return chosen_tokens, rejected_tokens
+
+
+def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
+    """
+    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving the position of the
+    first True in each "row".
+
+    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
+
+    Args:
+        bools (`torch.Tensor`):
+            An N-dimensional boolean tensor.
+        dtype (`torch.dtype`, optional):
+            The desired data type of the output tensor. Defaults to `torch.long`.
+
+    Returns:
+        `torch.Tensor`:
+            An (N-1)-dimensional tensor of integers indicating the position of the first True in each row. If no True
+            value is found in a row, returns the length of the row.
+    """
+    row_len = bools.size(-1)
+    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
+    return torch.min(zero_or_index, dim=-1).values
+
+
+def get_reward(
+    model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Computes the reward logits and the rewards for a given model and query responses.
+
+    Args:
+        model (`torch.nn.Module`):
+            The model used to compute the reward logits.
+        query_responses (`torch.Tensor`):
+            The tensor containing the query responses.
+        pad_token_id (`int`):
+            The token ID representing the pad token.
+        context_length (`int`):
+            The length of the context in the query responses.
+
+    Returns:
+        tuple:
+            - `reward_logits` (`torch.Tensor`):
+                The logits for the reward model.
+            - `final_rewards` (`torch.Tensor`):
+                The final rewards for each query response.
+            - `sequence_lengths` (`torch.Tensor`):
+                The lengths of the sequences in the query responses.
+    """
+    attention_mask = query_responses != pad_token_id
+    position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
+    lm_backbone = getattr(model, model.base_model_prefix)
+    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    output = lm_backbone(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+        use_cache=False,  # otherwise mistral-based RM would error out
+    )
+    reward_logits = model.score(output.hidden_states[-1])
+    sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
+    # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
+    return (
+        reward_logits,
+        reward_logits[
+            torch.arange(reward_logits.size(0), device=reward_logits.device),
+            sequence_lengths,
+        ].squeeze(-1),
+        sequence_lengths,
+    )
+
+
+def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs=None):
+    r"""
+    Prepare a k-bit quantized transformers model for training (PEFT/QLoRA).
+    """
+    loaded_in_kbit = getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False)
+    quant_methods = ["gptq", "aqlm", "eetq", "torchao", "hqq"]
+    is_quantized = getattr(model, "quantization_method", None) in quant_methods or getattr(
+        model, "hqq_quantized", False
+    )
+
+    if gradient_checkpointing_kwargs is None:
+        gradient_checkpointing_kwargs = {}
+
+    for _, param in model.named_parameters():
+        # freeze all parameters
+        param.requires_grad = False
+
+    # Enable gradient checkpointing if needed
+    if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        else:
+            # backward-compatible hook
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+
+            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
+            inspect.signature(model.gradient_checkpointing_enable).parameters
+        )
+        gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
+        model.gradient_checkpointing_enable(**gc_kwargs)
+
+    return model
+
+
+def enable_gradient_checkpointing(
+    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
+) -> PreTrainedModel:
+    """Enables gradient checkpointing for the model."""
+    # Enable gradient checkpointing on the base model for PEFT
+    if is_peft_model(model):
+        model.base_model.gradient_checkpointing_enable()
+    # Enable gradient checkpointing for non-PEFT models
+    else:
+        model.gradient_checkpointing_enable()
+
+    gradient_checkpointing_kwargs = gradient_checkpointing_kwargs or {}
+    use_reentrant = (
+        "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
+    )
+
+    if use_reentrant:
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        else:
+
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+
+            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+    return model
+
+
+def prepare_peft_model(
+    model: PreTrainedModel, peft_config: "PeftConfig | None", args: TrainingArguments
+) -> PreTrainedModel:
+    """Prepares a model for PEFT training."""
+    if not is_peft_available():
+        raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
+
+    if isinstance(model, PeftModel) and peft_config is not None:
+        raise ValueError(
+            "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge and "
+            "unload the existing adapter, save the resulting base model, and then pass that base model along with the "
+            "new `peft_config` to the trainer."
+        )
+
+    # Handle quantized models (QLoRA)
+    is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
+
+    is_sharded_qlora = False
+    if getattr(model, "is_loaded_in_4bit", False):
+        # Check if model is sharded (FSDP/DS-Zero3)
+        for _, param in model.named_parameters():
+            if param.__class__.__name__ == "Params4bit":
+                is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
+                break
+
+    # Prepare model for kbit training if needed
+    if is_qlora and not is_sharded_qlora and not isinstance(model, PeftModel):
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.gradient_checkpointing,
+            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
+        )
+        # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
+        args.gradient_checkpointing = False
+    elif args.gradient_checkpointing:
+        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
+
+    # Create PEFT model
+    if peft_config is not None:
+        if (
+            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
+            and getattr(model, "is_loaded_in_4bit", False)
+            and is_sharded_qlora
+        ):
+            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
+        else:
+            model = get_peft_model(model, peft_config)
+
+    # Handle bf16 casting for 4-bit models
+    if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
+        peft_module_casting_to_bf16(model)
+
+    return model
