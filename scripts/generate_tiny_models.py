@@ -345,11 +345,9 @@ for model_id, model_class, dtype in [
     }
     kwargs = {}
 
-    if issubclass(model_class.config_class, Qwen2VLConfig):
-        vision_config["depth"] = 2
-
     if issubclass(model_class.config_class, (Qwen2VLConfig, Qwen2_5_VLConfig)):
         text_config["rope_scaling"] = {"type": "default", "mrope_section": [1, 1], "rope_type": "default"}
+        vision_config["depth"] = 2
         # Different dict object from text_config; see GH-4101 and transformers#41020
         kwargs["rope_scaling"] = {"type": "default", "mrope_section": [1, 1], "rope_type": "default"}
 
