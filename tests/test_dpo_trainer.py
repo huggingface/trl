@@ -1309,7 +1309,6 @@ class TestDPOVisionTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
         ],
     )
-    @pytest.mark.slow
     def test_vdpo_trainer(self, model_id):
         # fmt: off
         dataset_dict = {
