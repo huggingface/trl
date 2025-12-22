@@ -226,6 +226,26 @@ class DPOConfig(TrainingArguments):
             "parameter."
         },
     )
+    model_adapter_name: str | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a "
+            "pretrained PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave "
+            "`ref_model` as `None`, the trainer will automatically make a copy of the adapter to use as the reference "
+            "model. For training, load a single adapter only, and it must be named `'default'`; do not load it under "
+            "a custom name."
+        },
+    )
+    ref_adapter_name: str | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a "
+            "pretrained PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave "
+            "`ref_model` as `None`, the trainer will automatically make a copy of the adapter to use as the reference "
+            "model. For training, load a single adapter only, and it must be named `'default'`; do not load it under "
+            "a custom name."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -236,14 +256,7 @@ class DPOConfig(TrainingArguments):
             "kept in memory."
         },
     )
-    model_adapter_name: str | None = field(
-        default=None,
-        metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
-    )
-    ref_adapter_name: str | None = field(
-        default=None,
-        metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
-    )
+
     label_pad_token_id: int = field(
         default=-100,
         metadata={"help": "Padding value to use for labels."},
@@ -397,6 +410,26 @@ class DPOConfig(TrainingArguments):
                 "The `use_logits_to_keep` argument is deprecated and will be removed in version 0.29.0. The trainer "
                 "now automatically uses a more efficient method than using `use_logits_to_keep`. You can safely "
                 "ignore this parameter.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.model_adapter_name is not None:
+            warnings.warn(
+                "The `model_adapter_name` argument is deprecated and will be removed in version 0.29.0. To resume "
+                "the training of a pretrained PEFT adapter, you can now safely just pass the PEFT model as the "
+                "`model` argument and leave `ref_model` as `None`, the trainer will automatically make a copy of "
+                "the adapter to use as the reference model. For training, load a single adapter only, and it must "
+                "be named `'default'`; do not load it under a custom name.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.ref_adapter_name is not None:
+            warnings.warn(
+                "The `ref_adapter_name` argument is deprecated and will be removed in version 0.29.0. To resume "
+                "the training of a pretrained PEFT adapter, you can now safely just pass the PEFT model as the "
+                "`model` argument and leave `ref_model` as `None`, the trainer will automatically make a copy of "
+                "the adapter to use as the reference model. For training, load a single adapter only, and it must "
+                "be named `'default'`; do not load it under a custom name.",
                 FutureWarning,
                 stacklevel=2,
             )
