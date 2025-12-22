@@ -450,6 +450,7 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
+        self.vllm_importance_sampling_min = args.vllm_importance_sampling_min
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
@@ -1914,8 +1915,11 @@ class GRPOTrainer(BaseTrainer):
                         vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
+                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap
+                    )
                     vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                        invalid_mis_mask, value=0.0
                     )
                 else:
                     raise ValueError(
