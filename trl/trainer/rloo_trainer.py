@@ -158,10 +158,11 @@ class RLOOTrainer(BaseTrainer):
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. Custom reward
-                  functions can also return `None` when the reward is not applicable to those samples. This is useful
-                  for multi-task training where different reward functions apply to different types of samples. When a
-                  reward function returns `None` for a sample, that reward function is excluded from the reward
-                  calculation for that sample. For more details, see [Using a custom reward
+                   functions can be either synchronous or asynchronous and can also return `None` when the reward is
+                   not applicable to those samples. This is useful for multi-task training where different reward
+                   functions apply to different types of samples. When a reward function returns `None` for a sample,
+                   that reward function is excluded from the reward calculation for that sample. For more details, see
+                   [Using a custom reward
                   function](#using-a-custom-reward-function).
 
                   The trainer's state is also passed to the reward function. The trainer's state is an instance of
@@ -331,7 +332,6 @@ class RLOOTrainer(BaseTrainer):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
-
         self.reward_funcs = reward_funcs
 
         self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
