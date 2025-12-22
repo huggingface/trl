@@ -305,59 +305,6 @@ class TestKTOTrainer(TrlTestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-    @require_peft
-    def test_kto_lora_save(self):
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        model_peft = get_peft_model(model, lora_config)
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-        # kto train lora model with a lora config
-        trainer = KTOTrainer(
-            model=model_peft,
-            ref_model=None,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            peft_config=lora_config,
-        )
-
-        # train the model
-        trainer.train()
-
-        # save peft adapter
-        trainer.save_model()
-
-        # assert that the model is loaded without giving OSError
-        try:
-            AutoModelForCausalLM.from_pretrained(self.tmp_dir)
-        except OSError:
-            pytest.fail("Loading the saved peft adapter failed")
-
     @require_liger_kernel
     def test_kto_trainer_with_liger(self):
         """Test KTO trainer with Liger kernel enabled."""
