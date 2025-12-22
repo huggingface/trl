@@ -828,7 +828,7 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
             # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
             # "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             # "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
