@@ -12,14 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
 import sys
 import time
 
 import pytest
 
-from trl.experimental.judges import AllTrueJudge, HfPairwiseJudge, PairRMJudge
+from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge, HfPairwiseJudge, PairRMJudge
 
-from ..testing_utils import RandomBinaryJudge, TrlTestCase, require_llm_blender
+from ..testing_utils import TrlTestCase, require_llm_blender
+
+
+class RandomBinaryJudge(BaseBinaryJudge):
+    """
+    Random binary judge, for testing purposes.
+    """
+
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
+        return [random.choice([0, 1, -1]) for _ in range(len(prompts))]
 
 
 class TestJudges(TrlTestCase):
