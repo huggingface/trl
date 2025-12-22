@@ -227,6 +227,27 @@ class TestParseResponse:
         }
         assert parsed == expected
 
+    def test_parse_response_multiple_tool_calls(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        text = textwrap.dedent(r"""<tool_call>
+        {"name": "multiply", "arguments": {"a": 3, "b": 4}}
+        </tool_call>
+        <tool_call>
+        {"name": "addition", "arguments": {"a": 3, "b": 4}}
+        </tool_call><|im_end|>""")
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+        expected = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
+                {"type": "function", "function": {"name": "addition", "arguments": {"a": 3, "b": 4}}},
+            ],
+        }
+        assert parsed == expected
+
     def test_parse_response_no_tool_call(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
         tokenizer = add_response_schema(tokenizer)
