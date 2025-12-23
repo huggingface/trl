@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 import pytest
 import torch
+import transformers
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.utils import is_peft_available
 
@@ -839,7 +841,13 @@ class TestForwardMaskedLogits:
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                ),
+            ),
         ],
     )
     def test_vlm(self, model_id):
