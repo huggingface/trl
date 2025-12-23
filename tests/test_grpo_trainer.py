@@ -1834,7 +1834,6 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
-            fp16=True,
             output_dir=self.tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=3,
