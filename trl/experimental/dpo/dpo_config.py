@@ -253,6 +253,13 @@ class DPOConfig(TrainingArguments):
             "a custom name."
         },
     )
+    label_pad_token_id: int | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. From now on, the label "
+            "padding token ID is hardcoded to -100 in the trainer."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -262,11 +269,6 @@ class DPOConfig(TrainingArguments):
             "before training. This allows to save memory during training, as the reference model does not need to be "
             "kept in memory."
         },
-    )
-
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={"help": "Padding value to use for labels."},
     )
     precompute_ref_batch_size: int | None = field(
         default=None,
@@ -433,6 +435,13 @@ class DPOConfig(TrainingArguments):
                 "`model` argument and leave `ref_model` as `None`, the trainer will automatically make a copy of "
                 "the adapter to use as the reference model. For training, load a single adapter only, and it must "
                 "be named `'default'`; do not load it under a custom name.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.label_pad_token_id is not None:
+            warnings.warn(
+                "The `label_pad_token_id` argument is deprecated and will be removed in version 0.29.0. From now "
+                "on, the label padding token ID is hardcoded to -100 in the trainer.",
                 FutureWarning,
                 stacklevel=2,
             )
