@@ -139,6 +139,14 @@ class DPOConfig(TrainingArguments):
             "the weights specified in `loss_weights`.",
         },
     )
+    loss_weights: list[float] | None = field(
+        default=None,
+        metadata={
+            "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
+            "Example: `[0.8, 0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss "
+            "types."
+        },
+    )
     label_smoothing: float = field(
         default=0.0,
         metadata={
@@ -331,14 +339,6 @@ class DPOConfig(TrainingArguments):
             "equivalent to the standard DPO loss. The paper recommends setting `ld_alpha` between `0.0` and `1.0`.",
         },
     )
-    loss_weights: list[float] | None = field(
-        default=None,
-        metadata={
-            "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
-            "Example: `[0.8, 0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss "
-            "types."
-        },
-    )
     ref_model_mixup_alpha: float = field(
         default=0.6,
         metadata={
@@ -360,6 +360,11 @@ class DPOConfig(TrainingArguments):
 
         if isinstance(self.loss_type, str):
             self.loss_type = [self.loss_type]
+        if self.loss_weights is not None and len(self.loss_weights) != len(self.loss_type):
+            raise ValueError(
+                "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "
+                f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
+            )
 
         if "aot_pair" in self.loss_type:
             warnings.warn(

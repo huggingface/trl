@@ -385,6 +385,7 @@ class DPOTrainer(BaseTrainer):
         self.beta = args.beta
         self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_types = args.loss_type  # args.loss_type is already a list
+        self.loss_weights = args.loss_weights or [1.0] * len(self.loss_types)
         self.label_smoothing = args.label_smoothing
         self.use_weighting = args.use_weighting
         if self.use_weighting and any(loss_type in {"aot", "aot_unpaired"} for loss_type in self.loss_types):
@@ -755,7 +756,7 @@ class DPOTrainer(BaseTrainer):
         delta_log_odds = chosen_logratios - rejected_logratios
 
         loss = 0.0
-        for loss_type in self.loss_types:
+        for loss_type, loss_weight in zip(self.loss_types, self.loss_weights, strict=True):
             if loss_type == "sigmoid":
                 per_sequence_loss = -F.logsigmoid(self.beta * delta_log_odds)
 
@@ -885,7 +886,7 @@ class DPOTrainer(BaseTrainer):
                 pair_weights = chosen_weights * rejected_weights
                 per_sequence_loss = per_sequence_loss * pair_weights
 
-            loss += per_sequence_loss.mean()
+            loss += per_sequence_loss.mean() * loss_weight
 
         # Log the metrics
         # Entropy
