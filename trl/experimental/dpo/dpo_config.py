@@ -324,6 +324,13 @@ class DPOConfig(TrainingArguments):
             "padding token ID is hardcoded to -100 in the trainer."
         },
     )
+    tools: list[dict] | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. Provide tools per example in "
+            "the dataset via a `tools` column instead."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -340,13 +347,6 @@ class DPOConfig(TrainingArguments):
             "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
             "than the training batch size to speed up preprocessing. If `None`, defaults to "
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
-        },
-    )
-    tools: list[dict] | None = field(
-        default=None,
-        metadata={
-            "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
-            "not support function calling, this argument will have no effect."
         },
     )
     use_liger_loss: bool = field(
@@ -484,6 +484,13 @@ class DPOConfig(TrainingArguments):
             warnings.warn(
                 "The `label_pad_token_id` argument is deprecated and will be removed in version 0.29.0. From now "
                 "on, the label padding token ID is hardcoded to -100 in the trainer.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.tools is not None:
+            warnings.warn(
+                "`tools` is deprecated and will be removed in version 0.29.0. Provide tools per example in the "
+                "dataset via a `tools` column instead.",
                 FutureWarning,
                 stacklevel=2,
             )
