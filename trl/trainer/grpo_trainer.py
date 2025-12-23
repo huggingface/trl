@@ -221,9 +221,9 @@ class GRPOTrainer(BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         tools (list of `Callable`, *optional*):
-            A list of callable tool functions that the model can invoke during generation. Each tool should be a
-            standard Python function with properly type-hinted arguments and return values, and a Google-style
-            docstring describing its purpose, arguments, and return value. For more details, see:
+            A list of callable tool functions (sync or async) that the model can invoke during generation. Each tool
+            should be a standard Python function with properly type-hinted arguments and return values, and a
+            Google-style docstring describing its purpose, arguments, and return value. For more details, see:
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
@@ -429,8 +429,15 @@ class GRPOTrainer(BaseTrainer):
                     "it with `pip install jmespath` to use this feature."
                 )
         self.tools = tools
+        self._sync_tool_dict = {}
+        self._async_tool_dict = {}
         if self.tools:
-            self._tool_dict = {tool.__name__: tool for tool in self.tools}
+            for tool in self.tools:
+                if asyncio.iscoroutinefunction(tool):
+                    self._async_tool_dict[tool.__name__] = tool
+                else:
+                    self._sync_tool_dict[tool.__name__] = tool
+
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
@@ -1575,20 +1582,48 @@ class GRPOTrainer(BaseTrainer):
                 prompt_completion_tool = prompt_completion_tools[idx]
                 # Append the last assistant message (which triggered tool_calls) to the prompt
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
+                async_coros = []
+                tool_call_results = {}
                 for tool_call in tool_call_list:
                     tool_call_count += 1
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
                         name = function["name"]
                         try:
-                            result = self._tool_dict[name](**function["arguments"])
+                            if name in self._sync_tool_dict:
+                                tool_call_results[name] = self._sync_tool_dict[name](**function["arguments"])
+                            elif name in self._async_tool_dict:
+                                async_coros.append((name, self._async_tool_dict[name](**function["arguments"])))
                         except Exception as e:
                             tool_failure_count += 1
                             result = {"error": str(e)}
                     else:
                         tool_failure_count += 1
                         name = tool_call.get("name", "unknown")
-                        result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
+                        tool_call_results[name] = {"error": f"Unsupported tool call type: {tool_call['type']}"}
+
+                if async_coros:
+
+                    async def _run_async_tools(async_coros):
+                        results = {}
+                        for name, coro in async_coros:
+                            try:
+                                result = await coro
+                                results[name] = result
+                            except Exception as e:
+                                results[name] = {"error": str(e)}
+                        return results
+
+                    async_results = asyncio.run_coroutine_threadsafe(
+                        _run_async_tools(async_coros), self.async_tool_loop
+                    ).result()
+
+                    for name, result in async_results.items():
+                        if "error" in result:
+                            tool_failure_count += 1
+                        tool_call_results[name] = result
+
+                for name, result in tool_call_results.items():
                     tool_message = {"role": "tool", "name": name, "content": str(result)}
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
@@ -1602,7 +1637,9 @@ class GRPOTrainer(BaseTrainer):
                 add_generation_prompt=True,
                 chat_template=self.chat_template,
                 **self.chat_template_kwargs,
-            )["input_ids"]
+            )
+            if isinstance(pct_ids, dict):
+                pct_ids = pct_ids["input_ids"]
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
