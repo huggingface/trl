@@ -1606,8 +1606,6 @@ class GRPOTrainer(BaseTrainer):
                         tool_call_results.append((name, {"error": f"Unsupported tool call type: {tool_call['type']}"}))
 
                 if async_coros:
-                    # Wait for the async tool loop to be ready
-                    self.async_loop_ready_event.wait()
 
                     async def _run_async_tools(async_coros):
                         coros = [coro for _, coro in async_coros]
