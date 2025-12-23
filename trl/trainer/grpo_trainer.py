@@ -1599,10 +1599,11 @@ class GRPOTrainer(BaseTrainer):
                         except Exception as e:
                             tool_failure_count += 1
                             result = {"error": str(e)}
+                            tool_call_results.append((name, result))
                     else:
                         tool_failure_count += 1
                         name = tool_call.get("name", "unknown")
-                        tool_call_results[name] = {"error": f"Unsupported tool call type: {tool_call['type']}"}
+                        tool_call_results.append((name, {"error": f"Unsupported tool call type: {tool_call['type']}"}))
 
                 if async_coros:
                     # Wait for the async tool loop to be ready
