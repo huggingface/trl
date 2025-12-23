@@ -268,7 +268,7 @@ class DPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel | "PeftModel",
+        model: "str | PreTrainedModel | PeftModel",
         ref_model: PreTrainedModel | None = None,
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,
@@ -386,6 +386,12 @@ class DPOTrainer(BaseTrainer):
         self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_types = args.loss_type  # args.loss_type is already a list
         self.label_smoothing = args.label_smoothing
+        self.use_weighting = args.use_weighting
+        if self.use_weighting and any(loss_type in {"aot", "aot_unpaired"} for loss_type in self.loss_types):
+            raise NotImplementedError(
+                "WPO-style weighting is not implemented for 'aot' or 'aot_unpaired' because those losses sort "
+                "samples, which would misalign per-pair weights."
+            )
         if "robust" in self.loss_types and not (0.0 <= self.label_smoothing < 0.5):
             logger.warning(
                 "The `label_smoothing` parameter should lie in [0.0, 0.5) for the 'robust' loss. You provided "
@@ -865,6 +871,19 @@ class DPOTrainer(BaseTrainer):
                     "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down', "
                     "'discopop', 'sft']"
                 )
+
+            if self.use_weighting:
+                # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
+                completion_lengths = shift_completion_mask.sum(dim=1).clamp_min(1)
+                log_probs = F.log_softmax(shift_logits, dim=-1)
+                log_denom = torch.logsumexp(2 * log_probs, dim=-1)
+                aligned_logps = per_token_logps - log_denom
+                aligned_logps[shift_completion_mask == 0] = 0.0
+                mean_logps = aligned_logps.sum(dim=1) / completion_lengths
+                weights = torch.exp(mean_logps).detach()
+                chosen_weights, rejected_weights = weights.chunk(2, dim=0)
+                pair_weights = chosen_weights * rejected_weights
+                per_sequence_loss = per_sequence_loss * pair_weights
 
             loss += per_sequence_loss.mean()
 

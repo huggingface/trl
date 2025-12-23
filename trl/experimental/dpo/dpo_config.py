@@ -156,6 +156,13 @@ class DPOConfig(TrainingArguments):
             "denoted by τ in the [paper](https://huggingface.co/papers/2310.12036)."
         },
     )
+    use_weighting: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference "
+            "pairs using the policy's length-normalized sequence probabilities."
+        },
+    )
     discopop_tau: float = field(
         default=0.05,
         metadata={
@@ -305,10 +312,6 @@ class DPOConfig(TrainingArguments):
             "help": "Whether to ignore the provided reference model and implicitly use a reference model that assigns "
             "equal probability to all responses."
         },
-    )
-    use_weighting: bool = field(
-        default=False,
-        metadata={"help": "Whether to weight the loss as done in the WPO paper."},
     )
     rpo_alpha: float | None = field(
         default=None,

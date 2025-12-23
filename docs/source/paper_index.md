@@ -758,6 +758,34 @@ training_args = DPOConfig(
 )
 ```
 
+### WPO: Enhancing RLHF with Weighted Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2406.11827
+
+WPO reweights preference pairs by their policy probabilities to reduce the off-policy gap in DPO-style training. The loss is:
+
+$$
+\mathcal{L}_{\text{WPO}} = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}} \left[ \textcolor{red}{w(x, y_w) w(x, y_l)} \log p(y_w \succ y_l \mid x) \right]
+$$
+
+where the weight  \\( w(x, y) \\) is defined as:
+
+$$
+w(x, y) = \exp\left(\frac{1}{|y|}\sum_{t=1}^{|y|} \log \frac{\pi_\theta(y_t \mid x, y_{<t})}{\sum_{v \in \mathcal{V}} \pi_\theta(v \mid x, y_{<t})^2}\right)
+$$
+
+To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid",  # DPO loss used in the paper
+    beta=0.01,  # Section 4 of the paper
+    use_weighting=True,
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
