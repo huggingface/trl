@@ -335,6 +335,42 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @pytest.mark.parametrize(
+        "f_divergence_type",
+        ["reverse_kl", "forward_kl", "js_divergence", "alpha_divergence"],
+    )
+    def test_train_with_f_divergence(self, f_divergence_type):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # Initialize the trainer
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            report_to="none",
+            f_divergence_type=f_divergence_type,
+            f_alpha_divergence_coef=0.5,
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
     def test_train_with_explicit_ref_model(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")

@@ -523,6 +523,39 @@ trainer = DPOTrainer(
 trainer.train()
 ```
 
+### Beyond Reverse KL: Generalizing Direct Preference Optimization with Diverse Divergence Constraints
+
+**📜 Paper**: https://huggingface.co/papers/2309.16240
+
+Proposes  \(( f \\)-DPO, extending DPO by replacing the usual reverse-KL regularizer with a general \(( f \\)-divergence, letting you trade off mode-seeking vs mass-covering behavior (e.g. forward KL, JS,  \(( \alpha \\)-divergences). The only change is replacing the DPO log-ratio margin with an **f′ score**:
+
+$$
+\mathcal{L}_{f\text{-DPO}}(\pi_\theta)
+= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+-\log \sigma\left(
+\beta \textcolor{red}{f'}\textcolor{red}{\Big(}\frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)}\textcolor{red}{\Big)}
+-
+\beta \textcolor{red}{f'}\textcolor{red}{\Big(}\frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\textcolor{red}{\Big)}
+\right)
+\right]
+$$
+
+Where  \\( f' \\) is the derivative of the convex function defining the chosen  \(( f \\)-divergence.
+
+To reproduce:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid",
+    beta=0.1,
+    f_divergence_type="js_divergence",  # or "reverse_kl" (default), "forward_kl", "js_divergence", "alpha_divergence"
+    f_alpha_divergence_coef=0.5,  # only used if f_divergence_type="alpha_divergence"
+)
+```
+
 ### A General Theoretical Paradigm to Understand Learning from Human Preferences
 
 **📜 Paper**: https://huggingface.co/papers/2310.12036

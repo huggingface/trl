@@ -14,9 +14,42 @@
 
 import warnings
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from transformers import TrainingArguments
+
+
+class FDivergenceType(Enum):
+    """
+    Types of f-divergence functions for DPO loss regularization.
+
+    <Deprecated version="0.27.0">
+
+    Using `FDivergenceType` for `f_divergence_type` in [`DPOConfig`] is deprecated and will be removed in version
+    0.29.0. Use a string instead.
+
+    </Deprecated>
+
+    Attributes:
+        REVERSE_KL: Reverse KL divergence.
+        JS_DIVERGENCE: Jensen-Shannon divergence.
+        ALPHA_DIVERGENCE: Alpha divergence.
+
+    Examples:
+        ```python
+        >>> from trl.trainer.dpo_config import DPOConfig, FDivergenceType
+
+        >>> config = DPOConfig(
+        ...     f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE,
+        ...     f_alpha_divergence_coef=0.5,  # used only with ALPHA_DIVERGENCE
+        ... )
+        ```
+    """
+
+    REVERSE_KL = "reverse_kl"
+    JS_DIVERGENCE = "js_divergence"
+    ALPHA_DIVERGENCE = "alpha_divergence"
 
 
 @dataclass
@@ -145,6 +178,20 @@ class DPOConfig(TrainingArguments):
             "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
             "Example: `[0.8, 0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss "
             "types."
+        },
+    )
+    f_divergence_type: str = field(
+        default="reverse_kl",
+        metadata={
+            "help": "f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: "
+            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`.",
+        },
+    )
+    f_alpha_divergence_coef: float = field(
+        default=1.0,
+        metadata={
+            "help": "α coefficient for the α-divergence u^-α regularizer, used only when "
+            "`f_divergence_type='alpha_divergence'`."
         },
     )
     label_smoothing: float = field(
@@ -305,17 +352,6 @@ class DPOConfig(TrainingArguments):
             "`use_liger_kernel` is `True`."
         },
     )
-    f_divergence_type: str = field(
-        default="FDivergenceType.REVERSE_KL",
-        metadata={
-            "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
-            "model."
-        },
-    )
-    f_alpha_divergence_coef: float = field(
-        default=1.0,
-        metadata={"help": "α coefficient in the α-divergence u^-α regularization function for DPO loss."},
-    )
     reference_free: bool = field(
         default=False,
         metadata={
@@ -450,5 +486,13 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
+        if isinstance(self.f_divergence_type, FDivergenceType):
+            warnings.warn(
+                "`f_divergence_type` will require a string in 0.29.0; `FDivergenceType` is deprecated. Use one of: "
+                "`reverse_kl`, `forward_kl`, `js_divergence`, `alpha_divergence`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.f_divergence_type = self.f_divergence_type.value
 
         super().__post_init__()
