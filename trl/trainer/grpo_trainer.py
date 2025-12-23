@@ -251,7 +251,7 @@ class GRPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel | "PeftModel",
+        model: "str | PreTrainedModel | PeftModel",
         reward_funcs: RewardFunc | list[RewardFunc],
         args: GRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
