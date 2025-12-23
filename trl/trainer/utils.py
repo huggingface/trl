@@ -19,8 +19,8 @@ import json
 import os
 import random
 import socket
-import zlib
 import threading
+import zlib
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import contextmanager
 from dataclasses import dataclass
