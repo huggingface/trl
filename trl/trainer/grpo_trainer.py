@@ -1603,6 +1603,8 @@ class GRPOTrainer(BaseTrainer):
                         tool_call_results[name] = {"error": f"Unsupported tool call type: {tool_call['type']}"}
 
                 if async_coros:
+                    # Wait for the async tool loop to be ready
+                    self.async_reward_loop_ready_event.wait()
 
                     async def _run_async_tools(async_coros):
                         results = {}
@@ -1640,6 +1642,7 @@ class GRPOTrainer(BaseTrainer):
             )
             if isinstance(pct_ids, dict):
                 pct_ids = pct_ids["input_ids"]
+
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
