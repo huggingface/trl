@@ -819,6 +819,29 @@ training_args = DPOConfig(
 )
 ```
 
+### Length Desensitization in Direct Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2409.06411
+
+Shows that standard DPO is inherently length-sensitive, which often pushes models toward overly long or verbose generations. The paper proposes LD-DPO, which modifies the sequence log-prob aggregation by splitting the longer response into a shared prefix (up to the shorter response length) and an excess tail, then downweighting the tail with a factor  \\( \alpha \in [0,1] \\):
+
+$$
+\log \pi_\theta(y_{\text{long}}|x) = \log \pi_\theta(y_{1:l_p}|x) + \alpha \cdot \log \pi_\theta(y_{l_p+1:l}|x, y_{1:l_p}),
+\quad
+l_p=\min(|y_w|,|y_l|).
+$$
+
+Setting  \\( \alpha=1 \\) recovers standard  \\( \alpha \\) reduces verbosity while preserving preference quality. 
+The optimal  \\( \alpha \\) depends on the model family and whether you’re training a base vs. instruct model, but the paper suggests  \\( \alpha=0.5 \\) as a strong default starting point.
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    ld_dpo_alpha=0.5,
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]

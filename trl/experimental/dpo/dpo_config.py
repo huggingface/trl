@@ -180,6 +180,15 @@ class DPOConfig(TrainingArguments):
             "types."
         },
     )
+    ld_alpha: float | None = field(
+        default=None,
+        metadata={
+            "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
+            "log-probabilities in responses. If `None`, no weighting is applied to the verbose part, and the loss is "
+            "equivalent to the standard DPO loss. Must be in [0.0, 1.0]: `ld_alpha=1.0` applies no weighting, and "
+            "`ld_alpha=0.0` masks tokens beyond shared lengths.",
+        },
+    )
     f_divergence_type: str = field(
         default="reverse_kl",
         metadata={
@@ -365,14 +374,6 @@ class DPOConfig(TrainingArguments):
             "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
             "If `None`, no weighting is applied and the loss is the same as the DPO loss. The paper recommends "
             "`rpo_alpha=1.0`."
-        },
-    )
-    ld_alpha: float | None = field(
-        default=None,
-        metadata={
-            "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
-            "log-probabilities in responses. If `None`, no weighting is applied to the verbose part, and the loss is "
-            "equivalent to the standard DPO loss. The paper recommends setting `ld_alpha` between `0.0` and `1.0`.",
         },
     )
     ref_model_mixup_alpha: float = field(

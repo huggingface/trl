@@ -386,6 +386,7 @@ class DPOTrainer(BaseTrainer):
         self.precompute_ref_logps = args.precompute_ref_log_probs
         self.loss_types = args.loss_type  # args.loss_type is already a list
         self.loss_weights = args.loss_weights or [1.0] * len(self.loss_types)
+        self.ld_alpha = args.ld_alpha
         self.f_divergence_type = args.f_divergence_type
         self.f_alpha_divergence_coef = args.f_alpha_divergence_coef
         self.label_smoothing = args.label_smoothing
@@ -727,7 +728,19 @@ class DPOTrainer(BaseTrainer):
         shift_completion_mask = completion_mask[..., 1:].contiguous()
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
         per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
-        logps = per_token_logps.sum(dim=1)  # sum over sequence length
+        if self.ld_alpha is None:
+            logps = per_token_logps.sum(dim=1)  # sum over sequence length
+        else:
+            comp_pos = shift_completion_mask.cumsum(dim=1)
+            comp_lens = shift_completion_mask.sum(dim=1).long()
+            chosen_lens, rejected_lens = comp_lens.chunk(2, dim=0)
+            shared_lens = torch.minimum(chosen_lens, rejected_lens)
+            shared_lens_2b = torch.cat([shared_lens, shared_lens], dim=0).to(device)
+            shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens_2b.unsqueeze(1))  # shared: 1 <= pos <= shared_len
+            tail_mask = comp_pos > shared_lens_2b.unsqueeze(1)  # tail: pos > shared_len
+            shared_logps = (per_token_logps * shared_mask).sum(dim=1)
+            tail_logps = (per_token_logps * tail_mask).sum(dim=1)
+            logps = shared_logps + self.ld_alpha * tail_logps
         chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
 
         if self.precompute_ref_logps:
