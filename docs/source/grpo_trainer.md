@@ -626,7 +626,7 @@ def multiply(a: int, b: int) -> int:
     """
     return a * b
 
-def async_add(a: int, b: int) -> int:
+async def async_add(a: int, b: int) -> int:
     """
     Asynchronously adds two integers.
 

@@ -70,7 +70,7 @@ def multiply_tool(a: int, b: int) -> int:
     return a * b
 
 
-def async_multiply_tool(a: int, b: int) -> int:
+async def async_multiply_tool(a: int, b: int) -> int:
     """
     Asynchronously multiplies two integers.
 
@@ -1860,6 +1860,7 @@ class TestGRPOTrainer(TrlTestCase):
                         [
                             # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
                             [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                            # an invalid tool call with wrong argument name
                             # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
                             [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
                             # "I don't know any tool<|im_end|>"
@@ -1872,6 +1873,7 @@ class TestGRPOTrainer(TrlTestCase):
                         [
                             # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
                             [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                            # an invalid tool call with wrong argument name
                             # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
                             [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
                             # "I don't know any tool<|im_end|>"
