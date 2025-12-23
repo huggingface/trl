@@ -19,6 +19,7 @@ import os
 import random
 import socket
 from collections.abc import Mapping, Sequence, Sized
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
@@ -28,7 +29,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
@@ -63,7 +63,7 @@ if is_comet_available():
     import comet_ml
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = logging.get_logger(__name__)
@@ -1171,3 +1171,43 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@contextmanager
+def use_adapter(model: "PeftModel", adapter_name: str | None):
+    """
+    Context manager to temporarily set and reset the active adapter in a PEFT model.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model to manage.
+        adapter_name (`str` or `None`):
+            Name of the adapter to set as active. If `None`, the context manager will disable all adapters.
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import use_adapter
+    >>> from peft import AutoPeftModelForCausalLM
+    >>> import torch
+
+    >>> model = AutoPeftModelForCausalLM.from_pretrained("path/to/model")
+    >>> input_ids = torch.tensor([[1, 2, 3]])
+    >>> with use_adapter(model, "adapter_name"):
+    ...     outputs = model(input_ids)
+    ```
+    """
+
+    if not is_peft_available():
+        raise ImportError(
+            "You're trying to use a PEFT adapter but PEFT is not installed. Please install it with `pip install peft`."
+        )
+    if adapter_name is None:
+        with model.disable_adapter():
+            yield
+    else:
+        previous_adapter = model.active_adapter
+        model.set_adapter(adapter_name)
+        try:
+            yield
+        finally:
+            model.set_adapter(previous_adapter)
