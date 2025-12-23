@@ -1347,13 +1347,13 @@ class TestSFTTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
+            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
                 marks=pytest.mark.skipif(
@@ -2018,7 +2018,6 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_steps=10,
             packing=packing,
             max_length=self.max_length,
-            fp16=True,  # this is sufficient to enable amp
             gradient_checkpointing=True,
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
@@ -2068,7 +2067,6 @@ class TestSFTTrainerSlow(TrlTestCase):
             report_to="none",
             per_device_train_batch_size=2,
             max_steps=10,
-            fp16=True,
         )
 
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)

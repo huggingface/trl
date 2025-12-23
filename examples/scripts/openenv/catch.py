@@ -12,6 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio>=0.13.0",
+#     "kernels",
+#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
+#     "openenv_core",
+# ]
+# ///
+
+
 """
 Simple script to run GRPO training with OpenEnv's Catch environment (OpenSpiel) and vLLM. The reward function
 is based on the catch game where the agent tries to catch falling balls.
@@ -19,7 +31,9 @@ is based on the catch game where the agent tries to catch falling balls.
 Setup:
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# Hotfix: https://github.com/huggingface/trl/pull/4740
+uv pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
 ```
 
 Usage:
@@ -216,6 +230,7 @@ def main():
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         logging_steps=1,
         report_to="trackio",
+        trackio_space_id=f"{args.model.split('/')[-1]}-GRPO-Catch",
         num_train_epochs=1,
         max_completion_length=4,
         gradient_accumulation_steps=4,

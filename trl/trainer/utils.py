@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import dataclasses
 import importlib.resources as pkg_resources
 import json
 import os
 import random
 import socket
+import threading
 from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -1161,3 +1163,55 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+def start_event_loop_in_daemon(
+    name: str | None = None,
+) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
+    """
+    This function creates a new daemon thread that runs the provided event loop.
+
+    Args:
+        name (`str`, *optional*):
+            Name of the thread. If `None`, the default thread naming will be used.
+
+    Returns:
+        `threading.Thread`:
+            The thread running the event loop.
+        `asyncio.AbstractEventLoop`:
+            The event loop being run in the thread.
+        `threading.Event`:
+            An event that is set when the loop is ready.
+    """
+    loop = asyncio.new_event_loop()
+    loop_ready_event = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop_ready_event.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop, name=name, daemon=True)
+    thread.start()
+    return thread, loop, loop_ready_event
+
+
+def shutdown_event_loop_in_daemon(
+    thread: threading.Thread | None,
+    loop: asyncio.AbstractEventLoop | None,
+) -> None:
+    """
+    Shutdown an asyncio event loop running in a separate thread.
+
+    This function stops the event loop and waits for the associated thread to finish execution.
+
+    Args:
+        thread (`threading.Thread`):
+            The thread running the event loop.
+        loop (`asyncio.AbstractEventLoop`):
+            The asyncio event loop to shut down.
+    """
+    if loop is None or thread is None:
+        return
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)
