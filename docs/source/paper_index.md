@@ -177,7 +177,7 @@ training_args = GRPOConfig(
     per_device_train_batch_size=1, # train_batch_size_per_device in the Training section of the repository
     num_generations=8, #  num_samples in the Training section of the repository
     max_completion_length=3000, # generate_max_length in the Training section of the repository
-    beta=0.0, # beta in the Training section of the repository
+    beta=0.0, # β in the Training section of the repository
 )
 ```
 
@@ -460,7 +460,7 @@ training_args = DPOConfig(
     loss_type="sigmoid", # losses in Appendix B of the paper
     per_device_train_batch_size=64, #  batch size in Appendix B of the paper
     learning_rate=1e-6, # learning rate in Appendix B of the paper
-    beta=0.1, # beta in Appendix B of the paper
+    beta=0.1, # β in Appendix B of the paper
 )
 ```
 
@@ -512,7 +512,7 @@ train_dataset = train_dataset.filter(rso_accept)
 
 training_args = DPOConfig(
     loss_type="hinge",
-    beta=0.05,  # correspond to gamma in the paper
+    beta=0.05,  # correspond to γ in the paper
 )
 
 trainer = DPOTrainer(
@@ -645,7 +645,7 @@ training_args = DPOConfig(
     loss_type="robust",
     per_device_train_batch_size=16,  # batch size in Section B of the paper
     learning_rate=1e-3,  # learning rate in Section B of the paper
-    beta=0.1,  # $\beta$ in Section B of the paper,
+    beta=0.1,  # β in Section B of the paper,
     max_prompt_length=128,  # max prompt length in Section B of the paper
     max_length=512,  # max length in Section B of the paper
     label_smoothing=0.1  # label smoothing $\varepsilon$ in Section 6 of the paper
@@ -752,7 +752,7 @@ training_args = DPOConfig(
     loss_type="apo_zero",  # Section 4 of the paper
     per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
     learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
-    beta=0.1,  # $\beta$ in Section 5.2 of the paper,
+    beta=0.1,  # β in Section 5.2 of the paper,
     max_prompt_length=512,  # prompt length in Section 5.2 of the paper
     max_completion_length=512,  # completion length in Section 5.2 of the paper
 )
@@ -765,7 +765,7 @@ training_args = DPOConfig(
     loss_type="apo_down",  # Section 4 of the paper
     per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
     learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
-    beta=0.1,  # $\beta$ in Section 5.2 of the paper,
+    beta=0.1,  # β in Section 5.2 of the paper,
     max_prompt_length=512,  # prompt length in Section 5.2 of the paper
     max_completion_length=512,  # completion length in Section 5.2 of the paper
 )
@@ -786,8 +786,8 @@ training_args = DPOConfig(
     loss_type="discopop",
     per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
     learning_rate=5e-7,  # learning rate in Section B.1 of the paper
-    beta=0.05,  # $\beta$ in Section B.1 of the paper,
-    discopop_tau=0.05  # $\tau$ in Section E of the paper
+    beta=0.05,  # β in Section B.1 of the paper,
+    discopop_tau=0.05  # τ in Section E of the paper
 )
 ```
 
