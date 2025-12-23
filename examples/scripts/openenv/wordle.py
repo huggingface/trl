@@ -30,7 +30,9 @@ Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 Setup:
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# Hotfix: https://github.com/huggingface/trl/pull/4740
+uv pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
 ```
 
 Usage:
