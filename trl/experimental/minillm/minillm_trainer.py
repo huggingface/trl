@@ -14,6 +14,8 @@
 
 import textwrap
 
+import os
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,12 +27,14 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
 )
+from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
 from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
 from .minillm_config import MiniLLMConfig
+from ...extras.profiling import profiling_decorator
 
 
 if is_peft_available():
@@ -231,6 +235,10 @@ class MiniLLMTrainer(GRPOTrainer):
         self.gamma = args.gamma
         self.length_normalization = args.length_normalization
 
+        self._current_rkl_advantange_time = 0.0
+        self._current_single_step_loss_time = 0.0
+        self._current_rl_loss_time = 0.0
+
     def _single_step_decomposition_loss(
         self,
         student_log_probs: torch.Tensor,
@@ -278,6 +286,7 @@ class MiniLLMTrainer(GRPOTrainer):
         else:
             return reg_loss
 
+    @torch.no_grad()
     def _compute_advantage(
         self,
         student_log_probs_on_labels: torch.Tensor,
@@ -295,11 +304,11 @@ class MiniLLMTrainer(GRPOTrainer):
 
         $$ \text{lengths}_t = \sum_{i=t}^{T} \gamma^{i-t} $$
 
-        $$ \text{advantages}_t = \frac{\sum_{i=t}^{T} \gamma^{i-t} R_i}{\text{lengths}_t} $$
+        $$ \text{advantages}_t = \frac{\sum_{i=t}^{T} \gamma^{i-t} \text{rewards}_i}{\text{lengths}_t} $$
 
         Otherwise:
 
-        $$ \text{advantages}_t = \sum_{i=t}^{T} \gamma^{i-t} R_i $$
+        $$ \text{advantages}_t = \sum_{i=t}^{T} \gamma^{i-t} \text{rewards}_i $$
 
         Args:
             student_log_probs_on_labels: Log probabilities of the student model on the labels.
@@ -322,24 +331,28 @@ class MiniLLMTrainer(GRPOTrainer):
         if self.gamma > 0.0:
             gamma_pow = torch.pow(self.gamma, torch.arange(response_length, device=rewards.device))
 
-            advantages = rewards * gamma_pow
-            advantages = advantages.flip(1).cumsum(dim=1).flip(1)
+            rewards = rewards * gamma_pow
+            rewards = rewards.flip(1).cumsum(dim=1).flip(1)
 
             if self.length_normalization:
                 mask = torch.where(mask < 0.5, 1e-4, mask)
                 lengths = mask * gamma_pow
                 lengths = lengths.flip(1).cumsum(dim=1).flip(1)
-                advantages = advantages / lengths
-        else:
-            advantages = rewards
+                rewards = rewards / lengths
+
+        advantages = rewards
 
         return advantages
 
+    def get_rev_kl(self, log_p: torch.Tensor, log_q: torch.Tensor, mask: torch.Tensor):
+        log_ratio = (log_p - log_q) * mask
+        kl = log_ratio.float().exp() - 1 - log_ratio
+        return kl
+
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
 
         # Compute student output
         student_outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
@@ -363,16 +376,25 @@ class MiniLLMTrainer(GRPOTrainer):
         student_log_probs = F.log_softmax(student_logits, dim=-1)
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
-        student_log_probs_on_labels = torch.gather(
-            student_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
-        ).squeeze(-1)
+        if self.args.on_policy_logq:
+            student_log_probs_on_labels = torch.gather(
+                student_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
+            ).squeeze(-1)
+        else:
+            student_log_probs_on_labels = inputs["old_per_token_logps"]
+
         teacher_log_probs_on_labels = torch.gather(
             teacher_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
         ).squeeze(-1)
 
-        mask = shifted_labels != -100
+        mask = attention_mask[:, prompt_lengths:].bool()
 
+        # Logging Meitrcs
+        mode = "train" if self.model.training else "eval"
+
+        # Compute advantage for Reverse KL
         if self.rkl_advantage:
+            rkl_advantage_time = time.perf_counter()
             reverse_kl_advantage = self._compute_advantage(
                 student_log_probs_on_labels=student_log_probs_on_labels,
                 teacher_log_probs_on_labels=teacher_log_probs_on_labels,
@@ -380,19 +402,58 @@ class MiniLLMTrainer(GRPOTrainer):
             )
 
             inputs["advantages"] = inputs["advantages"].unsqueeze(1) + reverse_kl_advantage
+            mean_advantage = (inputs["advantages"] * mask).sum() / mask.sum()
+            self._metrics[mode]["minillm/mean_advantage"].append(self.accelerator.gather(mean_advantage).mean().item())
+            rkl_advantage_time_after = time.perf_counter()
+            self._current_rkl_advantange_time += rkl_advantage_time_after - rkl_advantage_time
+            if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
+                self._metrics[mode]["rkl_advantage_time"].append(self._current_rkl_advantange_time)
+                self._current_rkl_advantange_time = 0.0
 
         # Compute GRPO loss on verifiable reward
+        rl_loss_time = time.perf_counter()
         loss = self._compute_loss(model, inputs)
+        self._metrics[mode]["rl_loss"].append(self.accelerator.gather(loss).mean().item())
+        rl_loss_time_after = time.perf_counter()
+        self._current_rl_loss_time += rl_loss_time_after - rl_loss_time
+        if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
+            self._metrics[mode]["rl_loss_time"].append(self._current_rl_loss_time)
+            self._current_rl_loss_time = 0.0
 
         # Compute loss
         if self.single_step_decomposition:
+            single_step_loss_time = time.perf_counter()
             single_step_decomposition_loss = self._single_step_decomposition_loss(
                 student_log_probs=student_log_probs,
                 teacher_log_probs=teacher_log_probs,
                 mask=mask,
             )
 
-            loss += single_step_decomposition_loss
+            self._metrics[mode]["minillm/single_step_decomposition_loss"].append(self.accelerator.gather(single_step_decomposition_loss).mean().item())
+            loss += (single_step_decomposition_loss / self.current_gradient_accumulation_steps)
+            single_step_loss_time_after = time.perf_counter()
+            self._current_single_step_loss_time += single_step_loss_time_after - single_step_loss_time
+            if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
+                self._metrics[mode]["single_step_loss_time"].append(self._current_single_step_loss_time)
+                self._current_single_step_loss_time = 0.0
+
+        # Compute Reverse KL for logging
+        with torch.no_grad():
+            reverse_kl = self.get_rev_kl(
+                log_p=teacher_log_probs_on_labels,
+                log_q=inputs["old_per_token_logps"],
+                mask=mask,
+            )
+            reverse_kl = reverse_kl.sum() / mask.sum()
+
+            if self.args.log_large_reverse_kl and reverse_kl.item() > 5.0:
+                save_path = f"{self.args.output_dir}/large_reverse_kl_logs/rank_{self.accelerator.process_index}/gs{self.state.global_step}_s{self._step}_rkl_{reverse_kl.item():.2f}/"
+                os.makedirs(save_path, exist_ok=True)
+                torch.save(inputs, f"{save_path}/inputs.pt")
+                torch.save(student_log_probs, f"{save_path}/student_log_probs.pt")
+                torch.save(teacher_log_probs, f"{save_path}/teacher_log_probs.pt")
+
+            self._metrics[mode]["minillm/reverse_kl"].append(self.accelerator.gather(reverse_kl).mean().item())
 
         # Empty cache
         empty_cache()
