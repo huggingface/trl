@@ -446,14 +446,6 @@ class MiniLLMTrainer(GRPOTrainer):
                 mask=mask,
             )
             reverse_kl = reverse_kl.sum() / mask.sum()
-
-            if self.args.log_large_reverse_kl and reverse_kl.item() > 5.0:
-                save_path = f"{self.args.output_dir}/large_reverse_kl_logs/rank_{self.accelerator.process_index}/gs{self.state.global_step}_s{self._step}_rkl_{reverse_kl.item():.2f}/"
-                os.makedirs(save_path, exist_ok=True)
-                torch.save(inputs, f"{save_path}/inputs.pt")
-                torch.save(student_log_probs, f"{save_path}/student_log_probs.pt")
-                torch.save(teacher_log_probs, f"{save_path}/teacher_log_probs.pt")
-
             self._metrics[mode]["minillm/reverse_kl"].append(self.accelerator.gather(reverse_kl).mean().item())
 
         # Empty cache
