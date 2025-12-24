@@ -376,10 +376,11 @@ class MiniLLMTrainer(GRPOTrainer):
         student_log_probs = F.log_softmax(student_logits, dim=-1)
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
-        if self.args.on_policy_logq:
+        generate_every = self.args.steps_per_generation * self.num_iterations
+        if self.args.on_policy_logq or self.args.gradient_accumulation_steps % generate_every == 0:
             student_log_probs_on_labels = torch.gather(
                 student_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
-            ).squeeze(-1)
+            ).squeeze(-1).detach()
         else:
             student_log_probs_on_labels = inputs["old_per_token_logps"]
 
