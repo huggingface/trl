@@ -331,6 +331,13 @@ class DPOConfig(TrainingArguments):
             "the dataset via a `tools` column instead."
         },
     )
+    reference_free: bool | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. The DPO trainer no longer "
+            "supports reference-free training. For reference-free training, use the CPOTrainer instead."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -359,13 +366,6 @@ class DPOConfig(TrainingArguments):
             "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
             "model  from the model when the model does not have a `get_decoder` method in the case when "
             "`use_liger_kernel` is `True`."
-        },
-    )
-    reference_free: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to ignore the provided reference model and implicitly use a reference model that assigns "
-            "equal probability to all responses."
         },
     )
     rpo_alpha: float | None = field(
@@ -502,5 +502,13 @@ class DPOConfig(TrainingArguments):
                 stacklevel=2,
             )
             self.f_divergence_type = self.f_divergence_type.value
+        if self.reference_free is not None:
+            warnings.warn(
+                "The `reference_free` argument is deprecated and will be removed in version 0.29.0. The DPO trainer "
+                "no longer supports reference-free training. For reference-free training, use the CPOTrainer "
+                "instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
 
         super().__post_init__()
