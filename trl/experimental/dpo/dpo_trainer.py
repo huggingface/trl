@@ -35,7 +35,7 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
-from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages
 from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
@@ -60,6 +60,10 @@ from .dpo_config import DPOConfig
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
+
+
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
 
 
 logger = get_logger(__name__)
@@ -406,6 +410,17 @@ class DPOTrainer(BaseTrainer):
                 "Label smoothing must be greater than 0.0 when using 'exo_pair' loss. The EXO paper recommends a "
                 "value of 1e-3."
             )
+        self.use_liger_kernel = args.use_liger_kernel
+        if args.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            self.liger_loss_fn = LigerFusedLinearDPOLoss(
+                beta=args.beta,
+                loss_type=self.loss_types[0],
+            )
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -613,12 +628,6 @@ class DPOTrainer(BaseTrainer):
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
-            # For Liger kernel, ensure only the essential columns
-            if args.use_liger_kernel:
-                collator_expected_keys = {"input_ids", "completion_mask"}
-                column_names = get_dataset_column_names(dataset)
-                dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
-
         return dataset
 
     def _set_signature_columns_if_needed(self):
@@ -697,7 +706,21 @@ class DPOTrainer(BaseTrainer):
         )
         return dataset
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def _compute_loss_liger(self, model, inputs):
+        raise NotImplementedError("LIGER loss computation is not implemented yet.")
+        # weight = model.get_output_embeddings().weight
+        # ref_weight = self.ref_model.get_output_embeddings().weight
+        # liger_loss, _ = self.liger_loss_fn(
+        #     weight,
+        #     hidden_states,
+        #     labels,
+        #     bias=bias,
+        #     ref_input=hidden_states,
+        #     ref_weight=ref_weight,
+        #     ref_bias=bias,
+        # )
+
+    def _compute_loss(self, model, inputs, return_outputs=False):
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
@@ -992,6 +1015,13 @@ class DPOTrainer(BaseTrainer):
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
         return (loss, outputs) if return_outputs else loss
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if self.use_liger_kernel:
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            return self._compute_loss_liger(unwrapped_model, inputs)
+        else:
+            return self._compute_loss(model, inputs, return_outputs)
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
