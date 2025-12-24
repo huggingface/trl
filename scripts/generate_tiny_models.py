@@ -320,7 +320,8 @@ for model_id, model_class, dtype in [
     ("HuggingFaceM4/Idefics3-8B-Llama3", Idefics3ForConditionalGeneration, torch.bfloat16),
     ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMForConditionalGeneration, torch.float32),
     ("llava-hf/llava-1.5-7b-hf", LlavaForConditionalGeneration, torch.float16),
-    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextForConditionalGeneration, torch.float16),
+    # Original model dtype is float16, but it triggers CUDA device side assert error (see GH-4741):
+    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextForConditionalGeneration, torch.bfloat16),
     ("OpenGVLab/InternVL3-8B-hf", InternVLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLForConditionalGeneration, torch.bfloat16),
