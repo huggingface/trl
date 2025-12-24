@@ -442,7 +442,7 @@ class MiniLLMTrainer(GRPOTrainer):
         with torch.no_grad():
             reverse_kl = self.get_rev_kl(
                 log_p=teacher_log_probs_on_labels,
-                log_q=inputs["old_per_token_logps"],
+                log_q=student_log_probs_on_labels,
                 mask=mask,
             )
             reverse_kl = reverse_kl.sum() / mask.sum()
