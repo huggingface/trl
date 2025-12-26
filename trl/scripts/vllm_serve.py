@@ -59,7 +59,7 @@ if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
     from vllm.utils import get_open_port
 
     if is_vllm_ascend_available():
@@ -495,7 +495,7 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         truncate_prompt_tokens: int | None = None
-        guided_decoding_regex: str | None = None
+        structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
 
     class GenerateResponse(BaseModel):
@@ -528,7 +528,7 @@ def main(script_args: ScriptArguments):
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
-                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
+                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided, the
                   model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
                   `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
@@ -564,11 +564,11 @@ def main(script_args: ScriptArguments):
                 row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
             prompts.append(row)
 
-        # Guided decoding, if enabled
-        if request.guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(regex=request.guided_decoding_regex)
+        # structured outputs, if enabled
+        if request.structured_outputs_regex is not None:
+            structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
         else:
-            guided_decoding = None
+            structured_outputs = None
 
         generation_kwargs = {
             "n": request.n,
@@ -579,7 +579,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "guided_decoding": guided_decoding,
+            "structured_outputs": structured_outputs,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
         generation_kwargs.update(request.generation_kwargs)
@@ -625,7 +625,7 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         truncate_prompt_tokens: int | None = None
-        guided_decoding_regex: str | None = None
+        structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
 
@@ -658,7 +658,7 @@ def main(script_args: ScriptArguments):
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
-                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
+                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided, the
                   model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
                   `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
@@ -697,11 +697,11 @@ def main(script_args: ScriptArguments):
                         if part["type"] == "image_pil":
                             part["image_pil"] = Image.open(BytesIO(base64.b64decode(part["image_pil"])))
 
-        # Guided decoding, if enabled
-        if request.guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(regex=request.guided_decoding_regex)
+        # structured outputs, if enabled
+        if request.structured_outputs_regex is not None:
+            structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
         else:
-            guided_decoding = None
+            structured_outputs = None
 
         generation_kwargs = {
             "n": request.n,
@@ -712,7 +712,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "guided_decoding": guided_decoding,
+            "structured_outputs": structured_outputs,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
         generation_kwargs.update(request.generation_kwargs)

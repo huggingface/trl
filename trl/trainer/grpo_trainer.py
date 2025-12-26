@@ -102,7 +102,7 @@ if is_liger_kernel_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_wandb_available():
     import wandb
@@ -701,7 +701,7 @@ class GRPOTrainer(BaseTrainer):
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
             # vLLM specific sampling arguments
-            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.structured_outputs_regex = args.vllm_structured_outputs_regex
 
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
@@ -1315,7 +1315,7 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "guided_decoding_regex": self.guided_decoding_regex,
+                        "structured_outputs_regex": self.structured_outputs_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
                     with profiling_context(self, "vLLM.generate"):
@@ -1389,10 +1389,10 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = output["completion_ids"]
                     logprobs = output["logprobs"]
                 else:
-                    if self.guided_decoding_regex:
-                        guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
+                    if self.structured_outputs_regex:
+                        structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
                     else:
-                        guided_decoding = None
+                        structured_outputs = None
 
                     generation_kwargs = {
                         "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
@@ -1402,7 +1402,7 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "guided_decoding": guided_decoding,
+                        "structured_outputs": structured_outputs,
                         "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                     }
                     if self.args.generation_kwargs is not None:
