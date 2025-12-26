@@ -22,9 +22,9 @@ Usage:
         --env-host https://sergiopaniego-textarena.hf.space \
         --num-generations 8 \
         --per-device-batch-size 1 \
-        --max-turns 50 \
+        --max-turns 100 \
         --gradient-accumulation-steps 8  \
-        --keep-last-n-turns 25xw
+        --keep-last-n-turns 25
 """
 
 from __future__ import annotations
