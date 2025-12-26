@@ -20,7 +20,9 @@ import os
 import random
 import socket
 import threading
+import zlib
 from collections.abc import Mapping, Sequence, Sized
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
@@ -30,7 +32,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
@@ -65,7 +66,7 @@ if is_comet_available():
     import comet_ml
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = logging.get_logger(__name__)
@@ -1160,6 +1161,17 @@ def create_model_from_path(
     return model
 
 
+def hash_module(module: torch.nn.Module) -> str:
+    h = zlib.adler32(b"")
+    for _, tensor in sorted(module.state_dict().items()):
+        tensor = tensor.cpu()
+        h = zlib.adler32(str(tensor.dtype).encode(), h)
+        if tensor.dtype in (torch.bfloat16, torch.float8_e4m3fn, torch.float8_e5m2):
+            tensor = tensor.to(torch.float32)
+        h = zlib.adler32(tensor.numpy().tobytes(), h)
+    return f"{h:08x}"
+
+
 def get_config_model_id(config: PretrainedConfig) -> str:
     """
     Retrieve the model identifier from a given model configuration.
@@ -1173,6 +1185,24 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@contextmanager
+def use_adapter(model: PeftModel, adapter_name: str | None):
+    if not is_peft_available():
+        raise ImportError(
+            "You're trying to use a PEFT adapter but PEFT is not installed. Please install it with `pip install peft`."
+        )
+    if adapter_name is None:
+        with model.disable_adapter():
+            yield
+    else:
+        previous_adapter = model.active_adapter
+        model.set_adapter(adapter_name)
+        try:
+            yield
+        finally:
+            model.set_adapter(previous_adapter)
 
 
 def start_event_loop_in_daemon(

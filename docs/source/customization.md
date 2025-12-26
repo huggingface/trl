@@ -11,22 +11,16 @@ By default, the `DPOTrainer` creates a `torch.optim.AdamW` optimizer. You can cr
 
 ```python
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from torch import optim
-from trl import DPOConfig, DPOTrainer
+from trl import DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 
 optimizer = optim.SGD(model.parameters(), lr=training_args.learning_rate)
 
 trainer = DPOTrainer(
-    model=model,
-    args=training_args,
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     train_dataset=dataset,
-    tokenizer=tokenizer,
     optimizers=(optimizer, None),
 )
 trainer.train()

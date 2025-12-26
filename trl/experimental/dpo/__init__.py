@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .callback import BEMACallback
+from .dpo_config import DPOConfig
 from .dpo_trainer import DPOTrainer
 
 
-__all__ = ["BEMACallback", "DPOTrainer"]
+__all__ = ["DPOConfig", "DPOTrainer"]
