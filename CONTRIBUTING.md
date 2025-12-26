@@ -88,7 +88,7 @@ If you want to implement a trainer for a new post-training method, first open an
 Based on the community and maintainer feedback, the next step will be to implement the trainer and config classes. See the following examples for inspiration:
 
 * Paired preference optimisation: [`dpo_trainer.py`](./trl/trainer/dpo_trainer.py) and [`dpo_config.py`](./trl/trainer/dpo_config.py)
-* RL-based optimisation: [`rloo_trainer.py](./trl/trainer/rloo_trainer.py) and [`rloo_config.py](./trl/trainer/rloo_config.py)
+* RL-based optimisation: [`rloo_trainer.py`](./trl/trainer/rloo_trainer.py) and [`rloo_config.py`](./trl/trainer/rloo_config.py)
 * Online optimisation: [`online_dpo_trainer.py`](./trl/trainer/online_dpo_trainer.py) and [`online_dpo_config.py`](./trl/trainer/online_dpo_config.py)
 
 ## Do you want to add documentation?
