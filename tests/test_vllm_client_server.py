@@ -139,6 +139,27 @@ class TestVLLMClientServer(TrlTestCase):
         for seq in completion_ids:
             assert len(seq) <= 32
 
+    def test_generate_with_stop_sequences(self):
+        prompts = ["Tell me a short sentence."]
+        baseline = self.client.generate(prompts, max_tokens=4, temperature=0.0)["completion_ids"][0]
+        assert baseline, "Expected at least one generated token"
+        stop_token_id = baseline[0]
+
+        completion_ids = self.client.generate(
+            prompts,
+            max_tokens=4,
+            temperature=0.0,
+            stop=["\n"],
+            stop_token_ids=[stop_token_id],
+            include_stop_str_in_output=False,
+        )["completion_ids"]
+
+        assert isinstance(completion_ids, list)
+        assert len(completion_ids) == len(prompts)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+            assert len(seq) <= 4
+
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
