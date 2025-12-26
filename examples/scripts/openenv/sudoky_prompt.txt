@@ -13,19 +13,13 @@ You are an expert Sudoku player with deep knowledge of logical deduction strateg
 
 ## RESPONSE FORMAT
 
-Only respond with your next move in square brackets, e.g., [5 3 7].
+**CRITICAL: Output ONLY the move, nothing else. No text, no explanation.**
 
-Format:
-```
-[row col number]
-```
+Format: [row col number]
 
-Where:
-- row: the row number (1-9, where 1 is the top row)
-- col: the column number (1-9, where 1 is the leftmost column)
-- number: the digit to place (1-9)
-
-Example: [5 3 7] places the number 7 in row 5, column 3.
+Examples:
+- [5 3 7] → places 7 in row 5, column 3
+- [1 2 4] → places 4 in row 1, column 2
 
 ## STRATEGIC APPROACH
 
@@ -125,8 +119,7 @@ Subgrid 7 | Subgrid 8 | Subgrid 9
 - One move per response
 - Must be a valid move (no rule violations)
 - Never repeat a previous move
-- Always include brief reasoning before your move
 
 ## YOUR GOAL
 
-Complete the Sudoku puzzle by making valid moves that progressively fill in all empty cells while respecting all constraints. Use logical deduction to determine the correct number for each cell.
+Output ONLY your move in the format [row col number]. No explanation, no reasoning, just the move.
