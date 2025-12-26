@@ -189,6 +189,9 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        stop: str | list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        include_stop_str_in_output: bool = False,
         truncate_prompt_tokens: int | None = None,
         guided_decoding_regex: str | None = None,
         generation_kwargs: dict | None = None,
@@ -215,6 +218,12 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
+            stop (`str` or `list[str]`, *optional*):
+                String or list of strings that stop generation when generated.
+            stop_token_ids (`list[int]`, *optional*):
+                Token IDs that stop generation when generated.
+            include_stop_str_in_output (`bool`, *optional*, defaults to `False`):
+                Whether to include the stop strings in the output text.
             truncate_prompt_tokens (`int`, *optional*):
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
@@ -252,6 +261,9 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "stop": stop,
+                "stop_token_ids": stop_token_ids,
+                "include_stop_str_in_output": include_stop_str_in_output,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
                 "generation_kwargs": generation_kwargs or {},
@@ -277,6 +289,9 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        stop: str | list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        include_stop_str_in_output: bool = False,
         truncate_prompt_tokens: int | None = None,
         guided_decoding_regex: str | None = None,
         generation_kwargs: dict | None = None,
@@ -305,6 +320,12 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each message list.
+            stop (`str` or `list[str]`, *optional*):
+                String or list of strings that stop generation when generated.
+            stop_token_ids (`list[int]`, *optional*):
+                Token IDs that stop generation when generated.
+            include_stop_str_in_output (`bool`, *optional*, defaults to `False`):
+                Whether to include the stop strings in the output text.
             truncate_prompt_tokens (`int`, *optional*):
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
@@ -359,6 +380,9 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "stop": stop,
+                "stop_token_ids": stop_token_ids,
+                "include_stop_str_in_output": include_stop_str_in_output,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
                 "generation_kwargs": generation_kwargs or {},
