@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import atexit
 import copy
 import inspect
 import json
@@ -85,8 +86,10 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
     shuffle_sequence_dict,
+    shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
+    start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
 )
 
@@ -312,9 +315,11 @@ class GRPOTrainer(BaseTrainer):
         self.eos_token_id = tokenizer.eos_token_id
 
         if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
-            # If the model is already a PeftModel, we need to merge and unload it.
-            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-            model = model.merge_and_unload()
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                "with the new `peft_config` to the trainer."
+            )
 
         # Create PEFT model
         if peft_config is not None:
@@ -353,6 +358,15 @@ class GRPOTrainer(BaseTrainer):
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
+
+        self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_reward_funcs:
+            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
+                start_event_loop_in_daemon(name="GRPOTrainer-AsyncRewardLoop")
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_reward_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
 
         # Reward weights
         if args.reward_weights is not None:
@@ -1229,7 +1243,7 @@ class GRPOTrainer(BaseTrainer):
                 coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            async_results = asyncio.run(_run_async_funcs())
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
