@@ -811,7 +811,22 @@ class GRPOConfig(TrainingArguments):
 
         super().__post_init__()
 
-        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+        if isinstance(self.scale_rewards, bool):
+            self.scale_rewards = "group" if self.scale_rewards else "none"
+        elif isinstance(self.scale_rewards, str):
+            value = self.scale_rewards.lower()
+            if value in {"group", "batch", "none"}:
+                self.scale_rewards = value
+            else:
+                raise ValueError(
+                    f"Invalid value for scale_rewards: {self.scale_rewards!r}. "
+                    "Expected one of: True, False, 'group', 'batch', 'none'."
+                )
+        else:
+            raise TypeError(
+                f"scale_rewards must be a bool or str, got {type(self.scale_rewards).__name__}"
+            )
+
 
         num_processes = self.world_size
         # The current default effective batch size
