@@ -15,15 +15,15 @@ TRL is a full stack library for post-training and aligning transformer language 
 
 ## Quick Start
 
-<div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0;">
-  <a href="installation" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">📦 Installation</a>
-  <a href="quickstart" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">⚡ Quickstart</a>
-  <a href="dataset_formats" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">📚 Conceptual Guides</a>
-  <a href="clis" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">🛠️ How-to Guides</a>
-  <a href="deepspeed_integration" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">🔌 Integrations</a>
-  <a href="example_overview" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">💡 Examples</a>
-  <a href="sft_trainer" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">📖 API Reference</a>
-  <a href="experimental_overview" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; transition: all 0.2s;">🧪 Experimental</a>
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 1rem 0;">
+  <a href="installation" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">📦 Installation</a>
+  <a href="quickstart" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">⚡ Quickstart</a>
+  <a href="dataset_formats" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">📚 Conceptual Guides</a>
+  <a href="clis" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">🛠️ How-to Guides</a>
+  <a href="deepspeed_integration" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">🔌 Integrations</a>
+  <a href="example_overview" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">💡 Examples</a>
+  <a href="sft_trainer" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">📖 API Reference</a>
+  <a href="experimental_overview" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">🧪 Experimental</a>
 </div>
 
 ## Latest News
