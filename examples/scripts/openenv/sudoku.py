@@ -24,6 +24,7 @@ Usage:
         --per-device-batch-size 1 \
         --max-turns 50 \
         --gradient-accumulation-steps 8
+        --difficulty easy
 """
 
 from __future__ import annotations
@@ -31,8 +32,8 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 from collections import defaultdict
-from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -47,7 +48,6 @@ from trl.experimental.openenv import generate_rollout_completions
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from envs.textarena_env import TextArenaAction, TextArenaEnv
-from envs.textarena_env.models import TextArenaMessage
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +77,16 @@ def parse_args() -> argparse.Namespace:
     # Game settings
     parser.add_argument("--max-turns", type=int, default=31)
     parser.add_argument("--max-new-tokens", type=int, default=8)
+    parser.add_argument(
+        "--difficulty",
+        type=str,
+        choices=["easy", "medium", "hard"],
+        default="hard",
+        help="Training difficulty: easy=guaranteed+options, medium=only options, hard=no hints",
+    )
+    parser.add_argument(
+        "--api-delay", type=float, default=0.0, help="Delay in seconds between API calls to avoid rate limiting"
+    )
 
     # Sampling
     parser.add_argument("--temperature", type=float, default=0.8)
@@ -213,8 +223,15 @@ def get_valid_numbers(grid: list[list[int]], row: int, col: int) -> set[int]:
     return set(range(1, 10)) - used
 
 
-def extract_empty_cells_with_candidates(board_str: str) -> list[tuple[int, int, set[int]]]:
-    """Extract empty cells with their valid candidate numbers."""
+def extract_empty_cells_with_candidates(
+    board_str: str, sort_by_difficulty: bool = True
+) -> list[tuple[int, int, set[int]]]:
+    """Extract empty cells with their valid candidate numbers.
+
+    Args:
+        sort_by_difficulty: If True, sort by number of candidates (easiest first).
+                           If False, keep natural order (top-left to bottom-right).
+    """
     grid = parse_board(board_str)
     cells_with_candidates = []
 
@@ -224,8 +241,9 @@ def extract_empty_cells_with_candidates(board_str: str) -> list[tuple[int, int, 
                 candidates = get_valid_numbers(grid, row, col)
                 cells_with_candidates.append((row + 1, col + 1, candidates))  # 1-indexed
 
-    # Sort by number of candidates (easiest first = naked singles)
-    cells_with_candidates.sort(key=lambda x: len(x[2]))
+    if sort_by_difficulty:
+        # Sort by number of candidates (easiest first = naked singles)
+        cells_with_candidates.sort(key=lambda x: len(x[2]))
 
     return cells_with_candidates
 
@@ -279,36 +297,40 @@ def extract_board_only(text: str) -> str:
     return "\n".join(board_lines) if board_lines else ""
 
 
-def format_history(messages: Iterable[TextArenaMessage]) -> str:
-    lines = []
-    for message in messages:
-        tag = message.category or "MESSAGE"
-        content = message.content.strip()
-        if content:
-            lines.append(f"[{tag}] {content}")
-    return "\n".join(lines)
-
-
 def make_compact_prompt(
     board: str,
     step: int,
     successful_moves: list[str],
     failed_moves: list[str],
+    difficulty: str = "hard",
 ) -> str:
-    """Create a compact prompt with only essential info (saves tokens!)."""
-    
+    """Create a compact prompt with only essential info (saves tokens!).
+
+    Args:
+        difficulty: Training difficulty level:
+            - "easy": Show guaranteed moves (naked singles) + other options
+            - "medium": Only show other options (hints where to look, not exact answers)
+            - "hard": No hints (model must learn Sudoku rules by itself)
+    """
+
     # Summary line
-    total_moves = len(successful_moves) + len(failed_moves)
     cells_filled = len(successful_moves)
     summary = f"Step {step}. Progress: {cells_filled} cells filled."
-    
+
     # Board (only show the grid, stripped down)
     board_only = extract_board_only(board) if board else "No board available."
-    
-    # Hints for easiest cells
+
+    # Moves already tried (for learning what NOT to do)
+    tried_moves_hint = ""
+    all_tried = successful_moves + failed_moves
+    if all_tried:
+        tried_moves_hint = f"\n\n⚠️ MOVES ALREADY TRIED (do not repeat): {', '.join(all_tried)}"
+
+    # Hints based on difficulty
     hints = ""
-    if board:
-        cells_with_candidates = extract_empty_cells_with_candidates(board)
+    if difficulty == "easy" and board:
+        # Easy: sorted by difficulty, show guaranteed moves + other easy options
+        cells_with_candidates = extract_empty_cells_with_candidates(board, sort_by_difficulty=True)
         if cells_with_candidates:
             guaranteed = []
             other_hints = []
@@ -319,83 +341,24 @@ def make_compact_prompt(
                 elif len(candidates) <= 3:
                     nums = ",".join(str(n) for n in sorted(candidates))
                     other_hints.append(f"({row},{col})→{nums}")
-            
+
             if guaranteed:
                 hints = f"\n\n🎯 GUARANTEED MOVES: {', '.join(guaranteed[:5])}"
             if other_hints:
                 hints += f"\nOther options: {' | '.join(other_hints[:5])}"
-    
-    return f"{summary}\n\nBoard:\n{board_only}{hints}\n\nYour move:"
 
-
-def make_user_prompt(
-    messages: Iterable[TextArenaMessage], 
-    last_board: str = "",
-    all_tried_moves: list[str] | None = None,
-) -> str:
-    """Create prompt with board, empty cells, and previous moves."""
-    messages_list = list(messages)
-    history = format_history(messages_list)
-    history_section = history if history else "Game starting."
-
-    # Use passed moves list if available, otherwise extract from messages
-    if all_tried_moves:
-        previous_moves = all_tried_moves
-    else:
-        previous_moves = []
-        for message in messages_list:
-            if message.sender_id == 0 and message.content:
-                move = extract_sudoku_move(message.content)
-                if move and move not in previous_moves:
-                    previous_moves.append(move)
-
-    # COMMENTED OUT: Testing if model copies these moves instead of avoiding them
-    previous_moves_hint = ""
-    # if previous_moves:
-    #     moves_str = ", ".join(previous_moves)
-    #     previous_moves_hint = f"\n\n⚠️ MOVES ALREADY TRIED (DO NOT REPEAT ANY): {moves_str}"
-
-    # Check if history already contains board
-    history_has_board = is_valid_board_state(history_section)
-
-    # Get board to use
-    board_to_use = ""
-    for message in reversed(messages_list):
-        if message.content and is_valid_board_state(message.content):
-            board_to_use = message.content
-            break
-    if not board_to_use and last_board:
-        board_to_use = last_board
-
-    # Build hints
-    candidates_hint = ""
-    board_hint = ""
-    if board_to_use:
-        cells_with_candidates = extract_empty_cells_with_candidates(board_to_use)
+    elif difficulty == "medium" and board:
+        # Medium: NOT sorted, just show empty cells with candidates (no ordering hints)
+        cells_with_candidates = extract_empty_cells_with_candidates(board, sort_by_difficulty=False)
         if cells_with_candidates:
-            # Separate guaranteed moves (ONLY OPTION) from others
-            guaranteed = []
-            other_hints = []
-            for row, col, candidates in cells_with_candidates[:12]:  # Show top 12 easiest
-                if len(candidates) == 1:
-                    num = list(candidates)[0]
-                    guaranteed.append(f"[{row} {col} {num}]")  # Show in exact move format!
-                elif len(candidates) <= 3:
-                    nums = ",".join(str(n) for n in sorted(candidates))
-                    other_hints.append(f"({row},{col})→{nums}")
+            cell_hints = []
+            for row, col, candidates in cells_with_candidates[:10]:
+                nums = ",".join(str(n) for n in sorted(candidates))
+                cell_hints.append(f"({row},{col})→{nums}")
+            if cell_hints:
+                hints = f"\n\nEmpty cells: {' | '.join(cell_hints)}"
 
-            # Build hint with guaranteed moves first
-            if guaranteed:
-                candidates_hint = f"\n\n🎯 GUARANTEED CORRECT MOVES (pick one): {', '.join(guaranteed[:5])}"
-            if other_hints:
-                candidates_hint += f"\n\nOther options: {' | '.join(other_hints[:5])}"
-
-        if not history_has_board:
-            board_only = extract_board_only(board_to_use)
-            if board_only:
-                board_hint = f"\n\nCurrent board:\n{board_only}"
-
-    return f"{history_section}{previous_moves_hint}{candidates_hint}{board_hint}\n\nYour move:"
+    return f"{summary}\n\nBoard:\n{board_only}{tried_moves_hint}{hints}\n\nYour move:"
 
 
 def check_move_targets_empty_cell(move: str, board_str: str) -> bool:
@@ -445,8 +408,11 @@ def rollout_once(
     system_prompt: str,
     max_turns: int,
     debug: bool = False,
+    difficulty: str = "hard",
+    api_delay: float = 0.0,
 ) -> dict[str, list]:
     result = env.reset()
+    time.sleep(api_delay)  # Avoid rate limiting
     observation = result.observation
 
     # Only store the LAST turn for backprop (much more efficient!)
@@ -458,7 +424,7 @@ def rollout_once(
     repetition_scores: list[float] = []
 
     move_counts: defaultdict[str, int] = defaultdict(int)
-    
+
     # Track successful and failed moves for summary
     successful_moves: list[str] = []
     failed_moves: list[str] = []
@@ -471,7 +437,7 @@ def rollout_once(
             last_board_state = message.content
             initial_filled = count_filled_cells(last_board_state)
             break
-    
+
     max_filled = initial_filled  # Track max progress
 
     for turn in range(max_turns):
@@ -484,6 +450,7 @@ def rollout_once(
             step=turn + 1,
             successful_moves=successful_moves,
             failed_moves=failed_moves,
+            difficulty=difficulty,
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -527,6 +494,7 @@ def rollout_once(
 
         # Step environment
         result = env.step(TextArenaAction(message=move))
+        time.sleep(api_delay)  # Avoid rate limiting
         observation = result.observation
         correct_score = float(result.reward or 0.0)
 
@@ -568,7 +536,9 @@ def rollout_once(
             repetition_score = 0.0
 
         if debug:
-            print(f"SCORES: empty_cell={empty_cell_score}, is_new={is_new_move}, repetitions={repetition_count}, rep_penalty={repetition_score}")
+            print(
+                f"SCORES: empty_cell={empty_cell_score}, is_new={is_new_move}, repetitions={repetition_count}, rep_penalty={repetition_score}"
+            )
 
         if not debug:
             print(f"Step {turn + 1}: {move}")
@@ -601,7 +571,7 @@ def rollout_once(
     valid_move_reward = sum(valid_move_scores) / len(valid_move_scores) if valid_move_scores else 0.0
     empty_cell_reward = sum(empty_cell_scores) / len(empty_cell_scores) if empty_cell_scores else 0.0
     repetition_reward = sum(repetition_scores) / len(repetition_scores) if repetition_scores else 0.0
-    
+
     # Progress reward: how many cells we filled beyond initial state (normalized to 0-1)
     # 81 total cells, so (max_filled - initial_filled) / (81 - initial_filled) gives progress
     remaining_to_fill = 81 - initial_filled
@@ -717,7 +687,9 @@ def main() -> None:
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
-        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization if args.vllm_gpu_memory_utilization else 0.2,  # Lower to leave more VRAM for backpropagation
+        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization
+        if args.vllm_gpu_memory_utilization
+        else 0.2,  # Lower to leave more VRAM for backpropagation
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
@@ -760,6 +732,8 @@ def main() -> None:
                 system_prompt=system_prompt,
                 max_turns=args.max_turns,
                 debug=args.debug,
+                difficulty=args.difficulty,
+                api_delay=args.api_delay,
             )
             all_prompt_ids.append(episode["prompt_ids"])
             all_completion_ids.append(episode["completion_ids"])
@@ -784,11 +758,11 @@ def main() -> None:
     trainer = GRPOTrainer(
         model=args.model_id,
         reward_funcs=[
-            reward_empty_cell,   # Learn to pick empty cells
+            reward_empty_cell,  # Learn to pick empty cells
             reward_valid_moves,  # Learn valid numbers
-            reward_repetition,   # Penalize repeating moves
-            reward_progress,     # Reward filling more cells
-            reward_correct,      # Solve the puzzle
+            reward_repetition,  # Penalize repeating moves
+            reward_progress,  # Reward filling more cells
+            reward_correct,  # Solve the puzzle
         ],
         train_dataset=dataset,
         args=grpo_config,
