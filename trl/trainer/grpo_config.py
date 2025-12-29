@@ -249,6 +249,10 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+        max_tool_calling_iterations (`int` or `None`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None` there is no limit and tool-calling
+            stops when the model generates a response turn with no tool calls or total response length is
+            `max_model_length`.
         use_liger_loss (`bool`, *optional*):
             Whether to use Liger loss.
 
@@ -723,6 +727,14 @@ class GRPOConfig(TrainingArguments):
             "[0.0-1.0]. A value of `0.0` masks all but the highest entropy token; `1.0` keeps all tokens. The paper "
             "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
             "non-truncated completions are considered."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None` there is no limit and "
+            "tool-calling stops when model generates a response turn with no tool calls or total response length is "
+            "`max_model_length`."
         },
     )
     use_liger_loss: bool = field(

@@ -1564,8 +1564,14 @@ class GRPOTrainer(BaseTrainer):
         tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
         tool_call_count = 0
         tool_failure_count = 0
+        max_tool_calling_iterations = (
+            self.args.max_tool_calling_iterations
+            if self.args.max_tool_calling_iterations is not None
+            else float("inf")
+        )
+        iteration_num = 0
 
-        while idxs_with_tool:
+        while idxs_with_tool and iteration_num < max_tool_calling_iterations:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
             # Call the tools, and build the new prompt for generation
@@ -1692,7 +1698,7 @@ class GRPOTrainer(BaseTrainer):
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
-
+            iteration_num += 1
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
     def _generate(self, prompts: list):
