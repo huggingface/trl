@@ -22,9 +22,10 @@ Usage:
         --env-host https://sergiopaniego-textarena.hf.space \
         --num-generations 8 \
         --per-device-batch-size 1 \
-        --max-turns 50 \
-        --gradient-accumulation-steps 8
-        --difficulty easy
+        --max-turns 100 \
+        --gradient-accumulation-steps 8 \
+        --difficulty easy \
+        --dataset-size 100
 """
 
 from __future__ import annotations
@@ -72,10 +73,10 @@ def parse_args() -> argparse.Namespace:
     # Prompts
     parser.add_argument("--system-prompt-path", default="sudoku_prompt.txt")
     parser.add_argument("--dataset-prompt", default="Play Sudoku like an expert.")
-    parser.add_argument("--dataset-size", type=int, default=3000)
+    parser.add_argument("--dataset-size", type=int, default=1000)
 
     # Game settings
-    parser.add_argument("--max-turns", type=int, default=31)
+    parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument(
         "--difficulty",
