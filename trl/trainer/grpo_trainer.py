@@ -18,6 +18,7 @@ import copy
 import inspect
 import json
 import os
+import sys
 import textwrap
 import time
 import warnings
@@ -1565,9 +1566,7 @@ class GRPOTrainer(BaseTrainer):
         tool_call_count = 0
         tool_failure_count = 0
         max_tool_calling_iterations = (
-            self.args.max_tool_calling_iterations
-            if self.args.max_tool_calling_iterations is not None
-            else float("inf")
+            self.args.max_tool_calling_iterations if self.args.max_tool_calling_iterations is not None else sys.maxsize
         )
         iteration_num = 0
 
