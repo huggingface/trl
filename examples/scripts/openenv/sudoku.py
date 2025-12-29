@@ -22,9 +22,8 @@ Usage:
         --env-host https://sergiopaniego-textarena.hf.space \
         --num-generations 8 \
         --per-device-batch-size 1 \
-        --max-turns 100 \
-        --gradient-accumulation-steps 8  \
-        --keep-last-n-turns 25
+        --max-turns 50 \
+        --gradient-accumulation-steps 8
 """
 
 from __future__ import annotations
@@ -78,9 +77,6 @@ def parse_args() -> argparse.Namespace:
     # Game settings
     parser.add_argument("--max-turns", type=int, default=31)
     parser.add_argument("--max-new-tokens", type=int, default=8)
-    parser.add_argument(
-        "--keep-last-n-turns", type=int, default=3, help="Only keep last N turns for backpropagation (saves memory)"
-    )
 
     # Sampling
     parser.add_argument("--temperature", type=float, default=0.8)
@@ -180,6 +176,14 @@ def parse_board(board_str: str) -> list[list[int]]:
                     grid[row][col] = int(char)
                     col += 1
     return grid
+
+
+def count_filled_cells(board_str: str) -> int:
+    """Count the number of filled cells in the board."""
+    if not is_valid_board_state(board_str):
+        return 0
+    grid = parse_board(board_str)
+    return sum(1 for row in grid for cell in row if cell != 0)
 
 
 def get_valid_numbers(grid: list[list[int]], row: int, col: int) -> set[int]:
@@ -285,24 +289,71 @@ def format_history(messages: Iterable[TextArenaMessage]) -> str:
     return "\n".join(lines)
 
 
-def make_user_prompt(messages: Iterable[TextArenaMessage], last_board: str = "") -> str:
+def make_compact_prompt(
+    board: str,
+    step: int,
+    successful_moves: list[str],
+    failed_moves: list[str],
+) -> str:
+    """Create a compact prompt with only essential info (saves tokens!)."""
+    
+    # Summary line
+    total_moves = len(successful_moves) + len(failed_moves)
+    cells_filled = len(successful_moves)
+    summary = f"Step {step}. Progress: {cells_filled} cells filled."
+    
+    # Board (only show the grid, stripped down)
+    board_only = extract_board_only(board) if board else "No board available."
+    
+    # Hints for easiest cells
+    hints = ""
+    if board:
+        cells_with_candidates = extract_empty_cells_with_candidates(board)
+        if cells_with_candidates:
+            guaranteed = []
+            other_hints = []
+            for row, col, candidates in cells_with_candidates[:10]:
+                if len(candidates) == 1:
+                    num = list(candidates)[0]
+                    guaranteed.append(f"[{row} {col} {num}]")
+                elif len(candidates) <= 3:
+                    nums = ",".join(str(n) for n in sorted(candidates))
+                    other_hints.append(f"({row},{col})→{nums}")
+            
+            if guaranteed:
+                hints = f"\n\n🎯 GUARANTEED MOVES: {', '.join(guaranteed[:5])}"
+            if other_hints:
+                hints += f"\nOther options: {' | '.join(other_hints[:5])}"
+    
+    return f"{summary}\n\nBoard:\n{board_only}{hints}\n\nYour move:"
+
+
+def make_user_prompt(
+    messages: Iterable[TextArenaMessage], 
+    last_board: str = "",
+    all_tried_moves: list[str] | None = None,
+) -> str:
     """Create prompt with board, empty cells, and previous moves."""
     messages_list = list(messages)
     history = format_history(messages_list)
     history_section = history if history else "Game starting."
 
-    # Extract previous moves made by the model
-    previous_moves = []
-    for message in messages_list:
-        if message.sender_id == 0 and message.content:
-            move = extract_sudoku_move(message.content)
-            if move and move not in previous_moves:
-                previous_moves.append(move)
+    # Use passed moves list if available, otherwise extract from messages
+    if all_tried_moves:
+        previous_moves = all_tried_moves
+    else:
+        previous_moves = []
+        for message in messages_list:
+            if message.sender_id == 0 and message.content:
+                move = extract_sudoku_move(message.content)
+                if move and move not in previous_moves:
+                    previous_moves.append(move)
 
+    # COMMENTED OUT: Testing if model copies these moves instead of avoiding them
     previous_moves_hint = ""
-    if previous_moves:
-        moves_str = ", ".join(previous_moves)
-        previous_moves_hint = f"\n\nMoves you already tried (DO NOT REPEAT): {moves_str}"
+    # if previous_moves:
+    #     moves_str = ", ".join(previous_moves)
+    #     previous_moves_hint = f"\n\n⚠️ MOVES ALREADY TRIED (DO NOT REPEAT ANY): {moves_str}"
 
     # Check if history already contains board
     history_has_board = is_valid_board_state(history_section)
@@ -322,21 +373,22 @@ def make_user_prompt(messages: Iterable[TextArenaMessage], last_board: str = "")
     if board_to_use:
         cells_with_candidates = extract_empty_cells_with_candidates(board_to_use)
         if cells_with_candidates:
-            # Show cells with fewest candidates first (easiest moves)
-            hints = []
-            for row, col, candidates in cells_with_candidates[:8]:  # Show top 8 easiest
+            # Separate guaranteed moves (ONLY OPTION) from others
+            guaranteed = []
+            other_hints = []
+            for row, col, candidates in cells_with_candidates[:12]:  # Show top 12 easiest
                 if len(candidates) == 1:
-                    # Naked single - only one option!
                     num = list(candidates)[0]
-                    hints.append(f"({row},{col})→{num} ONLY OPTION!")
-                else:
+                    guaranteed.append(f"[{row} {col} {num}]")  # Show in exact move format!
+                elif len(candidates) <= 3:
                     nums = ",".join(str(n) for n in sorted(candidates))
-                    hints.append(f"({row},{col})→{nums}")
+                    other_hints.append(f"({row},{col})→{nums}")
 
-            remaining = len(cells_with_candidates) - 8 if len(cells_with_candidates) > 8 else 0
-            candidates_hint = "\n\nEasiest cells to fill (valid numbers shown):\n" + " | ".join(hints)
-            if remaining > 0:
-                candidates_hint += f"\n...and {remaining} more cells."
+            # Build hint with guaranteed moves first
+            if guaranteed:
+                candidates_hint = f"\n\n🎯 GUARANTEED CORRECT MOVES (pick one): {', '.join(guaranteed[:5])}"
+            if other_hints:
+                candidates_hint += f"\n\nOther options: {' | '.join(other_hints[:5])}"
 
         if not history_has_board:
             board_only = extract_board_only(board_to_use)
@@ -393,33 +445,46 @@ def rollout_once(
     system_prompt: str,
     max_turns: int,
     debug: bool = False,
-    keep_last_n_turns: int = 3,  # Only keep last N turns for backprop to save memory
 ) -> dict[str, list]:
     result = env.reset()
     observation = result.observation
 
-    # Store tokens per turn (sliding window)
-    turn_data: list[dict] = []
+    # Only store the LAST turn for backprop (much more efficient!)
+    last_turn_data: dict | None = None
 
     valid_move_scores: list[float] = []
     empty_cell_scores: list[float] = []
     correct_scores: list[float] = []
+    repetition_scores: list[float] = []
 
     move_counts: defaultdict[str, int] = defaultdict(int)
+    
+    # Track successful and failed moves for summary
+    successful_moves: list[str] = []
+    failed_moves: list[str] = []
 
     # Extract initial board state
     last_board_state = ""
+    initial_filled = 0
     for message in observation.messages:
         if message.content and is_valid_board_state(message.content):
             last_board_state = message.content
+            initial_filled = count_filled_cells(last_board_state)
             break
+    
+    max_filled = initial_filled  # Track max progress
 
     for turn in range(max_turns):
         if result.done:
             break
 
-        # Build prompt
-        user_prompt = make_user_prompt(observation.messages, last_board_state)
+        # Build COMPACT prompt (saves tokens!)
+        user_prompt = make_compact_prompt(
+            board=last_board_state,
+            step=turn + 1,
+            successful_moves=successful_moves,
+            failed_moves=failed_moves,
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -438,28 +503,16 @@ def rollout_once(
         # Generate
         rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
 
-        # Store this turn's data
-        turn_data.append(
-            {
-                "prompt_ids": rollout_outputs["prompt_ids"],
-                "completion_ids": rollout_outputs["completion_ids"],
-                "logprobs": rollout_outputs["logprobs"],
-            }
-        )
-
-        # Keep only last N turns (sliding window to save memory)
-        if len(turn_data) > keep_last_n_turns:
-            turn_data.pop(0)
-
-        # Calculate current totals for display
-        total_prompt = sum(len(t["prompt_ids"]) for t in turn_data)
-        total_completion = sum(len(t["completion_ids"]) for t in turn_data)
+        # Store ONLY this turn's data (replace previous)
+        last_turn_data = {
+            "prompt_ids": rollout_outputs["prompt_ids"],
+            "completion_ids": rollout_outputs["completion_ids"],
+            "logprobs": rollout_outputs["logprobs"],
+        }
 
         if debug:
             step_tokens = len(rollout_outputs["prompt_ids"]) + len(rollout_outputs["completion_ids"])
-            print(
-                f"TOKENS: this_step={step_tokens}, window={len(turn_data)} turns, total_in_window={total_prompt}+{total_completion}"
-            )
+            print(f"TOKENS: this_step={step_tokens} (only last turn used for backprop)")
 
         completion_text = rollout_outputs.get("text") or tokenizer.decode(
             rollout_outputs["completion_ids"], skip_special_tokens=True
@@ -502,48 +555,77 @@ def rollout_once(
         else:
             empty_cell_score = 0.0
 
-        # Calculate valid_move_score
+        # Calculate valid_move_score and repetition_score
         is_new_move = move_counts[move] == 0
+        repetition_count = move_counts[move]
         move_counts[move] += 1
 
+        # Exponential penalty for repetitions: -2^(n-1) capped at -10
+        # 1st repeat: -1, 2nd: -2, 3rd: -4, 4th+: -10 (capped)
+        if repetition_count > 0:
+            repetition_score = -min(2 ** (repetition_count - 1), 10.0)
+        else:
+            repetition_score = 0.0
+
         if debug:
-            print(f"SCORES: empty_cell={empty_cell_score}, is_new={is_new_move}")
+            print(f"SCORES: empty_cell={empty_cell_score}, is_new={is_new_move}, repetitions={repetition_count}, rep_penalty={repetition_score}")
 
         if not debug:
             print(f"Step {turn + 1}: {move}")
 
         if feedback["valid_move"] and is_new_move:
             valid_move_score = 1.0
+            if move:
+                successful_moves.append(move)  # Track for summary
         elif feedback["got_warning"]:
             valid_move_score = -0.5
+            if move:
+                failed_moves.append(move)  # Track for summary
         else:
             valid_move_score = 0.0
 
-        # Update board state
+        # Update board state and track progress
         if feedback["board_state"] and is_valid_board_state(feedback["board_state"]):
             last_board_state = feedback["board_state"]
+            current_filled = count_filled_cells(last_board_state)
+            if current_filled > max_filled:
+                max_filled = current_filled
 
         valid_move_scores.append(valid_move_score)
         empty_cell_scores.append(empty_cell_score)
         correct_scores.append(correct_score)
+        repetition_scores.append(repetition_score)
 
     # Aggregate rewards
     correct_reward = correct_scores[-1] if correct_scores else 0.0
     valid_move_reward = sum(valid_move_scores) / len(valid_move_scores) if valid_move_scores else 0.0
     empty_cell_reward = sum(empty_cell_scores) / len(empty_cell_scores) if empty_cell_scores else 0.0
+    repetition_reward = sum(repetition_scores) / len(repetition_scores) if repetition_scores else 0.0
+    
+    # Progress reward: how many cells we filled beyond initial state (normalized to 0-1)
+    # 81 total cells, so (max_filled - initial_filled) / (81 - initial_filled) gives progress
+    remaining_to_fill = 81 - initial_filled
+    if remaining_to_fill > 0:
+        progress_reward = (max_filled - initial_filled) / remaining_to_fill
+    else:
+        progress_reward = 1.0  # Already complete
 
-    # Flatten turn_data (only last N turns) for backpropagation
-    prompt_ids = []
-    completion_ids = []
-    logprobs = []
-    for t in turn_data:
-        prompt_ids.extend(t["prompt_ids"])
-        completion_ids.extend(t["completion_ids"])
-        logprobs.extend(t["logprobs"])
+    # Use ONLY last turn for backpropagation (much more efficient!)
+    if last_turn_data:
+        prompt_ids = last_turn_data["prompt_ids"]
+        completion_ids = last_turn_data["completion_ids"]
+        logprobs = last_turn_data["logprobs"]
+    else:
+        prompt_ids = []
+        completion_ids = []
+        logprobs = []
 
     total_tokens = len(prompt_ids) + len(completion_ids)
+    cells_filled = max_filled - initial_filled
     print(
-        f"Episode: empty_cell={empty_cell_reward:.2f}, valid={valid_move_reward:.2f}, correct={correct_reward:.2f}, tokens={total_tokens}"
+        f"Episode: empty_cell={empty_cell_reward:.2f}, valid={valid_move_reward:.2f}, "
+        f"repetition={repetition_reward:.2f}, progress={progress_reward:.2f} ({cells_filled} cells), "
+        f"correct={correct_reward:.2f}, tokens={total_tokens}"
     )
 
     return {
@@ -553,6 +635,8 @@ def rollout_once(
         "correct_reward": correct_reward,
         "valid_move_reward": valid_move_reward,
         "empty_cell_reward": empty_cell_reward,
+        "repetition_reward": repetition_reward,
+        "progress_reward": progress_reward,
     }
 
 
@@ -580,6 +664,22 @@ def reward_valid_moves(completions: list[str], **kwargs) -> list[float]:
 def reward_correct(completions: list[str], **kwargs) -> list[float]:
     """Reward for solving the puzzle."""
     rewards = kwargs.get("correct_reward")
+    if rewards is None:
+        return [0.0 for _ in completions]
+    return [float(r) for r in rewards]
+
+
+def reward_repetition(completions: list[str], **kwargs) -> list[float]:
+    """Penalty for repeating moves."""
+    rewards = kwargs.get("repetition_reward")
+    if rewards is None:
+        return [0.0 for _ in completions]
+    return [float(r) for r in rewards]
+
+
+def reward_progress(completions: list[str], **kwargs) -> list[float]:
+    """Reward for filling more cells in the board."""
+    rewards = kwargs.get("progress_reward")
     if rewards is None:
         return [0.0 for _ in completions]
     return [float(r) for r in rewards]
@@ -617,9 +717,7 @@ def main() -> None:
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
-        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization
-        if args.vllm_gpu_memory_utilization
-        else 0.2,  # Lower to leave more VRAM for backpropagation
+        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization if args.vllm_gpu_memory_utilization else 0.2,  # Lower to leave more VRAM for backpropagation
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
@@ -651,6 +749,8 @@ def main() -> None:
         all_correct = []
         all_valid = []
         all_empty_cell = []
+        all_repetition = []
+        all_progress = []
 
         for _ in prompts:
             episode = rollout_once(
@@ -660,7 +760,6 @@ def main() -> None:
                 system_prompt=system_prompt,
                 max_turns=args.max_turns,
                 debug=args.debug,
-                keep_last_n_turns=args.keep_last_n_turns,
             )
             all_prompt_ids.append(episode["prompt_ids"])
             all_completion_ids.append(episode["completion_ids"])
@@ -668,6 +767,8 @@ def main() -> None:
             all_correct.append(episode["correct_reward"])
             all_valid.append(episode["valid_move_reward"])
             all_empty_cell.append(episode["empty_cell_reward"])
+            all_repetition.append(episode["repetition_reward"])
+            all_progress.append(episode["progress_reward"])
 
         return {
             "prompt_ids": all_prompt_ids,
@@ -676,14 +777,18 @@ def main() -> None:
             "correct_reward": all_correct,
             "valid_move_reward": all_valid,
             "empty_cell_reward": all_empty_cell,
+            "repetition_reward": all_repetition,
+            "progress_reward": all_progress,
         }
 
     trainer = GRPOTrainer(
         model=args.model_id,
         reward_funcs=[
-            reward_empty_cell,  # First: learn to pick empty cells
-            reward_valid_moves,  # Then: learn valid numbers
-            reward_correct,  # Finally: solve the puzzle
+            reward_empty_cell,   # Learn to pick empty cells
+            reward_valid_moves,  # Learn valid numbers
+            reward_repetition,   # Penalize repeating moves
+            reward_progress,     # Reward filling more cells
+            reward_correct,      # Solve the puzzle
         ],
         train_dataset=dataset,
         args=grpo_config,
