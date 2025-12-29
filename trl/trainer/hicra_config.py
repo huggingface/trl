@@ -78,9 +78,7 @@ class HICRAConfig(GRPOConfig):
     )
     use_hicra: bool = field(
         default=True,
-        metadata={
-            "help": "Whether to enable HICRA advantage modification. If False, behaves like standard GRPO."
-        },
+        metadata={"help": "Whether to enable HICRA advantage modification. If False, behaves like standard GRPO."},
     )
     hicra_entropy_topk: float = field(
         default=0.3,
@@ -142,8 +140,7 @@ class HICRAConfig(GRPOConfig):
         # Validate HICRA-specific parameters
         if self.hicra_alpha < 0 or self.hicra_alpha > 1:
             raise ValueError(
-                f"hicra_alpha must be in the range [0, 1], but got {self.hicra_alpha}. "
-                "The paper recommends α=0.2."
+                f"hicra_alpha must be in the range [0, 1], but got {self.hicra_alpha}. The paper recommends α=0.2."
             )
 
         if self.hicra_entropy_topk < 0 or self.hicra_entropy_topk > 1:
@@ -154,12 +151,10 @@ class HICRAConfig(GRPOConfig):
 
         if self.strategic_grams_path is not None and self.strategic_grams is not None:
             raise ValueError(
-                "strategic_grams_path and strategic_grams are mutually exclusive. "
-                "Please provide only one of them."
+                "strategic_grams_path and strategic_grams are mutually exclusive. Please provide only one of them."
             )
 
         if len(self.sg_n_range) != 2 or self.sg_n_range[0] > self.sg_n_range[1]:
             raise ValueError(
-                f"sg_n_range must be a tuple of (min_n, max_n) where min_n <= max_n, "
-                f"but got {self.sg_n_range}."
+                f"sg_n_range must be a tuple of (min_n, max_n) where min_n <= max_n, but got {self.sg_n_range}."
             )

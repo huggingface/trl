@@ -17,6 +17,8 @@
     title: DPO
   - local: grpo_trainer
     title: GRPO
+  - local: hicra_trainer
+    title: HICRA
   - local: reward_trainer
     title: Reward
   - local: rloo_trainer

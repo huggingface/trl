@@ -36,6 +36,8 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
+    "hicra_config": ["HICRAConfig"],
+    "hicra_trainer": ["HICRATrainer"],
     "judges": [
         "AllTrueJudge",
         "BaseBinaryJudge",
@@ -89,6 +91,8 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
+    from .hicra_config import HICRAConfig
+    from .hicra_trainer import HICRATrainer
     from .judges import (
         AllTrueJudge,
         BaseBinaryJudge,
