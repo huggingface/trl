@@ -707,6 +707,7 @@ def main() -> None:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
+        report_to="trackio",
         # chat_template_kwargs={"enable_thinking": False},
     )
 
