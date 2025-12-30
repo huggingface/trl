@@ -60,7 +60,7 @@
   title: Integrations
 - sections:
   - local: example_overview
-    title: Example Overview
+    title: Examples
   - local: community_tutorials
     title: Community Tutorials
   - local: lora_without_regret
