@@ -23,8 +23,8 @@ pip install trl
 <div class="grid grid-cols-2 md:grid-cols-4 gap-2 my-4">
   <a href="installation" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">📦 Installation</a>
   <a href="quickstart" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">⚡ Quickstart</a>
-  <a href="dataset_formats" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">📚 Guides</a>
   <a href="example_overview" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">💡 Examples</a>
+  <a href="dataset_formats" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">📚 Guides</a>
   <a href="sft_trainer" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">🏋️ Trainers</a>
   <a href="vllm_integration" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">🔌 Integrations</a>
   <a href="clis" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">🛠️ How-to Guides</a>
