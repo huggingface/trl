@@ -11,12 +11,12 @@ TRL is a full stack library for post-training and aligning transformer language 
   <span style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🔧 PEFT/LoRA ready</span>
   <span style="background: linear-gradient(135deg, #ff6b6b 0%, #feca57 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">👁️ VLM support</span>
   <span style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">📊 Trackio & WandB</span>
-  <span style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🤗 Transformers native</span>
+  <span style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🤗 Transformers based</span>
 </div>
 
 ## Quick Start
 
-<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 1rem 0;">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; margin: 1rem 0;">
   <a href="installation" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">📦 Installation</a>
   <a href="quickstart" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">⚡ Quickstart</a>
   <a href="dataset_formats" style="text-decoration: none; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 0.5rem; color: #374151; font-weight: 500; text-align: center;">📚 Conceptual Guides</a>
@@ -30,13 +30,13 @@ TRL is a full stack library for post-training and aligning transformer language 
 ## Latest News
 
 <div class="mt-10">
-  <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem;">
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem;">
     <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb" style="display: block; padding: 0.4rem 0.75rem;">
-      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/1.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/2.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
       <p class="text-gray-700" style="margin: 0.4rem 0 0 0;">GRPO using QLoRA on free Colab</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb" style="display: block; padding: 0.4rem 0.75rem;">
-      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/2.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/1.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
       <p class="text-gray-700" style="margin: 0.4rem 0 0 0;">GRPO FunctionGemma in BrowserGym (OpenEnv)</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb" style="display: block; padding: 0.4rem 0.75rem;">
