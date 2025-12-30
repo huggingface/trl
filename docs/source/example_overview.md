@@ -27,8 +27,8 @@ Generic notebooks that work with any model. Start here!
 
 | Notebook | Method | Model | Colab |
 |----------|:------:|:-----:|:-----:|
-| [Supervised Fine-Tuning (SFT) with QLoRA](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_trl_lora_qlora.ipynb) | SFT | Any | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb) |
-| [Group Relative Policy Optimization (GRPO) with QLoRA](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_trl_lora_qlora.ipynb) | GRPO | Any | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb) |
+| [SFT a 14B model with LoRA/QLoRA on Free Colab](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_trl_lora_qlora.ipynb) | SFT | Qwen3-14B | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb) |
+| [GRPO a 7B model with LoRA/QLoRA on Free Colab](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_trl_lora_qlora.ipynb) | GRPO | Qwen2-7B | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb) |
 
 ### 🤖 Agents
 
@@ -36,7 +36,7 @@ Train models for agentic tasks and tool use.
 
 | Notebook | Method | Model | Colab |
 |----------|:------:|-------|:-----:|
-| [Group Relative Policy Optimization (GRPO) for agent training](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_agent.ipynb) | GRPO | Qwen3 | ⚠️ Larger GPU |
+| [Agent Training Qwen3-1.7B with Tool Calling (BioGRID SQL)](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_agent.ipynb) | GRPO | Qwen3-1.7B | ⚠️ Larger GPU |
 
 ### 🎮 OpenEnv
 
@@ -44,8 +44,8 @@ Train agents in interactive environments using [OpenEnv](openenv).
 
 | Notebook | Method | Model | Colab |
 |----------|:------:|-------|:-----:|
-| [GRPO to play Wordle](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_wordle_grpo.ipynb) | GRPO | Qwen3 | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb) |
-| [GRPO in the BrowserGym environment for browser control](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) | GRPO | FunctionGemma | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) |
+| [Train Qwen3-1.7B to Play Wordle](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_wordle_grpo.ipynb) | GRPO | Qwen3-1.7B | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb) |
+| [FunctionGemma for Browser Control (BrowserGym)](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) | GRPO | FunctionGemma-270M | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) |
 
 ### 🎯 Model-specific
 
@@ -54,11 +54,11 @@ Notebooks for specific models, including Vision Language Models (VLM) and reason
 
 | Notebook | Method | Model | VLM | Colab |
 |----------|:------:|-------|:---:|:-----:|
-| [GRPO rnj-1-instruct for reasoning with QLoRA](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) | GRPO | rnj-1-instruct | | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) |
-| [Supervised Fine-Tuning (SFT) Ministral-3B](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_ministral3_vl.ipynb) | SFT | Ministral-3B | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb) |
-| [GRPO Ministral-3B](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_ministral3_vl.ipynb) | GRPO | Ministral-3B | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb) |
-| [Supervised Fine-Tuning (SFT) Qwen3-VL](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_qwen_vl.ipynb) | SFT | Qwen3-VL | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_qwen_vl.ipynb) |
-| [GRPO Qwen3-VL](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_qwen3_vl.ipynb) | GRPO | Qwen3-VL | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb) |
+| [Add Reasoning Capabilities to rnj-1-instruct-1B with GRPO and QLoRA](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) | GRPO | rnj-1-instruct-1B | | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) |
+| [SFT Ministral-3B VLM with QLoRA on Free Colab](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_ministral3_vl.ipynb) | SFT | Ministral-3B | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb) |
+| [GRPO Ministral-3B VLM with QLoRA on Free Colab](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_ministral3_vl.ipynb) | GRPO | Ministral-3B | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb) |
+| [SFT Qwen3-VL with QLoRA on Free Colab](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_qwen_vl.ipynb) | SFT | Qwen3-VL | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_qwen_vl.ipynb) |
+| [GRPO Qwen3-VL with QLoRA on Free Colab](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_qwen3_vl.ipynb) | GRPO | Qwen3-VL | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb) |
 
 ## 📜 Scripts
 
