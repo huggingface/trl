@@ -40,11 +40,11 @@ TRL is a full stack library for post-training and aligning transformer language 
       <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO FunctionGemma in BrowserGym (OpenEnv)</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb" style="display: flex; flex-direction: column;">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <img src="3.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
       <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO rnj-1-instruct with QLoRA for reasoning</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb" style="display: flex; flex-direction: column;">
-      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <img src="4.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
       <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">SFT Ministral-3 VL with QLoRA</p>
     </a>
   </div>
