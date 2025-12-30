@@ -2,7 +2,7 @@
 
 Get started with TRL in minutes. This guide shows you the essentials for training models with SFT, GRPO, and DPO.
 
-> 💡 **Looking for ready-to-run examples?** Check out our [notebooks for Colab](#-ready-to-run-examples) or [production scripts](example_overview#scripts).
+> 💡 **Looking for ready-to-run examples?** Check out our [notebooks for Colab](#ready-to-run-examples) or [production scripts](example_overview#scripts).
 
 ## Quick Examples
 
