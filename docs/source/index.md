@@ -23,7 +23,7 @@ TRL is a full stack library for post-training and aligning transformer language 
   <a href="clis" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">🛠️ How-to Guides</a>
   <a href="deepspeed_integration" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">🔌 Integrations</a>
   <a href="example_overview" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">💡 Examples</a>
-  <a href="sft_trainer" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">📖 API Reference</a>
+  <a href="dpo_trainer" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">📖 API Reference</a>
   <a href="experimental_overview" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">🧪 Experimental</a>
 </div>
 

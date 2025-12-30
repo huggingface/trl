@@ -1,10 +1,12 @@
 # Quickstart
 
-TRL is a comprehensive library for post-training foundation models using techniques like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO).
+Get started with TRL in minutes. This guide shows you the essentials for training models with SFT, GRPO, and DPO.
+
+> 💡 **Looking for ready-to-run examples?** Check out our [notebooks for Colab](#-ready-to-run-examples) or [production scripts](example_overview#scripts).
 
 ## Quick Examples
 
-Get started instantly with TRL's most popular trainers. Each example uses compact models for quick experimentation.
+Copy-paste these minimal examples to start training immediately. Each uses compact models for quick experimentation.
 
 ### Supervised Fine-Tuning
 
@@ -81,6 +83,33 @@ trl reward --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized
 ```
 
+## Ready-to-Run Examples
+
+Want to dive deeper? We provide a comprehensive collection of examples for all skill levels:
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-4">
+  <div class="border dark:border-gray-700 rounded-lg p-4">
+    <h4 style="margin-top: 0;">Notebooks (Beginner-friendly)</h4>
+    <p class="text-gray-600 text-sm">Self-contained notebooks for interactive learning. <strong>Many run on free Google Colab</strong>, while some require larger GPUs.</p>
+    <ul style="margin-bottom: 0.5rem;">
+      <li><a href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb">SFT with QLoRA</a> (free Colab ✓)</li>
+      <li><a href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb">GRPO with QLoRA</a> (free Colab ✓)</li>
+      <li><a href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb">GRPO for Vision-Language Models</a> (free Colab ✓)</li>
+    </ul>
+    <a href="example_overview#notebooks" class="text-sm">→ See all notebooks</a>
+  </div>
+  <div class="border dark:border-gray-700 rounded-lg p-4">
+    <h4 style="margin-top: 0;">Scripts (Production-ready)</h4>
+    <p class="text-gray-600 text-sm">Full-featured scripts for <strong>single GPU, multi-GPU, and DeepSpeed</strong> setups. Ready for real-world training.</p>
+    <ul style="margin-bottom: 0.5rem;">
+      <li><a href="https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py">SFT Script</a></li>
+      <li><a href="https://github.com/huggingface/trl/blob/main/trl/scripts/grpo.py">GRPO Script</a></li>
+      <li><a href="https://github.com/huggingface/trl/blob/main/trl/scripts/dpo.py">DPO Script</a></li>
+    </ul>
+    <a href="example_overview#scripts" class="text-sm">→ See all scripts</a>
+  </div>
+</div>
+
 ## What's Next?
 
 ### 📚 Learn More
@@ -95,10 +124,9 @@ trl reward --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
 - [Memory Optimization](reducing_memory_usage) - Efficient training
 - [PEFT Integration](peft_integration) - LoRA and QLoRA
 
-### 💡 Examples
+### 🌐 Community
 
-- [Example Scripts](https://github.com/huggingface/trl/tree/main/examples) - Production-ready code
-- [Community Tutorials](community_tutorials) - External guides
+- [Community Tutorials](community_tutorials) - External guides and resources
 
 ## Troubleshooting
 
