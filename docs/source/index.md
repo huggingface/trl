@@ -6,6 +6,10 @@
 
 TRL is a full stack library for post-training and aligning transformer language models. From Supervised Fine-Tuning (SFT) to Reinforcement Learning (GRPO, PPO) and Preference Optimization (DPO, KTO), TRL provides everything you need.
 
+```bash
+pip install trl
+```
+
 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.5rem 0;">
   <span style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🚀 vLLM integration</span>
   <span style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🔧 PEFT/LoRA ready</span>
@@ -27,7 +31,7 @@ TRL is a full stack library for post-training and aligning transformer language 
   <a href="experimental_overview" class="!no-underline bg-gray-100 border border-gray-200 px-4 py-2 rounded-lg text-gray-700 font-medium text-center hover:shadow">🧪 Experimental</a>
 </div>
 
-## Latest News
+## Featured
 
 <div class="mt-4">
   <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -54,8 +58,8 @@ TRL is a full stack library for post-training and aligning transformer language 
 
 Available TRL trainers organized by method type (⚡️ = vLLM support; 🧪 = experimental).
 
-<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
-<div style="flex: 1; min-width: 0;">
+<div class="flex flex-col md:flex-row gap-4 md:gap-8 w-full">
+<div class="flex-1 min-w-0">
 
 ### Online methods
 
@@ -72,7 +76,7 @@ Available TRL trainers organized by method type (⚡️ = vLLM support; 🧪 = e
 - [`PRMTrainer`](prm_trainer) 🧪
 
 </div>
-<div style="flex: 1; min-width: 0;">
+<div class="flex-1 min-w-0">
 
 ### Offline methods
 
