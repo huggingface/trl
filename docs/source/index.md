@@ -31,21 +31,21 @@ TRL is a full stack library for post-training and aligning transformer language 
 
 <div class="mt-10">
   <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_qwen_vl.ipynb" style="display: flex; flex-direction: column;">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
-      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">Supervised Fine-Tuning (SFT) Qwen3-VL with QLoRA</p>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb" style="display: flex; flex-direction: column;">
+      <img src="1.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO using QLoRA on free Colab</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb" style="display: flex; flex-direction: column;">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
-      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO Qwen3-VL with QLoRA</p>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb" style="display: flex; flex-direction: column;">
+      <img src="2.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO FunctionGemma in BrowserGym (OpenEnv)</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb" style="display: flex; flex-direction: column;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO rnj-1-instruct with QLoRA for reasoning</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb" style="display: flex; flex-direction: column;">
       <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
-      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">Supervised Fine-Tuning (SFT) Ministral-3 with QLoRA</p>
-    </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb" style="display: flex; flex-direction: column;">
-      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
-      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO Ministral-3 with QLoRA</p>
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">SFT Ministral-3 VL with QLoRA</p>
     </a>
   </div>
 </div>
