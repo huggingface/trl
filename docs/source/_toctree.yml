@@ -17,8 +17,6 @@
     title: DPO
   - local: grpo_trainer
     title: GRPO
-  - local: kto_trainer
-    title: KTO
   - local: reward_trainer
     title: Reward
   - local: rloo_trainer
@@ -69,18 +67,20 @@
     title: LoRA Without Regret
   title: Examples
 - sections:
-  - local: models
-    title: Model Classes
-  - local: model_utils
-    title: Model Utilities
+  - sections:
+    - local: chat_template_utils
+      title: Chat Template Utilities
+    - local: data_utils
+      title: Data Utilities
+    - local: model_utils
+      title: Model Utilities
+    - local: script_utils
+      title: Script Utilities
+    title: Utilities
   - local: callbacks
     title: Callbacks
-  - local: data_utils
-    title: Data Utilities
   - local: rewards
     title: Reward Functions
-  - local: script_utils
-    title: Script Utilities
   - local: others
     title: Others
   title: API
@@ -107,6 +107,8 @@
     title: GSPO-token
   - local: judges
     title: Judges
+  - local: kto_trainer
+    title: KTO 
   - local: merge_model_callback
     title: MergeModelCallback
   - local: minillm_trainer

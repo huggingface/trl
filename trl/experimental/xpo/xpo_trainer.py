@@ -36,14 +36,9 @@ from transformers.utils import is_peft_available
 from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.judges import BasePairwiseJudge
-from ...trainer.utils import (
-    SIMPLE_CHAT_TEMPLATE,
-    empty_cache,
-    get_reward,
-    selective_log_softmax,
-    truncate_right,
-)
+from ...trainer.utils import empty_cache, selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
+from ..utils import SIMPLE_CHAT_TEMPLATE, get_reward, truncate_right
 from .xpo_config import XPOConfig
 
 
@@ -60,7 +55,7 @@ class XPOTrainer(OnlineDPOTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model ([`PreTrainedModelWrapper`]):
+        ref_model ([`~transformers.PreTrainedModel`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
@@ -73,8 +68,8 @@ class XPOTrainer(OnlineDPOTrainer):
             The XPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
@@ -190,7 +185,13 @@ class XPOTrainer(OnlineDPOTrainer):
             return self._alpha
 
     def _generate_completions(self, prompts, model):
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_model_for_gen:
+        with (
+            unwrap_model_for_generation(
+                model,
+                self.accelerator,
+                generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+            ) as unwrapped_policy_model_for_gen,
+        ):
             model_output = unwrapped_policy_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
@@ -208,7 +209,13 @@ class XPOTrainer(OnlineDPOTrainer):
         else:
             actual_model_for_ref_generation = self.accelerator.unwrap_model(self.ref_model)
 
-        with unwrap_model_for_generation(actual_model_for_ref_generation, self.accelerator) as final_ref_model_for_gen:
+        with (
+            unwrap_model_for_generation(
+                actual_model_for_ref_generation,
+                self.accelerator,
+                generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+            ) as final_ref_model_for_gen,
+        ):
             ref_output = final_ref_model_for_gen.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],

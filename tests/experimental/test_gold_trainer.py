@@ -20,7 +20,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from trl.experimental.gold.gold_trainer import GOLDTrainer, ULDLoss, build_teacher_inputs_from_texts
-from trl.trainer.utils import DataCollatorForChatML
+from trl.experimental.utils import DataCollatorForChatML
 
 
 @pytest.fixture(scope="module")

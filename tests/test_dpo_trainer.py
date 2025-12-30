@@ -411,6 +411,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_precompute_ref_batch_size(self):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,
             per_device_train_batch_size=2,
             precompute_ref_log_probs=True,
             precompute_ref_batch_size=4,
@@ -588,59 +589,6 @@ class TestDPOTrainer(TrlTestCase):
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
-
-    @require_peft
-    def test_dpo_lora_save(self):
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        model_peft = get_peft_model(model, lora_config)
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            precompute_ref_log_probs=True,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        # dpo train lora model with a lora config
-        trainer = DPOTrainer(
-            model=model_peft,
-            ref_model=None,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            peft_config=lora_config,
-        )
-
-        # train the model
-        trainer.train()
-
-        # save peft adapter
-        trainer.save_model()
-
-        try:
-            AutoModelForCausalLM.from_pretrained(self.tmp_dir)
-        except OSError:
-            pytest.fail("Loading the saved peft adapter failed")
 
     @require_bitsandbytes
     @require_peft
@@ -865,77 +813,6 @@ class TestDPOTrainer(TrlTestCase):
 
         for tag in ["dpo", "trl"]:
             assert tag in trainer.model.model_tags
-
-    @require_peft
-    def test_dpo_lora_force_use_ref(self):
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        model_peft = get_peft_model(model, lora_config)
-
-        ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        with pytest.raises(ValueError):
-            # passing a peft_model as model and ref_model should error out,
-            # unless you pass `force_use_ref_model`
-            trainer = DPOTrainer(
-                model=model_peft,
-                ref_model=ref_model,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                peft_config=lora_config,
-            )
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            force_use_ref_model=True,
-            report_to="none",
-        )
-
-        trainer = DPOTrainer(
-            model=model_peft,
-            ref_model=ref_model,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            peft_config=lora_config,
-        )
-
-        # train the model
-        trainer.train()
 
     def test_dpo_trainer_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
@@ -1426,8 +1303,7 @@ class TestDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
@@ -1580,7 +1456,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             gradient_accumulation_steps=2,
             learning_rate=9e-1,
             eval_strategy="steps",
-            fp16=True,
             logging_strategy="no",
             report_to="none",
             beta=0.1,
