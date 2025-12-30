@@ -576,12 +576,11 @@ class ULDLoss(nn.Module):
                 # of the actual token that was generated, and multiply
                 conditional_prob_product = 1.0
                 for idx in group[1:]:
-                    if idx < probs.size(0) and idx < len(token_ids):
-                        # Get the actual token ID that was generated at this position
-                        actual_token_id = token_ids[idx]
-                        # Extract its probability (scalar)
-                        token_prob = probs[idx, actual_token_id].clamp_min(eps)
-                        conditional_prob_product *= token_prob
+                    # Get the actual token ID that was generated at this position
+                    actual_token_id = token_ids[idx]
+                    # Extract its probability (scalar)
+                    token_prob = probs[idx, actual_token_id].clamp_min(eps)
+                    conditional_prob_product *= token_prob
 
                 # Merge: multiply the scalar conditional prob product with the entire marginal distribution
                 # This gives: P(y | x_0) × P(token_1 | token_0, x) × ... × P(token_k | ..., x)
