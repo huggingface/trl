@@ -9,7 +9,8 @@ TRL is a full stack library for post-training and aligning transformer language 
 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.5rem 0;">
   <span style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🚀 vLLM integration</span>
   <span style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🔧 PEFT/LoRA ready</span>
-  <span style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">📊 Trackio & WandB & TensorBoard</span>
+  <span style="background: linear-gradient(135deg, #ff6b6b 0%, #feca57 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">👁️ VLM support</span>
+  <span style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">📊 Trackio & WandB</span>
   <span style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🤗 Transformers native</span>
 </div>
 
@@ -29,22 +30,22 @@ TRL is a full stack library for post-training and aligning transformer language 
 ## Latest News
 
 <div class="mt-10">
-  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb">
-      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" class="mt-0">
-      <p class="text-gray-700">Supervised Fine-Tuning (SFT) Ministral-3 with QLoRA</p>
+  <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_qwen_vl.ipynb" style="display: flex; flex-direction: column;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">Supervised Fine-Tuning (SFT) Qwen3-VL with QLoRA</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb">
-      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" class="mt-0">
-      <p class="text-gray-700">GRPO Ministral-3 with QLoRA</p>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb" style="display: flex; flex-direction: column;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO Qwen3-VL with QLoRA</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/docs/trl/main/en/openenv">
-      <img src="https://pbs.twimg.com/media/G6geuwEXEAA9ngv?format=jpg&name=small" alt="thumbnail" class="mt-0">
-      <p class="text-gray-700">OpenEnv Integration Guide</p>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb" style="display: flex; flex-direction: column;">
+      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">Supervised Fine-Tuning (SFT) Ministral-3 with QLoRA</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb">
-      <img src="https://pbs.twimg.com/media/G6geuwEXEAA9ngv?format=jpg&name=small" alt="thumbnail" class="mt-0">
-      <p class="text-gray-700">OpenEnv Wordle with GRPO</p>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb" style="display: flex; flex-direction: column;">
+      <img src="https://pbs.twimg.com/media/G7QgGdCXgAAesMG?format=jpg&name=small" alt="thumbnail" style="width: 100%; height: 160px; object-fit: cover; border-radius: 0.375rem; margin: 0;">
+      <p class="text-gray-700" style="margin-top: 0.75rem; flex-grow: 1;">GRPO Ministral-3 with QLoRA</p>
     </a>
   </div>
 </div>
@@ -116,6 +117,14 @@ Explore TRL models, datasets, and demos in the [TRL Hugging Face organization](h
       <p class="text-gray-500 text-sm">May 25, 2025</p>
       <p class="text-gray-700">🐯 Liger GRPO meets TRL</p>
     </a>
+  </div>
+</div>
+
+<details>
+<summary style="cursor: pointer; font-weight: 500; color: #6b7280; margin-top: 1rem;">Show older posts...</summary>
+
+<div class="mt-10">
+  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/open-r1">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">January 28, 2025</p>
@@ -126,14 +135,6 @@ Explore TRL models, datasets, and demos in the [TRL Hugging Face organization](h
       <p class="text-gray-500 text-sm">July 10, 2024</p>
       <p class="text-gray-700">Preference Optimization for Vision Language Models with TRL</p>
     </a>
-  </div>
-</div>
-
-<details>
-<summary style="cursor: pointer; font-weight: 500; color: #6b7280; margin-top: 1rem;">Show older posts...</summary>
-
-<div class="mt-10">
-  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/putting_rl_back_in_rlhf_with_rloo/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">June 12, 2024</p>
