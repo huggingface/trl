@@ -51,13 +51,14 @@ Train agents in interactive environments using [OpenEnv](openenv).
 
 Notebooks for specific models, including Vision Language Models (VLM) and reasoning.
 
-| Notebook | Method | Model | Colab |
-|----------|:------:|-------|:-----:|
-| [GRPO rnj-1-instruct for reasoning with QLoRA](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) | GRPO | rnj-1-instruct | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) |
-| [	Supervised Fine-Tuning (SFT) Ministral-3B (VLM)](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_ministral3_vl.ipynb) | SFT | Ministral-3B | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb) |
-| [GRPO Ministral-3B (VLM)](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_ministral3_vl.ipynb) | GRPO | Ministral-3B | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb) |
-| [	Supervised Fine-Tuning (SFT) Qwen3-VL (VLM)](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_qwen_vl.ipynb) | SFT | Qwen3-VL | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_qwen_vl.ipynb) |
-| [GRPO Qwen3-VL (VLM)](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_qwen3_vl.ipynb) | GRPO | Qwen3-VL | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb) |
+
+| Notebook | Method | Model | VLM | Colab |
+|----------|:------:|-------|:---:|:-----:|
+| [GRPO rnj-1-instruct for reasoning with QLoRA](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) | GRPO | rnj-1-instruct | | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) |
+| [Supervised Fine-Tuning (SFT) Ministral-3B](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_ministral3_vl.ipynb) | SFT | Ministral-3B | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb) |
+| [GRPO Ministral-3B](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_ministral3_vl.ipynb) | GRPO | Ministral-3B | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb) |
+| [Supervised Fine-Tuning (SFT) Qwen3-VL](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_qwen_vl.ipynb) | SFT | Qwen3-VL | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_qwen_vl.ipynb) |
+| [GRPO Qwen3-VL](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_qwen3_vl.ipynb) | GRPO | Qwen3-VL | ✅ | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb) |
 
 ## 📜 Scripts
 
