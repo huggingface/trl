@@ -22,7 +22,6 @@ from transformers.utils import is_peft_available, is_vision_available
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 from ..testing_utils import (
-    RandomPairwiseJudge,
     TrlTestCase,
     require_llm_blender,
     require_peft,
@@ -30,10 +29,11 @@ from ..testing_utils import (
     require_vision,
     require_vllm,
 )
+from .testing_utils import RandomPairwiseJudge
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig
 
 if is_vision_available():
     import numpy as np
@@ -211,38 +211,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @require_peft
-    def test_training_with_peft_model_and_peft_config(self):
-        model_lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
-        model = get_peft_model(self.model, model_lora_config)
-        # we want only the "train adapter" to be trained
-        lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        training_args = OnlineDPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            learning_rate=5.0e-7,
-            eval_strategy="steps",
-            report_to="none",
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-
-        trainer = OnlineDPOTrainer(
-            model=model,
-            reward_funcs=self.reward_model,
-            args=training_args,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            processing_class=self.tokenizer,
-            reward_processing_classes=self.reward_tokenizer,
-            peft_config=lora_train_config,
-        )
-
-        trainer.train()
-
-        # Check if training loss is available
-        assert "train_loss" in trainer.state.log_history[-1]
-
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_llm_blender
     def test_training_with_judge(self, config_name):
@@ -392,7 +360,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         # Test generation parameters
         assert config.top_p == 1.0
-        assert config.top_k is None
+        assert config.top_k == 0
         assert config.min_p is None
         assert config.repetition_penalty == 1.0
         assert not config.use_transformers_paged

@@ -463,10 +463,12 @@ def prepare_peft_model(
     if not is_peft_available():
         raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
 
-    # If the model is already a PeftModel, we need to merge and unload it.
-    # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
     if isinstance(model, PeftModel) and peft_config is not None:
-        model = model.merge_and_unload()
+        raise ValueError(
+            "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge and "
+            "unload the existing adapter, save the resulting base model, and then pass that base model along with the "
+            "new `peft_config` to the trainer."
+        )
 
     # Handle quantized models (QLoRA)
     is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)

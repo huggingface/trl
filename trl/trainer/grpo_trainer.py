@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import atexit
 import copy
 import inspect
 import json
@@ -84,8 +86,10 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
     shuffle_sequence_dict,
+    shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
+    start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
 )
 
@@ -167,10 +171,11 @@ class GRPOTrainer(BaseTrainer):
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. Custom reward
-                  functions can also return `None` when the reward is not applicable to those samples. This is useful
-                  for multi-task training where different reward functions apply to different types of samples. When a
-                  reward function returns `None` for a sample, that reward function is excluded from the reward
-                  calculation for that sample. For more details, see [Using a custom reward
+                   functions can be either synchronous or asynchronous and can also return `None` when the reward is
+                   not applicable to those samples. This is useful for multi-task training where different reward
+                   functions apply to different types of samples. When a reward function returns `None` for a sample,
+                   that reward function is excluded from the reward calculation for that sample. For more details, see
+                   [Using a custom reward
                   function](#using-a-custom-reward-function).
 
                   The trainer's state is also passed to the reward function. The trainer's state is an instance of
@@ -310,9 +315,11 @@ class GRPOTrainer(BaseTrainer):
         self.eos_token_id = tokenizer.eos_token_id
 
         if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
-            # If the model is already a PeftModel, we need to merge and unload it.
-            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-            model = model.merge_and_unload()
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                "with the new `peft_config` to the trainer."
+            )
 
         # Create PEFT model
         if peft_config is not None:
@@ -351,6 +358,15 @@ class GRPOTrainer(BaseTrainer):
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
+
+        self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_reward_funcs:
+            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
+                start_event_loop_in_daemon(name="GRPOTrainer-AsyncRewardLoop")
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_reward_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
 
         # Reward weights
         if args.reward_weights is not None:
@@ -710,6 +726,8 @@ class GRPOTrainer(BaseTrainer):
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs)
+            # Keep training-specific generation kwargs to overwrite model's original generation config
+            self.generation_kwargs = generation_kwargs
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -1177,11 +1195,13 @@ class GRPOTrainer(BaseTrainer):
         # This allows for dynamic reward shaping based on training progress.
         reward_kwargs["trainer_state"] = self.state
 
+        async_funcs_info = []  # async custom functions for asyncio.gather
+
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names, strict=True)
         ):
-            with profiling_context(self, reward_func_name):
-                if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+            if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+                with profiling_context(self, reward_func_name):
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
@@ -1196,14 +1216,36 @@ class GRPOTrainer(BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-                else:
+            elif asyncio.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+                async_funcs_info.append((i, reward_func, reward_func_name))
+            else:
+                # Run synchronous reward function
+                with profiling_context(self, reward_func_name):
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
-
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        # Execute async custom functions in parallel using asyncio.gather
+        if async_funcs_info:
+
+            async def _invoke_async_reward(index, func, func_name):
+                with profiling_context(self, func_name):
+                    output = await func(
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                    )
+                    output = [r if r is not None else torch.nan for r in output]
+                    return index, output
+
+            async def _run_async_funcs():
+                coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
+                return await asyncio.gather(*coros)
+
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
+            for idx, output_reward_func in async_results:
+                rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
@@ -1485,7 +1527,10 @@ class GRPOTrainer(BaseTrainer):
             with (
                 profiling_context(self, "transformers.generate"),
                 unwrap_model_for_generation(
-                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    self.model_wrapped,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model,
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),

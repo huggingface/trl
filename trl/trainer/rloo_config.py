@@ -207,9 +207,9 @@ class RLOOConfig(TrainingArguments):
 
         max_prompt_length:
 
-            <Deprecated version="0.26.0">
+            <Deprecated version="0.27.0">
 
-            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
+            Parameter `max_prompt_length` is deprecated and will be removed in version 0.29.0. You should instead
             filter your dataset before training to ensure that prompts do not exceed your desired length.
 
             </Deprecated>
@@ -643,7 +643,7 @@ class RLOOConfig(TrainingArguments):
 
         if self.max_prompt_length is not None:
             warnings.warn(
-                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
+                "The `max_prompt_length` argument is deprecated and will be removed in version 0.29.0. You should "
                 "instead filter your dataset before training to ensure that prompts do not exceed your desired "
                 "length.",
                 FutureWarning,

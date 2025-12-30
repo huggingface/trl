@@ -22,9 +22,11 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from transformers import (
     AutoProcessor,
     DataCollator,
@@ -601,7 +603,8 @@ class SFTTrainer(BaseTrainer):
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            dict_args.pop("push_to_hub_token")
+            if not Version(transformers.__version__) < Version("5.0.0.dev0"):
+                dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
         # Model
@@ -697,9 +700,11 @@ class SFTTrainer(BaseTrainer):
                         peft_config.modules_to_save.append("lm_head")
 
         if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
-            # If the model is already a PeftModel, we need to merge and unload it.
-            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-            model = model.merge_and_unload()
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                "with the new `peft_config` to the trainer."
+            )
 
         # Create PEFT model
         if peft_config is not None:
