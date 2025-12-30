@@ -96,26 +96,26 @@ Explore TRL models, datasets, and demos in the [TRL Hugging Face organization](h
 ## Blog Posts
 
 <div class="mt-10">
-  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/openenv">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">October 23, 2025</p>
-      <p class="text-gray-700">Building the Open Agent Ecosystem Together: Introducing OpenEnv</p>
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem;">
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/openenv" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">October 23, 2025</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Building the Open Agent Ecosystem Together: Introducing OpenEnv</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">August 7, 2025</p>
-      <p class="text-gray-700">Vision Language Model Alignment in TRL ⚡️</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">August 7, 2025</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Vision Language Model Alignment in TRL ⚡️</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/vllm-colocate">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/vllm-colocate/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">June 3, 2025</p>
-      <p class="text-gray-700">NO GPU left behind: Unlocking Efficiency with Co-located vLLM in TRL</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/vllm-colocate" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/vllm-colocate/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">June 3, 2025</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">NO GPU left behind: Unlocking Efficiency with Co-located vLLM in TRL</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/liger-grpo">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/liger-grpo/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">May 25, 2025</p>
-      <p class="text-gray-700">🐯 Liger GRPO meets TRL</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/liger-grpo" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/liger-grpo/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">May 25, 2025</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">🐯 Liger GRPO meets TRL</p>
     </a>
   </div>
 </div>
@@ -124,46 +124,46 @@ Explore TRL models, datasets, and demos in the [TRL Hugging Face organization](h
 <summary style="cursor: pointer; font-weight: 500; color: #6b7280; margin-top: 1rem;">Show older posts...</summary>
 
 <div class="mt-10">
-  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/open-r1">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">January 28, 2025</p>
-      <p class="text-gray-700">Open-R1: a fully open reproduction of DeepSeek-R1</p>
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem;">
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/open-r1" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">January 28, 2025</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Open-R1: a fully open reproduction of DeepSeek-R1</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/dpo_vlm">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/dpo_vlm/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">July 10, 2024</p>
-      <p class="text-gray-700">Preference Optimization for Vision Language Models with TRL</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/dpo_vlm" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/dpo_vlm/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">July 10, 2024</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Preference Optimization for Vision Language Models with TRL</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/putting_rl_back_in_rlhf_with_rloo/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">June 12, 2024</p>
-      <p class="text-gray-700">Putting RL back in RLHF</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/putting_rl_back_in_rlhf_with_rloo/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">June 12, 2024</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Putting RL back in RLHF</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-ddpo">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/166_trl_ddpo/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">September 29, 2023</p>
-      <p class="text-gray-700">Finetune Stable Diffusion Models with DDPO via TRL</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-ddpo" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/166_trl_ddpo/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">September 29, 2023</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Finetune Stable Diffusion Models with DDPO via TRL</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/dpo-trl">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/157_dpo_trl/dpo_thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">August 8, 2023</p>
-      <p class="text-gray-700">Fine-tune Llama 2 with DPO</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/dpo-trl" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/157_dpo_trl/dpo_thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">August 8, 2023</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Fine-tune Llama 2 with DPO</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/stackllama">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/138_stackllama/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">April 5, 2023</p>
-      <p class="text-gray-700">StackLLaMA: A hands-on guide to train LLaMA with RLHF</p>
-   </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-peft">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/133_trl_peft/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">March 9, 2023</p>
-      <p class="text-gray-700">Fine-tuning 20B LLMs with RLHF on a 24GB consumer GPU</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/stackllama" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/138_stackllama/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">April 5, 2023</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">StackLLaMA: A hands-on guide to train LLaMA with RLHF</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/rlhf">
-      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/120_rlhf/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">December 9, 2022</p>
-      <p class="text-gray-700">Illustrating Reinforcement Learning from Human Feedback</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-peft" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/133_trl_peft/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">March 9, 2023</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Fine-tuning 20B LLMs with RLHF on a 24GB consumer GPU</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/rlhf" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/120_rlhf/thumbnail.png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">December 9, 2022</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Illustrating Reinforcement Learning from Human Feedback</p>
     </a>
   </div>
 </div>
@@ -173,11 +173,11 @@ Explore TRL models, datasets, and demos in the [TRL Hugging Face organization](h
 ## Talks
 
 <div class="mt-10">
-  <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).pdf">
-      <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">October 30, 2025</p>
-      <p class="text-gray-700">Fine tuning with TRL</p>
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem;">
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).pdf" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/Fine%20tuning%20with%20TRL%20(Oct%2025).png" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block; margin: 1%;">
+      <p style="margin: 0.3rem 0 0 0; font-size: 0.75rem; color: #6b7280;">October 30, 2025</p>
+      <p class="text-gray-700" style="margin: 0.2rem 0 0 0;">Fine tuning with TRL</p>
     </a>
   </div>
 </div>
