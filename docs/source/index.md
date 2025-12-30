@@ -30,22 +30,22 @@ TRL is a full stack library for post-training and aligning transformer language 
 ## Latest News
 
 <div class="mt-10">
-  <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb" style="display: block;">
-      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/1.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.375rem; display: block;">
-      <p class="text-gray-700" style="margin-top: 0.75rem;">GRPO using QLoRA on free Colab</p>
+  <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem;">
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/1.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block;">
+      <p class="text-gray-700" style="margin: 0.4rem 0 0 0; font-size: 0.9rem;">GRPO using QLoRA on free Colab</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb" style="display: block;">
-      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/2.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.375rem; display: block;">
-      <p class="text-gray-700" style="margin-top: 0.75rem;">GRPO FunctionGemma in BrowserGym (OpenEnv)</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/2.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block;">
+      <p class="text-gray-700" style="margin: 0.4rem 0 0 0; font-size: 0.9rem;">GRPO FunctionGemma in BrowserGym (OpenEnv)</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb" style="display: block;">
-      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/3.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.375rem; display: block;">
-      <p class="text-gray-700" style="margin-top: 0.75rem;">GRPO rnj-1-instruct with QLoRA for reasoning</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/3.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block;">
+      <p class="text-gray-700" style="margin: 0.4rem 0 0 0; font-size: 0.9rem;">GRPO rnj-1-instruct with QLoRA for reasoning</p>
     </a>
-    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb" style="display: block;">
-      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/4.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.375rem; display: block;">
-      <p class="text-gray-700" style="margin-top: 0.75rem;">SFT Ministral-3 VL with QLoRA</p>
+    <a class="!no-underline border dark:border-gray-700 rounded-lg shadow hover:shadow-lg" href="https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb" style="display: block; padding: 0.4rem 0.75rem;">
+      <img src="https://github.com/huggingface/trl/blob/new-docs-landing/assets/4.png?raw=true" alt="thumbnail" style="width: 100%; height: auto; border-radius: 0.25rem; display: block;">
+      <p class="text-gray-700" style="margin: 0.4rem 0 0 0; font-size: 0.9rem;">SFT Ministral-3 VL with QLoRA</p>
     </a>
   </div>
 </div>
