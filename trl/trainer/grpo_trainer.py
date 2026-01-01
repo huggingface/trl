@@ -472,11 +472,7 @@ class GRPOTrainer(BaseTrainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-        if self.use_liger_kernel and not self.importance_sampling_level == "token":
-            raise NotImplementedError(
-                "Liger Kernels currently only support token-level importance sampling. Please set"
-                "`importance_sampling_level` to 'token'."
-            )
+        # Liger Kernels now support both "token" and "sequence" importance sampling levels
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -2092,8 +2088,7 @@ class GRPOTrainer(BaseTrainer):
             max_completion_length=self.max_completion_length,
             importance_sampling_level=self.importance_sampling_level,
             reduce=True,
-            num_items_in_batch=inputs.get("num_items_in_batch"),
-            importance_sampling_ratio=inputs.get("importance_sampling_ratio"),
+            vllm_is_ratio=inputs.get("importance_sampling_ratio"),
         )
 
         mode = "train" if self.model.training else "eval"
