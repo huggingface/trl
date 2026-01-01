@@ -24,48 +24,38 @@
 # ///
 
 """
-Simple script to run GRPO training with OpenEnv's BrowserGym environment and vLLM.
+Simple script to run GRPO training with OpenEnv's BrowserGym environment and vLLM for LLMs.
 
-This example automatically detects and uses vision capabilities when VLM models are used.
-Screenshots from BrowserGym are collected and passed to the model during training. The GRPO
-trainer auto-detects multimodal support by checking for images in the rollout data.
+This script is optimized for text-only Language Models (LLMs). It uses the accessibility
+tree text from BrowserGym, making it memory-efficient.
+
+The environment runs on a Hugging Face Space by default.
 
 Setup:
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
 # Hotfix: https://github.com/huggingface/trl/pull/4740
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
 ```
 
 Usage:
 
-# Build and start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
-# ```sh
-cd OpenEnv
-docker build -t openenv-base:latest -f src/core/containers/images/Dockerfile .
-docker build -t browsergym-env:latest -f src/envs/browsergym_env/server/Dockerfile .
-docker run -d -p 8000:8000 \
-  -e BROWSERGYM_BENCHMARK="miniwob" \
-  -e BROWSERGYM_TASK_NAME="click-test" \
-  browsergym-env:latest
-```
-
 # Option 1: Colocated vLLM (1 GPU required)
 ```sh
-python examples/scripts/openenv/browsergym.py --vllm-mode colocate
+python examples/scripts/openenv/browsergym_llm.py --vllm-mode colocate
 ```
 
 # Option 2: Separate vLLM server (2 GPUs required)
 
 # Spin up vLLM server (Terminal 1)
 ```sh
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-VL-2B-Instruct --host 0.0.0.0 --port 8001
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-0.6B --host 0.0.0.0 --port 8001
 ```
 
 # Run training (Terminal 2)
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym.py --vllm-mode server --vllm-server-url http://localhost:8001
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym_llm.py --vllm-mode server --vllm-server-url http://localhost:8001
 ```
 """
 
@@ -75,10 +65,8 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 from datasets import Dataset
 from envs.browsergym_env import BrowserGymAction, BrowserGymEnv
-from PIL import Image
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
@@ -88,25 +76,15 @@ from trl.experimental.openenv import generate_rollout_completions
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run GRPO training for BrowserGym MiniWoB using OpenEnv environment.")
     parser.add_argument(
-        "--tokenizer-id",
-        default="Qwen/Qwen3-VL-2B-Instruct",
-        help="Model identifier used to load the tokenizer.",
-    )
-    parser.add_argument(
         "--model-id",
-        default="Qwen/Qwen3-VL-2B-Instruct",
+        default="Qwen/Qwen3-0.6B",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
-    parser.add_argument("--env-host", type=str, default="0.0.0.0", help="Host for the Echo environment.")
-    parser.add_argument("--env-port", type=int, default=8001, help="Port for the Echo environment.")
     parser.add_argument(
-        "--env-mode",
-        choices=["docker-local", "docker-image", "docker-hub", "space"],
-        default="docker-image",
-        help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
-    )
-    parser.add_argument(
-        "--env-image", type=str, default="browsergym-env:latest", help="Docker image for the BrowserGym environment."
+        "--space-url",
+        type=str,
+        default="https://burtenshaw-browsergym-v2.hf.space",
+        help="URL for the Hugging Face Space running the BrowserGym environment.",
     )
     parser.add_argument(
         "--benchmark",
@@ -158,12 +136,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Optional top-p sampling parameter forwarded to vLLM.",
-    )
-    parser.add_argument(
-        "--image-size",
-        type=int,
-        default=512,
-        help="Resize screenshots to this size (preserving aspect ratio) to reduce memory usage. Set to 0 to disable resizing.",
     )
     parser.add_argument(
         "--learning-rate",
@@ -274,14 +246,17 @@ You must complete the given web task by interacting with the page.
 
 Available actions:
 - noop() - Do nothing
-- click(bid) - Click element with BrowserGym ID
-- fill(bid, text) - Fill input field
+- click(bid) - Click element with BrowserGym ID (the number in brackets)
+- fill(bid, text) - Fill input field with text
 - send_keys(text) - Send keyboard input
 - scroll(direction) - Scroll up/down
 
+The page structure shows elements as: [bid] element_type 'element_text'
+For example: [13] button 'Click Me!' means bid='13'
+
 Reply with exactly ONE action on a single line, e.g.:
-click('123')
-fill('456', 'text')
+click('13')
+fill('42', 'hello world')
 noop()
 
 Do not include explanations or multiple actions."""
@@ -331,10 +306,9 @@ def rollout_once(
     tokenizer: AutoTokenizer,
     dataset_prompt: str,
     max_steps: int,
-    image_size: int = 0,
     debug: bool = False,
 ) -> dict[str, list]:
-    """Run one episode and collect training data."""
+    """Run one episode and collect training data (text-only, no screenshots)."""
     result = env.reset()
     observation = result.observation
 
@@ -343,35 +317,15 @@ def rollout_once(
     logprobs: list[float] = []
     step_rewards: list[float] = []
     completion_rewards: list[float] = []
-    images: list[Image.Image] = []  # Collect screenshots for VLM
 
     for step_num in range(max_steps):
         if result.done:
             break
 
-        # Create prompt from observation
+        # Create prompt from observation (text-only using accessibility tree)
         goal = observation.goal or dataset_prompt
         axtree = observation.axtree_txt or ""
         error = observation.error if observation.last_action_error else ""
-
-        # Collect screenshot if available (for VLM support)
-        if observation.screenshot is not None:
-            screenshot_array = np.array(observation.screenshot, dtype=np.uint8)
-            screenshot_image = Image.fromarray(screenshot_array)
-
-            # Resize to reduce memory if image_size > 0
-            if image_size > 0:
-                # Preserve aspect ratio while resizing
-                screenshot_image.thumbnail((image_size, image_size), Image.LANCZOS)
-                print(
-                    f"[DEBUG] Step {step_num + 1}: Collected and resized screenshot from {screenshot_array.shape} to {screenshot_image.size}"
-                )
-            else:
-                print(f"[DEBUG] Step {step_num + 1}: Collected screenshot, shape={screenshot_array.shape}")
-
-            images.append(screenshot_image)
-        else:
-            print(f"[DEBUG] Step {step_num + 1}: No screenshot available")
 
         user_prompt = make_user_prompt(goal, step_num, axtree, error)
         messages = [
@@ -419,19 +373,13 @@ def rollout_once(
     # Final reward is based on task completion
     final_reward = completion_rewards[-1] if completion_rewards else 0.0
 
-    result_dict = {
+    return {
         "prompt_ids": prompt_ids,
         "completion_ids": completion_ids,
         "logprobs": logprobs,
         "step_rewards": step_rewards,
         "completion_reward": final_reward,
     }
-
-    # Include images if available (GRPO trainer will auto-detect VLM support)
-    if images:
-        result_dict["images"] = images
-
-    return result_dict
 
 
 # ---------------------------------------------------------------------------
@@ -455,26 +403,9 @@ def reward_completion(completions: list[str], **kwargs) -> list[float]:
 def main() -> None:
     args = parse_args()
 
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_id)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    # Select environment mode
-    if args.env_mode == "docker-local":
-        env_url = f"http://{args.env_host}:{args.env_port}"
-        client = BrowserGymEnv(base_url=env_url)
-        print(f"🌍 Using existing BrowserGym Environment (Docker) at: {env_url}")
-    elif args.env_mode == "docker-image":
-        client = BrowserGymEnv.from_docker_image(args.env_image)
-        print("🌍 Using BrowserGym Environment (Docker) from local Image")
-    elif args.env_mode == "docker-hub":
-        client = BrowserGymEnv.from_hub(args.env_image)
-        print("🌍 Using existing BrowserGym Environment (Docker) from Hub Image")
-    elif args.env_mode == "space":
-        env_url = args.env_host
-        client = BrowserGymEnv(base_url=env_url)
-        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
-    else:
-        raise ValueError(f"Unknown environment mode: {args.env_mode}")
+    # Connect to BrowserGym environment via Hugging Face Space
+    client = BrowserGymEnv(base_url=args.space_url)
+    print(f"🌍 Using Hugging Face Space environment at: {args.space_url}")
 
     dataset = Dataset.from_dict({"prompt": [args.dataset_prompt] * args.dataset_size})
 
@@ -516,19 +447,19 @@ def main() -> None:
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
         completion_rewards: list[float] = []
-        episode_images: list[list[Image.Image]] = []
 
-        print(f"\n[DEBUG] rollout_func called with {len(prompts)} prompts")
+        if args.debug:
+            print(f"\n[DEBUG] rollout_func called with {len(prompts)} prompts (LLM mode, text-only)")
 
         for i, prompt_text in enumerate(prompts):
-            print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
+            if args.debug:
+                print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
             episode = rollout_once(
                 trainer=trainer,
                 env=client,
-                tokenizer=tokenizer,
+                tokenizer=trainer.processing_class,
                 dataset_prompt=prompt_text,
                 max_steps=args.max_steps,
-                image_size=args.image_size,
                 debug=args.debug,
             )
             episode_prompt_ids.append(episode["prompt_ids"])
@@ -536,32 +467,15 @@ def main() -> None:
             episode_logprobs.append(episode["logprobs"])
             completion_rewards.append(episode["completion_reward"])
 
-            # Collect images if available (for VLM support)
-            if "images" in episode:
-                print(f"[DEBUG] Episode {i + 1} has {len(episode['images'])} images")
-                episode_images.append(episode["images"])
-            else:
-                print(f"[DEBUG] Episode {i + 1} has NO images")
-
-        result = {
+        return {
             "prompt_ids": episode_prompt_ids,
             "completion_ids": episode_completion_ids,
             "logprobs": episode_logprobs,
             "completion_reward": completion_rewards,
         }
 
-        # Include images if any episode had screenshots (GRPO trainer auto-detects VLM)
-        if episode_images:
-            result["images"] = episode_images
-            print(f"[DEBUG] rollout_func returning with images: {len(episode_images)} episodes")
-        else:
-            print("[DEBUG] rollout_func returning WITHOUT images")
-
-        return result
-
     trainer = GRPOTrainer(
         model=args.model_id,
-        processing_class=tokenizer,
         reward_funcs=[reward_completion],
         train_dataset=dataset,
         args=grpo_config,
@@ -569,10 +483,11 @@ def main() -> None:
     )
 
     print("=" * 80)
-    print("Starting GRPO training with BrowserGym environment")
+    print("Starting GRPO training with BrowserGym environment (LLM mode)")
     print(f"Benchmark: {args.benchmark}")
     print(f"Task: {args.task_name}")
     print(f"Model: {args.model_id}")
+    print("Mode: LLM (text-only, using accessibility tree)")
     print(f"Using {args.num_generations} rollouts per dataset prompt")
     print(f"Output directory: {output_dir}")
     print("=" * 80)

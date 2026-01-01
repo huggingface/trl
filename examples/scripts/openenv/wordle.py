@@ -12,13 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio>=0.13.0",
+#     "kernels",
+#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
+#     "openenv_core",
+# ]
+# ///
+
+
 """
 Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
 Setup:
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# Hotfix: https://github.com/huggingface/trl/pull/4740
+uv pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
 ```
 
 Usage:
@@ -462,6 +476,8 @@ def main() -> None:
         num_generations=args.num_generations,
         max_completion_length=args.max_new_tokens,
         logging_steps=args.logging_steps,
+        report_to="trackio",
+        trackio_space_id=f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
         save_steps=args.save_interval,
         save_total_limit=args.save_total_limit,

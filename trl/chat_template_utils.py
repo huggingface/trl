@@ -12,23 +12,118 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from transformers import PreTrainedTokenizer
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+
+
+def clone_chat_template(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    source_tokenizer_path: str,
+    resize_to_multiple_of: int | None = 64,
+) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[int]]:
+    """
+    Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
+
+    This function:
+    - Copies the chat template from a source tokenizer to the target tokenizer.
+    - Adds any new tokens from the source tokenizer to the target tokenizer.
+    - Sets and synchronizes the EOS token across the tokenizer and model.
+    - Resizes the model's token embeddings to match the new vocabulary size, optionally rounding it up to a multiple of
+      a specified value. In such cases, dummy tokens are added to the tokenizer to ensure the vocabulary size matches
+      the embedding dimensions.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to update.
+        tokenizer ([`~transformers.PreTrainedTokenizer`]):
+            Tokenizer to update.
+        source_tokenizer_path (`str`):
+            Path or identifier of the pretrained tokenizer to clone from.
+        resize_to_multiple_of (`int` or `None`, *optional*, defaults to `64`):
+            The embedding layer will be resized to the new vocabulary size. If this is not `None`, it will round up the
+            new vocabulary size to the nearest multiple of this value.
+
+    Returns:
+        model ([`~transformers.PreTrainedModel`]):
+            Updated model with resized token embeddings and EOS token configured.
+        tokenizer ([`~transformers.PreTrainedTokenizer`]):
+            Updated tokenizer with the chat template and special tokens applied.
+        added_tokens (`list[int]`):
+            List of tokens that were added to the tokenizer from the source tokenizer.
+
+    Example:
+    ```python
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import clone_chat_template
+
+    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+    ```
+    """
+    # Load the source tokenizer containing the desired chat template
+    tokenizer_source = AutoTokenizer.from_pretrained(source_tokenizer_path)
+
+    # Copy the chat template from the source tokenizer
+    tokenizer.chat_template = tokenizer_source.get_chat_template()
+
+    # Ensure all added tokens from the source are available in the target tokenizer
+    added_tokens = [
+        token for token in tokenizer_source.added_tokens_decoder.values() if token.content not in tokenizer.vocab
+    ]
+    tokenizer.add_tokens(added_tokens)
+
+    # Set the EOS token from the source tokenizer (important for generation)
+    tokenizer.eos_token = tokenizer_source.eos_token
+    model.config.eos_token_id = tokenizer.eos_token_id
+    if model.can_generate():  # Non-generative models (e.g. SequenceClassification) may not have a generation_config
+        model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    # Resize model embeddings to include any new tokens, optionally rounding up to a multiple
+    model.resize_token_embeddings(
+        # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
+        # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
+        # as handling of special and added tokens varies across tokenizers.
+        new_num_tokens=len(tokenizer.vocab),
+        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
+    )
+
+    # After resizing, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
+    # ensure vocabulary size matches the embedding matrix dimensions.
+    idx = 0
+    while model.vocab_size > len(tokenizer.vocab):
+        dummy_token = AddedToken(f"<extra_id_{idx}>")
+        is_added = tokenizer.add_tokens(dummy_token)
+        idx += 1
+        if is_added == 1:
+            added_tokens.append(dummy_token)
+
+    # Verify that vocabulary size now matches embedding dimensions
+    if len(tokenizer.vocab) != model.vocab_size:
+        raise RuntimeError(
+            f"Vocabulary size mismatch after resizing: tokenizer vocab size is {len(tokenizer.vocab)}, but model "
+            f"embedding size is {model.vocab_size}. This indicates an internal error in the token alignment process."
+        )
+    added_tokens = [token.content for token in added_tokens]
+    added_tokens = tokenizer.convert_tokens_to_ids(added_tokens)
+    return model, tokenizer, added_tokens
 
 
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
-    "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?:<\|im_end\|>|$)",
+    "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
         "content": {"type": "string"},
         "reasoning_content": {"type": "string"},
         "tool_calls": {
-            "x-parser": "json",
-            "x-parser-args": {"transform": "[{type: 'function', function: @}]"},
             "type": "array",
+            "x-regex-iterator": r"<tool_call>\s*(.+?)\s*</tool_call>",
             "items": {
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
                 "type": "object",
                 "properties": {
                     "type": {"const": "function"},

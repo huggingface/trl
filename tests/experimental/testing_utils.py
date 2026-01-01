@@ -11,20 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import random
 
-from .modeling_value_head import (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-    PreTrainedModelWrapper,
-)
-from .ppo_config import PPOConfig
-from .ppo_trainer import PPOTrainer
+from trl.experimental.judges import BasePairwiseJudge
 
 
-__all__ = [
-    "AutoModelForCausalLMWithValueHead",
-    "AutoModelForSeq2SeqLMWithValueHead",
-    "PreTrainedModelWrapper",
-    "PPOConfig",
-    "PPOTrainer",
-]
+class RandomPairwiseJudge(BasePairwiseJudge):
+    """
+    Random pairwise judge, for testing purposes.
+    """
+
+    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
+        if not return_scores:
+            return [random.randint(0, len(completion) - 1) for completion in completions]
+        else:
+            return [random.random() for _ in range(len(prompts))]
