@@ -22,38 +22,34 @@ import torch
 @pytest.fixture(autouse=True)
 def set_model_float32_dtype(monkeypatch):
     """Auto-inject float32 dtype for tiny models defined in trl-internal-testing."""
-    from transformers import (
-        AutoModel,
-        AutoModelForCausalLM,
-        AutoModelForImageTextToText,
-        AutoModelForSequenceClassification,
-        AutoProcessor,
-        AutoTokenizer,
-    )
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 
-    def create_wrapper(original_method):
-        @wraps(original_method)
-        def wrapper(pretrained_model_name_or_path, *args, **kwargs):
+    def create_classmethod_wrapper(original_classmethod):
+        # Extract the underlying function from the classmethod
+        original_func = original_classmethod.__func__
+
+        @wraps(original_func)
+        def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
             # Only inject if model_id is one of trl-internal-testing
-            if "trl-internal-testing" in pretrained_model_name_or_path:
+            if (
+                isinstance(pretrained_model_name_or_path, str)
+                and "trl-internal-testing" in pretrained_model_name_or_path
+            ):
                 if "dtype" not in kwargs:
                     kwargs["dtype"] = "float32"
 
-            return original_method(pretrained_model_name_or_path, *args, **kwargs)
+            return original_func(cls, pretrained_model_name_or_path, *args, **kwargs)
 
-        return wrapper
+        # Re-wrap as classmethod
+        return classmethod(wrapper)
 
-    # Patch all transformers Auto* classes
+    # Patch base classes - this affects all models, tokenizers, and processors
     for cls in [
-        AutoModel,
-        AutoModelForCausalLM,
-        AutoModelForSequenceClassification,
-        AutoTokenizer,
-        AutoProcessor,
-        AutoModelForImageTextToText,
+        PreTrainedModel,
+        PreTrainedTokenizerBase,
+        ProcessorMixin,
     ]:
-        if hasattr(cls, "from_pretrained"):
-            monkeypatch.setattr(cls, "from_pretrained", create_wrapper(cls.from_pretrained))
+        monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
 
 
 @pytest.fixture(autouse=True)
