@@ -16,6 +16,7 @@ import contextlib
 import os
 from collections import defaultdict
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1258,3 +1259,92 @@ class SFTTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+
+
+class GenerativeSFTTrainer(SFTTrainer):
+    """SFT trainer that runs generation during eval and slices prompts out of predictions."""
+
+    def prediction_step(
+        self,
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        if not self.args.predict_with_generate or prediction_loss_only:
+            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+
+        inputs = self._prepare_inputs(inputs)
+
+        if ignore_keys is None:
+            if hasattr(model, "config"):
+                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
+            else:
+                ignore_keys = []
+
+        labels = inputs.get("labels")
+
+        generation_config = self.args.generation_config or getattr(model, "generation_config", None)
+        if generation_config is None:
+            raise ValueError("A generation configuration is required when `predict_with_generate=True`.")
+
+        try:
+            generation_config = generation_config.clone()
+        except AttributeError:
+            generation_config = deepcopy(generation_config)
+
+        if generation_config.max_new_tokens is None:
+            generation_config.max_new_tokens = self.args.generation_max_length or 128
+
+        pad_token_id = self.tokenizer.pad_token_id if self.tokenizer is not None else None
+        if pad_token_id is None:
+            pad_token_id = getattr(model.config, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(model.config, "eos_token_id", None)
+
+        if pad_token_id is None:
+            raise ValueError("Could not deduce a valid pad_token_id (or eos_token_id) for generation.")
+
+        model_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+
+        with torch.no_grad():
+            generated_tokens = model.generate(
+                **model_inputs,
+                generation_config=generation_config,
+                pad_token_id=pad_token_id,
+            )
+
+        attention_mask = inputs.get("attention_mask")
+        if attention_mask is not None:
+            prompt_lengths = attention_mask.sum(dim=1)
+        else:
+            prompt_lengths = torch.full(
+                (generated_tokens.size(0),),
+                inputs["input_ids"].shape[1],
+                device=generated_tokens.device,
+            )
+
+        trimmed_sequences = []
+        for sequence, prompt_length in zip(generated_tokens, prompt_lengths):
+            trimmed_sequences.append(sequence[int(prompt_length.item()) :])
+
+        max_trimmed_len = max(seq.size(0) for seq in trimmed_sequences) if trimmed_sequences else 0
+        if max_trimmed_len == 0:
+            generated_tokens = generated_tokens[:, :0]
+        else:
+            padded_sequences = []
+            for seq in trimmed_sequences:
+                pad_length = max_trimmed_len - seq.size(0)
+                if pad_length > 0:
+                    seq = torch.cat((seq, seq.new_full((pad_length,), pad_token_id)))
+                padded_sequences.append(seq)
+            generated_tokens = torch.stack(padded_sequences, dim=0)
+
+        generated_tokens = self.accelerator.pad_across_processes(generated_tokens, dim=1, pad_index=pad_token_id)
+        generated_tokens = self.accelerator.gather_for_metrics(generated_tokens).cpu()
+
+        if labels is not None:
+            labels = self.accelerator.pad_across_processes(labels, dim=1, pad_index=-100)
+            labels = self.accelerator.gather_for_metrics(labels).cpu()
+
+        return None, generated_tokens, labels
