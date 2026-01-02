@@ -11,11 +11,11 @@ pip install trl
 ```
 
 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.5rem 0;">
-  <span style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🚀 vLLM integration</span>
-  <span style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🔧 PEFT/LoRA ready</span>
-  <span style="background: linear-gradient(135deg, #ff6b6b 0%, #feca57 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">👁️ VLM support</span>
-  <span style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">📊 Trackio & WandB</span>
-  <span style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🤗 Transformers based</span>
+  <span style="background: linear-gradient(135deg, #fd00c0 0%, #0bfaee 100%); color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🚀 vLLM integration</span>
+  <span style="background: linear-gradient(135deg, #fd00c0 0%, #0bfaee 100%);  color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🔧 PEFT/LoRA ready</span>
+  <span style="background: linear-gradient(135deg, #fd00c0 0%, #0bfaee 100%);  color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">👁️ VLM support</span>
+  <span style="background: linear-gradient(135deg, #fd00c0 0%, #0bfaee 100%);  color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">📊 Trackio & WandB</span>
+  <span style="background: linear-gradient(135deg, #fd00c0 0%, #0bfaee 100%);  color: white; padding: 0.25rem 0.75rem; border-radius: 2rem; font-size: 0.85rem;">🤗 Transformers based</span>
 </div>
 
 ## Quick Start
