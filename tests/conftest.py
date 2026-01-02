@@ -13,9 +13,71 @@
 # limitations under the License.
 
 import gc
+from functools import wraps
 
 import pytest
 import torch
+
+
+# ============================================================================
+# Model Revision Override
+# ============================================================================
+# To test a tiny model PR before merging to main:
+# 1. Add the full model_id and PR revision to this dict
+# 2. Commit and push to trigger CI
+# 3. Once CI is green, merge the tiny model PR on HF Hub
+# 4. Remove the entry from this dict and commit
+#
+# Example:
+#   MODEL_REVISIONS = {
+#       "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5": "refs/pr/3",
+#       "trl-internal-testing/tiny-LlavaForConditionalGeneration": "refs/pr/5",
+#   }
+# ============================================================================
+
+MODEL_REVISIONS = {
+    # Add model_id: revision mappings here to test PRs
+}
+
+
+@pytest.fixture(autouse=True)
+def apply_model_revisions(monkeypatch):
+    """Auto-inject revision parameter for models defined in MODEL_REVISIONS."""
+    if not MODEL_REVISIONS:
+        return
+
+    from transformers import (
+        AutoModel,
+        AutoModelForCausalLM,
+        AutoModelForImageTextToText,
+        AutoModelForSequenceClassification,
+        AutoProcessor,
+        AutoTokenizer,
+    )
+
+    def create_wrapper(original_method):
+        @wraps(original_method)
+        def wrapper(pretrained_model_name_or_path, *args, **kwargs):
+            # Direct lookup - only inject if model_id is in the override dict
+            if pretrained_model_name_or_path in MODEL_REVISIONS:
+                if "revision" not in kwargs:
+                    kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
+
+            return original_method(pretrained_model_name_or_path, *args, **kwargs)
+
+        return wrapper
+
+    # Patch all transformers Auto* classes
+    for cls in [
+        AutoModel,
+        AutoModelForCausalLM,
+        AutoModelForSequenceClassification,
+        AutoTokenizer,
+        AutoProcessor,
+        AutoModelForImageTextToText,
+    ]:
+        if hasattr(cls, "from_pretrained"):
+            monkeypatch.setattr(cls, "from_pretrained", create_wrapper(cls.from_pretrained))
 
 
 @pytest.fixture(autouse=True)
