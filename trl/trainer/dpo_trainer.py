@@ -155,6 +155,8 @@ class DataCollatorForPreference(DataCollatorMixin):
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
         if "pixel_values" in examples[0]:
             pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
+        if "image_grid_thw" in examples[0]:
+            image_grid_thw = [torch.tensor(example["image_grid_thw"]) for example in examples]
         if "pixel_attention_mask" in examples[0]:
             pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
         if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
@@ -171,6 +173,8 @@ class DataCollatorForPreference(DataCollatorMixin):
         output["rejected_attention_mask"] = pad(rejected_attention_mask, padding_value=0)
         if "pixel_values" in examples[0]:
             output["pixel_values"] = pad(pixel_values, padding_value=0.0)
+        if "image_grid_thw" in examples[0]:
+            output["image_grid_thw"] = pad(image_grid_thw, padding_value=0)
         if "pixel_attention_mask" in examples[0]:
             output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
         if "image_sizes" in examples[0]:
@@ -753,7 +757,7 @@ class DPOTrainer(BaseTrainer):
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
         prompt_input_ids = processed_features["input_ids"][0]
-        pixel_values = processed_features["pixel_values"][0]
+        pixel_values = processed_features["pixel_values"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
 
@@ -786,7 +790,8 @@ class DPOTrainer(BaseTrainer):
             output["image_sizes"] = processed_features["image_sizes"][0]
         if "token_type_ids" in processed_features:
             output["token_type_ids"] = processed_features["token_type_ids"][0]
-
+        if "image_grid_thw" in processed_features:
+            output["image_grid_thw"] = processed_features["image_grid_thw"].squeeze(0)
         return output
 
     def _set_signature_columns_if_needed(self):
@@ -988,6 +993,8 @@ class DPOTrainer(BaseTrainer):
             )
         if "image_sizes" in batch:
             output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+        if "image_grid_thw" in batch:
+            output["image_grid_thw"] = torch.cat([batch["image_grid_thw"], batch["image_grid_thw"]], dim=0)
         if "token_type_ids" in batch:
             output["token_type_ids"] = torch.cat((batch["token_type_ids"], batch["token_type_ids"]))
 
@@ -1248,6 +1255,8 @@ class DPOTrainer(BaseTrainer):
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+        if "image_grid_thw" in concatenated_batch:
+            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_thw"]
 
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
         completion_attention_mask = concatenated_batch["completion_attention_mask"]
@@ -1495,7 +1504,8 @@ class DPOTrainer(BaseTrainer):
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
-
+        if "image_grid_thw" in concatenated_batch:
+            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_thw"]
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
         completion_input_ids = concatenated_batch["completion_input_ids"]
