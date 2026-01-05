@@ -74,6 +74,7 @@ logger = logging.get_logger(__name__)
 
 
 def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
+    """Numerically stable computation of log(1-exp(x))."""
     # branch at -ln 2 ~ -0.693 to avoid cancellation
     t = -0.6931471805599453
     return torch.where(x < t, torch.log1p(-torch.exp(x)), torch.log(-torch.expm1(x)))
