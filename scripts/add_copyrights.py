@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 
 
-COPYRIGHT_HEADER = f"""# Copyright 2020-{datetime.now().year - 1} The HuggingFace Team. All rights reserved.
+COPYRIGHT_HEADER = f"""# Copyright 2020-{datetime.now().year} The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
