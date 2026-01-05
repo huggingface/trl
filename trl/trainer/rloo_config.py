@@ -669,3 +669,4 @@ class RLOOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
+            self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex

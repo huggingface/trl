@@ -1143,7 +1143,6 @@ class RLOOTrainer(BaseTrainer):
                     "top_k": self.top_k,
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
-                    "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                 }
                 generation_kwargs[structured_outputs_key] = structured_outputs
                 if self.args.generation_kwargs is not None:
