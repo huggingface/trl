@@ -417,10 +417,7 @@ class DPOTrainer(BaseTrainer):
                     "You set `use_liger_kernel=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
-            self.liger_loss_fn = LigerFusedLinearDPOLoss(
-                beta=args.beta,
-                loss_type=self.loss_types[0],
-            )
+            self.liger_loss_fn = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -572,6 +569,7 @@ class DPOTrainer(BaseTrainer):
                         prepare_multimodal_messages(example["completion"], num_images=0)
                     prompt_ids = processing_class.apply_chat_template(
                         example["prompt"],
+                        return_dict=False,
                         tokenize=True,
                         add_generation_prompt=True,
                         tools=example.get("tools"),
@@ -706,21 +704,98 @@ class DPOTrainer(BaseTrainer):
         )
         return dataset
 
-    def _compute_loss_liger(self, model, inputs):
-        raise NotImplementedError("LIGER loss computation is not implemented yet.")
-        # weight = model.get_output_embeddings().weight
-        # ref_weight = self.ref_model.get_output_embeddings().weight
-        # liger_loss, _ = self.liger_loss_fn(
-        #     weight,
-        #     hidden_states,
-        #     labels,
-        #     bias=bias,
-        #     ref_input=hidden_states,
-        #     ref_weight=ref_weight,
-        #     ref_bias=bias,
-        # )
+    def _compute_loss_liger(self, model, inputs, return_outputs):
+        if self.precompute_ref_logps:
+            raise NotImplementedError("Liger DPO loss does not support precomputed reference log probabilities.")
 
-    def _compute_loss(self, model, inputs, return_outputs=False):
+        mode = "train" if self.model.training else "eval"
+
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        completion_mask = inputs["completion_mask"]
+
+        # Truncate inputs
+        if self.args.max_length is not None:
+            if self.args.truncation_mode == "keep_start":
+                input_ids = input_ids[:, : self.args.max_length]
+                attention_mask = attention_mask[:, : self.args.max_length]
+                completion_mask = completion_mask[:, : self.args.max_length]
+            elif self.args.truncation_mode == "keep_end":
+                attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
+                input_ids = input_ids[:, -self.args.max_length :]
+                attention_mask = attention_mask[:, -self.args.max_length :]
+                completion_mask = completion_mask[:, -self.args.max_length :]
+                attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+
+        decoder = model.get_decoder()
+        outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+        hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
+        lm_head = model.get_output_embeddings()
+        weight = lm_head.weight
+        bias = lm_head.bias
+
+        if is_peft_model(model):
+            raise NotImplementedError("Liger DPO loss is not implemented for PEFT models.")
+        else:
+            with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+                ref_decoder = self.ref_model.get_decoder()
+                ref_outputs = ref_decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+                ref_lm_head = self.ref_model.get_output_embeddings()
+                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
+                ref_weight = ref_lm_head.weight
+                ref_bias = ref_lm_head.bias
+
+        shift_completion_mask = completion_mask[:, 1:].contiguous()
+        labels = input_ids[:, 1:].clone()
+        labels[shift_completion_mask == 0] = -100
+
+        loss, metrics = self.liger_loss_fn(
+            weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
+        )
+
+        (
+            chosen_logps,
+            rejected_logps,
+            chosen_logits_mean,
+            rejected_logits_mean,
+            nll_loss,
+            chosen_rewards,
+            rejected_rewards,
+        ) = metrics
+
+        if mode == "train":
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+
+        avg_chosen_logits = self.accelerator.gather_for_metrics(chosen_logits_mean).mean().item()
+        avg_rejected_logits = self.accelerator.gather_for_metrics(rejected_logits_mean).mean().item()
+        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
+        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
+
+        agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
+        agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
+        self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
+        self._metrics[mode]["rewards/rejected"].append(agg_rejected_rewards.mean().item())
+
+        reward_accuracies = (chosen_rewards > rejected_rewards).float()
+        agg_reward_accuracies = self.accelerator.gather(reward_accuracies)
+        self._metrics[mode]["rewards/accuracies"].append(agg_reward_accuracies.mean().item())
+
+        margins = chosen_rewards - rejected_rewards
+        agg_margins = self.accelerator.gather(margins)
+        self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
+
+        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
+        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
+
+        return (loss, None) if return_outputs else loss
+
+    def _compute_loss(self, model, inputs, return_outputs):
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
@@ -1018,8 +1093,7 @@ class DPOTrainer(BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.use_liger_kernel:
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._compute_loss_liger(unwrapped_model, inputs)
+            return self._compute_loss_liger(model, inputs, return_outputs)
         else:
             return self._compute_loss(model, inputs, return_outputs)
 
