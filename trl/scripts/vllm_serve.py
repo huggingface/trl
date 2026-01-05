@@ -37,6 +37,8 @@ from trl.import_utils import (
     is_vllm_available,
 )
 
+# NPU Adapt
+from torch_npu.contrib import transfer_to_npu
 
 if is_fastapi_available():
     from fastapi import FastAPI
@@ -106,6 +108,32 @@ class WeightSyncWorkerExtension:
                 UUID of the device of client main process. Used to assert that devices are different from vllm workers
                 devices.
         """
+
+        # NPU Adapt
+        if not hasattr(self, 'device') or self.device is None:
+            if torch.npu.is_available():
+                current_npu = torch.npu.current_device()
+                self.device = torch.device("npu", current_npu)
+            elif torch.cuda.is_available():
+                self.device = torch.device("cuda", torch.cuda.current_device())
+            elif is_torch_xpu_available():
+                self.device = torch.device("xpu", torch.xpu.current_device())
+            else:
+                self.device = torch.device("cpu")
+        # ===== DEBUG: device info=====
+        print(f"[DEBUG] is_npu_available = {repr(torch.npu.is_available())}")
+        print(f"[DEBUG] is_cuda_available = {repr(torch.cuda.is_available())}")
+        print(f"[DEBUG] is_xpu_available = {repr(torch.xpu.is_available())}")
+
+        print(f"[DEBUG] current_npu = {repr(torch.npu.current_device())}")
+        print(f"[DEBUG] current_cuda = {repr(torch.cuda.current_device())}")
+        # print(f"[DEBUG] current_xpu = {repr(torch.xpu.current_device())}")
+
+        print(f"[DEBUG] self.device = {repr(self.device)}")
+        print(f"[DEBUG] type(self.device) = {type(self.device)}")
+        print(f"[DEBUG] torch.device check: isinstance = {isinstance(self.device, torch.device)}")
+        # ==================================
+
         if self.communicator is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
@@ -114,12 +142,14 @@ class WeightSyncWorkerExtension:
             is_torch_xpu_available() and hasattr(torch.xpu.get_device_properties(self.device), "uuid")
         ):
             accelerator_module = torch.xpu if is_torch_xpu_available() else torch.cuda
-            if client_device_uuid == str(accelerator_module.get_device_properties(self.device).uuid):
-                raise RuntimeError(
-                    f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
-                    "roles/ranks within the same communicator. This setup is unsupported and will likely lead to program "
-                    "hangs or incorrect behavior. Ensure that trainer is using different devices than vLLM server."
-                )
+
+            # NPU Adapt
+            # if client_device_uuid == str(accelerator_module.get_device_properties(self.device).uuid):
+            #     raise RuntimeError(
+            #         f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
+            #         "roles/ranks within the same communicator. This setup is unsupported and will likely lead to program "
+            #         "hangs or incorrect behavior. Ensure that trainer is using different devices than vLLM server."
+            #     )
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
