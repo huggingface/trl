@@ -473,6 +473,8 @@ class GRPOTrainer(BaseTrainer):
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
+        if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
+            raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -2190,8 +2192,8 @@ class GRPOTrainer(BaseTrainer):
         off_policy_threshold: float,
     ) -> torch.Tensor:
         """
-        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper.
-        Returns a (B, 1) tensor where 1.0 indicates "Keep" and 0.0 indicates "Drop".
+        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper. Returns a (B, 1) tensor where 1.0 indicates
+        "Keep" and 0.0 indicates "Drop".
         """
         # K1 estimator: log(pi_old) - log(pi_theta)
         k1_divergence = old_per_token_logps - per_token_logps.detach()
