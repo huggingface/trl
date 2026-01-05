@@ -587,6 +587,84 @@ class PPOTrainer(BaseTrainer):
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
 
+    @staticmethod
+    def _compute_reward_shaping_delta(
+        postprocessed_responses: torch.Tensor,
+        sequence_lengths: torch.Tensor,
+        eos_token_id: int | None,
+        args: PPOConfig,
+    ) -> torch.Tensor:
+        """
+        Compute the reward shaping delta based on the configured strategies.
+        """
+        device = postprocessed_responses.device
+        batch_size = postprocessed_responses.shape[0]
+        delta_score = torch.zeros(batch_size, device=device, dtype=torch.float)
+
+        # 1. Length penalty
+        if args.reward_shaping_enable_length:
+            delta_score -= args.reward_shaping_length_coef * sequence_lengths.float()
+
+        # 2. Repetition penalty (n-gram)
+        if args.reward_shaping_enable_repetition:
+            if args.reward_shaping_repetition_ngram < 2:
+                raise ValueError("N-gram size must be >= 2 for repetition penalty.")
+
+            n = args.reward_shaping_repetition_ngram
+            # Using loop for correctness as batch size is typically small in PPO rollout
+            for i in range(batch_size):
+                seq_len = int(sequence_lengths[i].item())
+                if seq_len < n:
+                    continue
+
+                tokens = postprocessed_responses[i, :seq_len].tolist()
+
+                total = max(0, seq_len - n + 1)
+                if total == 0:
+                    repeat_rate = 0.0
+                else:
+                    ngrams = set()
+                    for j in range(len(tokens) - n + 1):
+                        ngram = tuple(tokens[j : j + n])
+                        ngrams.add(ngram)
+                    unique = len(ngrams)
+                    repeat_rate = 1.0 - unique / total
+
+                delta_score[i] -= args.reward_shaping_repetition_coef * repeat_rate
+
+        # 3. EOS shaping
+        if args.reward_shaping_enable_eos:
+            if eos_token_id is None:
+                raise ValueError("EOS token ID is required for EOS shaping.")
+
+            # Check for EOS presence
+            has_eos = torch.any(postprocessed_responses == eos_token_id, dim=-1)
+
+            # Missing EOS penalty
+            delta_score[~has_eos] -= args.reward_shaping_eos_missing_penalty
+
+            # EOS bonus / Out of range penalty
+            # Find the first EOS position
+            eos_indices = first_true_indices(postprocessed_responses == eos_token_id)
+            # eos_len = eos_pos + 1
+            eos_lens = eos_indices + 1
+
+            # Only consider those that actually have EOS
+            if has_eos.any():
+                valid_eos_lens = eos_lens[has_eos]
+                in_range = (valid_eos_lens >= args.reward_shaping_eos_min_len) & (
+                    valid_eos_lens <= args.reward_shaping_eos_max_len
+                )
+
+                # Apply bonus if in range, penalty if out of range
+                delta_score[has_eos] += torch.where(
+                    in_range,
+                    torch.tensor(args.reward_shaping_eos_bonus, device=device),
+                    torch.tensor(-args.reward_shaping_eos_out_of_range_penalty, device=device),
+                )
+
+        return delta_score
+
     def train(self):
         args = self.args
         accelerator = self.accelerator
@@ -741,7 +819,23 @@ class PPOTrainer(BaseTrainer):
                 # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
                 # Completions not passing that filter will receive a lower score.
                 contain_eos_token = torch.any(postprocessed_responses == self.processing_class.eos_token_id, dim=-1)
-                if self.args.missing_eos_penalty is not None:
+
+                # Reward Shaping
+                if (
+                    self.args.reward_shaping_enable_length
+                    or self.args.reward_shaping_enable_repetition
+                    or self.args.reward_shaping_enable_eos
+                ):
+                    delta_scores = self._compute_reward_shaping_delta(
+                        postprocessed_responses,
+                        sequence_lengths + 1,
+                        self.processing_class.eos_token_id,
+                        self.args,
+                    )
+                    scores += delta_scores
+
+                # Apply legacy missing_eos_penalty only if EOS shaping is NOT enabled
+                if self.args.missing_eos_penalty is not None and not self.args.reward_shaping_enable_eos:
                     scores[~contain_eos_token] -= self.args.missing_eos_penalty
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 

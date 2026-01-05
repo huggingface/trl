@@ -311,7 +311,75 @@ class PPOConfig(TrainingArguments):
         },
     )
 
+    # Reward shaping parameters
+    reward_shaping_enable_length: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable length penalty shaping."},
+    )
+    reward_shaping_enable_repetition: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable repetition penalty shaping."},
+    )
+    reward_shaping_enable_eos: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable EOS shaping."},
+    )
+    reward_shaping_length_coef: float = field(
+        default=0.0,
+        metadata={"help": "Coefficient for length penalty."},
+    )
+    reward_shaping_repetition_coef: float = field(
+        default=0.0,
+        metadata={"help": "Coefficient for repetition penalty."},
+    )
+    reward_shaping_repetition_ngram: int = field(
+        default=4,
+        metadata={"help": "N-gram size for repetition penalty."},
+    )
+    reward_shaping_eos_bonus: float = field(
+        default=0.0,
+        metadata={"help": "Bonus for generating EOS within range."},
+    )
+    reward_shaping_eos_missing_penalty: float = field(
+        default=0.0,
+        metadata={"help": "Penalty for missing EOS."},
+    )
+    reward_shaping_eos_out_of_range_penalty: float = field(
+        default=0.0,
+        metadata={"help": "Penalty for generating EOS out of range."},
+    )
+    reward_shaping_eos_min_len: int = field(
+        default=1,
+        metadata={"help": "Minimum length for EOS bonus."},
+    )
+    reward_shaping_eos_max_len: int = field(
+        default=1000,
+        metadata={"help": "Maximum length for EOS bonus."},
+    )
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Reward shaping validation
+        if self.reward_shaping_enable_length and self.reward_shaping_length_coef < 0:
+            raise ValueError("`reward_shaping_length_coef` must be non-negative.")
+
+        if self.reward_shaping_enable_repetition:
+            if self.reward_shaping_repetition_coef < 0:
+                raise ValueError("`reward_shaping_repetition_coef` must be non-negative.")
+            if self.reward_shaping_repetition_ngram < 2:
+                raise ValueError("`reward_shaping_repetition_ngram` must be >= 2.")
+
+        if self.reward_shaping_enable_eos:
+            if self.reward_shaping_eos_bonus < 0:
+                raise ValueError("`reward_shaping_eos_bonus` must be non-negative.")
+            if self.reward_shaping_eos_missing_penalty < 0:
+                raise ValueError("`reward_shaping_eos_missing_penalty` must be non-negative.")
+            if self.reward_shaping_eos_out_of_range_penalty < 0:
+                raise ValueError("`reward_shaping_eos_out_of_range_penalty` must be non-negative.")
+            if self.reward_shaping_eos_min_len < 1:
+                raise ValueError("`reward_shaping_eos_min_len` must be >= 1.")
+            if self.reward_shaping_eos_max_len < self.reward_shaping_eos_min_len:
+                raise ValueError("`reward_shaping_eos_max_len` must be >= `reward_shaping_eos_min_len`.")
 
         super().__post_init__()
