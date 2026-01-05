@@ -213,6 +213,15 @@ class RLOOConfig(TrainingArguments):
             filter your dataset before training to ensure that prompts do not exceed your desired length.
 
             </Deprecated>
+
+        vllm_guided_decoding_regex:
+
+            <Deprecated version="0.27.0">
+
+            Parameter `vllm_guided_decoding_regex` is deprecated and will be removed in version 0.28.0. You should
+            instead use `vllm_structured_outputs_regex`.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -580,6 +589,10 @@ class RLOOConfig(TrainingArguments):
             "desired length."
         },
     )
+    vllm_guided_decoding_regex: str | None = field(
+        default=None,
+        metadata={"help": "Deprecated, use `vllm_structured_outputs_regex` instead."},
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -646,6 +659,13 @@ class RLOOConfig(TrainingArguments):
                 "The `max_prompt_length` argument is deprecated and will be removed in version 0.29.0. You should "
                 "instead filter your dataset before training to ensure that prompts do not exceed your desired "
                 "length.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.vllm_guided_decoding_regex is not None:
+            warnings.warn(
+                "The `vllm_guided_decoding_regex` argument is deprecated and will be removed in version 0.28.0. You "
+                "should instead use `vllm_structured_outputs_regex`.",
                 FutureWarning,
                 stacklevel=2,
             )

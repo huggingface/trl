@@ -36,6 +36,7 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging import version
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -101,8 +102,13 @@ if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import StructuredOutputsParams
+
+    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
 
 if is_wandb_available():
     import wandb
@@ -1389,10 +1395,18 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = output["completion_ids"]
                     logprobs = output["logprobs"]
                 else:
-                    if self.structured_outputs_regex:
-                        structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
+                    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                        structured_outputs_key = "guided_decoding"
+                        if self.structured_outputs_regex:
+                            structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
+                        else:
+                            structured_outputs = None
                     else:
-                        structured_outputs = None
+                        structured_outputs_key = "structured_outputs"
+                        if self.structured_outputs_regex:
+                            structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
+                        else:
+                            structured_outputs = None
 
                     generation_kwargs = {
                         "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
@@ -1402,9 +1416,9 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "structured_outputs": structured_outputs,
                         "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                     }
+                    generation_kwargs[structured_outputs_key] = structured_outputs
                     if self.args.generation_kwargs is not None:
                         generation_kwargs.update(self.args.generation_kwargs)
                     sampling_params = SamplingParams(**generation_kwargs)

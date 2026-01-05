@@ -28,7 +28,6 @@ import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
-from packaging import version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
@@ -72,13 +71,8 @@ if is_wandb_available():
     import wandb
 
 if is_vllm_available():
-    import vllm
     from vllm import LLM, SamplingParams
-
-    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss

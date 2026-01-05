@@ -26,6 +26,7 @@ from multiprocessing.connection import Connection
 
 import torch
 import torch.distributed.distributed_c10d as c10d
+from packaging import version
 from transformers import is_torch_xpu_available, is_vision_available
 
 from trl import TrlParser
@@ -53,14 +54,18 @@ if is_uvicorn_available():
 if is_vision_available():
     from PIL import Image
 
-
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
-    from vllm.sampling_params import StructuredOutputsParams
     from vllm.utils import get_open_port
+
+    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
 
     if is_vllm_ascend_available():
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
@@ -564,11 +569,19 @@ def main(script_args: ScriptArguments):
                 row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
             prompts.append(row)
 
-        # structured outputs, if enabled
-        if request.structured_outputs_regex is not None:
-            structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        # Structured outputs, if enabled
+        if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+            structured_outputs_key = "guided_decoding"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
         else:
-            structured_outputs = None
+            structured_outputs_key = "structured_outputs"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
 
         generation_kwargs = {
             "n": request.n,
@@ -579,9 +592,9 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "structured_outputs": structured_outputs,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
+        generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
@@ -697,11 +710,19 @@ def main(script_args: ScriptArguments):
                         if part["type"] == "image_pil":
                             part["image_pil"] = Image.open(BytesIO(base64.b64decode(part["image_pil"])))
 
-        # structured outputs, if enabled
-        if request.structured_outputs_regex is not None:
-            structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        # Structured outputs, if enabled
+        if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+            structured_outputs_key = "guided_decoding"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
         else:
-            structured_outputs = None
+            structured_outputs_key = "structured_outputs"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
 
         generation_kwargs = {
             "n": request.n,
@@ -712,9 +733,9 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "structured_outputs": structured_outputs,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
+        generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
