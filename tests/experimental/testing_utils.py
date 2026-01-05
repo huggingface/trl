@@ -11,19 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import random
 
-from typing import TYPE_CHECKING
-
-from ..import_utils import _LazyModule
+from trl.experimental.judges import BasePairwiseJudge
 
 
-_import_structure = {
-    "utils": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
-}
+class RandomPairwiseJudge(BasePairwiseJudge):
+    """
+    Random pairwise judge, for testing purposes.
+    """
 
-if TYPE_CHECKING:
-    from .utils import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
-else:
-    import sys
-
-    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
+    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
+        if not return_scores:
+            return [random.randint(0, len(completion) - 1) for completion in completions]
+        else:
+            return [random.random() for _ in range(len(prompts))]

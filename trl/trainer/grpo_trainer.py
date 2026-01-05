@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import atexit
 import copy
 import inspect
 import json
@@ -35,6 +36,7 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging import version
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -85,8 +87,10 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
     shuffle_sequence_dict,
+    shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
+    start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
 )
 
@@ -98,8 +102,13 @@ if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+
+    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
 
 if is_wandb_available():
     import wandb
@@ -355,6 +364,15 @@ class GRPOTrainer(BaseTrainer):
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
+
+        self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_reward_funcs:
+            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
+                start_event_loop_in_daemon(name="GRPOTrainer-AsyncRewardLoop")
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_reward_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
 
         # Reward weights
         if args.reward_weights is not None:
@@ -690,7 +708,7 @@ class GRPOTrainer(BaseTrainer):
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
             # vLLM specific sampling arguments
-            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.structured_outputs_regex = args.vllm_structured_outputs_regex
 
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
@@ -1232,7 +1250,7 @@ class GRPOTrainer(BaseTrainer):
                 coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            async_results = asyncio.run(_run_async_funcs())
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
@@ -1304,7 +1322,7 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "guided_decoding_regex": self.guided_decoding_regex,
+                        "structured_outputs_regex": self.structured_outputs_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
                     with profiling_context(self, "vLLM.generate"):
@@ -1378,10 +1396,18 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = output["completion_ids"]
                     logprobs = output["logprobs"]
                 else:
-                    if self.guided_decoding_regex:
-                        guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
+                    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                        structured_outputs_key = "guided_decoding"
+                        if self.structured_outputs_regex:
+                            structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
+                        else:
+                            structured_outputs = None
                     else:
-                        guided_decoding = None
+                        structured_outputs_key = "structured_outputs"
+                        if self.structured_outputs_regex:
+                            structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
+                        else:
+                            structured_outputs = None
 
                     generation_kwargs = {
                         "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
@@ -1391,9 +1417,9 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "guided_decoding": guided_decoding,
                         "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                     }
+                    generation_kwargs[structured_outputs_key] = structured_outputs
                     if self.args.generation_kwargs is not None:
                         generation_kwargs.update(self.args.generation_kwargs)
                     sampling_params = SamplingParams(**generation_kwargs)

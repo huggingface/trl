@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -194,7 +194,7 @@ if is_vllm_available():
     # Fix DisableTqdm
     # Bug introduced in https://github.com/vllm-project/vllm/pull/52
     # Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-    # Since TRL currently only supports vLLM v0.10.2-0.11.2, we patch it here. This can be removed when TRL requires
+    # Since TRL currently only supports vLLM v0.10.2-0.12.0, we patch it here. This can be removed when TRL requires
     # vLLM >=0.11.1
     import vllm.model_executor.model_loader.weight_utils
     from tqdm import tqdm

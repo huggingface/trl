@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -137,15 +137,14 @@ def _override_model_generation_config(model, generation_kwargs=None):
     """
     Context manager to temporarily override a model's generation_config with training config.
 
-    This works around transformers' config merging logic that would otherwise overwrite
-    values matching global defaults with model-specific values (see upstream issue transformers#42762;
-    fixed in transformers v5 by PR `transformers#42702`).
+    This works around transformers' config merging logic that would otherwise overwrite values matching global defaults
+    with model-specific values (see upstream issue transformers#42762; fixed in transformers v5 by PR
+    `transformers#42702`).
 
-    By temporarily setting the model's generation_config to match the passed generation_config,
-    we avoid the conflict.
+    By temporarily setting the model's generation_config to match the passed generation_config, we avoid the conflict.
 
-    The model's original generation_config is preserved outside this context, ensuring
-    that saved/pushed models retain their intended inference behavior.
+    The model's original generation_config is preserved outside this context, ensuring that saved/pushed models retain
+    their intended inference behavior.
 
     Args:
         model: The model (typically unwrapped_model) whose generation_config to temporarily override.
@@ -185,10 +184,9 @@ def unwrap_model_for_generation(
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
 
-    This function unwraps distributed models (FSDP, DeepSpeed) and optionally overrides
-    the model's generation_config temporarily during generation. This is useful for applying
-    training-specific generation parameters without permanently modifying the model's original
-    generation_config.
+    This function unwraps distributed models (FSDP, DeepSpeed) and optionally overrides the model's generation_config
+    temporarily during generation. This is useful for applying training-specific generation parameters without
+    permanently modifying the model's original generation_config.
 
     Args:
         model (`DistributedDataParallel | DeepSpeedEngine`):
@@ -199,9 +197,9 @@ def unwrap_model_for_generation(
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
         generation_kwargs (dict, *optional*):
-            If provided, temporarily overrides the model's generation_config during generation.
-            The original config is automatically restored when exiting the context. This is
-            useful for using different generation parameters during training vs. inference.
+            If provided, temporarily overrides the model's generation_config during generation. The original config is
+            automatically restored when exiting the context. This is useful for using different generation parameters
+            during training vs. inference.
 
     Yields:
         Unwrapped model with optionally overridden generation_config.

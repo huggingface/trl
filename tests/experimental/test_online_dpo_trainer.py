@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ from transformers.utils import is_peft_available, is_vision_available
 from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 from ..testing_utils import (
-    RandomPairwiseJudge,
     TrlTestCase,
     require_llm_blender,
     require_peft,
@@ -30,6 +29,7 @@ from ..testing_utils import (
     require_vision,
     require_vllm,
 )
+from .testing_utils import RandomPairwiseJudge
 
 
 if is_peft_available():
