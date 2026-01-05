@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -748,7 +748,9 @@ class OnlineDPOTrainer(BaseTrainer):
                 top_k=-1 if self.top_k is None else self.top_k,
                 min_p=0.0 if self.min_p is None else self.min_p,
                 max_tokens=self.generation_config.max_tokens,
-                structured_outputs_regex=self.structured_outputs_regex if hasattr(self, "structured_outputs_regex") else None,
+                structured_outputs_regex=self.structured_outputs_regex
+                if hasattr(self, "structured_outputs_regex")
+                else None,
                 generation_kwargs=self.args.generation_kwargs,
             )["completion_ids"]
             # Flatten: each prompt generates 2 completions

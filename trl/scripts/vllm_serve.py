@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -528,8 +528,8 @@ def main(script_args: ScriptArguments):
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
-                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided, the
-                  model will only generate tokens that match this regex pattern.
+                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
+                  the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
                   `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
                   keys that conflict with the other parameters, they will override them.
@@ -658,8 +658,8 @@ def main(script_args: ScriptArguments):
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
-                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided, the
-                  model will only generate tokens that match this regex pattern.
+                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
+                  the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
                   `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
                   keys that conflict with the other parameters, they will override them.

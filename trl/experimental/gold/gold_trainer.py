@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
+from packaging import version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
@@ -71,8 +72,13 @@ if is_wandb_available():
     import wandb
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import StructuredOutputsParams
+
+    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -1687,7 +1693,9 @@ class GOLDTrainer(SFTTrainer):
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
             if self.vllm_structured_outputs_regex:
-                structured_outputs = StructuredOutputsParams(backend="outlines", regex=self.vllm_structured_outputs_regex)
+                structured_outputs = StructuredOutputsParams(
+                    backend="outlines", regex=self.vllm_structured_outputs_regex
+                )
             else:
                 structured_outputs = None
             sampling_params = SamplingParams(
