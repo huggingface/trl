@@ -46,38 +46,31 @@ def apply_model_revisions(monkeypatch):
     if not MODEL_REVISIONS:
         return
 
-    from transformers import (
-        AutoModel,
-        AutoModelForCausalLM,
-        AutoModelForImageTextToText,
-        AutoModelForSequenceClassification,
-        AutoProcessor,
-        AutoTokenizer,
-    )
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
 
-    def create_wrapper(original_method):
-        @wraps(original_method)
-        def wrapper(pretrained_model_name_or_path, *args, **kwargs):
-            # Direct lookup - only inject if model_id is in the override dict
+    def create_classmethod_wrapper(original_classmethod):
+        # Extract the underlying function from the classmethod
+        original_func = original_classmethod.__func__
+
+        @wraps(original_func)
+        def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
+            # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
                 if "revision" not in kwargs:
                     kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
 
-            return original_method(pretrained_model_name_or_path, *args, **kwargs)
+            return original_func(cls, pretrained_model_name_or_path, *args, **kwargs)
 
-        return wrapper
+        # Re-wrap as classmethod
+        return classmethod(wrapper)
 
     # Patch all transformers Auto* classes
     for cls in [
-        AutoModel,
-        AutoModelForCausalLM,
-        AutoModelForSequenceClassification,
-        AutoTokenizer,
-        AutoProcessor,
-        AutoModelForImageTextToText,
+        PreTrainedModel,
+        PreTrainedTokenizerBase,
+        ProcessorMixin,
     ]:
-        if hasattr(cls, "from_pretrained"):
-            monkeypatch.setattr(cls, "from_pretrained", create_wrapper(cls.from_pretrained))
+        monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
 
 
 @pytest.fixture(autouse=True)
