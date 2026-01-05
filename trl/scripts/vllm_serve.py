@@ -54,6 +54,7 @@ if is_uvicorn_available():
 if is_vision_available():
     from PIL import Image
 
+
 if is_vllm_available():
     import vllm
     from vllm import LLM, SamplingParams
