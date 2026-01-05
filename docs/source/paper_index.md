@@ -418,6 +418,7 @@ training_args = GRPOConfig(
 **📜 Paper**: https://huggingface.co/papers/2512.02556
 
 DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement:
+
 - The **Unbiased KL Estimate**, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
 ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
 
