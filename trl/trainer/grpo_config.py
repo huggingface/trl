@@ -275,6 +275,11 @@ class GRPOConfig(TrainingArguments):
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
             Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
             ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+        off_policy_mask_threshold (`float`, *optional*):
+            Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. When set,
+            sequences with negative advantages and high KL divergence are masked out to stabilize training. This
+            parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
         use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
             Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
@@ -767,6 +772,15 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
             "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+        },
+    )
+    off_policy_mask_threshold: float | None = field(
+        default=None,
+        metadata={
+            "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
+            "When set, sequences with negative advantages and high KL divergence are masked out to stabilize "
+            "training. This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5)."
         },
     )
     use_bias_correction_kl: bool = field(
