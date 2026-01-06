@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ class AnnealingScheduler:
         total_steps: int | float,
         schedule_type: str = "linear",
         direction: str = "down",  # "down" means 1→0 annealing
-        **kwargs: Any,
+        **kwargs: dict[str, Any],
     ) -> None:
         self.total_steps = total_steps
         self.schedule_type = schedule_type
@@ -148,20 +148,26 @@ class RTPOTrainer(GRPOTrainer):
     ```
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str` or `PreTrainedModel`):
             Model to be trained (must be a vision-language model).
-        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
+        reward_funcs (`RewardFunc` or `list[RewardFunc]]`):
             Reward functions for computing rewards (same as GRPO).
-        args ([`PAPOConfig`], *optional*, defaults to `None`):
+        args ([`RTPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. Must include "prompt" and "image" columns.
-        eval_dataset: Same requirements as train_dataset.
-        processing_class: Processing class (tokenizer/processor) for the model.
-        reward_processing_classes: Processing classes for reward models.
-        callbacks: Training callbacks.
-        optimizers: Optimizer and scheduler tuple.
-        peft_config: PEFT configuration if using parameter-efficient fine-tuning.
+            Dataset to use for training. Must include `"prompt"` and `"image"` columns.
+        eval_dataset:
+            Same requirements as train_dataset.
+        processing_class:
+            Processing class (tokenizer/processor) for the model.
+        reward_processing_classes:
+            Processing classes for reward models.
+        callbacks:
+            Training callbacks.
+        optimizers:
+            Optimizer and scheduler tuple.
+        peft_config:
+            PEFT configuration if using parameter-efficient fine-tuning.
     """
 
     _tag_names = ["trl", "rtpo"]
@@ -190,7 +196,7 @@ class RTPOTrainer(GRPOTrainer):
         self.anneal_scheduler = AnnealingScheduler(
             total_steps=total_steps,
             schedule_type=args.schedule_type,  # linear / cosine / exponential / piecewise / constant
-            direction=args.direction,  # up 0 -> 1 / down 1-> 0
+            direction=args.direction,  # up 0 -> 1 / down 1 -> 0
             decay_rate=args.decay_rate,  # corresponding to the exponential parameter
             milestones=args.milestones,  # corresponding to the piecewise parameter
             values=args.values,  # corresponding to the piecewise parameter

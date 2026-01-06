@@ -412,6 +412,7 @@ training_args = GRPOConfig(
     ...
 )
 ```
+
 ### Reverse Thinking Policy Optimization
 
 **📰 Blog**: https://github.com/SolarWindRider/avr/blob/main/README.md
@@ -421,10 +422,9 @@ However, many training datasets already contain **complete, high-quality reasoni
 
 RTPO is designed to:
 
-* Utilize existing reasoning traces as **auxiliary CoT** to support early-stage rollouts.
-* Force the model to gradually reconstruct its own reasoning by **shortening the auxiliary CoT** step by step.
-* Enable a *reverse learning schedule*: the model first learns to output correct answers, then progressively learns how to reason.
-
+- Utilize existing reasoning traces as **auxiliary CoT** to support early-stage rollouts.
+- Force the model to gradually reconstruct its own reasoning by **shortening the auxiliary CoT** step by step.
+- Enable a *reverse learning schedule*: the model first learns to output correct answers, then progressively learns how to reason.
 
 ### DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models
 
