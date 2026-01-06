@@ -293,6 +293,16 @@ class DPOTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
+        # Force dispatch_batches=False for IterableDataset
+        if isinstance(train_dataset, IterableDataset):
+            if args.accelerator_config.dispatch_batches is True:
+                logger.warning(
+                    "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
+                    "is forced to `False` when using an `IterableDataset`. To remove this warning, unset "
+                    "`dispatch_batches` in `DPOConfig` or set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+
         # Model and reference model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}

@@ -84,15 +84,6 @@ if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
 
-    # Force dispatch_batches=False for accelerator to handle variable batch sizes with streaming
-    if script_args.dataset_streaming:
-        if training_args.accelerator_config is None:
-            training_args.accelerator_config = {"dispatch_batches": False}
-        elif isinstance(training_args.accelerator_config, dict):
-            training_args.accelerator_config["dispatch_batches"] = False
-        else:
-            training_args.accelerator_config.dispatch_batches = False
-
     # Fix for "marked as ready twice" error with gradient checkpointing + LoRA
     if training_args.gradient_checkpointing:
         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
