@@ -131,12 +131,6 @@ if __name__ == "__main__":
             eval_dataset = dataset["validation"]
         elif "dev" in dataset:
             eval_dataset = dataset["dev"]
-        else:
-            # No eval split available, disable evaluation
-            training_args.eval_strategy = "no"
-            logger.warning(
-                f"No evaluation split found (tried '{script_args.dataset_test_split}', 'validation', 'dev'). Disabling evaluation."
-            )
 
     trainer = GOLDTrainer(
         model=model_args.model_name_or_path,
