@@ -89,9 +89,9 @@ class ModelConfig:
         metadata={"help": "Specific model version to use. It can be a branch name, a tag name, or a commit id."},
     )
     dtype: str | None = field(
-        default=None,
+        default="float32",
         metadata={
-            "help": "Override the default `torch.dtype` and load the model under this dtype.",
+            "help": 'Override the default `torch.dtype` and load the model under this dtype. It defaults to `"float32"`.',
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
