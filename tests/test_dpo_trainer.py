@@ -1307,6 +1307,7 @@ class TestDPOVisionTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
         ],
     )
     def test_vdpo_trainer(self, model_id):
