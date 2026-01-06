@@ -72,7 +72,7 @@ class TestVLLMClientServer(TrlTestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            ["trl", "vllm-serve", "--model", cls.model_id, "--host", "localhost"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
 
         # Initialize the client
@@ -173,7 +173,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            ["trl", "vllm-serve", "--model", cls.model_id, "--host", "localhost"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
 
         # Initialize the client
@@ -273,7 +273,7 @@ class TestVLLMClientServerTP(TrlTestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--tensor_parallel_size", "2"],
+            ["trl", "vllm-serve", "--model", cls.model_id, "--tensor_parallel_size", "2", "--host", "localhost"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -356,7 +356,7 @@ class TestVLLMClientServerDP(TrlTestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--data_parallel_size", "2"],
+            ["trl", "vllm-serve", "--model", cls.model_id, "--data_parallel_size", "2", "--host", "localhost"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -441,7 +441,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            ["trl", "vllm-serve", "--model", cls.model_id, "--host", "localhost"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
 
     def test_init_communicator_with_device_int(self):
