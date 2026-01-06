@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import dataclasses
 import importlib.resources as pkg_resources
 import json
 import os
 import random
 import socket
+import threading
 from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -275,16 +277,6 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
-
-
-def peft_module_casting_to_bf16(model):
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
-            module = module.to(torch.float32)
-        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
-            if hasattr(module, "weight"):
-                if module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
@@ -1231,3 +1223,55 @@ def forward_masked_logits(
         hidden_states=outputs.hidden_states,
         attentions=outputs.get("attentions"),
     )
+
+
+def start_event_loop_in_daemon(
+    name: str | None = None,
+) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
+    """
+    This function creates a new daemon thread that runs the provided event loop.
+
+    Args:
+        name (`str`, *optional*):
+            Name of the thread. If `None`, the default thread naming will be used.
+
+    Returns:
+        `threading.Thread`:
+            The thread running the event loop.
+        `asyncio.AbstractEventLoop`:
+            The event loop being run in the thread.
+        `threading.Event`:
+            An event that is set when the loop is ready.
+    """
+    loop = asyncio.new_event_loop()
+    loop_ready_event = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop_ready_event.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop, name=name, daemon=True)
+    thread.start()
+    return thread, loop, loop_ready_event
+
+
+def shutdown_event_loop_in_daemon(
+    thread: threading.Thread | None,
+    loop: asyncio.AbstractEventLoop | None,
+) -> None:
+    """
+    Shutdown an asyncio event loop running in a separate thread.
+
+    This function stops the event loop and waits for the associated thread to finish execution.
+
+    Args:
+        thread (`threading.Thread`):
+            The thread running the event loop.
+        loop (`asyncio.AbstractEventLoop`):
+            The asyncio event loop to shut down.
+    """
+    if loop is None or thread is None:
+        return
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)
