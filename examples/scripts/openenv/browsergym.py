@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio>=0.13.0",
+#     "kernels",
+#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
+#     "openenv_core",
+# ]
+# ///
+
 """
 Simple script to run GRPO training with OpenEnv's BrowserGym environment and vLLM.
 
@@ -23,6 +34,8 @@ Setup:
 
 ```sh
 uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+# Hotfix: https://github.com/huggingface/trl/pull/4740
+uv pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
 ```
 
 Usage:
@@ -93,7 +106,7 @@ def parse_args() -> argparse.Namespace:
         help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
     parser.add_argument(
-        "--env-image", type=str, default="openspiel-env:latest", help="Docker image for the OpenSpiel environment."
+        "--env-image", type=str, default="browsergym-env:latest", help="Docker image for the BrowserGym environment."
     )
     parser.add_argument(
         "--benchmark",
@@ -485,6 +498,8 @@ def main() -> None:
         generation_batch_size=args.num_generations,  # Must be divisible by num_generations
         max_completion_length=args.max_new_tokens,
         logging_steps=args.logging_steps,
+        report_to="trackio",
+        trackio_space_id=f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
         save_steps=args.save_interval,
         save_total_limit=args.save_total_limit,

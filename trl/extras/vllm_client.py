@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -190,7 +190,7 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
-        guided_decoding_regex: str | None = None,
+        structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
         """
@@ -219,7 +219,7 @@ class VLLMClient:
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
                 disabled.
-            guided_decoding_regex (`str`, *optional*):
+            structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
@@ -253,7 +253,7 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
+                "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
             },
         )
@@ -278,9 +278,11 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
-        guided_decoding_regex: str | None = None,
+        structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
         chat_template_kwargs: dict | None = None,
+        tools: list | None = None,
+        chat_template: str | None = None,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided chat messages.
@@ -307,7 +309,7 @@ class VLLMClient:
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
                 disabled.
-            guided_decoding_regex (`str`, *optional*):
+            structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
@@ -315,6 +317,11 @@ class VLLMClient:
                 will override them.
             chat_template_kwargs (`dict`, *optional*):
                 Additional keyword arguments to customize the chat template used by the model.
+            tools (`list`, *optional*):
+                List of tool functions available for tool calling during chat generation.
+            chat_template (`str`, *optional*):
+                Template to use for structuring the chat. If not provided, the model's default chat template will be
+                used.
 
         Returns:
             `dict` with keys:
@@ -325,6 +332,11 @@ class VLLMClient:
                 - `logprobs` (`list[list[float]]`):
                     List of lists of log probabilities for each generated token.
         """
+        if tools is not None:
+            raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
+        if chat_template is not None:
+            raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
+
         url = f"{self.base_url}/chat/"
 
         # Convert PIL images to base64 strings
@@ -348,7 +360,7 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
+                "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
                 "chat_template_kwargs": chat_template_kwargs or {},
             },
