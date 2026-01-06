@@ -64,7 +64,7 @@ _import_structure = {
     "rloo_config": ["RLOOConfig"],
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
-    "sft_trainer": ["SFTTrainer"],
+    "sft_trainer": ["SFTTrainer", "GenerativeSFTTrainer"],
     "utils": ["RunningMoments", "disable_dropout_in_model", "empty_cache", "peft_module_casting_to_bf16"],
     "xpo_config": ["XPOConfig"],
     "xpo_trainer": ["XPOTrainer"],
@@ -117,7 +117,7 @@ if TYPE_CHECKING:
     from .rloo_config import RLOOConfig
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
-    from .sft_trainer import SFTTrainer
+    from .sft_trainer import GenerativeSFTTrainer, SFTTrainer
     from .utils import RunningMoments, disable_dropout_in_model, empty_cache, peft_module_casting_to_bf16
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
