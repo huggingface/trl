@@ -472,6 +472,9 @@ class GRPOTrainer(BaseTrainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
+        self.off_policy_mask_threshold = args.off_policy_mask_threshold
+        if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
+            raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -2180,6 +2183,28 @@ class GRPOTrainer(BaseTrainer):
         sapo_token_loss = sigmoid_smoothed_loss * 4 / temperature
         return sapo_token_loss
 
+    @staticmethod
+    def get_off_policy_mask(
+        advantages: torch.Tensor,
+        per_token_logps: torch.Tensor,
+        old_per_token_logps: torch.Tensor,
+        mask: torch.Tensor,
+        off_policy_threshold: float,
+    ) -> torch.Tensor:
+        """
+        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper. Returns a (B, 1) tensor where 1.0 indicates
+        "Keep" and 0.0 indicates "Drop".
+        """
+        # K1 estimator: log(pi_old) - log(pi_theta)
+        k1_divergence = old_per_token_logps - per_token_logps.detach()
+        # Sequence-level Mean KL (ignoring prompt+padding)
+        seq_kl_sum = (k1_divergence * mask).sum(dim=1, keepdim=True)
+        avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        # Keep if (Advantage >= 0) OR (KL <= delta)
+        is_pos_adv = advantages >= 0
+        is_low_kl = avg_seq_kl <= off_policy_threshold
+        return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -2187,6 +2212,7 @@ class GRPOTrainer(BaseTrainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
@@ -2204,7 +2230,6 @@ class GRPOTrainer(BaseTrainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
             entropy_mask = self.get_high_entropy_mask(entropies, mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
@@ -2223,11 +2248,19 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
+        if self.off_policy_mask_threshold is not None:
+            off_policy_mask = self.get_off_policy_mask(
+                advantages=advantages,
+                per_token_logps=per_token_logps,
+                old_per_token_logps=old_per_token_logps,
+                mask=mask,
+                off_policy_threshold=self.off_policy_mask_threshold,
+            )
+
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
         elif self.importance_sampling_level == "sequence":
-            mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
             log_importance_weights = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             log_importance_weights = log_importance_weights.unsqueeze(-1)
         else:
@@ -2275,6 +2308,9 @@ class GRPOTrainer(BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
+        if self.off_policy_mask_threshold is not None:
+            per_token_loss = per_token_loss * off_policy_mask
+
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
@@ -2284,7 +2320,6 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
         if self.loss_type in ["grpo", "sapo"]:
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             loss = loss / self.current_gradient_accumulation_steps
