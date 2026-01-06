@@ -1724,6 +1724,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__).is_devrelease,  # Tests with dev dependencies
+        reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
+        "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
+        strict=True,
+    )
     @pytest.mark.parametrize(
         "model_id",
         [
