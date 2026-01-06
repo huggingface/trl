@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -71,6 +71,13 @@ if is_torch_xla_available():
 
 
 logger = logging.get_logger(__name__)
+
+
+def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
+    """Numerically stable computation of log(1-exp(x))."""
+    # branch at -ln 2 ~ -0.693 to avoid cancellation
+    t = -0.6931471805599453
+    return torch.where(x < t, torch.log1p(-torch.exp(x)), torch.log(-torch.expm1(x)))
 
 
 class ORPOTrainer(BaseTrainer):
@@ -665,8 +672,10 @@ class ORPOTrainer(BaseTrainer):
         """
 
         # Derived from Eqs. (4) and (7) from https://huggingface.co/papers/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
+        policy_chosen_logps = policy_chosen_logps.float()
+        policy_rejected_logps = policy_rejected_logps.float()
         log_odds = (policy_chosen_logps - policy_rejected_logps) - (
-            torch.log1p(-torch.exp(policy_chosen_logps)) - torch.log1p(-torch.exp(policy_rejected_logps))
+            log1mexp(policy_chosen_logps) - log1mexp(policy_rejected_logps)
         )
         ratio = F.logsigmoid(log_odds)
         losses = self.beta * ratio
