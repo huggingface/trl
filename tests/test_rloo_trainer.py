@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -693,8 +693,8 @@ class TestRLOOTrainer(TrlTestCase):
 
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
-    def test_training_vllm_guided_decoding(self):
-        """Test that training works with vLLM for generation with guided decoding."""
+    def test_training_vllm_structured_outputs(self):
+        """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -705,7 +705,7 @@ class TestRLOOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             use_vllm=True,
-            vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
+            vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = RLOOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM

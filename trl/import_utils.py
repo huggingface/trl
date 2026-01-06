@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -79,9 +79,9 @@ def is_uvicorn_available() -> bool:
 def is_vllm_available() -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
-        if not (version.parse("0.10.2") <= version.parse(_vllm_version) <= version.parse("0.11.2")):
+        if not (version.parse("0.10.2") <= version.parse(_vllm_version) <= version.parse("0.12.0")):
             warnings.warn(
-                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2. You have version "
+                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2, 0.12.0. You have version "
                 f"{_vllm_version} installed. We recommend installing a supported version to avoid compatibility "
                 "issues.",
                 stacklevel=2,
