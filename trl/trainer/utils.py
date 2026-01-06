@@ -1136,7 +1136,7 @@ def create_model_from_path(
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
-            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32``.
+            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`.
 
     Returns:
         [`~transformers.PreTrainedModel`]:
