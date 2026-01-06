@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
-from ..models.utils import prepare_fsdp
+from ..models.utils import peft_module_casting_to_bf16, prepare_fsdp
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
@@ -69,7 +69,6 @@ from .utils import (
     log_table_to_comet_experiment,
     pad,
     pad_to_length,
-    peft_module_casting_to_bf16,
     selective_log_softmax,
 )
 

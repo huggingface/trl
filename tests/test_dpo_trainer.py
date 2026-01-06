@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -411,6 +411,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_precompute_ref_batch_size(self):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,
             per_device_train_batch_size=2,
             precompute_ref_log_probs=True,
             precompute_ref_batch_size=4,
@@ -1302,8 +1303,7 @@ class TestDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
@@ -1456,7 +1456,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             gradient_accumulation_steps=2,
             learning_rate=9e-1,
             eval_strategy="steps",
-            fp16=True,
             logging_strategy="no",
             report_to="none",
             beta=0.1,

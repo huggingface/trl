@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import atexit
 import copy
 import inspect
 import json
@@ -35,6 +36,7 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging import version
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -85,8 +87,10 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
     shuffle_sequence_dict,
+    shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
+    start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
@@ -99,8 +103,13 @@ if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+
+    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
 
 if is_wandb_available():
     import wandb
@@ -368,6 +377,15 @@ class GRPOTrainer(BaseTrainer):
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
 
+        self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_reward_funcs:
+            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
+                start_event_loop_in_daemon(name="GRPOTrainer-AsyncRewardLoop")
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_reward_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
+
         # Reward weights
         if args.reward_weights is not None:
             if len(args.reward_weights) != len(reward_funcs):
@@ -466,6 +484,9 @@ class GRPOTrainer(BaseTrainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
+        self.off_policy_mask_threshold = args.off_policy_mask_threshold
+        if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
+            raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
@@ -701,7 +722,7 @@ class GRPOTrainer(BaseTrainer):
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
             # vLLM specific sampling arguments
-            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.structured_outputs_regex = args.vllm_structured_outputs_regex
 
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
@@ -1243,7 +1264,7 @@ class GRPOTrainer(BaseTrainer):
                 coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            async_results = asyncio.run(_run_async_funcs())
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
@@ -1315,7 +1336,7 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "guided_decoding_regex": self.guided_decoding_regex,
+                        "structured_outputs_regex": self.structured_outputs_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
                     with profiling_context(self, "vLLM.generate"):
@@ -1389,10 +1410,18 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = output["completion_ids"]
                     logprobs = output["logprobs"]
                 else:
-                    if self.guided_decoding_regex:
-                        guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
+                    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                        structured_outputs_key = "guided_decoding"
+                        if self.structured_outputs_regex:
+                            structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
+                        else:
+                            structured_outputs = None
                     else:
-                        guided_decoding = None
+                        structured_outputs_key = "structured_outputs"
+                        if self.structured_outputs_regex:
+                            structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
+                        else:
+                            structured_outputs = None
 
                     generation_kwargs = {
                         "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
@@ -1402,9 +1431,9 @@ class GRPOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "guided_decoding": guided_decoding,
                         "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                     }
+                    generation_kwargs[structured_outputs_key] = structured_outputs
                     if self.args.generation_kwargs is not None:
                         generation_kwargs.update(self.args.generation_kwargs)
                     sampling_params = SamplingParams(**generation_kwargs)
@@ -2170,6 +2199,28 @@ class GRPOTrainer(BaseTrainer):
         sapo_token_loss = sigmoid_smoothed_loss * 4 / temperature
         return sapo_token_loss
 
+    @staticmethod
+    def get_off_policy_mask(
+        advantages: torch.Tensor,
+        per_token_logps: torch.Tensor,
+        old_per_token_logps: torch.Tensor,
+        mask: torch.Tensor,
+        off_policy_threshold: float,
+    ) -> torch.Tensor:
+        """
+        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper. Returns a (B, 1) tensor where 1.0 indicates
+        "Keep" and 0.0 indicates "Drop".
+        """
+        # K1 estimator: log(pi_old) - log(pi_theta)
+        k1_divergence = old_per_token_logps - per_token_logps.detach()
+        # Sequence-level Mean KL (ignoring prompt+padding)
+        seq_kl_sum = (k1_divergence * mask).sum(dim=1, keepdim=True)
+        avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        # Keep if (Advantage >= 0) OR (KL <= delta)
+        is_pos_adv = advantages >= 0
+        is_low_kl = avg_seq_kl <= off_policy_threshold
+        return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -2177,6 +2228,7 @@ class GRPOTrainer(BaseTrainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
@@ -2194,7 +2246,6 @@ class GRPOTrainer(BaseTrainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
             entropy_mask = self.get_high_entropy_mask(entropies, mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
@@ -2213,11 +2264,19 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
+        if self.off_policy_mask_threshold is not None:
+            off_policy_mask = self.get_off_policy_mask(
+                advantages=advantages,
+                per_token_logps=per_token_logps,
+                old_per_token_logps=old_per_token_logps,
+                mask=mask,
+                off_policy_threshold=self.off_policy_mask_threshold,
+            )
+
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
         elif self.importance_sampling_level == "sequence":
-            mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
             log_importance_weights = (log_ratio * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
             log_importance_weights = log_importance_weights.unsqueeze(-1)
         else:
@@ -2265,6 +2324,9 @@ class GRPOTrainer(BaseTrainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
+        if self.off_policy_mask_threshold is not None:
+            per_token_loss = per_token_loss * off_policy_mask
+
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
@@ -2274,7 +2336,6 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
         if self.loss_type in ["grpo", "sapo"]:
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             loss = loss / self.current_gradient_accumulation_steps
