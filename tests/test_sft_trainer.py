@@ -321,7 +321,10 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_model(self):
         # Instantiate the model
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            dtype="float32",
+        )
 
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1610,7 +1613,11 @@ class TestSFTTrainer(TrlTestCase):
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
         )
-        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype="float32",
+            quantization_config=quantization_config,
+        )
 
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
