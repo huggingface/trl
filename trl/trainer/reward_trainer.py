@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from transformers import (
     AutoModelForSequenceClassification,
@@ -34,9 +35,9 @@ from transformers import (
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -76,6 +77,10 @@ def suppress_from_pretrained_warning(logger: logging.Logger):
         yield
     finally:
         logger.removeFilter(f)
+
+
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -183,12 +188,15 @@ class RewardTrainer(BaseTrainer):
 
     dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-    trainer = RewardTrainer(model="Qwen/Qwen2.5-0.5B-Instruct", train_dataset=dataset)
+    trainer = RewardTrainer(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        train_dataset=dataset,
+    )
     trainer.train()
     ```
 
     Args:
-        model (`str | PreTrainedModel`):
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -197,6 +205,7 @@ class RewardTrainer(BaseTrainer):
               using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
               `args.model_init_kwargs`.
             - A sequence classification [`~transformers.PreTrainedModel`] object.
+            - A sequence classification [`~peft.PeftModel`] object.
         args ([`RewardConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -259,11 +268,11 @@ class RewardTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: "str | PreTrainedModel | PeftModel",
         args: RewardConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
@@ -345,10 +354,12 @@ class RewardTrainer(BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
-            # If the model is already a PeftModel, we need to merge and unload it.
-            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-            model = model.merge_and_unload()
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                "with the new `peft_config` to the trainer."
+            )
 
         # Create PEFT model
         if peft_config is not None:
@@ -356,7 +367,7 @@ class RewardTrainer(BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -405,16 +416,6 @@ class RewardTrainer(BaseTrainer):
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._total_train_tokens = 0
-
-        # Initialize the Trainer. Parent class will handle:
-        # - DeepSpeed configuration (through create_accelerator_and_postprocess)
-        # - FSDP setup
-        # - Distributed training setup
-        # - Optimizer and scheduler creation
-
         super().__init__(
             model=model,
             args=args,
@@ -439,11 +440,14 @@ class RewardTrainer(BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
-
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
     def _prepare_dataset(
         self,
@@ -458,7 +462,7 @@ class RewardTrainer(BaseTrainer):
             dataset = dataset.with_transform(remove_none_values)
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
-        column_names = list(next(iter(dataset)).keys())
+        column_names = get_dataset_column_names(dataset)
         is_processed = "chosen_input_ids" in column_names and "rejected_input_ids" in column_names
 
         # Build the kwargs for the `map` function
@@ -538,16 +542,7 @@ class RewardTrainer(BaseTrainer):
         if self._signature_columns is None:
             self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "margin"]
 
-    def compute_loss(
-        self,
-        model: nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        return_outputs: bool = False,
-        num_items_in_batch: torch.Tensor | None = None,
-    ):
-        """
-        Compute training loss and additionally compute token accuracies
-        """
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
@@ -602,7 +597,7 @@ class RewardTrainer(BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs.update(metrics)
+        logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

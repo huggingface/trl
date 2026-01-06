@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -50,13 +50,12 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import create_reference_model, prepare_deepspeed
+from ...models.utils import create_reference_model, peft_module_casting_to_bf16, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
-    peft_module_casting_to_bf16,
     selective_log_softmax,
 )
 from ..utils import DPODataCollatorWithPadding
@@ -420,9 +419,12 @@ class KTOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_config, we merge and unload it first
             if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
+                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
+                    "model along with the new `peft_config` to the trainer."
+                )
 
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 _support_gc_kwargs = hasattr(

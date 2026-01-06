@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -85,6 +85,7 @@ def _generate_completions(
         list[str]: A list of generated text completions corresponding to the input prompts.
     """
     completions = []
+    # TODO: Override model.generation_config with generation_kwargs
     with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         for idx in range(0, len(prompts), batch_size):
             batch = prompts[idx : idx + batch_size]

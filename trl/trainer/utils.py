@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import dataclasses
 import importlib.resources as pkg_resources
 import json
 import os
 import random
 import socket
+import threading
 from collections.abc import Mapping, Sequence, Sized
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
@@ -28,7 +31,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
@@ -63,7 +65,7 @@ if is_comet_available():
     import comet_ml
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = logging.get_logger(__name__)
@@ -277,16 +279,6 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
             module.p = 0
 
 
-def peft_module_casting_to_bf16(model):
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
-            module = module.to(torch.float32)
-        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
-            if hasattr(module, "weight"):
-                if module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
-
-
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -360,79 +352,6 @@ def cap_exp(value, cap=-1):
     # Cap the exponent value below the upper-bound to avoid overflow, before calling torch.exp
     cap = get_exp_cap(value) if cap < 0 else cap
     return torch.exp(torch.clamp(value, max=cap))
-
-
-def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
-    """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving the position of the
-    first True in each "row".
-
-    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
-
-    Args:
-        bools (`torch.Tensor`):
-            An N-dimensional boolean tensor.
-        dtype (`torch.dtype`, optional):
-            The desired data type of the output tensor. Defaults to `torch.long`.
-
-    Returns:
-        `torch.Tensor`:
-            An (N-1)-dimensional tensor of integers indicating the position of the first True in each row. If no True
-            value is found in a row, returns the length of the row.
-    """
-    row_len = bools.size(-1)
-    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
-    return torch.min(zero_or_index, dim=-1).values
-
-
-def get_reward(
-    model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Computes the reward logits and the rewards for a given model and query responses.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model used to compute the reward logits.
-        query_responses (`torch.Tensor`):
-            The tensor containing the query responses.
-        pad_token_id (`int`):
-            The token ID representing the pad token.
-        context_length (`int`):
-            The length of the context in the query responses.
-
-    Returns:
-        tuple:
-            - `reward_logits` (`torch.Tensor`):
-                The logits for the reward model.
-            - `final_rewards` (`torch.Tensor`):
-                The final rewards for each query response.
-            - `sequence_lengths` (`torch.Tensor`):
-                The lengths of the sequences in the query responses.
-    """
-    attention_mask = query_responses != pad_token_id
-    position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-    lm_backbone = getattr(model, model.base_model_prefix)
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    output = lm_backbone(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-        use_cache=False,  # otherwise mistral-based RM would error out
-    )
-    reward_logits = model.score(output.hidden_states[-1])
-    sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
-    # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
-    return (
-        reward_logits,
-        reward_logits[
-            torch.arange(reward_logits.size(0), device=reward_logits.device),
-            sequence_lengths,
-        ].squeeze(-1),
-        sequence_lengths,
-    )
 
 
 def prepare_deepspeed(
@@ -1244,3 +1163,95 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@contextmanager
+def use_adapter(model: "PeftModel", adapter_name: str | None):
+    """
+    Context manager to temporarily set and reset the active adapter in a PEFT model.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model to manage.
+        adapter_name (`str` or `None`):
+            Name of the adapter to set as active. If `None`, the context manager will disable all adapters.
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import use_adapter
+    >>> from peft import AutoPeftModelForCausalLM
+    >>> import torch
+
+    >>> model = AutoPeftModelForCausalLM.from_pretrained("path/to/model")
+    >>> input_ids = torch.tensor([[1, 2, 3]])
+    >>> with use_adapter(model, "adapter_name"):
+    ...     outputs = model(input_ids)
+    ```
+    """
+
+    if not is_peft_available():
+        raise ImportError(
+            "You're trying to use a PEFT adapter but PEFT is not installed. Please install it with `pip install peft`."
+        )
+    if adapter_name is None:
+        with model.disable_adapter():
+            yield
+    else:
+        previous_adapter = model.active_adapter
+        model.set_adapter(adapter_name)
+        try:
+            yield
+        finally:
+            model.set_adapter(previous_adapter)
+
+
+def start_event_loop_in_daemon(
+    name: str | None = None,
+) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
+    """
+    This function creates a new daemon thread that runs the provided event loop.
+
+    Args:
+        name (`str`, *optional*):
+            Name of the thread. If `None`, the default thread naming will be used.
+
+    Returns:
+        `threading.Thread`:
+            The thread running the event loop.
+        `asyncio.AbstractEventLoop`:
+            The event loop being run in the thread.
+        `threading.Event`:
+            An event that is set when the loop is ready.
+    """
+    loop = asyncio.new_event_loop()
+    loop_ready_event = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop_ready_event.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop, name=name, daemon=True)
+    thread.start()
+    return thread, loop, loop_ready_event
+
+
+def shutdown_event_loop_in_daemon(
+    thread: threading.Thread | None,
+    loop: asyncio.AbstractEventLoop | None,
+) -> None:
+    """
+    Shutdown an asyncio event loop running in a separate thread.
+
+    This function stops the event loop and waits for the associated thread to finish execution.
+
+    Args:
+        thread (`threading.Thread`):
+            The thread running the event loop.
+        loop (`asyncio.AbstractEventLoop`):
+            The asyncio event loop to shut down.
+    """
+    if loop is None or thread is None:
+        return
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)

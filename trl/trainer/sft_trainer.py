@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,13 +22,15 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from accelerate import PartialState, logging
+import transformers
+from accelerate import PartialState
+from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from transformers import (
     AutoProcessor,
-    BaseImageProcessor,
     DataCollator,
-    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -67,7 +69,7 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, PeftType, get_peft_model
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 FLASH_ATTENTION_VARIANTS = {
@@ -489,17 +491,20 @@ class SFTTrainer(BaseTrainer):
     Example:
 
     ```python
-    from datasets import load_dataset
     from trl import SFTTrainer
+    from datasets import load_dataset
 
     dataset = load_dataset("roneneldan/TinyStories", split="train[:1%]")
 
-    trainer = SFTTrainer(model="Qwen/Qwen2-0.5B-Instruct", train_dataset=dataset)
+    trainer = SFTTrainer(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        train_dataset=dataset,
+    )
     trainer.train()
     ```
 
     Args:
-        model (`str | PreTrainedModel`):
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -507,8 +512,9 @@ class SFTTrainer(BaseTrainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
               config) with the keyword arguments in `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object.
-            If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+            - A [`~peft.PeftModel`] object. Only causal language models are supported.
+            If you're training a model with an MoE architecture and want to include the load balancing/auxiliary loss
             as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
@@ -517,7 +523,7 @@ class SFTTrainer(BaseTrainer):
             Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
             and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. SFT supports both [language modeling](#language-modeling) type and
+            Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
@@ -576,11 +582,11 @@ class SFTTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: "str | PreTrainedModel | PeftModel",
         args: SFTConfig | TrainingArguments | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         compute_loss_func: Callable | None = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
@@ -599,7 +605,8 @@ class SFTTrainer(BaseTrainer):
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            dict_args.pop("push_to_hub_token")
+            if not Version(transformers.__version__) < Version("5.0.0.dev0"):
+                dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
         # Model
@@ -694,10 +701,12 @@ class SFTTrainer(BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
-            # If the model is already a PeftModel, we need to merge and unload it.
-            # Further information: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-            model = model.merge_and_unload()
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                "with the new `peft_config` to the trainer."
+            )
 
         # Create PEFT model
         if peft_config is not None:
@@ -705,7 +714,7 @@ class SFTTrainer(BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -721,7 +730,7 @@ class SFTTrainer(BaseTrainer):
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
         # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
         self.num_virtual_tokens = 0
-        if is_peft_available() and isinstance(model, PeftModel):
+        if is_peft_available() and is_peft_model(model):
             if model.active_adapter in model.peft_config:
                 peft_model_config = model.peft_config[model.active_adapter]
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
@@ -753,7 +762,7 @@ class SFTTrainer(BaseTrainer):
             if args.per_device_train_batch_size == 1 and not args.packing:
                 logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "of 1 annihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
 
@@ -859,16 +868,6 @@ class SFTTrainer(BaseTrainer):
             else:
                 raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._total_train_tokens = 0
-
-        # Initialize the Trainer. Parent class will handle:
-        # - DeepSpeed configuration (through create_accelerator_and_postprocess)
-        # - FSDP setup
-        # - Distributed training setup
-        # - Optimizer and scheduler creation
-
         super().__init__(
             model=model,
             args=args,
@@ -890,16 +889,19 @@ class SFTTrainer(BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
-
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
-        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         args: SFTConfig,
         packing: bool,
         formatting_func: Callable[[dict], str] | None,
@@ -1127,16 +1129,7 @@ class SFTTrainer(BaseTrainer):
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
-    def compute_loss(
-        self,
-        model: nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        return_outputs: bool = False,
-        num_items_in_batch: torch.Tensor | None = None,
-    ):
-        """
-        Compute training loss and additionally compute token accuracies
-        """
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
@@ -1146,6 +1139,7 @@ class SFTTrainer(BaseTrainer):
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
+
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
             inputs["return_token_accuracy"] = True
@@ -1254,7 +1248,7 @@ class SFTTrainer(BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs.update(metrics)
+        logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

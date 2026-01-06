@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -514,6 +514,47 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_training_sync_and_async_reward_funcs(self):
+        # Test that GRPOTrainer can be instantiated with multiple reward functions one of which is async
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def sync_reward_func1(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion)) for completion in completions]
+
+        def sync_reward_func2(completions, **kwargs):
+            return [1 for _ in completions]
+
+        async def async_reward_func(completions, **kwargs):
+            """Async Reward function that rewards completions with more unique letters."""
+            return [float(len(set(completion))) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_training_multiple_reward_funcs_with_None_output(self):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -736,6 +777,133 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_get_off_policy_mask(self):
+        """
+        Test the logic of off-policy masking:
+        - Keep if Advantage >= 0
+        - Keep if KL <= threshold
+        - Drop if Advantage < 0 AND KL > threshold
+        """
+        mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
+
+        advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
+        old_per_token_logps = torch.zeros((3, 4))
+        per_token_logps = torch.zeros((3, 4))
+
+        per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
+        per_token_logps[1, :] = -0.5  # Neg adv + Low KL (0.5) -> Keep
+        per_token_logps[2, :] = -2.0  # Neg adv + High KL (2.0) -> Drop
+
+        off_policy_threshold = 1.0
+
+        expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
+
+        off_policy_mask = GRPOTrainer.get_off_policy_mask(
+            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+        )
+
+        torch.testing.assert_close(off_policy_mask, expected_mask)
+
+    def test_get_off_policy_mask_padding(self):
+        """Test that padding is correctly ignored in KL calculation."""
+        mask = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # 2 valid tokens
+        advantages = torch.tensor([[-1.0]])  # Negative advantage
+
+        old_per_token_logps = torch.zeros((1, 4))
+        per_token_logps = torch.zeros((1, 4))
+
+        # Valid tokens have High KL (2.0)
+        per_token_logps[0, 0] = -2.0
+        per_token_logps[0, 1] = -2.0
+
+        # Padding tokens have abnormal values (should be ignored)
+        per_token_logps[0, 2] = -10_000.0
+        per_token_logps[0, 3] = 10_000.0
+
+        off_policy_threshold = 1.0
+
+        # Avg KL on valid tokens = (2+2)/2 = 2.0 > 1.0 -> Drop
+        expected_mask = torch.tensor([[0.0]])
+
+        off_policy_mask = GRPOTrainer.get_off_policy_mask(
+            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+        )
+
+        torch.testing.assert_close(off_policy_mask, expected_mask)
+
+        # Now test with Low KL on valid tokens
+        per_token_logps[0, 0] = -0.5
+        per_token_logps[0, 1] = -0.5
+        # Avg KL = 0.5 <= 1.0 -> Keep
+        expected_mask_keep = torch.tensor([[1.0]])
+
+        off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
+            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+        )
+
+        torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
+
+    def test_training_with_off_policy_mask(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            off_policy_mask_threshold=0.5,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @pytest.mark.xfail(reason="Off-Policy Masking isn't compatible with Liger yet.")
+    def test_training_with_off_policy_mask_with_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            off_policy_mask_threshold=0.5,
+            use_liger_kernel=True,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_training_with_bias_correction_kl(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -877,8 +1045,8 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
-    def test_training_vllm_guided_decoding(self):
-        """Test that training works with vLLM for generation with guided decoding."""
+    def test_training_vllm_structured_outputs(self):
+        """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -889,7 +1057,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             use_vllm=True,
-            vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
+            vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
@@ -912,7 +1080,7 @@ class TestGRPOTrainer(TrlTestCase):
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_importance_sampling_correction(self):
-        """Test that training works with vLLM for generation with guided decoding."""
+        """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1264,7 +1432,8 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            generation_kwargs={"do_sample": True, "top_k": 50, "length_penalty": -0.1},  # Add some gen kwargs
+            # Pass gen kwargs
+            generation_kwargs={"do_sample": True, "top_k": 50, "num_beams": 2, "length_penalty": -0.1},
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1367,10 +1536,7 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
-            ),
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
     )
@@ -1468,10 +1634,7 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-                marks=pytest.mark.xfail(reason="Blocked by upstream bug in transformers#42762", strict=True),
-            ),
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
     @require_vision
@@ -1561,6 +1724,12 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.xfail(
+        Version(transformers.__version__).is_devrelease,  # Tests with dev dependencies
+        reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
+        "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
+        strict=True,
+    )
     @pytest.mark.parametrize(
         "model_id",
         [

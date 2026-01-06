@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,14 +30,14 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
 )
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ...models import prepare_peft_model
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import disable_dropout_in_model
+from ..utils import prepare_peft_model
 from .prm_config import PRMConfig
 
 
