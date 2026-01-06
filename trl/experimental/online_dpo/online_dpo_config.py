@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -106,8 +106,8 @@ class OnlineDPOConfig(TrainingArguments):
               server is running (start with `trl vllm-serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
-        vllm_guided_decoding_regex (`str`, *optional*):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -306,9 +306,9 @@ class OnlineDPOConfig(TrainingArguments):
             "model implementation."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
+    vllm_structured_outputs_regex: str | None = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
     vllm_gpu_memory_utilization: float | None = field(
         default=0.55,
