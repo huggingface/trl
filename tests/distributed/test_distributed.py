@@ -13,10 +13,11 @@
 # limitations under the License.
 
 import os
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+from ..testing_utils import require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,13 +29,13 @@ def run_command(command: list[str], env: dict[str, str]) -> None:
     assert result.returncode == 0
 
 
+@require_torch_multi_accelerator
 def test_sft():
-    accelerate = shutil.which("accelerate")
     with tempfile.TemporaryDirectory() as tmpdir:
         # fmt: off
         run_command(
             [
-                accelerate, "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
+                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
@@ -45,16 +46,35 @@ def test_sft():
         # fmt: on
 
 
+@require_torch_multi_accelerator
 def test_dpo():
-    accelerate = shutil.which("accelerate")
     with tempfile.TemporaryDirectory() as tmpdir:
         # fmt: off
         run_command(
             [
-                accelerate, "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/dpo.py",
+                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/dpo.py",
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
+                "--output_dir", tmpdir,
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+
+@require_torch_multi_accelerator
+def test_sft_streaming():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_language_modeling",
+                "--dataset_streaming",
+                "--max_steps", "3",
                 "--output_dir", tmpdir,
             ],
             os.environ.copy(),
