@@ -17,6 +17,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from ..testing_utils import require_torch_multi_accelerator
 
 
@@ -81,6 +83,8 @@ def test_sft_streaming():
         )
         # fmt: on
 
+
+@pytest.mark.xfail(reason="PEFT + multi-GPU is currently broken, see https://github.com/huggingface/trl/issues/4782")
 @require_torch_multi_accelerator
 def test_sft_peft():
     with tempfile.TemporaryDirectory() as tmpdir:
