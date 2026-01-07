@@ -2031,7 +2031,9 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype="float32", quantization_config=quantization_config
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -2078,7 +2080,9 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype="float32", quantization_config=quantization_config
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
