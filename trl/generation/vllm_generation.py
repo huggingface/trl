@@ -211,11 +211,11 @@ class VLLMGeneration:
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
 
-            vllm_quantization = None
+            quantization = None
             if is_bitsandbytes_available():
                 for _, module in model.named_modules():
                     if isinstance(module, bnb.nn.Linear4bit):
-                        vllm_quantization = "bitsandbytes"
+                        quantization = "bitsandbytes"
                         break
                     elif isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
@@ -234,7 +234,7 @@ class VLLMGeneration:
                 "enable_sleep_mode": self.enable_sleep_mode,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 "logprobs_mode": "processed_logprobs",
-                "quantization": vllm_quantization,
+                "quantization": quantization,
             }
             self.llm = LLM(**llm_kwargs)
             if self.enable_sleep_mode:
