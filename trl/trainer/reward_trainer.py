@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from transformers import (
     AutoModelForSequenceClassification,
@@ -195,7 +196,7 @@ class RewardTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`str | PreTrainedModel`):
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -204,6 +205,7 @@ class RewardTrainer(BaseTrainer):
               using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
               `args.model_init_kwargs`.
             - A sequence classification [`~transformers.PreTrainedModel`] object.
+            - A sequence classification [`~peft.PeftModel`] object.
         args ([`RewardConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -266,7 +268,7 @@ class RewardTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: "str | PreTrainedModel | PeftModel",
         args: RewardConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -352,7 +354,7 @@ class RewardTrainer(BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
                 "and unload the existing adapter, save the resulting base model, and then pass that base model along "
@@ -365,7 +367,7 @@ class RewardTrainer(BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the

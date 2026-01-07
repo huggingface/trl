@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -122,8 +122,8 @@ class GRPOConfig(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-        vllm_guided_decoding_regex (`str`, *optional*):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -275,6 +275,11 @@ class GRPOConfig(TrainingArguments):
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
             Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
             ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+        off_policy_mask_threshold (`float`, *optional*):
+            Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. When set,
+            sequences with negative advantages and high KL divergence are masked out to stabilize training. This
+            parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
         use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
             Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
@@ -300,6 +305,15 @@ class GRPOConfig(TrainingArguments):
 
             Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
             filter your dataset before training to ensure that prompts do not exceed your desired length.
+
+            </Deprecated>
+
+        vllm_guided_decoding_regex:
+
+            <Deprecated version="0.27.0">
+
+            Parameter `vllm_guided_decoding_regex` is deprecated and will be removed in version 0.28.0. You should
+            instead use `vllm_structured_outputs_regex`.
 
             </Deprecated>
     """
@@ -517,9 +531,9 @@ class GRPOConfig(TrainingArguments):
             "usage low, but waking the engine adds host–device transfer latency."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
+    vllm_structured_outputs_regex: str | None = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
@@ -760,6 +774,15 @@ class GRPOConfig(TrainingArguments):
             "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
         },
     )
+    off_policy_mask_threshold: float | None = field(
+        default=None,
+        metadata={
+            "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
+            "When set, sequences with negative advantages and high KL divergence are masked out to stabilize "
+            "training. This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5)."
+        },
+    )
     use_bias_correction_kl: bool = field(
         default=False,
         metadata={
@@ -796,6 +819,10 @@ class GRPOConfig(TrainingArguments):
             "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
             "desired length."
         },
+    )
+    vllm_guided_decoding_regex: str | None = field(
+        default=None,
+        metadata={"help": "Deprecated, use `vllm_structured_outputs_regex` instead."},
     )
 
     def __post_init__(self):
@@ -880,3 +907,11 @@ class GRPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
+        if self.vllm_guided_decoding_regex is not None:
+            warnings.warn(
+                "The `vllm_guided_decoding_regex` argument is deprecated and will be removed in version 0.28.0. You "
+                "should instead use `vllm_structured_outputs_regex`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex
