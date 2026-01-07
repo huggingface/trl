@@ -84,10 +84,6 @@ if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
 
-    # Fix for "marked as ready twice" error with gradient checkpointing + LoRA
-    if training_args.gradient_checkpointing:
-        training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
-
     ################
     # Model & Processor
     ################
