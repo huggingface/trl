@@ -79,4 +79,4 @@ jobs:
       - name: Run distributed smoke tests
         run: |
           source .venv/bin/activate
-          python tests/distributed/run_distributed_smoke.py
+          pytest -v tests/distributed/test_distributed.py
