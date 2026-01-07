@@ -1383,9 +1383,20 @@ class TestDPOVisionTrainer(TrlTestCase):
                 if model_id in [
                     "trl-internal-testing/tiny-LlavaForConditionalGeneration",
                     "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                    "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
                 ] and (
                     "vision_tower.vision_model.encoder.layers.1" in n
                     or "vision_tower.vision_model.post_layernorm.weight" in n
+                    or "model.visual.deepstack_merger_list.0.norm.weight" in n
+                    or "model.visual.deepstack_merger_list.0.linear_fc1.weight" in n
+                    or "model.visual.deepstack_merger_list.0.linear_fc2.weight" in n
+                    or "model.visual.deepstack_merger_list.1.norm.weight" in n
+                    or "model.visual.deepstack_merger_list.1.linear_fc1.weight" in n
+                    or "model.visual.deepstack_merger_list.1.linear_fc2.weight" in n
+                    or "model.visual.deepstack_merger_list.2.norm.weight" in n
+                    or "model.visual.deepstack_merger_list.2.linear_fc1.weight" in n
+                    or "model.visual.deepstack_merger_list.2.linear_fc2.weight" in n
+
                 ):
                     # For some reason, these params are not updated. This is probably not related to TRL, but to
                     # the model itself. We should investigate this further, but for now we just skip these params.
