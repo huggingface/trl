@@ -36,10 +36,10 @@ def test_sft():
         run_command(
             [
                 "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
+                "--output_dir", tmpdir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
-                "--output_dir", tmpdir,
             ],
             os.environ.copy(),
         )
@@ -53,10 +53,10 @@ def test_dpo():
         run_command(
             [
                 "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/dpo.py",
+                "--output_dir", tmpdir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
-                "--output_dir", tmpdir,
             ],
             os.environ.copy(),
         )
@@ -70,12 +70,29 @@ def test_sft_streaming():
         run_command(
             [
                 "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
+                "--output_dir", tmpdir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
                 "--dataset_streaming",
                 "--max_steps", "3",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+@require_torch_multi_accelerator
+def test_sft_peft():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
                 "--output_dir", tmpdir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_language_modeling",
+                "--use_peft",
             ],
             os.environ.copy(),
         )
