@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 import torch
 from huggingface_hub import HfApi, ModelCard
+from peft import LoraConfig, get_peft_model
 from torch import nn
 from transformers import (
     AutoConfig,
@@ -112,8 +113,9 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, f
         print(f"Model {repo_id} already exists, skipping")
     else:
         model.push_to_hub(repo_id)
-        tokenizer.push_to_hub(repo_id)
         model_card.push_to_hub(repo_id)
+        if tokenizer is not None:
+            tokenizer.push_to_hub(repo_id)
         if generation_config is not None:
             generation_config.push_to_hub(repo_id)
 
@@ -320,7 +322,8 @@ for model_id, model_class, dtype in [
     ("HuggingFaceM4/Idefics3-8B-Llama3", Idefics3ForConditionalGeneration, torch.bfloat16),
     ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMForConditionalGeneration, torch.float32),
     ("llava-hf/llava-1.5-7b-hf", LlavaForConditionalGeneration, torch.float16),
-    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextForConditionalGeneration, torch.float16),
+    # Original model dtype is float16, but it triggers CUDA device side assert error (see GH-4741):
+    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextForConditionalGeneration, torch.bfloat16),
     ("OpenGVLab/InternVL3-8B-hf", InternVLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLForConditionalGeneration, torch.bfloat16),
@@ -379,3 +382,15 @@ for model_id, model_class, dtype in [
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=dtype)
     push_to_hub(model, processor, generation_config, "tiny")
+
+# PEFT models
+model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
+model = get_peft_model(model, LoraConfig())
+generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+push_to_hub(model, None, None, "tiny")
+
+# Same model, but different weights
+model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
+model = get_peft_model(model, LoraConfig())
+generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+push_to_hub(model, None, None, "tiny", "2")
