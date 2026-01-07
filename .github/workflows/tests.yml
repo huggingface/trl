@@ -39,7 +39,7 @@ jobs:
   distributed_smoke:
     name: Distributed smoke tests
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-12xlarge-cache
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
