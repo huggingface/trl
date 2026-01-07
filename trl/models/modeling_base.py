@@ -21,14 +21,6 @@ with suppress_experimental_warning():
     from ..experimental.ppo.modeling_value_head import PreTrainedModelWrapper as _PreTrainedModelWrapper
 
 
-LAYER_PATTERNS = [
-    "transformer.h.{layer}",
-    "model.decoder.layers.{layer}",
-    "gpt_neox.layers.{layer}",
-    "model.layers.{layer}",
-]
-
-
 class PreTrainedModelWrapper(_PreTrainedModelWrapper):
     def __init__(self, *args, **kwargs):
         warnings.warn(
