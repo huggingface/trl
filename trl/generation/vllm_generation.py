@@ -54,11 +54,33 @@ class VLLMGeneration:
     def __init__(
         self,
         model,
-        args,
         accelerator,
         is_fsdp_enabled,
-        generation_kwargs,
         processing_class,
+        # vLLM configuration
+        mode: str,
+        tensor_parallel_size: int,
+        gpu_memory_utilization: float,
+        enable_sleep_mode: bool,
+        max_num_seqs: int | None = None,
+        max_model_length: int | None = None,
+        model_impl: str | None = None,
+        structured_outputs_regex: str | None = None,
+        # Server mode configuration
+        server_base_url: str | None = None,
+        server_host: str = "localhost",
+        server_port: int = 8000,
+        group_port: int | None = None,
+        server_timeout: int = 600,
+        # Generation configuration
+        generation_kwargs: dict | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        min_p: float | None = None,
+        repetition_penalty: float | None = None,
+        max_completion_length: int | None = None,
+        # Chat/tool configuration
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         chat_template: str | None = None,
@@ -68,17 +90,30 @@ class VLLMGeneration:
 
         Args:
             model: The model to use for generation
-            args: Training arguments containing vLLM configuration
             accelerator: Accelerator instance for distributed training
             is_fsdp_enabled: Whether FSDP is enabled
-            generation_kwargs: Dict containing generation parameters:
-                - temperature: Sampling temperature
-                - top_p: Top-p sampling parameter
-                - top_k: Top-k sampling parameter
-                - min_p: Min-p sampling parameter
-                - repetition_penalty: Repetition penalty
-                - max_completion_length: Maximum completion length
             processing_class: Tokenizer or processor for the model
+            mode: vLLM mode ('server' or 'colocate')
+            tensor_parallel_size: Tensor parallel size for vLLM
+            gpu_memory_utilization: GPU memory utilization (0.0-1.0)
+            enable_sleep_mode: Whether to enable sleep mode
+            max_num_seqs: Maximum number of sequences to process in parallel.
+                If None, calculated as per_device_train_batch_size * tensor_parallel_size * steps_per_generation
+            max_model_length: Maximum model length
+            model_impl: Model implementation
+            structured_outputs_regex: Regex for structured outputs
+            server_base_url: Base URL for vLLM server (server mode)
+            server_host: Host for vLLM server (server mode)
+            server_port: Port for vLLM server (server mode)
+            group_port: Group port for vLLM communicator (server mode)
+            server_timeout: Connection timeout for vLLM server (server mode)
+            generation_kwargs: Additional generation kwargs to pass to vLLM
+            temperature: Sampling temperature
+            top_p: Top-p sampling parameter
+            top_k: Top-k sampling parameter
+            min_p: Min-p sampling parameter
+            repetition_penalty: Repetition penalty
+            max_completion_length: Maximum completion length
             chat_template_kwargs: Chat template kwargs
             tools: Optional tools for function calling
             chat_template: Optional chat template
@@ -90,28 +125,46 @@ class VLLMGeneration:
                 The closure will hold a reference to trainer and see its state updates.
         """
         self.model = model
-        self.args = args
         self.accelerator = accelerator
         self.is_fsdp_enabled = is_fsdp_enabled
         self.processing_class = processing_class
+
+        # vLLM configuration
+        self.mode = mode
+        self.tensor_parallel_size = tensor_parallel_size
+        self.gpu_memory_utilization = gpu_memory_utilization
+        self.enable_sleep_mode = enable_sleep_mode
+        self.max_num_seqs = max_num_seqs
+        self.max_model_length = max_model_length
+        self.model_impl = model_impl
+        self.structured_outputs_regex = structured_outputs_regex
+
+        # Server mode configuration
+        self.server_base_url = server_base_url
+        self.server_host = server_host
+        self.server_port = server_port
+        self.group_port = group_port
+        self.server_timeout = server_timeout
+
+        # Generation configuration
+        self.generation_kwargs = generation_kwargs
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.min_p = min_p
+        self.repetition_penalty = repetition_penalty
+        self.max_completion_length = max_completion_length
+
+        # Chat/tool configuration
         self.chat_template = chat_template
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.tools = tools
         self.rollout_func = rollout_func
 
-        # Unpack generation config
-        self.temperature = generation_kwargs.get("temperature")
-        self.top_p = generation_kwargs.get("top_p")
-        self.top_k = generation_kwargs.get("top_k")
-        self.min_p = generation_kwargs.get("min_p")
-        self.repetition_penalty = generation_kwargs.get("repetition_penalty")
-        self.max_completion_length = generation_kwargs.get("max_completion_length")
-
         self._init_vllm()
 
     def _init_vllm(self):
         """Initialize vLLM in server or colocate mode."""
-        args = self.args
         model = self.model
         accelerator = self.accelerator
 
@@ -121,33 +174,33 @@ class VLLMGeneration:
                 "`pip install trl[vllm]` to use it."
             )
 
-        if args.vllm_mode == "server":
+        if self.mode == "server":
             if accelerator.is_main_process:
-                if args.vllm_server_base_url is not None:
-                    base_url = args.vllm_server_base_url
+                if self.server_base_url is not None:
+                    base_url = self.server_base_url
                 else:
-                    base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+                    base_url = f"http://{self.server_host}:{self.server_port}"
                 self.vllm_client = VLLMClient(
-                    base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                    base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
                 self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
-        elif args.vllm_mode == "colocate":
+        elif self.mode == "colocate":
             # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
             # the same number of ranks
-            if not accelerator.num_processes % args.vllm_tensor_parallel_size == 0:
+            if not accelerator.num_processes % self.tensor_parallel_size == 0:
                 raise ValueError(
-                    f"vllm_tensor_parallel_size ({args.vllm_tensor_parallel_size}) must divide world size "
+                    f"vllm_tensor_parallel_size ({self.tensor_parallel_size}) must divide world size "
                     f"({accelerator.num_processes}) evenly."
                 )
 
-            if args.vllm_tensor_parallel_size > 1:
+            if self.tensor_parallel_size > 1:
                 # Create subgroups of ranks for TP, each group with `vllm_tensor_parallel_size` ranks.
                 # For example, if world_size=8 and vllm_tensor_parallel_size=2 → groups: [0,1], [2,3], [4,5], [6,7]
                 self.tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
                     [
-                        list(range(i * args.vllm_tensor_parallel_size, (i + 1) * args.vllm_tensor_parallel_size))
-                        for i in range(accelerator.num_processes // args.vllm_tensor_parallel_size)
+                        list(range(i * self.tensor_parallel_size, (i + 1) * self.tensor_parallel_size))
+                        for i in range(accelerator.num_processes // self.tensor_parallel_size)
                     ]
                 )
 
@@ -170,29 +223,24 @@ class VLLMGeneration:
             # Build LLM initialization kwargs
             llm_kwargs = {
                 "model": model.name_or_path,
-                "tensor_parallel_size": args.vllm_tensor_parallel_size,
-                "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
-                "max_num_seqs": args.per_device_train_batch_size
-                * args.vllm_tensor_parallel_size
-                * args.steps_per_generation,
-                "max_model_len": args.vllm_max_model_length,
+                "tensor_parallel_size": self.tensor_parallel_size,
+                "gpu_memory_utilization": self.gpu_memory_utilization,
+                "max_num_seqs": self.max_num_seqs,
+                "max_model_len": self.max_model_length,
                 "distributed_executor_backend": "external_launcher",
-                "seed": accelerator.process_index // args.vllm_tensor_parallel_size,
+                "seed": accelerator.process_index // self.tensor_parallel_size,
                 "max_num_batched_tokens": 4096,
-                "model_impl": args.vllm_model_impl,
-                "enable_sleep_mode": args.vllm_enable_sleep_mode,
+                "model_impl": self.model_impl,
+                "enable_sleep_mode": self.enable_sleep_mode,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 "logprobs_mode": "processed_logprobs",
                 "quantization": vllm_quantization,
             }
             self.llm = LLM(**llm_kwargs)
-            if args.vllm_enable_sleep_mode:
+            if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
         else:
-            raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{args.vllm_mode}'.")
-
-        # vLLM specific sampling arguments
-        self.structured_outputs_regex = args.vllm_structured_outputs_regex
+            raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
         # When using vLLM, the main process is responsible for loading the model weights. This can cause process
         # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -210,7 +258,6 @@ class VLLMGeneration:
     def _sync_fsdp1_params_to_vllm(self, module, prefix="", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
-        args = self.args
         accelerator = self.accelerator
 
         if visited is None:
@@ -231,15 +278,14 @@ class VLLMGeneration:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
-                    if args.vllm_mode == "server" and accelerator.is_main_process:
+                    if self.mode == "server" and accelerator.is_main_process:
                         self.vllm_client.update_named_param(full_name, param.data)
-                    elif args.vllm_mode == "colocate":
+                    elif self.mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
 
     def _sync_fsdp2_params_to_vllm(self, module):
         """FSDP2-specific parameter synchronization (lines 1025-1046)."""
-        args = self.args
         accelerator = self.accelerator
         model = self.model
 
@@ -259,9 +305,9 @@ class VLLMGeneration:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
 
-            if args.vllm_mode == "server" and accelerator.is_main_process:
+            if self.mode == "server" and accelerator.is_main_process:
                 self.vllm_client.update_named_param(name, param)
-            elif args.vllm_mode == "colocate":
+            elif self.mode == "colocate":
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights([(name, param)])
 
@@ -272,7 +318,6 @@ class VLLMGeneration:
         Handles FSDP, DeepSpeed, PEFT weight synchronization.
         """
         model = self.model
-        args = self.args
         accelerator = self.accelerator
         is_fsdp_enabled = self.is_fsdp_enabled
 
@@ -316,9 +361,9 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        if args.vllm_mode == "server" and accelerator.is_main_process:
+                        if self.mode == "server" and accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
-                        elif args.vllm_mode == "colocate":
+                        elif self.mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
@@ -337,16 +382,16 @@ class VLLMGeneration:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
                     with gather_if_zero3([param]):
-                        if args.vllm_mode == "server" and accelerator.is_main_process:
+                        if self.mode == "server" and accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
-                        elif args.vllm_mode == "colocate":
+                        elif self.mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
 
         # Reset cache on vLLM
-        if args.vllm_mode == "server" and accelerator.is_main_process:
+        if self.mode == "server" and accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
-        elif args.vllm_mode == "colocate":
+        elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
 
     def generate(self, prompts, num_generations, profiler=None):
@@ -361,7 +406,6 @@ class VLLMGeneration:
             Tuple of (prompt_ids, completion_ids, logprobs, extra_fields)
         """
         profiler = profiler or nullcontext()
-        args = self.args
         accelerator = self.accelerator
         rollout_func = self.rollout_func
         temperature = self.temperature
@@ -376,7 +420,7 @@ class VLLMGeneration:
         chat_template = self.chat_template
 
         # Wake up colocated vLLM instances if needed
-        if args.vllm_mode == "colocate" and args.vllm_enable_sleep_mode:
+        if self.mode == "colocate" and self.enable_sleep_mode:
             torch.cuda.empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
             # Work around for https://github.com/vllm-project/vllm/issues/29341
@@ -396,7 +440,7 @@ class VLLMGeneration:
                                 call["function"]["arguments"] = json.dumps(args_value)
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-        if args.vllm_mode == "server":
+        if self.mode == "server":
             all_prompts = gather_object(prompts)
 
             if accelerator.is_main_process:
@@ -414,7 +458,7 @@ class VLLMGeneration:
                     "min_p": 0.0 if min_p is None else min_p,
                     "max_tokens": max_completion_length,
                     "structured_outputs_regex": self.structured_outputs_regex,
-                    "generation_kwargs": args.generation_kwargs,
+                    "generation_kwargs": self.generation_kwargs,
                 }
                 with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
                     if rollout_func is not None:
@@ -468,7 +512,7 @@ class VLLMGeneration:
                     extra_fields[key] = values
 
         # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
-        elif args.vllm_mode == "colocate":
+        elif self.mode == "colocate":
             if rollout_func is not None:
                 rollout_prompts = prompts
                 if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
@@ -507,21 +551,21 @@ class VLLMGeneration:
                     "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                 }
                 generation_kwargs[structured_outputs_key] = structured_outputs
-                if args.generation_kwargs is not None:
-                    generation_kwargs.update(args.generation_kwargs)
+                if self.generation_kwargs is not None:
+                    generation_kwargs.update(self.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
 
-                if args.vllm_tensor_parallel_size > 1:
+                if self.tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.
                     # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
                     orig_size = len(prompts)
-                    gathered_prompts = [None for _ in range(args.vllm_tensor_parallel_size)]
+                    gathered_prompts = [None for _ in range(self.tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
                     all_prompts = [p for sublist in gathered_prompts for p in sublist]
                 else:
                     all_prompts = prompts
 
-                if args.vllm_enable_sleep_mode:
+                if self.enable_sleep_mode:
                     self.llm.wake_up(tags=["kv_cache"])
 
                 with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
@@ -545,7 +589,7 @@ class VLLMGeneration:
                     for output in outputs.outputs
                 ]
 
-                if args.vllm_tensor_parallel_size > 1:
+                if self.tensor_parallel_size > 1:
                     # Slice completions for this rank within its TP group.
                     # Each rank generates all outputs — we keep only our share.
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
@@ -560,7 +604,7 @@ class VLLMGeneration:
 
                 extra_fields = {}  # No extra fields for colocate mode
 
-                if args.vllm_enable_sleep_mode:
+                if self.enable_sleep_mode:
                     self.llm.sleep(level=2)
 
         return prompt_ids, completion_ids, logprobs, extra_fields
