@@ -24,5 +24,4 @@ ng_run "+config_paths=[resources_servers/workplace_assistant/configs/workplace_a
 CUDA_VISIBLE_DEVICES=0 python train.py --config config.yaml
 ```
 
-We should be able to do multinode, but im having issues with ngpu > 1 for training backend currently
-https://huggingface.co/docs/trl/main/en/vllm_integration#modes-of-using-vllm-during-training
+multinode is working, an example will be uploaded soon! 
