@@ -292,7 +292,8 @@ class DPOTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
-        # Force dispatch_batches=False for IterableDataset
+        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+        # batches from multiple processes, leading to mismatch errors.
         if isinstance(train_dataset, IterableDataset):
             if args.accelerator_config.dispatch_batches is True:
                 logger.warning(
