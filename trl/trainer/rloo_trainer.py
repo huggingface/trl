@@ -32,7 +32,6 @@ import torch.utils.data
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
