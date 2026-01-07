@@ -57,7 +57,6 @@ class TrainingConfig:
     num_generations: int = 2
     per_device_train_batch_size: int = 2
     gradient_accumulation_steps: int = 16
-
     max_seq_length: int = 1024
     max_prompt_length: int = None
 
@@ -74,7 +73,6 @@ class TrainingConfig:
     report_to: str = "none"
     run_name: str = None  # Wandb
     project_name: str = None  # Wandb
-
     log_completions: bool = False
     num_completions_to_print: int = None
 
@@ -161,9 +159,6 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
                         matching_item[key] = json.loads(matching_item[key])
                 break
 
-        if not matching_item:
-            raise ValueError(f"Could not find dataset item for prompt: {prompt}")
-
         for _ in range(num_generations):
             expanded_prompts.append(prompt)
             expanded_dataset_items.append(dict(matching_item))
@@ -201,7 +196,6 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
 
     tokenizer = trainer.processing_class
     
-    # interleaved completion with mask
     prompt_ids: List[List[int]] = []
     completion_ids: List[List[int]] = []
     completion_mask: List[List[int]] = []  # 1 for action, 0 for observation
@@ -232,7 +226,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
                 )
                 rollout_failed = not has_content
 
-        # truncated or other failure - mask out
+        # truncated or other failure - mask
         if rollout_failed:
             eos_token_id = tokenizer.eos_token_id or 0
             prompt_ids.append(expected_prompt_ids)
@@ -246,9 +240,10 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         episode_reward = response.get("reward", 0.0)
         output_items = response.get("response", {}).get("output", [])
 
-        # Make interleaved completion: (p,a,o,a,o...) & mask all but assistant role 
-        # Each turn has prompt_ids, gen_ids. Find tool_result = current_prompt - previous_seen_tokens and mask it 
-        # on policy tokenid correction replace_prefix_tokens is done in vllm server
+        # interleaved completion with mask (p,a,o,a,o...)
+        # Each turn has prompt_ids, gen_ids
+        # tool_result = prompt_ids - seen_token_ids (to mask it) 
+        # replace_prefix_tokens done in vllm server https://docs.nvidia.com/nemo/gym/latest/contribute/rl-framework-integration/openai-compatible-http-server-on-policy-correction.html
         
         seen_token_ids: List[int] = []
         interleaved_completion: List[int] = []
@@ -314,8 +309,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
             "train/num_turns_max": max(num_turns_list),
         })
 
-    # Deduplicate prompt_ids since TRL re-duplicates them internally
-    unique_prompt_ids = prompt_ids[::num_generations]
+    unique_prompt_ids = prompt_ids[::num_generations] # TRL re-duplicates them
 
     return {
         "prompt_ids": unique_prompt_ids,
@@ -344,7 +338,7 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
                         instructions = responses_params.get("instructions", "")
 
                         if isinstance(input_data, list) and len(input_data) > 0:
-                            # (e.g. reasoning_gym)
+                            # list of messages format (e.g. reasoning_gym)
                             prompt_parts = []
                             if instructions:
                                 prompt_parts.append(f"system: {instructions}")
@@ -353,8 +347,9 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
                                     prompt_parts.append(f"{msg['role']}: {msg['content']}")
                             item["prompt"] = "\n\n".join(prompt_parts) if prompt_parts else ""
                         elif isinstance(input_data, str):
-                            # (e.g. google_search)
+                            # prompt as string, no list of messages (e.g. google_search)
                             prompt_parts = []
+                            # system prompt
                             if instructions:
                                 prompt_parts.append(instructions)
                             if input_data:
