@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
+from packaging.version import Version
 from transformers.utils import is_openai_available
 
 from ...import_utils import is_llm_blender_available
@@ -51,6 +52,26 @@ Here are the unordered outputs from the models. Each output is associated with a
 
 Evaluate the models on the basis of the quality and relevance of their results, and select the model that generated the best result. Reply with the identifier of the best model. Our evaluation will only take into account the first character of your answer, so make sure it contains only one of the identifiers and nothing else (no quotation marks, no spaces, no new lines, ...).
 '''
+
+
+def _ensure_llm_blender_importable() -> None:
+    """
+    Pre-import shim to work around a known `llm-blender` issue.
+
+    As of `llm-blender` v0.0.2 (see upstream issue: https://github.com/yuchenlin/LLM-Blender/issues/33), importing
+    `llm_blender` may fail on `transformers` >= 5.0.0.dev0 because it unconditionally accesses
+    `transformers.utils.hub.TRANSFORMERS_CACHE`.
+
+    We set this attribute to a dummy value before importing `llm_blender` so that the import succeeds. This helper is
+    intentionally a no-op on older `transformers` versions.
+
+    This shim can be removed once the upstream issue is fixed and the minimum required `llm-blender` version includes
+    that fix.
+    """
+    import transformers.utils.hub
+
+    if Version(transformers.__version__) >= Version("5.0.0.dev0"):
+        transformers.utils.hub.TRANSFORMERS_CACHE = None  # unused; just needs to exist
 
 
 class BaseJudge(ABC):
@@ -206,6 +227,7 @@ class PairRMJudge(BasePairwiseJudge):
     def __init__(self):
         if not is_llm_blender_available():
             raise ValueError("llm-blender is not installed. Please install it with `pip install llm-blender`.")
+        _ensure_llm_blender_importable()
         import llm_blender
 
         self.blender = llm_blender.Blender()
