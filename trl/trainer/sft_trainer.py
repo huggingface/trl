@@ -609,11 +609,22 @@ class SFTTrainer(BaseTrainer):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
+        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+        # batches from multiple processes, leading to mismatch errors.
+        if isinstance(train_dataset, IterableDataset):
+            if args.accelerator_config.dispatch_batches is True:
+                logger.warning(
+                    "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
+                    "is forced to `False` when using an `IterableDataset`. To remove this warning, unset "
+                    "`dispatch_batches` in `SFTConfig` or set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+
         # Model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if args.distributed_state.distributed_type == "DEEPSPEED":
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
