@@ -500,6 +500,9 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        stop: str | list[str] | None = None
+        stop_token_ids: list[int] | None = None
+        include_stop_str_in_output: bool = False
         truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
@@ -531,6 +534,11 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `stop` (`str` or `list[str]`, *optional*): String or list of strings that stop generation when
+                  generated.
+                - `stop_token_ids` (`list[int]`, *optional*): Token IDs that stop generation when generated.
+                - `include_stop_str_in_output` (`bool`, *optional*, defaults to `False`): Whether to include stop
+                  strings in the output text.
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
@@ -592,6 +600,9 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
+            "stop": request.stop,
+            "stop_token_ids": request.stop_token_ids,
+            "include_stop_str_in_output": request.include_stop_str_in_output,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
@@ -638,6 +649,9 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        stop: str | list[str] | None = None
+        stop_token_ids: list[int] | None = None
+        include_stop_str_in_output: bool = False
         truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
@@ -669,6 +683,11 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `stop` (`str` or `list[str]`, *optional*): String or list of strings that stop generation when
+                  generated.
+                - `stop_token_ids` (`list[int]`, *optional*): Token IDs that stop generation when generated.
+                - `include_stop_str_in_output` (`bool`, *optional*, defaults to `False`): Whether to include stop
+                  strings in the output text.
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
@@ -733,6 +752,9 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
+            "stop": request.stop,
+            "stop_token_ids": request.stop_token_ids,
+            "include_stop_str_in_output": request.include_stop_str_in_output,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
