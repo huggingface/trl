@@ -217,9 +217,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
     batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
     batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
-    batch[f"{kwargs['prefix']}completion_input_ids"] = (
-        all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
-    )
+    batch[f"{kwargs['prefix']}completion_input_ids"] = all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
     batch[f"{kwargs['prefix']}completion_attention_mask"] = (
         all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
     )
@@ -230,9 +228,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
             batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
                 f"{kwargs['prefix']}prompt_input_ids"
             ]
-            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[
-                f"{kwargs['prefix']}prompt_attention_mask"
-            ]
+            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
             batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
                 f"{kwargs['prefix']}completion_input_ids"
             ]
