@@ -38,9 +38,6 @@ class KTOConfig(TrainingArguments):
             to use the default data collator.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int`, *optional*):
-            Maximum length of the completion. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
@@ -141,14 +138,7 @@ class KTOConfig(TrainingArguments):
         default=512,
         metadata={
             "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
-    max_completion_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
+            "collator."
         },
     )
     beta: float = field(
