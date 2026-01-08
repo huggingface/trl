@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,6 @@ from datasets import Dataset, concatenate_datasets
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
-    AutoModelForCausalLM,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -50,13 +49,13 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import create_reference_model, prepare_deepspeed
+from ...models.utils import create_reference_model, peft_module_casting_to_bf16, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
+    create_model_from_path,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
-    peft_module_casting_to_bf16,
     selective_log_softmax,
 )
 from ..utils import DPODataCollatorWithPadding
@@ -367,49 +366,33 @@ class KTOTrainer(BaseTrainer):
                 "same as `model`, you must mass a copy of it, or `None` if you use peft."
             )
 
-        if args.model_init_kwargs is None:
-            model_init_kwargs = {}
-        elif not isinstance(model, str):
-            raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
-        else:
-            model_init_kwargs = args.model_init_kwargs
-            dtype = model_init_kwargs.get("dtype", "auto")
-            if dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
-                    )
-                model_init_kwargs["dtype"] = dtype
-            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
-
-        if args.ref_model_init_kwargs is None:
-            ref_model_init_kwargs = {}
-        elif not isinstance(ref_model, str):
-            raise ValueError(
-                "You passed ref_model_kwargs to the KTOTrainer. But your ref_model is already instantiated."
-            )
-        else:
-            ref_model_init_kwargs = args.ref_model_init_kwargs
-            dtype = ref_model_init_kwargs.get("dtype", "auto")
-            if dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
-                    )
-                ref_model_init_kwargs["dtype"] = dtype
-            ref_model_init_kwargs["device_map"] = ref_model_init_kwargs.get("device_map", "auto")
-
+        # Model initialization
         if isinstance(model, str):
-            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Distributed training requires device_map=None ("auto" fails with DeepSpeed/FSDP)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the KTOConfig, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
 
+        # Reference model initialization
         if isinstance(ref_model, str):
-            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+            ref_model_init_kwargs = args.ref_model_init_kwargs or {}
+            # Distributed training requires device_map=None
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                ref_model_init_kwargs["device_map"] = None
+            ref_model = create_model_from_path(ref_model, **ref_model_init_kwargs)
+        else:
+            if ref_model is not None and args.ref_model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `ref_model_init_kwargs` to the KTOConfig, but your ref_model is already instantiated. "
+                    "The `ref_model_init_kwargs` will be ignored."
+                )
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
