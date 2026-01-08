@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,13 +35,67 @@ from trl.trainer.utils import (
     split_pixel_values_by_grid,
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
+    use_adapter,
 )
 
 from .testing_utils import TrlTestCase, require_peft, require_rich
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import AutoPeftModelForCausalLM, LoraConfig
+
+
+@require_peft
+class TestUseAdapter(TrlTestCase):
+    def test_disables_on_none(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        with model.disable_adapter():
+            expected = model(input_ids).logits
+
+        with use_adapter(model, None):
+            output = model(input_ids).logits
+
+        assert torch.equal(output, expected)
+
+    def test_restores_previous_adapter(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        expected = model(input_ids).logits
+        with use_adapter(model, "my_adapter"):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+        with use_adapter(model, None):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+    def test_with_multiple_adapters(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter_1"
+        )
+        model.load_adapter("trl-internal-testing/tiny-PeftModel-2", "my_adapter_2")
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+
+        model.set_adapter("my_adapter_1")  # should be a no-op, but let's keep it for clarity
+        expected_1 = model(input_ids).logits
+        model.set_adapter("my_adapter_2")
+        expected_2 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_1"):
+            output_1 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_2"):
+            output_2 = model(input_ids).logits
+
+        assert torch.equal(output_1, expected_1)
+        assert torch.equal(output_2, expected_2)
 
 
 class TestPad(TrlTestCase):
