@@ -153,7 +153,6 @@ class TestKTOTrainer(TrlTestCase):
 
         fn_kwargs = {
             "prefix": "",
-            "is_encoder_decoder": False,
             "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
             "truncation_mode": trainer.truncation_mode,

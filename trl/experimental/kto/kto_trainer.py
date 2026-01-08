@@ -484,7 +484,6 @@ class KTOTrainer(BaseTrainer):
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
-                is_encoder_decoder=False,
             )
 
             if args.remove_unused_columns:
@@ -594,7 +593,6 @@ class KTOTrainer(BaseTrainer):
 
             fn_kwargs = {
                 "prefix": "",
-                "is_encoder_decoder": False,
                 "tokenizer": self.processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
