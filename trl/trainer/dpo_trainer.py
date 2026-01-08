@@ -474,7 +474,7 @@ class DPOTrainer(BaseTrainer):
 
         # Data collator
         if data_collator is None:
-            if "QWEN3VL" in model.config.architectures[0]:
+            if "Qwen3VL" in model.config.architectures[0]:
                 data_collator = QWEN3VLDataCollatorForPreference(pad_token_id=self.pad_token_id)
             else:
                 data_collator = DataCollatorForPreference(pad_token_id=self.pad_token_id)
