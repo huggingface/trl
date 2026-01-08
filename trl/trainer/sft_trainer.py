@@ -1157,6 +1157,7 @@ class SFTTrainer(BaseTrainer):
             and self.compute_loss_func is None
             and not self.aux_loss_enabled # aux loss isn't supported yet
             and self.num_virtual_tokens == 0  # not implemented yet
+            and not self.model.config._attn_implementation in FLASH_ATTENTION_VARIANTS # weird issue
         )
 
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
