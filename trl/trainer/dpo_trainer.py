@@ -189,6 +189,66 @@ class DataCollatorForPreference(DataCollatorMixin):
         return output
 
 
+@dataclass
+class QWEN3VLDataCollatorForPreference(DataCollatorMixin):
+    """
+    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they are
+    not all of the same length.
+
+    Args:
+        pad_token_id (`int`):
+            Token ID to use for padding.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            Type of Tensor to return. Only `"pt"` is currently supported.
+
+    """
+
+    pad_token_id: int
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: list[list[int] | Any | dict[str, Any]]) -> dict[str, Any]:
+        # Convert to tensor
+        prompt_input_ids = [torch.tensor(example["prompt_input_ids"]) for example in examples]
+        prompt_attention_mask = [torch.ones_like(input_ids) for input_ids in prompt_input_ids]
+        chosen_input_ids = [torch.tensor(example["chosen_input_ids"]) for example in examples]
+        chosen_attention_mask = [torch.ones_like(input_ids) for input_ids in chosen_input_ids]
+        rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
+        rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
+        if "pixel_values" in examples[0]:
+            pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
+        if "image_grid_thw" in examples[0]:
+            image_grid_thw = [torch.tensor(example["image_grid_thw"]) for example in examples]
+        if "pixel_attention_mask" in examples[0]:
+            pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
+            ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
+
+        # Pad
+        output = {}
+        output["prompt_input_ids"] = pad(prompt_input_ids, padding_value=self.pad_token_id, padding_side="left")
+        output["prompt_attention_mask"] = pad(prompt_attention_mask, padding_value=0, padding_side="left")
+        output["chosen_input_ids"] = pad(chosen_input_ids, padding_value=self.pad_token_id)
+        output["chosen_attention_mask"] = pad(chosen_attention_mask, padding_value=0)
+        output["rejected_input_ids"] = pad(rejected_input_ids, padding_value=self.pad_token_id)
+        output["rejected_attention_mask"] = pad(rejected_attention_mask, padding_value=0)
+        if "pixel_values" in examples[0]:
+            output["pixel_values"] = torch.cat(pixel_values, dim=0)
+        if "image_grid_thw" in examples[0]:
+            output["image_grid_thw"] = pad(image_grid_thw, padding_value=0)
+        if "pixel_attention_mask" in examples[0]:
+            output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
+        if "image_sizes" in examples[0]:
+            output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            output["ref_chosen_logps"] = ref_chosen_logps
+            output["ref_rejected_logps"] = ref_rejected_logps
+        if "token_type_ids" in examples[0]:
+            token_type_ids = [torch.tensor(example["token_type_ids"]) for example in examples]
+            output["token_type_ids"] = pad(token_type_ids, padding_value=0, padding_side="left")
+
+        return output
+
 class DPOTrainer(BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method.
@@ -414,7 +474,10 @@ class DPOTrainer(BaseTrainer):
 
         # Data collator
         if data_collator is None:
-            data_collator = DataCollatorForPreference(pad_token_id=self.pad_token_id)
+            if "QWEN3VL" in model.config.architectures[0]:
+                data_collator = QWEN3VLDataCollatorForPreference(pad_token_id=self.pad_token_id)
+            else:
+                data_collator = DataCollatorForPreference(pad_token_id=self.pad_token_id)
 
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
