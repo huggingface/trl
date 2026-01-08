@@ -172,12 +172,13 @@ class TestKTOTrainer(TrlTestCase):
 
         fn_kwargs = {
             "prefix": "",
-            "is_encoder_decoder": trainer.is_encoder_decoder,
+            "is_encoder_decoder": False,
             "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
             "truncation_mode": trainer.truncation_mode,
             "label_pad_token_id": trainer.label_pad_token_id,
             "max_prompt_length": trainer.max_prompt_length,
+            "max_completion_length": None,
         }
         processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
         assert processed_dataset["prompt"][:] == train_dataset["prompt"][:]
