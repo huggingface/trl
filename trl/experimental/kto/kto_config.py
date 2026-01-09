@@ -38,9 +38,6 @@ class KTOConfig(TrainingArguments):
             to use the default data collator.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int`, *optional*):
-            Maximum length of the completion. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
@@ -65,9 +62,6 @@ class KTOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
             during evaluation.
-        is_encoder_decoder (`bool`, *optional*):
-            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
-            you need to specify if the model returned by the callable is an encoder-decoder model.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
@@ -144,14 +138,7 @@ class KTOConfig(TrainingArguments):
         default=512,
         metadata={
             "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
-    max_completion_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
+            "collator."
         },
     )
     beta: float = field(
@@ -204,13 +191,6 @@ class KTOConfig(TrainingArguments):
         metadata={
             "help": "If `True`, generates and logs completions from both the model and the reference model to W&B "
             "during evaluation."
-        },
-    )
-    is_encoder_decoder: bool | None = field(
-        default=None,
-        metadata={
-            "help": "When using the `model_init` argument (callable) to instantiate the model instead of the `model` "
-            "argument, you need to specify if the model returned by the callable is an encoder-decoder model."
         },
     )
     disable_dropout: bool = field(
