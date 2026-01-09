@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import atexit
 import copy
 import inspect
 import os
@@ -31,6 +33,7 @@ import torch.utils.data
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -79,9 +82,12 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
     shuffle_sequence_dict,
+    shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
+    start_event_loop_in_daemon,
     unsplit_pixel_values_by_grid,
+    use_adapter,
 )
 
 
@@ -89,8 +95,13 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+
+    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
 
 if is_wandb_available():
     import wandb
@@ -132,7 +143,7 @@ class RLOOTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`str | PreTrainedModel`):
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -141,6 +152,7 @@ class RLOOTrainer(BaseTrainer):
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+            - A [`~peft.PeftModel`] object. Only causal language models are supported.
         reward_funcs (`RewardFunc | list[RewardFunc]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
@@ -154,10 +166,11 @@ class RLOOTrainer(BaseTrainer):
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. Custom reward
-                  functions can also return `None` when the reward is not applicable to those samples. This is useful
-                  for multi-task training where different reward functions apply to different types of samples. When a
-                  reward function returns `None` for a sample, that reward function is excluded from the reward
-                  calculation for that sample. For more details, see [Using a custom reward
+                   functions can be either synchronous or asynchronous and can also return `None` when the reward is
+                   not applicable to those samples. This is useful for multi-task training where different reward
+                   functions apply to different types of samples. When a reward function returns `None` for a sample,
+                   that reward function is excluded from the reward calculation for that sample. For more details, see
+                   [Using a custom reward
                   function](#using-a-custom-reward-function).
 
                   The trainer's state is also passed to the reward function. The trainer's state is an instance of
@@ -224,7 +237,7 @@ class RLOOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: "str | PreTrainedModel | PeftModel",
         reward_funcs: RewardFunc | list[RewardFunc],
         args: RLOOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -244,8 +257,8 @@ class RLOOTrainer(BaseTrainer):
         # Model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if args.distributed_state.distributed_type == "DEEPSPEED":
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
@@ -284,12 +297,21 @@ class RLOOTrainer(BaseTrainer):
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
 
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
                 "and unload the existing adapter, save the resulting base model, and then pass that base model along "
                 "with the new `peft_config` to the trainer."
             )
+        if is_peft_available() and is_peft_model(model):
+            # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
+            # of the "default" adapter, so that we can use it as the reference model during the training.
+            model.add_adapter("ref", model.peft_config["default"])
+            for name, param in model.named_parameters():
+                if ".default." in name:
+                    ref_name = name.replace(".default.", ".ref.")
+                    ref_param = model.get_parameter(ref_name)
+                    ref_param.data.copy_(param.data)
 
         # Create PEFT model
         if peft_config is not None:
@@ -297,7 +319,7 @@ class RLOOTrainer(BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -328,6 +350,15 @@ class RLOOTrainer(BaseTrainer):
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
+
+        self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
+        if self._has_async_reward_funcs:
+            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
+                start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_reward_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
 
         # Reward weights
         if args.reward_weights is not None:
@@ -548,7 +579,7 @@ class RLOOTrainer(BaseTrainer):
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
             # vLLM specific sampling arguments
-            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.structured_outputs_regex = args.vllm_structured_outputs_regex
 
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
@@ -959,11 +990,13 @@ class RLOOTrainer(BaseTrainer):
         # This allows for dynamic reward shaping based on training progress.
         reward_kwargs["trainer_state"] = self.state
 
+        async_funcs_info = []  # async custom functions for asyncio.gather
+
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names, strict=True)
         ):
-            with profiling_context(self, reward_func_name):
-                if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+            if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+                with profiling_context(self, reward_func_name):
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
@@ -978,14 +1011,36 @@ class RLOOTrainer(BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-                else:
+            elif asyncio.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+                async_funcs_info.append((i, reward_func, reward_func_name))
+            else:
+                # Run synchronous reward function
+                with profiling_context(self, reward_func_name):
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
-
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        # Execute async custom functions in parallel using asyncio.gather
+        if async_funcs_info:
+
+            async def _invoke_async_reward(index, func, func_name):
+                with profiling_context(self, func_name):
+                    output = await func(
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                    )
+                    output = [r if r is not None else torch.nan for r in output]
+                    return index, output
+
+            async def _run_async_funcs():
+                coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
+                return await asyncio.gather(*coros)
+
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
+            for idx, output_reward_func in async_results:
+                rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
@@ -1045,7 +1100,7 @@ class RLOOTrainer(BaseTrainer):
                         "top_k": self.top_k,
                         "min_p": 0.0 if self.min_p is None else self.min_p,
                         "max_tokens": self.max_completion_length,
-                        "guided_decoding_regex": self.guided_decoding_regex,
+                        "structured_outputs_regex": self.structured_outputs_regex,
                         "generation_kwargs": self.args.generation_kwargs,
                     }
                     with profiling_context(self, "vLLM.generate"):
@@ -1078,10 +1133,18 @@ class RLOOTrainer(BaseTrainer):
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
-                if self.guided_decoding_regex:
-                    guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
+                if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                    structured_outputs_key = "guided_decoding"
+                    if self.structured_outputs_regex:
+                        structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
+                    else:
+                        structured_outputs = None
                 else:
-                    guided_decoding = None
+                    structured_outputs_key = "structured_outputs"
+                    if self.structured_outputs_regex:
+                        structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
+                    else:
+                        structured_outputs = None
 
                 generation_kwargs = {
                     "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
@@ -1091,8 +1154,8 @@ class RLOOTrainer(BaseTrainer):
                     "top_k": self.top_k,
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
-                    "guided_decoding": guided_decoding,
                 }
+                generation_kwargs[structured_outputs_key] = structured_outputs
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
@@ -1371,7 +1434,11 @@ class RLOOTrainer(BaseTrainer):
                         **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
                     )
                 else:
-                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    # When training a PEFT adapter, how we obtain the reference depends on the setup:
+                    # - New adapter: disabling adapters yields the base model.
+                    # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
+                    model = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                         ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -307,11 +307,21 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
 def test_merge_probabilities_multiplies_split_tokens():
     config = build_config()
     # Use simple 3-token vocabulary to validate merging behaviour
+    # probs[0] = P(token | context) at position 0 for all vocab tokens
+    # probs[1] = P(token | context) at position 1 for all vocab tokens
     probs = torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.5, 0.3]])
     loss = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
 
-    merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]])
-    expected = torch.softmax(torch.log(probs[0]) + torch.log(probs[1]), dim=-1)
+    # token_ids[1] = 1 means the actual token at position 1 is token ID 1
+    # So we should extract P(token_id=1 | ...) = probs[1, 1] = 0.5
+    token_ids = [0, 1]  # Actual generated tokens
+
+    merged = loss._merge_probabilities_with_alignment_groups(probs, [[0, 1]], token_ids=token_ids)
+
+    # Expected: P_merged(y) = P(y | context_0) × P(token_1=1 | context_1)
+    # For each vocab token y, multiply marginal prob at pos 0 by scalar conditional prob of actual token at pos 1
+    expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
+    # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.3, 0.15, 0.05]
 
     assert torch.allclose(merged[0], expected, atol=1e-6)
 

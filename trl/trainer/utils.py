@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import dataclasses
 import importlib.resources as pkg_resources
 import json
 import os
 import random
 import socket
+import threading
 from collections.abc import Mapping, Sequence, Sized
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
@@ -28,7 +31,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
@@ -41,6 +43,7 @@ from transformers import (
     PreTrainedModel,
     is_comet_available,
 )
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     is_peft_available,
@@ -63,7 +66,7 @@ if is_comet_available():
     import comet_ml
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = logging.get_logger(__name__)
@@ -275,16 +278,6 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
-
-
-def peft_module_casting_to_bf16(model):
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
-            module = module.to(torch.float32)
-        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
-            if hasattr(module, "weight"):
-                if module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
@@ -1171,3 +1164,155 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@dataclass
+class CausalLMOutputWithPastAndFlatLogits(CausalLMOutputWithPast):
+    flat_logits: torch.Tensor | None = None
+
+
+def forward_masked_logits(
+    model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs
+) -> CausalLMOutputWithPastAndFlatLogits:
+    """
+    Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
+
+    These are always equal:
+
+    ```python
+    full_outputs = model(input_ids=input_ids)
+    masked_outputs = forward_masked_logits(model, mask, input_ids=input_ids)
+
+    assert torch.equal(
+        masked_outputs.flat_logits,
+        full_outputs.logits[mask.bool()],
+    )
+    ```
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            A causal language model.
+        logits_mask (`torch.LongTensor`):
+            Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
+            input sequence shape in `kwargs` (typically `[batch, seq_len]`).
+        **kwargs:
+            Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
+
+    Returns:
+        `CausalLMOutputWithPastAndFlatLogits`: Output containing logits only for the unmasked positions.
+
+    Raises:
+        ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
+    """
+    if kwargs.get("logits_to_keep") is not None:
+        raise ValueError("`logits_to_keep` is not supported by this forward helper.")
+    if kwargs.get("labels") is not None:
+        raise ValueError("`labels` is not yet supported by this forward helper.")
+
+    outputs: BaseModelOutputWithPast = model.get_decoder()(**kwargs)
+    hidden_states = outputs.last_hidden_state
+
+    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+    flat_logits = model.lm_head(hidden_states[logits_mask.bool()])
+    if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
+        flat_logits = flat_logits * model.logit_scale
+
+    return CausalLMOutputWithPastAndFlatLogits(
+        flat_logits=flat_logits,
+        # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
+        past_key_values=outputs.get("past_key_values"),
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.get("attentions"),
+    )
+
+
+@contextmanager
+def use_adapter(model: "PeftModel", adapter_name: str | None):
+    """
+    Context manager to temporarily set and reset the active adapter in a PEFT model.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model to manage.
+        adapter_name (`str` or `None`):
+            Name of the adapter to set as active. If `None`, the context manager will disable all adapters.
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import use_adapter
+    >>> from peft import AutoPeftModelForCausalLM
+    >>> import torch
+
+    >>> model = AutoPeftModelForCausalLM.from_pretrained("path/to/model")
+    >>> input_ids = torch.tensor([[1, 2, 3]])
+    >>> with use_adapter(model, "adapter_name"):
+    ...     outputs = model(input_ids)
+    ```
+    """
+
+    if not is_peft_available():
+        raise ImportError(
+            "You're trying to use a PEFT adapter but PEFT is not installed. Please install it with `pip install peft`."
+        )
+    if adapter_name is None:
+        with model.disable_adapter():
+            yield
+    else:
+        previous_adapter = model.active_adapter
+        model.set_adapter(adapter_name)
+        try:
+            yield
+        finally:
+            model.set_adapter(previous_adapter)
+
+
+def start_event_loop_in_daemon(
+    name: str | None = None,
+) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
+    """
+    This function creates a new daemon thread that runs the provided event loop.
+
+    Args:
+        name (`str`, *optional*):
+            Name of the thread. If `None`, the default thread naming will be used.
+
+    Returns:
+        `threading.Thread`:
+            The thread running the event loop.
+        `asyncio.AbstractEventLoop`:
+            The event loop being run in the thread.
+        `threading.Event`:
+            An event that is set when the loop is ready.
+    """
+    loop = asyncio.new_event_loop()
+    loop_ready_event = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop_ready_event.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop, name=name, daemon=True)
+    thread.start()
+    return thread, loop, loop_ready_event
+
+
+def shutdown_event_loop_in_daemon(
+    thread: threading.Thread | None,
+    loop: asyncio.AbstractEventLoop | None,
+) -> None:
+    """
+    Shutdown an asyncio event loop running in a separate thread.
+
+    This function stops the event loop and waits for the associated thread to finish execution.
+
+    Args:
+        thread (`threading.Thread`):
+            The thread running the event loop.
+        loop (`asyncio.AbstractEventLoop`):
+            The asyncio event loop to shut down.
+    """
+    if loop is None or thread is None:
+        return
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)

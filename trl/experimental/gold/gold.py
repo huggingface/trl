@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -52,6 +52,8 @@ python trl/experimental/gold/gold.py \
     --lora_alpha 16
 """
 
+import logging
+
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -66,6 +68,9 @@ from trl import (
 )
 from trl.experimental.gold.gold_config import GOLDConfig
 from trl.experimental.gold.gold_trainer import GOLDTrainer
+
+
+logger = logging.getLogger(__name__)
 
 
 if __name__ == "__main__":
@@ -117,19 +122,29 @@ if __name__ == "__main__":
     ################
     # Training
     ################
+    # Handle eval dataset - check if test split exists, fallback to validation or None
+    eval_dataset = None
+    if training_args.eval_strategy != "no":
+        if script_args.dataset_test_split in dataset:
+            eval_dataset = dataset[script_args.dataset_test_split]
+        elif "validation" in dataset:
+            eval_dataset = dataset["validation"]
+        elif "dev" in dataset:
+            eval_dataset = dataset["dev"]
+
     trainer = GOLDTrainer(
         model=model_args.model_name_or_path,
         teacher_model=training_args.teacher_model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
     if training_args.eval_strategy != "no":
         generation_config = GenerationConfig(
-            max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+            max_new_tokens=training_args.max_completion_length, do_sample=True, temperature=training_args.temperature
         )
         completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
         trainer.add_callback(completions_callback)
