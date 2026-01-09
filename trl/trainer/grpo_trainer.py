@@ -277,9 +277,7 @@ class GRPOTrainer(BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            self.args = GRPOConfig(f"{model_name}-GRPO")
-        else:
-            self.args = args
+            args = GRPOConfig(f"{model_name}-GRPO")
 
         # Model
         if isinstance(model, str):
@@ -331,7 +329,7 @@ class GRPOTrainer(BaseTrainer):
                 "with the new `peft_config` to the trainer."
             )
 
-        if is_peft_available() and is_peft_model(model) and self.args.beta != 0.0:
+        if is_peft_available() and is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training.
             model.add_adapter("ref", model.peft_config["default"])
