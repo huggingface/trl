@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import sys
-import warnings
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
@@ -264,3 +263,27 @@ if is_vllm_available():
 
     # Overwrite the function in the dependency
     vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
+
+
+def _maybe_patch_transformers_hybrid_cache() -> None:
+    # liger_kernel<=0.6.4 imports HybridCache from transformers, but in transformers>=5.0.0.dev0 HybridCache has been
+    # removed, see https://github.com/huggingface/transformers/pull/43168. This monkey patch should be only needed is
+    # until 0.6.5 if https://github.com/linkedin/Liger-Kernel/pull/1002 gets merged and released.
+    import transformers
+    from packaging.version import Version
+    from transformers.utils.import_utils import _is_package_available
+
+    transformers_version = Version(transformers.__version__)
+    is_liger_kernel_available, liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
+    liger_kernel_version = Version(liger_kernel_version) if is_liger_kernel_available else None
+    if (
+        is_liger_kernel_available
+        and liger_kernel_version <= Version("0.6.4")
+        and transformers_version >= Version("5.0.0.dev0")
+    ):
+        import transformers.cache_utils as cache_utils
+
+        cache_utils.HybridCache = cache_utils.Cache
+
+
+_maybe_patch_transformers_hybrid_cache()
