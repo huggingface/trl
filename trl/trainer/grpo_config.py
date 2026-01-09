@@ -761,8 +761,8 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Specifies how Importance Sampling (IS) is performed when "
             "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
-            "dimensions: (1) constraint, which determines how to handle ratios above "
-            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
+            "dimensions: (1) constraint, which determines how to handle ratios outside the bounds "
+            "[min, C]—either truncation (clip to range, ρ ← clamp(ρ, min, C)) or "
             "masking (set ratios above C or below min to zero); and (2) granularity, which determines whether "
             "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
             "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
@@ -782,8 +782,9 @@ class GRPOConfig(TrainingArguments):
         default=0.0,
         metadata={
             "help": "Importance sampling lower bound used by `vllm_importance_sampling_mode`. For `*_truncate` "
-            "modes, this setting is not supported. For `*_mask` modes, ratios below the min value are set to zero. "
-            "To strictly mask ratios below min without upper bound, set vllm_importance_sampling_cap to float('inf')"
+            "modes, ratios are clipped from below at min. For `*_mask` modes, ratios below min are set to "
+            "zero. To strictly mask ratios below min without upper bound, set vllm_importance_sampling_cap to "
+            "float('inf')"
         },
     )
     off_policy_mask_threshold: float | None = field(
