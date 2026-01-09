@@ -2239,7 +2239,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             logging_strategy="no",
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
 
         trainer = GRPOTrainer(
             model=model,
@@ -2322,7 +2322,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             attn_implementation="kernels-community/flash-attn2",
-            dtype="bfloat16",
+            dtype="float32",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )

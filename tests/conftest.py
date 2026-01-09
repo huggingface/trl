@@ -74,39 +74,6 @@ def apply_model_revisions(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def set_model_float32_dtype(monkeypatch):
-    """Auto-inject float32 dtype for tiny models defined in trl-internal-testing."""
-    from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
-
-    def create_classmethod_wrapper(original_classmethod):
-        # Extract the underlying function from the classmethod
-        original_func = original_classmethod.__func__
-
-        @wraps(original_func)
-        def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
-            # Only inject if model_id is one of trl-internal-testing
-            if (
-                isinstance(pretrained_model_name_or_path, str)
-                and "trl-internal-testing" in pretrained_model_name_or_path
-            ):
-                if "dtype" not in kwargs:
-                    kwargs["dtype"] = "float32"
-
-            return original_func(cls, pretrained_model_name_or_path, *args, **kwargs)
-
-        # Re-wrap as classmethod
-        return classmethod(wrapper)
-
-    # Patch base classes - this affects all models, tokenizers, and processors
-    for cls in [
-        PreTrainedModel,
-        PreTrainedTokenizerBase,
-        ProcessorMixin,
-    ]:
-        monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
-
-
-@pytest.fixture(autouse=True)
 def cleanup_gpu():
     """
     Automatically cleanup GPU memory after each test.

@@ -175,7 +175,8 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_model(self):
         # Instantiate the model
         model = AutoModelForSequenceClassification.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            dtype="float32",
         )
 
         # Get the dataset
