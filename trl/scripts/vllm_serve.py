@@ -437,41 +437,29 @@ def _replace_prefix_tokens(
     template_token_ids: list[int],
 ) -> list[int]:
     """
-    Fixes up chat template-tokenized messages to match model output tokenization.
+    This function is for fixing up the chat template-tokenized messages history
+    to match the model output tokenization up to the last assistant turn,
+    in order to preserve the monotonic tokens property for optimized multi-turn
+    training.
 
-    This preserves the monotonic tokens property for optimized multi-turn training by ensuring
-    that previously generated tokens are not retokenized differently by the chat template.
+    RL training frameworks train models on token IDs, but the OpenAI compatible
+    server communicates in what is basically de-tokenized text. When multiple
+    model calls are made to the OpenAI compatible server in a single trajectory,
+    model generations in previous model calls may be re-tokenized to something
+    that is different than what was generated. This is not too big of an issue
+    (that we know of) at inference time, but the log probs the model produces
+    are different enough for the differently re-tokenized generation result that
+    it causes the training to be off policy. Off policy isn't necessarily a bad
+    thing in isolation, but this source of off-policyness may cause unexpected
+    issues if not properly accounted for. It also mis-aligns the token ID
+    sequences across model calls, which is strange during training.
+
+    There are real cases where the model output string _does not match_ the chat
+    template tokenization of the parsed model output. A concrete example is
+    inconsistent whitespace tokens around tool call special tokens.
 
     Based on NeMo RL's _replace_prefix_tokens:
     https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
-
-    When model generates text that gets re-tokenized by chat template in subsequent turns,
-    the token IDs may differ due to tokenization ambiguity (e.g., whitespace, context).
-
-    Example:
-        Turn 1: Model outputs [220, 17] (decodes to " 4")
-        Turn 2: Template retokenizes as [1001] (also decodes to " 4")
-
-    This creates off-policy issues where training logprobs don't match generation logprobs.
-
-    This solves the issue by keeping exact model tokens up to the last EOS, then append new template tokens after EOS.
-    This ensures we preserve the actual tokens the model generated, not a retokenized version.
-
-    Args:
-        tokenizer: The tokenizer instance, must have eos_token_id
-        model_prefix_token_ids: Token IDs from actual model generation to preserve
-        template_prefix_token_ids: Chat template applied up to last assistant message
-        template_token_ids: Chat template applied to full conversation
-
-    Returns:
-        Combined token sequence: model_tokens[:-1] + template_tokens[after_eos:]
-
-    Example:
-        model_prefix_token_ids = [1, 2, 3, 220, 17, 2]  # Last 2 is EOS
-        template_prefix_token_ids = [1, 2, 3, 1001, 2]  # Up to last assistant
-        template_token_ids = [1, 2, 3, 1001, 2, 21, 22]  # Full conversation
-
-        Output: [1, 2, 3, 220, 17, 2, 21, 22]  # Keeps original [220, 17], adds new [21, 22]
     """
     if not model_prefix_token_ids:
         return template_token_ids
@@ -481,18 +469,18 @@ def _replace_prefix_tokens(
         logger.warning("Tokenizer has no EOS token ID, cannot apply _replace_prefix_tokens")
         return template_token_ids
 
-    # Find where to cut the model prefix (before EOS if present at end)
     model_cut_end = len(model_prefix_token_ids)
     if model_prefix_token_ids and model_prefix_token_ids[-1] == eos_token_id:
         model_cut_end -= 1
 
-    # Find the last EOS in template prefix
+    # We take everything starting with the EOS token ID.
     template_cut_start = -1
     for pos in reversed(range(len(template_prefix_token_ids))):
         if template_token_ids[pos] == eos_token_id:
             template_cut_start = pos
             break
 
+    # This should never be the case, but
     if template_cut_start < 0:
         logger.warning("No EOS token found in template prefix, cannot apply _replace_prefix_tokens")
         return template_token_ids
@@ -1009,7 +997,6 @@ def main(script_args: ScriptArguments):
             # do on policy token id correction and call generate instead of chat 
             # see https://docs.nvidia.com/nemo/gym/latest/contribute/rl-framework-integration/openai-compatible-http-server-on-policy-correction.html
             # and https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
-            logger.info(f"[/chat/completions] Detected prefix token IDs in assistant message, using _replace_prefix_tokens")
             tokenizer = cached_tokenizer
 
             # preprocess full conversation
@@ -1037,7 +1024,6 @@ def main(script_args: ScriptArguments):
                 template_prefix_prompts = connections[0].recv()
                 template_prefix_token_ids = template_prefix_prompts[0]["prompt_token_ids"]
 
-                logger.info(f"[/chat/completions] Calling _replace_prefix_tokens model_prefix len: {len(model_prefix_tokens)}, template_prefix len: {len(template_prefix_token_ids)}, template_full len: {len(template_prompt['prompt_token_ids'])}")
 
                 corrected_token_ids = _replace_prefix_tokens(
                     tokenizer,
@@ -1046,9 +1032,7 @@ def main(script_args: ScriptArguments):
                     template_prompt["prompt_token_ids"]
                 )
 
-                logger.info(f"[/chat/completions] final len = {len(corrected_token_ids)}")
             else:
-                logger.info(f"[/chat/completions] Skipping _replace_prefix_tokens, model_prefix_tokens={model_prefix_tokens is not None}, last_assistant_idx={last_assistant_idx}")
                 corrected_token_ids = template_prompt["prompt_token_ids"]
 
             corrected_prompt = {"prompt_token_ids": corrected_token_ids}
@@ -1082,7 +1066,6 @@ def main(script_args: ScriptArguments):
         all_outputs = list(chain.from_iterable(all_outputs))
 
         if not all_outputs:
-            logger.warning("[/chat/completions] All workers returned empty - max seq len probably exceeded. Returning empty msg with finish_reason=length")
             return {
                 "id": completion_id,
                 "object": "chat.completion",
@@ -1111,10 +1094,10 @@ def main(script_args: ScriptArguments):
                 tool_calls = None
                 finish_reason = "stop"
 
-                if hasattr(gen_output, "tool_calls") and gen_output.tool_calls:
+                if hasattr(gen_output, "tool_calls") and gen_output.tool_calls: # native tool call parsing 
                     tool_calls = gen_output.tool_calls
                     finish_reason = "tool_calls"
-                elif request.tools and text:
+                elif request.tools and text: # try manual tool call parsing eg qwen3 style xml format... this is a hack. 
                     pattern = r'<tool_call>(.*?)</tool_call>'
                     matches = re.findall(pattern, text, re.DOTALL)
                     if matches:
@@ -1202,7 +1185,7 @@ def main(script_args: ScriptArguments):
         preprocessed_prompts = connections[0].recv()
 
         if preprocessed_prompts and len(preprocessed_prompts) > 1:
-            logger.warning(f"More than one tokenized message returned from preprocess_chat inside tokenize, double check results!")
+            logger.warning("More than one tokenized message returned from preprocess_chat inside tokenize, double check results!")
 
         if not preprocessed_prompts or len(preprocessed_prompts) == 0:
             return {"tokens": [], "model": request.model or script_args.model}
@@ -1235,18 +1218,12 @@ def main(script_args: ScriptArguments):
                 template_prefix_prompts = connections[0].recv()
                 template_prefix_token_ids = template_prefix_prompts[0]["prompt_token_ids"]
 
-                logger.info(f"[/tokenize] Calling _replace_prefix_tokens, model_prefix length: {len(model_prefix_tokens)}, template_prefix length: {len(template_prefix_token_ids)}, template_full length: {len(template_prompt['prompt_token_ids'])}")
-
                 result_tokens = _replace_prefix_tokens(
                     tokenizer,
                     model_prefix_tokens,
                     template_prefix_token_ids,
                     template_prompt["prompt_token_ids"]
                 )
-
-                logger.info(f"[/tokenize] final length = {len(result_tokens)}")
-            else:
-                logger.info(f"[/tokenize] Skipping _replace_prefix_tokens, one of model_prefix_tokens={model_prefix_tokens is not None}, last_assistant_idx={last_assistant_idx} is None")
 
         return {
             "tokens": result_tokens,
