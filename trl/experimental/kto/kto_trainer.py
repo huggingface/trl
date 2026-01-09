@@ -584,88 +584,33 @@ class KTOTrainer(BaseTrainer):
         # issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
+        # Prepare datasets using the _prepare_dataset method
+        # This handles: extract prompt, unpair, apply chat template, tokenize, and process tokens
+        train_dataset = self._prepare_dataset(train_dataset, processing_class, "train")
+
+        if eval_dataset is not None:
+            eval_dataset = self._prepare_dataset(eval_dataset, processing_class, "eval")
+
+        # Create KL datasets if needed for KL divergence estimation
+        # KL datasets are mismatched prompt-completion pairs used to estimate KL(policy || reference)
         with PartialState().main_process_first():
-            # Extract the prompt if needed
-            train_dataset = train_dataset.map(
-                maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
-            )
-            # Unpair the dataset if needed
-            train_dataset = maybe_unpair_preference_dataset(
-                train_dataset, args.dataset_num_proc, desc="Unpairing train dataset"
-            )
-            # Apply the chat template if needed
-            train_dataset = train_dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"tokenizer": processing_class},
-                num_proc=args.dataset_num_proc,
-                desc="Applying chat template to train dataset",
-            )
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
-                )
-                eval_dataset = maybe_unpair_preference_dataset(
-                    eval_dataset, args.dataset_num_proc, desc="Unpairing eval dataset"
-                )
-                eval_dataset = eval_dataset.map(
-                    maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
-                    num_proc=args.dataset_num_proc,
-                    desc="Applying chat template to eval dataset",
-                )
-
-            # Tokenize and prepare the training datasets
-            train_dataset = train_dataset.map(
-                _tokenize,
-                batched=True,
-                fn_kwargs={"tokenizer": self.processing_class},
-                num_proc=args.dataset_num_proc,
-                desc="Tokenizing train dataset",
-            )
-
-            fn_kwargs = {
-                "prefix": "",
-                "is_encoder_decoder": self.is_encoder_decoder,
-                "tokenizer": self.processing_class,
-                "max_length": self.max_length,
-                "truncation_mode": self.truncation_mode,
-                "label_pad_token_id": self.label_pad_token_id,
-                "max_prompt_length": self.max_prompt_length,
-                "max_completion_length": self.max_completion_length,
-            }
-
-            train_dataset = train_dataset.map(
-                _process_tokens,
-                fn_kwargs=fn_kwargs,
-                num_proc=args.dataset_num_proc,
-                desc="Processing tokenized train dataset",
-            )
-
-            # Tokenize and prepare the eval datasets
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": self.processing_class},
-                    batched=True,
-                    num_proc=args.dataset_num_proc,
-                    desc="Tokenizing eval dataset",
-                )
-
-                eval_dataset = eval_dataset.map(
-                    _process_tokens,
-                    fn_kwargs=fn_kwargs,
-                    num_proc=args.dataset_num_proc,
-                    desc="Processing tokenized eval dataset",
-                )
-
-            # Get KL datasets if needed
             if self.calculate_KL:
                 if args.per_device_train_batch_size <= 1:
                     raise ValueError(
                         "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
                     )
+
+                # Prepare kwargs for processing KL dataset tokens
+                fn_kwargs = {
+                    "prefix": "KL_",
+                    "is_encoder_decoder": self.is_encoder_decoder,
+                    "tokenizer": processing_class,
+                    "max_length": self.max_length,
+                    "truncation_mode": self.truncation_mode,
+                    "label_pad_token_id": self.label_pad_token_id,
+                    "max_prompt_length": self.max_prompt_length,
+                    "max_completion_length": self.max_completion_length,
+                }
 
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
                 # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
@@ -676,8 +621,6 @@ class KTOTrainer(BaseTrainer):
                     num_proc=args.dataset_num_proc,
                     desc="Extracting KL train dataset",
                 )
-
-                fn_kwargs["prefix"] = "KL_"
                 train_kl_dataset = train_kl_dataset.map(
                     _process_tokens,
                     fn_kwargs=fn_kwargs,
@@ -804,6 +747,96 @@ class KTOTrainer(BaseTrainer):
             self.kto_loss_fn = LigerFusedLinearKTOLoss(
                 ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None)
             )
+
+    def _prepare_dataset(
+        self,
+        dataset: Dataset,
+        processing_class: PreTrainedTokenizerBase,
+        dataset_name: str,
+    ) -> Dataset:
+        """
+        Prepare a KTO dataset by extracting prompts, unpairing, applying chat templates, and tokenizing.
+
+        This method processes raw KTO datasets through the following steps:
+        1. Check if dataset is already processed (has tokenized columns)
+        2. Extract prompts from implicit formats
+        3. Unpair preference datasets if needed
+        4. Apply chat templates to messages
+        5. Tokenize the dataset
+        6. Process tokens (truncate, pad, create labels)
+
+        Args:
+            dataset (`Dataset`):
+                The dataset to prepare. Can be raw or partially processed.
+            processing_class (`PreTrainedTokenizerBase`):
+                The tokenizer/processor to use for tokenization.
+            dataset_name (`str`):
+                Name of the dataset (e.g., "train", "eval") for logging purposes.
+
+        Returns:
+            `Dataset`: The prepared dataset with tokenized columns ready for training/evaluation.
+        """
+        with PartialState().main_process_first():
+            # Check if dataset is already processed
+            column_names = dataset.column_names
+            is_processed = "completion_input_ids" in column_names
+
+            if is_processed:
+                logger.info(
+                    f"{dataset_name} dataset is already processed (contains 'completion_input_ids'), skipping preprocessing."
+                )
+                return dataset
+
+            # Extract the prompt if needed
+            dataset = dataset.map(
+                maybe_extract_prompt,
+                num_proc=self.args.dataset_num_proc,
+                desc=f"Extracting prompt from {dataset_name} dataset",
+            )
+
+            # Unpair the dataset if needed
+            dataset = maybe_unpair_preference_dataset(
+                dataset, self.args.dataset_num_proc, desc=f"Unpairing {dataset_name} dataset"
+            )
+
+            # Apply the chat template if needed
+            dataset = dataset.map(
+                maybe_apply_chat_template,
+                fn_kwargs={"tokenizer": processing_class},
+                num_proc=self.args.dataset_num_proc,
+                desc=f"Applying chat template to {dataset_name} dataset",
+            )
+
+            # Tokenize the dataset
+            dataset = dataset.map(
+                _tokenize,
+                batched=True,
+                fn_kwargs={"tokenizer": processing_class},
+                num_proc=self.args.dataset_num_proc,
+                desc=f"Tokenizing {dataset_name} dataset",
+            )
+
+            # Prepare process_tokens kwargs
+            fn_kwargs = {
+                "prefix": "",
+                "is_encoder_decoder": self.is_encoder_decoder,
+                "tokenizer": processing_class,
+                "max_length": self.max_length,
+                "truncation_mode": self.truncation_mode,
+                "label_pad_token_id": self.label_pad_token_id,
+                "max_prompt_length": self.max_prompt_length,
+                "max_completion_length": self.max_completion_length,
+            }
+
+            # Process tokens (truncate, pad, create labels)
+            dataset = dataset.map(
+                _process_tokens,
+                fn_kwargs=fn_kwargs,
+                num_proc=self.args.dataset_num_proc,
+                desc=f"Processing tokenized {dataset_name} dataset",
+            )
+
+        return dataset
 
     @contextmanager
     def null_ref_context(self):
