@@ -107,6 +107,51 @@ GOLD requires a [conversational](dataset_formats#conversational) [language model
 `GOLDTrainer` keeps the raw messages so the ChatML collator can construct prompts and completions with the correct
 boundaries.
 
+## How Token Merging Works
+
+When student and teacher use different tokenizers, the same text may be split differently:
+
+- **Student**: `"Hugging Face"` → 1 token
+- **Teacher**: `"Hugging"`, `" Face"` → 2 tokens
+
+GOLD aligns these sequences and merges the teacher's multi-token probabilities into a single distribution that can be compared with the student's single-token distribution.
+
+### Probability Merging
+
+For a teacher sequence of tokens `[token₀, token₁, ..., tokenₖ]` that maps to a single student token, GOLD computes:
+
+```
+P_merged(y) = P(y | context) × P(token₁ | token₀, context) × ... × P(tokenₖ | ..., context)
+```
+
+where:
+- `P(y | context)` is the marginal probability distribution over all vocabulary tokens at the first position
+- `P(tokenᵢ | ..., context)` are **scalar** conditional probabilities of the actual tokens that were generated
+
+**Key insight**: Only the conditional probabilities of the **actual continuation tokens** are extracted as scalars. The full marginal distribution at the first position is then scaled by multiplying these scalar probabilities.
+
+This ensures:
+1. **Correct joint probability** for the actual generated sequence (by the chain rule)
+2. **Reasonable approximation** for counterfactual tokens (scaled by the same continuation likelihood)
+3. **Unnormalized distributions** that preserve the correct relative probabilities for ULD loss computation
+
+### Example
+
+Given:
+```
+P(x₀):         ["HF": 0.6,  "is": 0.3,  "cool": 0.1]
+P(x₁ | "HF"):  ["HF": 0.05, "is": 0.9,  "cool": 0.05]
+```
+
+If tokens 0 and 1 are merged, and the actual sequence was `["HF", "is"]`:
+```
+P_merged("HF")   = 0.6 × 0.9 = 0.54  ✓ (correct joint probability)
+P_merged("is")   = 0.3 × 0.9 = 0.27
+P_merged("cool") = 0.1 × 0.9 = 0.09
+```
+
+The merged distribution is unnormalized (sums to 0.81), but this is intentional and correct for ULD loss computation, which uses sorting and L1 distance.
+
 ## GOLDTrainer
 
 [[autodoc]] experimental.gold.GOLDTrainer
