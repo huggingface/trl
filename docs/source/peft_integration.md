@@ -232,7 +232,7 @@ trainer.train()
 
 ### Direct Preference Optimization (DPO)
 
-The `DPOTrainer` implements preference learning from human feedback.
+The [`DPOTrainer`] implements preference learning from human feedback.
 
 #### With LoRA
 
