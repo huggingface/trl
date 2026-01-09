@@ -659,6 +659,12 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
+    apply_gdpo: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to apply GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization"
+        },
+    )
     scale_rewards: str = field(
         default="group",
         metadata={
