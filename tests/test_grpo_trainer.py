@@ -1080,7 +1080,7 @@ class TestGRPOTrainer(TrlTestCase):
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     @pytest.mark.parametrize(
-        "vllm_importance_sampling_min, vllm_importance_sampling_cap",
+        "vllm_importance_sampling_min, vllm_importance_sampling_max",
         [
             (0.0, 3.0),  # only cap/max (current default)
             (0.5, float("inf")),  # only min
@@ -1088,7 +1088,7 @@ class TestGRPOTrainer(TrlTestCase):
         ],
     )
     def test_training_vllm_importance_sampling_correction(
-        self, vllm_importance_sampling_min, vllm_importance_sampling_cap
+        self, vllm_importance_sampling_min, vllm_importance_sampling_max
     ):
         """Test that training works with vLLM for generation with importance sampling correction."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1103,7 +1103,7 @@ class TestGRPOTrainer(TrlTestCase):
             use_vllm=True,
             vllm_importance_sampling_correction=True,
             vllm_importance_sampling_min=vllm_importance_sampling_min,
-            vllm_importance_sampling_cap=vllm_importance_sampling_cap,
+            vllm_importance_sampling_max=vllm_importance_sampling_max,
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM

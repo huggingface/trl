@@ -770,20 +770,29 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
-    vllm_importance_sampling_cap: float = field(
+    vllm_importance_sampling_cap: float | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated, use `vllm_importance_sampling_max` instead. "
+            "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+        },
+    )
+
+    vllm_importance_sampling_max: float = field(
         default=3.0,
         metadata={
-            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
-            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+            "help": "Importance sampling upper bound (max) used by `vllm_importance_sampling_mode`. For '*_truncate' "
+            "modes, ratios are clipped from above at max. For '*_mask' modes, ratios larger than max are set to zero."
         },
     )
 
     vllm_importance_sampling_min: float = field(
         default=0.0,
         metadata={
-            "help": "Importance sampling lower bound used by `vllm_importance_sampling_mode`. For `*_truncate` "
+            "help": "Importance sampling lower bound (min) used by `vllm_importance_sampling_mode`. For `*_truncate` "
             "modes, ratios are clipped from below at min. For `*_mask` modes, ratios below min are set to "
-            "zero. To strictly mask ratios below min without upper bound, set vllm_importance_sampling_cap to "
+            "zero. To strictly mask ratios below min without upper bound, set vllm_importance_sampling_max to "
             "float('inf')"
         },
     )
@@ -928,3 +937,12 @@ class GRPOConfig(TrainingArguments):
                 stacklevel=2,
             )
             self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex
+
+        if self.vllm_importance_sampling_cap is not None:
+            warnings.warn(
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in version 0.28.0. You "
+                "should instead use `vllm_importance_sampling_max`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.vllm_importance_sampling_max = self.vllm_importance_sampling_cap
