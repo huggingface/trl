@@ -1953,7 +1953,9 @@ class GRPOTrainer(BaseTrainer):
 
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                        vllm_importance_sampling_ratio,
+                        min=self.vllm_importance_sampling_min,
+                        max=self.vllm_importance_sampling_cap,
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
                     invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
