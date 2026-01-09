@@ -277,7 +277,9 @@ class GRPOTrainer(BaseTrainer):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
-            args = GRPOConfig(f"{model_name}-GRPO")
+            self.args = GRPOConfig(f"{model_name}-GRPO")
+        else:
+            self.args = args
 
         # Model
         if isinstance(model, str):
