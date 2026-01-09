@@ -41,7 +41,6 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
     TrainingArguments,
-    is_comet_available,
     is_wandb_available,
 )
 from transformers.trainer_utils import EvalLoopOutput, has_length
@@ -454,12 +453,6 @@ class KTOTrainer(BaseTrainer):
                     output.requires_grad_(True)
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-        if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
-            raise ValueError(
-                "`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-                " Please install `wandb` or `comet-ml` to resolve."
-            )
 
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder

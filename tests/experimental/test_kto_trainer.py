@@ -23,6 +23,28 @@ from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens, _
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb, require_peft
 
 
+class TestKTOConfig:
+    @require_no_wandb
+    def test_generate_during_eval_no_wandb(self):
+        with pytest.raises(
+            ValueError,
+            match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+            " Please install `wandb` or `comet-ml` to resolve.",
+        ):
+            KTOConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                generate_during_eval=True,
+                report_to="none",
+            )
+
+
 class TestKTOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -273,37 +295,6 @@ class TestKTOTrainer(TrlTestCase):
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
                     assert not torch.equal(param, new_param)
-
-    @require_no_wandb
-    def test_kto_trainer_generate_during_eval_no_wandb(self):
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            generate_during_eval=True,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-        with pytest.raises(
-            ValueError,
-            match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-            " Please install `wandb` or `comet-ml` to resolve.",
-        ):
-            KTOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
 
     @require_liger_kernel
     def test_kto_trainer_with_liger(self):

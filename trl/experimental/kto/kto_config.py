@@ -256,8 +256,10 @@ class KTOConfig(TrainingArguments):
     )
 
     def __post_init__(self):
+        # Set bf16 default
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
+        # Handle deprecated use_liger_loss
         if self.use_liger_loss is not None:
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
@@ -266,5 +268,61 @@ class KTOConfig(TrainingArguments):
                 stacklevel=2,
             )
             self.use_liger_kernel = self.use_liger_loss
+
+        # Validate loss_type
+        valid_loss_types = ["kto", "apo_zero_unpaired"]
+        if self.loss_type not in valid_loss_types:
+            raise ValueError(f"Invalid loss_type: '{self.loss_type}'. Expected one of {valid_loss_types}.")
+
+        # Validate truncation_mode
+        valid_truncation_modes = ["keep_end", "keep_start"]
+        if self.truncation_mode not in valid_truncation_modes:
+            raise ValueError(
+                f"Invalid truncation_mode: '{self.truncation_mode}'. Expected one of {valid_truncation_modes}."
+            )
+
+        # Validate beta
+        if self.beta <= 0:
+            raise ValueError(
+                f"beta must be positive, got {self.beta}. Higher β means less deviation from the reference model."
+            )
+
+        # Validate weights
+        if self.desirable_weight <= 0:
+            raise ValueError(
+                f"desirable_weight must be positive, got {self.desirable_weight}. "
+                "This weight is used to balance desirable and undesirable examples."
+            )
+
+        if self.undesirable_weight <= 0:
+            raise ValueError(
+                f"undesirable_weight must be positive, got {self.undesirable_weight}. "
+                "This weight is used to balance desirable and undesirable examples."
+            )
+
+        # Validate generate_during_eval dependencies
+        if self.generate_during_eval:
+            from transformers import is_comet_available, is_wandb_available
+
+            if not (is_wandb_available() or is_comet_available()):
+                raise ValueError(
+                    "`generate_during_eval=True` requires Weights & Biases or Comet to be installed. "
+                    "Please install with: `pip install wandb` or `pip install comet-ml`"
+                )
+
+        # Validate max_length relationships
+        if self.max_length is not None and self.max_prompt_length is not None:
+            if self.max_prompt_length >= self.max_length:
+                raise ValueError(
+                    f"max_prompt_length ({self.max_prompt_length}) must be less than "
+                    f"max_length ({self.max_length}) to allow space for completions."
+                )
+
+        if self.max_completion_length is not None and self.max_length is not None:
+            if self.max_completion_length >= self.max_length:
+                raise ValueError(
+                    f"max_completion_length ({self.max_completion_length}) must be less than "
+                    f"max_length ({self.max_length})."
+                )
 
         super().__post_init__()
