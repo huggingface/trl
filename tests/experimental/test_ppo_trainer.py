@@ -17,9 +17,7 @@ import os
 
 import pytest
 import torch
-import transformers
 from datasets import load_dataset
-from packaging import version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
