@@ -263,10 +263,16 @@ class SFTConfig(TrainingArguments):
         default="nll",
         metadata={
             "help": (
-                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
-                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
+                'Type of loss to use. Possible values are:\n'
+                '- `"nll"`: Negative Log-Likelihood (default)\n'
+                '- `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)\n'
+                '- `"eaft"`: Entropy-Adaptive Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2601.02151)'
             )
         },
+    )
+    eaft_alpha: float = field(
+        default=1.0,
+        metadata={"help": "The alpha parameter for EAFT loss to control the power of adaptive weight."},
     )
     activation_offloading: bool = field(
         default=False,
