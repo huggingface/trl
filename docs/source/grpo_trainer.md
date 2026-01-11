@@ -375,7 +375,7 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
    - The function must accept the following as keyword arguments:
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
-     - `completions_ids` (contains the tokenized completions),
+     - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
@@ -391,9 +391,9 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
 Below is an example of a reward function for a standard format that rewards longer completions:
 
 ```python
-def reward_func(completions_ids, **kwargs):
+def reward_func(completion_ids, **kwargs):
     """Reward function that assigns higher scores to longer completions (in terms of token count)."""
-    return [float(len(ids)) for ids in completions_ids]
+    return [float(len(ids)) for ids in completion_ids]
 ```
 
 You can test it as follows:
@@ -401,8 +401,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
 >>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
->>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
->>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+>>> completion_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completion_ids=completion_ids)
 [2.0, 4.0]
 ```
 
@@ -421,8 +421,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]
 >>> completions = [" blue.", " in the sky."]
->>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
->>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+>>> completion_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
+>>> reward_func(prompts=prompts, completions=completions, completion_ids=completion_ids)
 [6.0, 12.0]
 ```
 
