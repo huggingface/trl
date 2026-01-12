@@ -466,6 +466,7 @@ class GRPOTrainer(BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
         self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
@@ -1594,12 +1595,8 @@ class GRPOTrainer(BaseTrainer):
         tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
         tool_call_count = 0
         tool_failure_count = 0
-        max_tool_calling_iterations = (
-            self.args.max_tool_calling_iterations if self.args.max_tool_calling_iterations is not None else sys.maxsize
-        )
         iteration_num = 0
-
-        while idxs_with_tool and iteration_num < max_tool_calling_iterations:
+        while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
             # Call the tools, and build the new prompt for generation
