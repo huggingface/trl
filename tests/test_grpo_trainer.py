@@ -1225,7 +1225,7 @@ class TestGRPOTrainer(TrlTestCase):
         # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
         def fake_generate(input_ids, **kwargs):
             # pad_token_id = 151643; eos_token_id = 151645
-            completions_ids = torch.tensor(
+            completion_ids = torch.tensor(
                 [
                     [1, 2, 3, 4, 5, 6, 7, 8],  # this one is truncated
                     [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
@@ -1233,7 +1233,7 @@ class TestGRPOTrainer(TrlTestCase):
                 ],
                 device=input_ids.device,
             )
-            return torch.cat([input_ids, completions_ids], dim=1)
+            return torch.cat([input_ids, completion_ids], dim=1)
 
         mock_generate.side_effect = fake_generate
 
@@ -2239,7 +2239,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             logging_strategy="no",
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
 
         trainer = GRPOTrainer(
             model=model,
@@ -2322,7 +2322,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             attn_implementation="kernels-community/flash-attn2",
-            dtype="bfloat16",
+            dtype="float32",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
