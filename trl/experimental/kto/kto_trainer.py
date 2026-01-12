@@ -198,13 +198,13 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
         max_length -= 1
 
-    # if combined sequence is too long, truncate the answer (completion) from the end
+    # if combined sequence is too long, truncate the completion (answer) from the end
     prompt_length = len(all_tokens["prompt_input_ids"])
-    answer_length = len(all_tokens["answer_input_ids"])
-    if prompt_length + answer_length > max_length:
-        max_answer_length = max_length - prompt_length
+    completion_length = len(all_tokens["answer_input_ids"])
+    if prompt_length + completion_length > max_length:
+        max_completion_length = max_length - prompt_length
         for k in ["answer_input_ids", "answer_attention_mask"]:
-            all_tokens[k] = all_tokens[k][:max_answer_length]
+            all_tokens[k] = all_tokens[k][:max_completion_length]
 
     # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
     batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
