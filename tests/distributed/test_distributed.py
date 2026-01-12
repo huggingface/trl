@@ -16,8 +16,6 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
 
 
@@ -76,7 +74,6 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.xfail(reason="PEFT + multi-GPU is broken, see https://github.com/huggingface/trl/issues/4782")
     def test_sft_peft(self):
         # fmt: off
         run_command(

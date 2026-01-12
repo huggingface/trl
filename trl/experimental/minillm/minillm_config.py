@@ -88,6 +88,13 @@ class MiniLLMConfig(GRPOConfig):
         # 1. num_generations can be < 2 in MiniLLMConfig. Scale_rewards must be set to "none" to avoid nan.
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+        self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         TrainingArguments.__post_init__(self)
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
