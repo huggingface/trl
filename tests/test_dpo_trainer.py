@@ -611,7 +611,7 @@ class TestDPOTrainer(TrlTestCase):
 
         # lora model
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+            model_id, dtype="float32", quantization_config=BitsAndBytesConfig(load_in_4bit=True)
         )
 
         training_args = DPOConfig(
@@ -695,7 +695,7 @@ class TestDPOTrainer(TrlTestCase):
 
         # lora model
         model = AutoModelForCausalLM.from_pretrained(
-            self.model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+            self.model_id, dtype="float32", quantization_config=BitsAndBytesConfig(load_in_4bit=True)
         )
 
         training_args = DPOConfig(
