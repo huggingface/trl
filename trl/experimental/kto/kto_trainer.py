@@ -598,7 +598,6 @@ class KTOTrainer(BaseTrainer):
                 "truncation_mode": self.truncation_mode,
                 "label_pad_token_id": self.label_pad_token_id,
                 "max_prompt_length": self.max_prompt_length,
-                "max_completion_length": None,
             }
 
             train_dataset = train_dataset.map(
