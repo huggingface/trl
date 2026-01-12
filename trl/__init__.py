@@ -268,7 +268,7 @@ if is_vllm_available():
 def _maybe_patch_transformers_hybrid_cache() -> None:
     # liger_kernel<=0.6.4 imports HybridCache from transformers, but HybridCache was removed in
     # transformers>=5.0.0.dev0 (see https://github.com/huggingface/transformers/pull/43168). This monkey patch should
-    # only be needed until 0.6.5, if https://github.com/linkedin/Liger-Kernel/pull/1002 is merged and released.
+    # only be needed until 0.6.5 if https://github.com/linkedin/Liger-Kernel/pull/1002 is merged and released.
     import transformers
     from packaging.version import Version
     from transformers.utils.import_utils import _is_package_available
