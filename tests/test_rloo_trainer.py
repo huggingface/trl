@@ -867,7 +867,7 @@ class TestRLOOTrainer(TrlTestCase):
         # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
         def fake_generate(input_ids, **kwargs):
             # pad_token_id = 151643; eos_token_id = 151645
-            completions_ids = torch.tensor(
+            completion_ids = torch.tensor(
                 [
                     [1, 2, 3, 4, 5, 6, 7, 8],  # this one is truncated
                     [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
@@ -875,7 +875,7 @@ class TestRLOOTrainer(TrlTestCase):
                 ],
                 device=input_ids.device,
             )
-            return torch.cat([input_ids, completions_ids], dim=1)
+            return torch.cat([input_ids, completion_ids], dim=1)
 
         mock_generate.side_effect = fake_generate
 
