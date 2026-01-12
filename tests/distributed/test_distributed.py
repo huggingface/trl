@@ -22,7 +22,10 @@ from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = ROOT / "tests" / "accelerate_configs" / "2gpu.yaml"
+CONFIG_PATHS = {
+    "ddp": ROOT / "tests" / "accelerate_configs" / "ddp.yaml",
+    "fsdp2": ROOT / "tests" / "accelerate_configs" / "fsdp2.yaml",
+}
 
 
 def run_command(command: list[str], env: dict[str, str]) -> None:
@@ -32,11 +35,12 @@ def run_command(command: list[str], env: dict[str, str]) -> None:
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    def test_sft(self):
+    @pytest.mark.parametrize("config", ["ddp", "fsdp2"])
+    def test_sft(self, config):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
+                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/sft.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -46,11 +50,18 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    def test_dpo(self):
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing")),
+        ],
+    )
+    def test_dpo(self, config):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/dpo.py",
+                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/dpo.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -60,11 +71,12 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    def test_sft_streaming(self):
+    @pytest.mark.parametrize("config", ["ddp", "fsdp2"])
+    def test_sft_dataset_streaming(self, config):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
+                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/sft.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -76,12 +88,18 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.xfail(reason="PEFT + multi-GPU is broken, see https://github.com/huggingface/trl/issues/4782")
-    def test_sft_peft(self):
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param("ddp", marks=pytest.mark.xfail(reason="PEFT + multi-GPU is broken, see #4782")),
+            "fsdp2",
+        ],
+    )
+    def test_sft_peft(self, config):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", str(CONFIG_PATH), "trl/scripts/sft.py",
+                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/sft.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
