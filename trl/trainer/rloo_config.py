@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -117,8 +117,8 @@ class RLOOConfig(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-        vllm_guided_decoding_regex (`str`, *optional*):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -211,6 +211,15 @@ class RLOOConfig(TrainingArguments):
 
             Parameter `max_prompt_length` is deprecated and will be removed in version 0.29.0. You should instead
             filter your dataset before training to ensure that prompts do not exceed your desired length.
+
+            </Deprecated>
+
+        vllm_guided_decoding_regex:
+
+            <Deprecated version="0.27.0">
+
+            Parameter `vllm_guided_decoding_regex` is deprecated and will be removed in version 0.28.0. You should
+            instead use `vllm_structured_outputs_regex`.
 
             </Deprecated>
     """
@@ -419,9 +428,9 @@ class RLOOConfig(TrainingArguments):
             "usage low, but waking the engine adds host–device transfer latency."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
+    vllm_structured_outputs_regex: str | None = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
@@ -580,6 +589,10 @@ class RLOOConfig(TrainingArguments):
             "desired length."
         },
     )
+    vllm_guided_decoding_regex: str | None = field(
+        default=None,
+        metadata={"help": "Deprecated, use `vllm_structured_outputs_regex` instead."},
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -649,3 +662,11 @@ class RLOOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
+        if self.vllm_guided_decoding_regex is not None:
+            warnings.warn(
+                "The `vllm_guided_decoding_regex` argument is deprecated and will be removed in version 0.28.0. You "
+                "should instead use `vllm_structured_outputs_regex`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex
