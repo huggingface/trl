@@ -397,10 +397,7 @@ class GRPOTrainer(BaseTrainer):
         else:
             self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
 
-        if args.apply_gdpo:
-            self.apply_gdpo = True
-        else:
-            self.apply_gdpo = False
+        self.apply_gdpo = apply_gdpo
             
         # Reward processing class
         if reward_processing_classes is None:
@@ -2021,20 +2018,21 @@ class GRPOTrainer(BaseTrainer):
             ## Make sure every reward contain no nan value
             rewards_per_func_filter = torch.nan_to_num(rewards_per_func)
 
-            all_reward_advantage = []
-            ## Calculate the mean and std of each reward group-wise separately
-            for i in range(len(self.reward_weights)):
-                reward_i = rewards_per_func_filter[:,i]
-                each_reward_mean_grouped = reward_i.view(-1, self.num_generations).mean(dim=1)
-                each_reward_std_grouped = reward_i.view(-1, self.num_generations).std(dim=1)
+            G = self.num_generations
+            BG, R = rewards_per_func_filter.shape
+            assert BG % G == 0, "First dimension must be divisible by num_generations"
+            B = BG // G
 
-                each_reward_mean_grouped = each_reward_mean_grouped.repeat_interleave(self.num_generations, dim=0)
-                each_reward_std_grouped = each_reward_std_grouped.repeat_interleave(self.num_generations, dim=0)
-                each_reward_advantage = reward_i - each_reward_mean_grouped
-                each_reward_advantage = each_reward_advantage / (each_reward_std_grouped + 1e-4)
-                all_reward_advantage.append(each_reward_advantage)
+            # [B, G, R]
+            r = rewards_per_func_filter.view(B, G, R)
 
-            combined_reward_advantage = torch.stack(all_reward_advantage, dim=1)
+            # group-wise stats over generations (dim=1): [B, 1, R]
+            mean = r.mean(dim=1, keepdim=True)
+            std  = r.std(dim=1, keepdim=True)  # same default behavior as your original std()
+
+            # advantages: [B, G, R]
+            adv = (r - mean) / (std + 1e-4)
+            combined_reward_advantage = adv.reshape(BG, R)
             pre_bn_advantages = (combined_reward_advantage * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
             ## compute batch-wise mean and std
