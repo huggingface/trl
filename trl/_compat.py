@@ -41,7 +41,12 @@ def _package_needs_patch(package_name: str, fixed_in_version: str) -> bool:
 
         is_available, version = _is_package_available(package_name, return_version=True)
         return is_available and Version(version) < Version(fixed_in_version)
-    except Exception:
+    except Exception as e:
+        warnings.warn(
+            f"Failed to check {package_name} version against {version_threshold}: {e}. "
+            f"Compatibility patch may not be applied.",
+            stacklevel=2,
+        )
         return False
 
 
