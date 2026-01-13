@@ -167,7 +167,7 @@ def _patch_transformers_hybrid_cache() -> None:
 
                 cache_utils.HybridCache = cache_utils.Cache
         except Exception as e:
-            warnings.warn(f"Failed to patch liger_kernel HybridCache compatibility: {e}", stacklevel=2)
+            warnings.warn(f"Failed to patch transformers HybridCache compatibility: {e}", stacklevel=2)
 
 
 # Apply vLLM patches
