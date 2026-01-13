@@ -232,7 +232,7 @@ class TestRewardTrainer(TrlTestCase):
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
             model_init_kwargs={"dtype": torch.float16},
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = RewardTrainer(
