@@ -38,7 +38,7 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from huggingface_hub import CommitScheduler, DatasetCard, create_repo
+from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging import version
 from packaging.version import Version
 from torch import nn
@@ -791,7 +791,12 @@ class GRPOTrainer(BaseTrainer):
                 exist_ok=True,
             )
             template_path = pkg_resources.files("trl").joinpath("templates/completions_dataset_card.md")
+            card_data = DatasetCardData(
+                pretty_name="TRL Completion logs",
+                tags=["trl", "trl-logs", "completions"],
+            )
             card = DatasetCard.from_template(
+                card_data=card_data,
                 template_path=str(template_path),
                 log_completions_hub_repo=self.args.log_completions_hub_repo,
                 hub_model_id=self.args.hub_model_id,

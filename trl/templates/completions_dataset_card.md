@@ -1,8 +1,5 @@
 ---
-tags:
-- trl
-- trl-logs
-- completions
+{{ card_data }}
 ---
 
 # TRL Completion logs
