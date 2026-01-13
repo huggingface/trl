@@ -34,7 +34,7 @@ The environment runs on a Hugging Face Space by default.
 Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/browsergym_env
+uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 ```
 
 Setup (Option B - Clone OpenEnv repo):
@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--space-url",
         type=str,
-        default="https://sergiopaniego-browsergym-env.hf.space",
+        default="https://openenv-browsergym-env.hf.space",
         help="URL for the Hugging Face Space running the BrowserGym environment.",
     )
     parser.add_argument(

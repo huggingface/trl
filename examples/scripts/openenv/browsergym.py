@@ -33,7 +33,7 @@ trainer auto-detects multimodal support by checking for images in the rollout da
 Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/browsergym_env
+uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 ```
 
 Setup (Option B - Clone OpenEnv repo):
@@ -107,7 +107,7 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen3-VL-2B-Instruct",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
-    parser.add_argument("--env-host", type=str, default="https://sergiopaniego-browsergym-env.hf.space", help="Host for the BrowserGym environment.")
+    parser.add_argument("--env-host", type=str, default="https://openenv-browsergym-env.hf.space", help="Host for the BrowserGym environment.")
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the BrowserGym environment.")
     parser.add_argument(
         "--env-mode",
