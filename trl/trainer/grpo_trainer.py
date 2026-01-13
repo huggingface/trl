@@ -37,7 +37,6 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -107,7 +106,7 @@ if is_vllm_available():
     import vllm
     from vllm import LLM, SamplingParams
 
-    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+    if Version(vllm.__version__) <= Version("0.10.2"):
         from vllm.sampling_params import GuidedDecodingParams
     else:
         from vllm.sampling_params import StructuredOutputsParams
@@ -1412,7 +1411,7 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = output["completion_ids"]
                     logprobs = output["logprobs"]
                 else:
-                    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                    if Version(vllm.__version__) <= Version("0.10.2"):
                         structured_outputs_key = "guided_decoding"
                         if self.structured_outputs_regex:
                             structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)

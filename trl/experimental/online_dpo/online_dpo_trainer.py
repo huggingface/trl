@@ -30,7 +30,7 @@ import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
-from packaging import version
+from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
@@ -70,7 +70,7 @@ if is_peft_available():
 if is_sagemaker_mp_enabled():
     from smdistributed.modelparallel import __version__ as SMP_VERSION
 
-    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+    IS_SAGEMAKER_MP_POST_1_10 = Version(SMP_VERSION) >= Version("1.10")
 
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
@@ -1060,7 +1060,7 @@ class OnlineDPOTrainer(BaseTrainer):
         if self.use_transformers_paged:
             previous_attn = self.model_wrapped.config._attn_implementation
 
-            if version.parse(transformers.__version__).release >= version.parse("5.0.0").release:
+            if Version(transformers.__version__).release >= Version("5.0.0").release:
                 new_attn = "paged|flash_attention_2" if is_flash_attn_2_available() else "paged|sdpa"
             else:
                 new_attn = "paged_attention" if is_flash_attn_2_available() else "sdpa_paged"
