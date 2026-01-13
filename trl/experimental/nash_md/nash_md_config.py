@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from ...trainer.online_dpo_config import OnlineDPOConfig
+from ..online_dpo import OnlineDPOConfig
 
 
 @dataclass
@@ -22,7 +22,7 @@ class NashMDConfig(OnlineDPOConfig):
     r"""
     Configuration class for the [`experimental.nash_md.NashMDTrainer`].
 
-    Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
+    Subclass of [`experimental.online_dpo.OnlineDPOConfig`] we can use all its arguments and add the following:
 
     Parameters:
         mixture_coef (`float` or `list[float]`, *optional*, defaults to `0.5`):

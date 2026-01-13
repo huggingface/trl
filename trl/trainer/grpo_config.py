@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -47,14 +47,16 @@ class GRPOConfig(TrainingArguments):
             is False.
 
         > Parameters that control the data preprocessing
+
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
-        num_generations (`int` or `None`, *optional*, defaults to `8`):
+        num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
+        num_generations_eval (`int` or `None`, *optional*):
+            Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
+            save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -79,8 +81,8 @@ class GRPOConfig(TrainingArguments):
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
             `1.0` to consider all tokens.
-        top_k (`int`, *optional*):
-            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
+        top_k (`int`, *optional*, defaults to `0`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
             disabled and all tokens are considered.
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
@@ -120,8 +122,8 @@ class GRPOConfig(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-        vllm_guided_decoding_regex (`str`, *optional*):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -135,6 +137,9 @@ class GRPOConfig(TrainingArguments):
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
 
         > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
 
@@ -142,6 +147,9 @@ class GRPOConfig(TrainingArguments):
             Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        vllm_max_model_length (`int`, *optional*):
+            Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus
+            `max_completion_length`; if omitted, it is inferred from the model config.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
@@ -154,7 +162,8 @@ class GRPOConfig(TrainingArguments):
 
         beta (`float`, *optional*, defaults to `0.0`):
             KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and improving
-            training speed.
+            training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement
+            learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -167,7 +176,13 @@ class GRPOConfig(TrainingArguments):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
             When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
-            paper](https://arxiv.org/pdf/2510.13786) and the recommended value is `5.0`.
+            paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`.
+        sapo_temperature_neg (`float`, *optional*, defaults to `1.05`):
+            Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. This parameter
+            is introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
+        sapo_temperature_pos (`float`, *optional*, defaults to `1.0`):
+            Temperature for tokens with positive advantage scores used in the `sapo` loss function. This parameter is
+            introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -207,6 +222,10 @@ class GRPOConfig(TrainingArguments):
               clipped weights are then multiplied with the advantages and policy model's log probs. Individual token
               losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
               This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
+            - `"sapo"`: Soft Adaptive Policy Optimization loss, as introduced in the [Soft Adaptive Policy Optimization
+              paper](https://huggingface.co/papers/2506.13585). Replaces hard clipping with a smooth,
+              temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
+              learning signals.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -230,6 +249,10 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
         use_liger_loss (`bool`, *optional*):
             Whether to use Liger loss.
 
@@ -239,16 +262,32 @@ class GRPOConfig(TrainingArguments):
             instead.
 
             </Deprecated>
-
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
-            Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
-            logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
-            Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
-            (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
-            and training backends. TIS is proposed as a remedy for this issue.
-        vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
-            Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
-            sampling ratio, improving training stability.
+            Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
+            recomputed training logprobs. If set to `False`, no IS is applied regardless of
+            `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
+            and constrained.
+        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
+            Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
+            values are:
+
+                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped from above at C.
+                - `"token_mask"`: Token-level masked IS. Per-token ratios above C are set to zero.
+                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
+                  C and applied to all tokens in the sequence.
+                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
+        vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
+            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
+            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+        off_policy_mask_threshold (`float`, *optional*):
+            Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. When set,
+            sequences with negative advantages and high KL divergence are masked out to stabilize training. This
+            parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
+        use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
+            Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
+            KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
+            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
 
         > Parameters that control the logging
 
@@ -264,12 +303,21 @@ class GRPOConfig(TrainingArguments):
 
         > Deprecated arguments
 
-        wandb_log_unique_prompts (`bool`, *optional*):
+        max_prompt_length:
 
             <Deprecated version="0.26.0">
 
-            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.27.0. Use
-            `log_unique_prompts` instead.
+            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
+            filter your dataset before training to ensure that prompts do not exceed your desired length.
+
+            </Deprecated>
+
+        vllm_guided_decoding_regex:
+
+            <Deprecated version="0.27.0">
+
+            Parameter `vllm_guided_decoding_regex` is deprecated and will be removed in version 0.28.0. You should
+            instead use `vllm_structured_outputs_regex`.
 
             </Deprecated>
     """
@@ -332,8 +380,9 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
-            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only supported when the model"
-            " has untied word embedding and language modeling head layers i.e. `tie_word_embeddings` in the model config is False."
+            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only "
+            "supported when the model has untied word embedding and language modeling head layers i.e. "
+            "`tie_word_embeddings` in the model config is False."
         },
     )
 
@@ -347,17 +396,18 @@ class GRPOConfig(TrainingArguments):
             "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
         },
     )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
-        },
-    )
     num_generations: int | None = field(
         default=8,
         metadata={
             "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
             "* gradient_accumulation_steps) must be evenly divisible by this value."
+        },
+    )
+    num_generations_eval: int | None = field(
+        default=None,
+        metadata={
+            "help": "Number of generations to sample during evaluation. This allows using fewer generations during "
+            "evaluation to save computation. If `None`, uses the value of `num_generations`."
         },
     )
     max_completion_length: int | None = field(
@@ -401,10 +451,10 @@ class GRPOConfig(TrainingArguments):
             "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: int | None = field(
-        default=None,
+    top_k: int = field(
+        default=0,
         metadata={
-            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
@@ -485,9 +535,9 @@ class GRPOConfig(TrainingArguments):
             "usage low, but waking the engine adds host–device transfer latency."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
+    vllm_structured_outputs_regex: str | None = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
@@ -513,6 +563,13 @@ class GRPOConfig(TrainingArguments):
             "after the timeout, a `ConnectionError` is raised."
         },
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group. This is used to communicate with the vLLM server. "
+            "Unless the port is occupied, there is no need to change it.",
+        },
+    )
 
     # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
@@ -521,6 +578,13 @@ class GRPOConfig(TrainingArguments):
             "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
             "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
             "launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
+        },
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={
+            "help": "Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus "
+            "`max_completion_length`; if omitted, it is inferred from the model config."
         },
     )
     vllm_tensor_parallel_size: int = field(
@@ -537,7 +601,8 @@ class GRPOConfig(TrainingArguments):
         default=0.0,
         metadata={
             "help": "KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and "
-            "improving training speed."
+            "improving training speed. [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement "
+            "learning](https://huggingface.co/papers/2501.12948) use a value of `0.001`."
         },
     )
     num_iterations: int = field(
@@ -563,6 +628,22 @@ class GRPOConfig(TrainingArguments):
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
             "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the"
             "[ScaleRL paper]https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
+        },
+    )
+    sapo_temperature_neg: float = field(
+        default=1.05,
+        metadata={
+            "help": "Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. "
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
+        },
+    )
+    sapo_temperature_pos: float = field(
+        default=1.0,
+        metadata={
+            "help": "Temperature for tokens with positive advantage scores used in the `sapo` loss function. "
+            "This parameter is introduced in the [Soft Adaptive Policy Optimization "
+            "paper](https://huggingface.co/papers/2511.20347)."
         },
     )
     importance_sampling_level: str = field(
@@ -616,6 +697,10 @@ class GRPOConfig(TrainingArguments):
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
             "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
+            "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
+            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
+            "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
+            "off-policy updates while preserving useful learning signals."
         },
     )
     mask_truncated_completions: bool = field(
@@ -658,6 +743,14 @@ class GRPOConfig(TrainingArguments):
             "non-truncated completions are considered."
         },
     )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
+        },
+    )
     use_liger_loss: bool = field(
         default=None,
         metadata={"help": "Whether to use the Liger GRPO loss."},
@@ -665,18 +758,49 @@ class GRPOConfig(TrainingArguments):
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
-            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
-            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
-            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
-            "effects due to subtle implementation differences between generation and training backends. TIS is "
-            "proposed as a remedy for this issue."
+            "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
+            "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
+            "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
+            "IS ratios are computed and constrained."
         },
     )
-    vllm_importance_sampling_cap: float = field(
-        default=2.0,
+
+    vllm_importance_sampling_mode: str = field(
+        default="sequence_mask",
         metadata={
-            "help": "Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the "
-            "importance sampling ratio, improving training stability."
+            "help": "Specifies how Importance Sampling (IS) is performed when "
+            "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
+            "dimensions: (1) constraint, which determines how to handle ratios above "
+            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
+            "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+            "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
+            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
+            "'sequence_mask'."
+        },
+    )
+
+    vllm_importance_sampling_cap: float = field(
+        default=3.0,
+        metadata={
+            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+        },
+    )
+    off_policy_mask_threshold: float | None = field(
+        default=None,
+        metadata={
+            "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
+            "When set, sequences with negative advantages and high KL divergence are masked out to stabilize "
+            "training. This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5)."
+        },
+    )
+    use_bias_correction_kl: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
+            "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
+            "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
         },
     )
 
@@ -695,18 +819,34 @@ class GRPOConfig(TrainingArguments):
     log_unique_prompts: bool = field(
         default=False,
         metadata={
-            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are logged."
+            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all "
+            "prompts are logged."
         },
     )
 
     # Deprecated arguments
-    wandb_log_unique_prompts: bool | None = field(
+    max_prompt_length: int | None = field(
         default=None,
-        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
+        metadata={
+            "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
+            "desired length."
+        },
+    )
+    vllm_guided_decoding_regex: str | None = field(
+        default=None,
+        metadata={"help": "Deprecated, use `vllm_structured_outputs_regex` instead."},
     )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+        if self.top_k is None:
+            self.top_k = 0
+            warnings.warn(
+                "The value `None` for `top_k` is deprecated and will raise an error in TRL 0.28. "
+                "Use `top_k=0` to disable top-k filtering instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
 
         super().__post_init__()
 
@@ -735,11 +875,14 @@ class GRPOConfig(TrainingArguments):
             )
 
         if self.do_eval and self.eval_strategy != "no":
+            # Determine the number of generations to use for evaluation
+            num_generations = self.num_generations_eval or self.num_generations
+
             # Just ensure the value is divisible by the global batch size
-            if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
+            if (self.per_device_eval_batch_size * num_processes) % num_generations != 0:
                 raise ValueError(
                     f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
-                    f"divisible by num_generations ({self.num_generations})."
+                    f"divisible by the number of generations used for evaluation ({num_generations})."
                 )
 
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
@@ -768,11 +911,19 @@ class GRPOConfig(TrainingArguments):
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
 
-        if self.wandb_log_unique_prompts is not None:
+        if self.max_prompt_length is not None:
             warnings.warn(
-                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.27.0. Please "
-                "use `log_unique_prompts` instead.",
+                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
+                "instead filter your dataset before training to ensure that prompts do not exceed your desired "
+                "length.",
                 FutureWarning,
                 stacklevel=2,
             )
-            self.log_unique_prompts = self.wandb_log_unique_prompts
+        if self.vllm_guided_decoding_regex is not None:
+            warnings.warn(
+                "The `vllm_guided_decoding_regex` argument is deprecated and will be removed in version 0.28.0. You "
+                "should instead use `vllm_structured_outputs_regex`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex
