@@ -35,7 +35,7 @@ max_length = 2048 # Supports automatic RoPE Scaling, so choose any number
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/mistral-7b",
     max_seq_length=max_length,
-    dtype=None,  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
+    dtype="auto",  # For auto-detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
     load_in_4bit=True,  # Use 4bit quantization to reduce memory usage. Can be False
 )
 
@@ -88,7 +88,7 @@ Access Jupyter Lab at ```http://localhost:8888``` and start fine-tuning!
 These are some core settings you can toggle before training:
 
 - ```max_seq_length = 2048``` – Controls context length. While Llama-3 supports 8192, we recommend 2048 for testing. Unsloth enables 4× longer context fine-tuning.
-- ```dtype = None``` – Defaults to None; use torch.float16 or torch.bfloat16 for newer GPUs.
+- ```dtype = "auto"``` – For auto-detection; use torch.float16 or torch.bfloat16 for newer GPUs.
 - ```load_in_4bit = True``` – Enables 4-bit quantization, reducing memory use 4× for fine-tuning. Disabling it allows for LoRA 16-bit fine-tuning to be enabled.
 - To enable full fine-tuning (FFT), set ```full_finetuning = True```. For 8-bit fine-tuning, set ```load_in_8bit = True```. Note: Only one training method can be set to True at a time.
 
