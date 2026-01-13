@@ -20,99 +20,146 @@ This module contains temporary patches to handle version incompatibilities betwe
 Each patch should be removed when minimum version requirements eliminate the need.
 """
 
-# Monkey-patches for vLLM.
-from .import_utils import is_vllm_available  # noqa: E402
+import warnings
+
+from .import_utils import is_vllm_available
 
 
-if is_vllm_available():
+def _patch_vllm_logging() -> None:
+    """Set vLLM logging level to ERROR by default to reduce noise."""
     import os
 
     os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
 
-    # Fix DisableTqdm
-    # Bug introduced in https://github.com/vllm-project/vllm/pull/52
-    # Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-    # Since TRL currently only supports vLLM v0.10.2-0.12.0, we patch it here. This can be removed when TRL requires
-    # vLLM >=0.11.1
-    import vllm.model_executor.model_loader.weight_utils
-    from tqdm import tqdm
 
-    class DisabledTqdm(tqdm):
-        def __init__(self, *args, **kwargs):
-            kwargs["disable"] = True
-            super().__init__(*args, **kwargs)
+def _patch_vllm_disabled_tqdm() -> None:
+    """
+    Fix DisabledTqdm class in vLLM.
 
-    # Overwrite the class in the dependency
-    vllm.model_executor.model_loader.weight_utils.DisabledTqdm = DisabledTqdm
+    - Bug introduced in https://github.com/vllm-project/vllm/pull/52
+    - Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
+    - Since TRL currently supports vLLM v0.10.2-0.12.0, we patch it here
+    - This can be removed when TRL requires vLLM>=0.11.1
+    """
+    try:
+        import vllm.model_executor.model_loader.weight_utils
+        from packaging.version import Version
+        from tqdm import tqdm
+        from transformers.utils.import_utils import _is_package_available
 
-    # Fix get_cached_tokenizer: remove all_special_tokens_extended, because it doesn't exist in transformers v5
-    import contextlib
-    import copy
+        _is_vllm_available, vllm_version = _is_package_available("vllm", return_version=True)
+        if not (_is_vllm_available and Version(vllm_version) < Version("0.11.1")):
+            return
 
-    import vllm.transformers_utils.tokenizer
+        class DisabledTqdm(tqdm):
+            def __init__(self, *args, **kwargs):
+                kwargs["disable"] = True
+                super().__init__(*args, **kwargs)
 
-    def get_cached_tokenizer(tokenizer):
-        cached_tokenizer = copy.copy(tokenizer)
-        tokenizer_all_special_ids = tokenizer.all_special_ids
-        tokenizer_all_special_tokens = tokenizer.all_special_tokens
-        tokenizer_vocab = tokenizer.get_vocab()
-        tokenizer_len = len(tokenizer)
-
-        max_token_id = max(tokenizer_vocab.values())
-        if hasattr(tokenizer, "vocab_size"):
-            with contextlib.suppress(NotImplementedError):
-                max_token_id = max(max_token_id, tokenizer.vocab_size)
-
-        class CachedTokenizer(tokenizer.__class__):  # type: ignore
-            @property
-            def all_special_ids(self) -> list[int]:
-                return tokenizer_all_special_ids
-
-            @property
-            def all_special_tokens(self) -> list[str]:
-                return tokenizer_all_special_tokens
-
-            @property
-            def max_token_id(self) -> int:
-                return max_token_id
-
-            def get_vocab(self) -> dict[str, int]:
-                return tokenizer_vocab
-
-            def __len__(self) -> int:
-                return tokenizer_len
-
-            def __reduce__(self):
-                return get_cached_tokenizer, (tokenizer,)
-
-        CachedTokenizer.__name__ = f"Cached{tokenizer.__class__.__name__}"
-
-        cached_tokenizer.__class__ = CachedTokenizer
-        return cached_tokenizer
-
-    # Overwrite the function in the dependency
-    vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
+        vllm.model_executor.model_loader.weight_utils.DisabledTqdm = DisabledTqdm
+    except (ImportError, AttributeError) as e:
+        warnings.warn(f"Failed to patch vLLM DisabledTqdm: {e}", stacklevel=2)
 
 
-def _maybe_patch_transformers_hybrid_cache() -> None:
-    # liger_kernel<=0.6.4 imports HybridCache from transformers, but HybridCache was removed in
-    # transformers>=5.0.0.dev0 (see https://github.com/huggingface/transformers/pull/43168). This monkey patch should
-    # only be needed until 0.6.5 if https://github.com/linkedin/Liger-Kernel/pull/1002 is merged and released.
-    import transformers
-    from packaging.version import Version
-    from transformers.utils.import_utils import _is_package_available
+def _patch_vllm_cached_tokenizer() -> None:
+    """
+    Fix get_cached_tokenizer for transformers v5 compatibility.
 
-    transformers_version = Version(transformers.__version__)
-    is_liger_kernel_available, liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
-    liger_kernel_version = Version(liger_kernel_version) if is_liger_kernel_available else None
-    if (
-        is_liger_kernel_available
-        and liger_kernel_version <= Version("0.6.4")
-        and transformers_version >= Version("5.0.0.dev0")
-    ):
-        import transformers.cache_utils as cache_utils
+    - Issue: vLLM's get_cached_tokenizer accesses all_special_tokens_extended
+    - Removed in transformers: https://github.com/huggingface/transformers/pull/40936 (transformers>=5.0.0.dev0)
+    - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
+    - This can be removed when TRL requires vLLM>=0.12.0
+    """
+    try:
+        import contextlib
+        import copy
 
-        cache_utils.HybridCache = cache_utils.Cache
+        import vllm.transformers_utils.tokenizer
+        from packaging.version import Version
+        from transformers.utils.import_utils import _is_package_available
+
+        _is_vllm_available, vllm_version = _is_package_available("vllm", return_version=True)
+        if not (_is_vllm_available and Version(vllm_version) < Version("0.12.0")):
+            return
+
+        def get_cached_tokenizer(tokenizer):
+            cached_tokenizer = copy.copy(tokenizer)
+            tokenizer_all_special_ids = tokenizer.all_special_ids
+            tokenizer_all_special_tokens = tokenizer.all_special_tokens
+            tokenizer_vocab = tokenizer.get_vocab()
+            tokenizer_len = len(tokenizer)
+
+            max_token_id = max(tokenizer_vocab.values())
+            if hasattr(tokenizer, "vocab_size"):
+                with contextlib.suppress(NotImplementedError):
+                    max_token_id = max(max_token_id, tokenizer.vocab_size)
+
+            class CachedTokenizer(tokenizer.__class__):  # type: ignore
+                @property
+                def all_special_ids(self) -> list[int]:
+                    return tokenizer_all_special_ids
+
+                @property
+                def all_special_tokens(self) -> list[str]:
+                    return tokenizer_all_special_tokens
+
+                @property
+                def max_token_id(self) -> int:
+                    return max_token_id
+
+                def get_vocab(self) -> dict[str, int]:
+                    return tokenizer_vocab
+
+                def __len__(self) -> int:
+                    return tokenizer_len
+
+                def __reduce__(self):
+                    return get_cached_tokenizer, (tokenizer,)
+
+            CachedTokenizer.__name__ = f"Cached{tokenizer.__class__.__name__}"
+
+            cached_tokenizer.__class__ = CachedTokenizer
+            return cached_tokenizer
+
+        vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
+    except (ImportError, AttributeError) as e:
+        warnings.warn(f"Failed to patch vLLM cached_tokenizer: {e}", stacklevel=2)
 
 
-_maybe_patch_transformers_hybrid_cache()
+def _patch_transformers_hybrid_cache() -> None:
+    """
+    Fix HybridCache import compatibility for liger_kernel<=0.6.4.
+
+    - Issue: liger_kernel imports HybridCache from transformers.cache_utils
+    - HybridCache removed in https://github.com/huggingface/transformers/pull/43168 (transformers>=5.0.0.dev0)
+    - Fixed in https://github.com/linkedin/Liger-Kernel/pull/1002 (will be released in liger_kernel>=0.6.5)
+    - This patch can be removed when TRL requires liger_kernel>=0.6.5
+    """
+    try:
+        import transformers
+        from packaging.version import Version
+        from transformers.utils.import_utils import _is_package_available
+
+        transformers_version = Version(transformers.__version__)
+        is_liger_available, liger_version = _is_package_available("liger_kernel", return_version=True)
+
+        if not is_liger_available:
+            return
+
+        liger_version = Version(liger_version)
+        if liger_version <= Version("0.6.4") and transformers_version >= Version("5.0.0.dev0"):
+            import transformers.cache_utils as cache_utils
+
+            cache_utils.HybridCache = cache_utils.Cache
+    except Exception as e:
+        warnings.warn(f"Failed to patch liger_kernel HybridCache compatibility: {e}", stacklevel=2)
+
+
+# Apply vLLM patches
+if is_vllm_available():
+    _patch_vllm_logging()
+    _patch_vllm_disabled_tqdm()
+    _patch_vllm_cached_tokenizer()
+
+# Apply transformers patches
+_patch_transformers_hybrid_cache()
