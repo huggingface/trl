@@ -338,6 +338,13 @@ class DPOConfig(TrainingArguments):
             "supports reference-free training. For reference-free training, use the CPOTrainer instead."
         },
     )
+    use_liger_loss: bool = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. Use `use_liger_kernel` "
+            "instead."
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -355,10 +362,6 @@ class DPOConfig(TrainingArguments):
             "than the training batch size to speed up preprocessing. If `None`, defaults to "
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
-    )
-    use_liger_loss: bool = field(
-        default=None,
-        metadata={"help": "Whether to use Liger loss."},
     )
     base_model_attribute_name: str = field(
         default="model",
@@ -510,5 +513,13 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
+        if self.use_liger_loss is not None:
+            warnings.warn(
+                "The `use_liger_loss` argument is deprecated and will be removed in version 0.29.0. Use "
+                "`use_liger_kernel` instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.use_liger_kernel = self.use_liger_loss
 
         super().__post_init__()
