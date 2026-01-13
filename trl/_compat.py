@@ -25,6 +25,26 @@ import warnings
 from .import_utils import is_vllm_available
 
 
+def _package_needs_patch(package_name: str, fixed_in_version: str) -> bool:
+    """
+    Check if package requires compatibility patch.
+
+    Returns True if package is installed with version < fixed_in_version.
+
+    Args:
+        package_name (str): Package name.
+        fixed_in_version (str): Version when the issue was fixed and the patch is no longer necessary.
+    """
+    try:
+        from packaging.version import Version
+        from transformers.utils.import_utils import _is_package_available
+
+        is_available, version = _is_package_available(package_name, return_version=True)
+        return is_available and Version(version) < Version(fixed_in_version)
+    except Exception:
+        return False
+
+
 def _patch_vllm_logging() -> None:
     """Set vLLM logging level to ERROR by default to reduce noise."""
     import os
