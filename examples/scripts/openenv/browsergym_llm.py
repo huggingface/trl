@@ -70,8 +70,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from datasets import Dataset
 from browsergym_env import BrowserGymAction, BrowserGymEnv
+from datasets import Dataset
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
@@ -459,7 +459,7 @@ def main() -> None:
         for i, inp in enumerate(inputs):
             prompt_text = inp["prompt"]
             if args.debug:
-                print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
+                print(f"[DEBUG] Processing prompt {i + 1}/{len(inputs)}")
             episode = rollout_once(
                 trainer=trainer,
                 env=client,

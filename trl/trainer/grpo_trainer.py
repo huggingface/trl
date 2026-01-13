@@ -240,8 +240,8 @@ class GRPOTrainer(BaseTrainer):
             Function to use for generating completions. It receives the full inputs (a list of dicts, each containing
             at minimum a `"prompt"` key plus any extra dataset columns like `"env"`) allocated to the current process
             and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"`
-            fields. Any other fields are forwarded to the reward functions. This feature is experimental and may
-            change or be removed at any time without prior notice.
+            fields. Any other fields are forwarded to the reward functions. This feature is experimental and may change
+            or be removed at any time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -1352,7 +1352,9 @@ class GRPOTrainer(BaseTrainer):
                                 if is_conversational({"prompt": rollout_inputs[0]["prompt"]}):
                                     for inp in rollout_inputs:
                                         inp["prompt"] = apply_chat_template(
-                                            {"prompt": inp["prompt"]}, self.processing_class, **self.chat_template_kwargs
+                                            {"prompt": inp["prompt"]},
+                                            self.processing_class,
+                                            **self.chat_template_kwargs,
                                         )["prompt"]
                             output = self.rollout_func(rollout_inputs, self)
                         else:

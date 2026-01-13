@@ -87,8 +87,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from datasets import Dataset
 from browsergym_env import BrowserGymAction, BrowserGymEnv
+from datasets import Dataset
 from PIL import Image
 from transformers import AutoTokenizer
 
@@ -108,7 +108,12 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen3-VL-2B-Instruct",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
-    parser.add_argument("--env-host", type=str, default="https://openenv-browsergym-env.hf.space", help="Host for the BrowserGym environment.")
+    parser.add_argument(
+        "--env-host",
+        type=str,
+        default="https://openenv-browsergym-env.hf.space",
+        help="Host for the BrowserGym environment.",
+    )
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the BrowserGym environment.")
     parser.add_argument(
         "--env-mode",
@@ -533,7 +538,7 @@ def main() -> None:
 
         for i, inp in enumerate(inputs):
             prompt_text = inp["prompt"]
-            print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
+            print(f"[DEBUG] Processing prompt {i + 1}/{len(inputs)}")
             episode = rollout_once(
                 trainer=trainer,
                 env=client,

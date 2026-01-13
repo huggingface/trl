@@ -138,9 +138,9 @@ class MiniLLMTrainer(GRPOTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the full inputs (a list of dicts, each containing
-            at minimum a `"prompt"` key plus any extra dataset columns) and the trainer instance. It must return a
-            dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields are forwarded to
-            the reward functions. This feature is experimental and may change or be removed at any time without prior
+            at minimum a `"prompt"` key plus any extra dataset columns) and the trainer instance. It must return a dict
+            with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"` fields. Any other fields are forwarded to the
+            reward functions. This feature is experimental and may change or be removed at any time without prior
             notice.
     """
 

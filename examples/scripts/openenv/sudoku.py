@@ -110,9 +110,7 @@ def parse_args() -> argparse.Namespace:
     # Environment
     parser.add_argument("--env-host", type=str, default="https://openenv-sudoku.hf.space")
     parser.add_argument("--env-port", type=int, default=8001)
-    parser.add_argument(
-        "--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space"
-    )
+    parser.add_argument("--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space")
     parser.add_argument("--env-image", type=str, default="textarena-env:latest")
 
     # Prompts

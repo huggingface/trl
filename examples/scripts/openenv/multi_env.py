@@ -101,9 +101,7 @@ from textarena_env.rewards import extract_feedback_counts, extract_guess, extrac
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Multi-environment GRPO training with Wordle and Sudoku."
-    )
+    parser = argparse.ArgumentParser(description="Multi-environment GRPO training with Wordle and Sudoku.")
 
     # Model
     parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B", help="Model identifier for fine-tuning.")
@@ -128,10 +126,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-sudoku", type=int, default=500, help="Number of Sudoku prompts in the dataset.")
 
     # Prompts
-    parser.add_argument("--wordle-system-prompt-path", default="wordle_prompt.txt", help="Path to Wordle system prompt.")
-    parser.add_argument("--sudoku-system-prompt-path", default="sudoku_prompt.txt", help="Path to Sudoku system prompt.")
-    parser.add_argument("--wordle-dataset-prompt", default="Play Wordle like an expert.", help="Wordle dataset prompt.")
-    parser.add_argument("--sudoku-dataset-prompt", default="Play Sudoku like an expert.", help="Sudoku dataset prompt.")
+    parser.add_argument(
+        "--wordle-system-prompt-path", default="wordle_prompt.txt", help="Path to Wordle system prompt."
+    )
+    parser.add_argument(
+        "--sudoku-system-prompt-path", default="sudoku_prompt.txt", help="Path to Sudoku system prompt."
+    )
+    parser.add_argument(
+        "--wordle-dataset-prompt", default="Play Wordle like an expert.", help="Wordle dataset prompt."
+    )
+    parser.add_argument(
+        "--sudoku-dataset-prompt", default="Play Sudoku like an expert.", help="Sudoku dataset prompt."
+    )
 
     # Per-env rollout controls
     parser.add_argument("--wordle-max-turns", type=int, default=6, help="Maximum turns for Wordle episodes.")
@@ -170,7 +176,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trackio-space-id", default="MultiEnv-GRPO", help="TrackIO space identifier.")
     parser.add_argument("--logging-steps", type=int, default=1, help="Logging frequency.")
     parser.add_argument("--debug", action="store_true", default=False, help="Enable verbose debugging output.")
-    parser.add_argument("--gradient-checkpointing", action="store_true", default=True, help="Enable gradient checkpointing.")
+    parser.add_argument(
+        "--gradient-checkpointing", action="store_true", default=True, help="Enable gradient checkpointing."
+    )
 
     # vLLM
     parser.add_argument("--vllm-mode", choices=("colocate", "server"), default="colocate", help="vLLM execution mode.")
@@ -821,6 +829,7 @@ def main() -> None:
 
     # Shuffle the dataset
     import random
+
     random.shuffle(all_entries)
 
     dataset = Dataset.from_list(all_entries)
@@ -979,7 +988,7 @@ def main() -> None:
         rollout_func=rollout_func,
     )
 
-    print(f"🚀 Starting multi-env GRPO training:")
+    print("🚀 Starting multi-env GRPO training:")
     print(f"   - {args.num_generations} generations per prompt")
     print(f"   - Wordle: {args.wordle_max_turns} max turns")
     print(f"   - Sudoku: {args.sudoku_max_turns} max turns, difficulty={args.sudoku_difficulty}")
