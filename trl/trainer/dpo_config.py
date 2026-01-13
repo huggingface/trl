@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -505,8 +507,9 @@ class DPOConfig(TrainingArguments):
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
         # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
         # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-        self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         self.f_divergence_type = FDivergenceType(self.f_divergence_type)
 
