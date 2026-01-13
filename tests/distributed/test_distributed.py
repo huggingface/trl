@@ -141,7 +141,7 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
-                "--reward_funcs", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             ],
             os.environ.copy(),
         )
@@ -157,7 +157,7 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
-                "--reward_funcs", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             ],
             os.environ.copy(),
         )
