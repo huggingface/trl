@@ -397,7 +397,7 @@ class GRPOTrainer(BaseTrainer):
         else:
             self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
 
-        self.apply_gdpo = apply_gdpo
+        self.apply_gdpo = args.apply_gdpo
             
         # Reward processing class
         if reward_processing_classes is None:

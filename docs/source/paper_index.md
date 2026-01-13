@@ -183,7 +183,7 @@ training_args = GRPOConfig(
 
 ### GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization
 
-**📜 Paper**: https://huggingface.co/papers/update_later
+**📜 Paper**: https://huggingface.co/papers/2601.05242
 
 GDPO is a reinforcement learning optimization method designed for multi-reward training. While existing approaches commonly apply Group Relative Policy Optimization (GRPO) in multi-reward settings, we show that this leads to reward advantages collapse, reducing training signal resolution and causing unstable or failed convergence. GDPO resolves this issue by decoupling reward normalization across individual rewards, preserving their relative differences and enabling more faithful preference optimization. Across tool calling, math reasoning, and code generation tasks, GDPO consistently surpasses GRPO in both training convergence and downstream evaluation performance. To enable GDPO for multi-reward RL training, simply set:
 
