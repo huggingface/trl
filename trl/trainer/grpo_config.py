@@ -823,7 +823,7 @@ class GRPOConfig(TrainingArguments):
             "prompts are logged."
         },
     )
-    log_completions_hub_repo: Optional[str] = field(
+    log_completions_hub_repo: str | None = field(
         default=None,
         metadata={"help": "Hugging Face Hub repository to save the completions."},
     )
