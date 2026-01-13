@@ -43,7 +43,13 @@ def _patch_vllm_disabled_tqdm() -> None:
     """
     try:
         import vllm.model_executor.model_loader.weight_utils
+        from packaging.version import Version
         from tqdm import tqdm
+        from transformers.utils.import_utils import _is_package_available
+
+        _is_vllm_available, vllm_version = _is_package_available("vllm", return_version=True)
+        if not (_is_vllm_available and Version(vllm_version) < Version("0.11.1")):
+            return
 
         class DisabledTqdm(tqdm):
             def __init__(self, *args, **kwargs):
