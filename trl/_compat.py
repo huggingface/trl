@@ -157,7 +157,7 @@ def _patch_transformers_hybrid_cache() -> None:
     - Fixed in https://github.com/linkedin/Liger-Kernel/pull/1002 (will be released in liger_kernel>=0.6.5)
     - This patch can be removed when TRL requires liger_kernel>=0.6.5
     """
-    if _is_package_version_below("liger_kernel", "0.6.5"):
+    if _is_package_version_below("liger_kernel", "0.6.5") or _is_package_version_below("peft", "0.18.0"):
         try:
             import transformers
 
