@@ -18,7 +18,7 @@ GRPO training for Sudoku with TextArena environment.
 Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/textarena
+uv pip install git+https://huggingface.co/spaces/openenv/sudoku
 ```
 
 Setup (Option B - Clone OpenEnv repo):
@@ -50,7 +50,7 @@ CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/sudoku.py --vllm-mode ser
 
 # Start the environment only if using --env-mode docker-local
 ```sh
-docker run -d -p 8001:8001 registry.hf.space/sergiopaniego-textarena:latest
+docker run -d -p 8001:8001 registry.hf.space/openenv-sudoku:latest
 ```
 
 ```sh
@@ -62,7 +62,7 @@ python examples/scripts/openenv/sudoku.py --env-mode docker-local --vllm-mode co
 python examples/scripts/openenv/sudoku.py \
     --vllm-mode colocate \
     --env-mode space \
-    --env-host https://sergiopaniego-textarena.hf.space \
+    --env-host https://openenv-sudoku.hf.space \
     --num-generations 8 \
     --per-device-batch-size 1 \
     --max-turns 100 \
@@ -107,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B")
 
     # Environment
-    parser.add_argument("--env-host", type=str, default="https://sergiopaniego-textarena.hf.space")
+    parser.add_argument("--env-host", type=str, default="https://openenv-sudoku.hf.space")
     parser.add_argument("--env-port", type=int, default=8001)
     parser.add_argument(
         "--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space"
