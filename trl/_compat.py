@@ -140,14 +140,12 @@ def _patch_transformers_hybrid_cache() -> None:
         from packaging.version import Version
         from transformers.utils.import_utils import _is_package_available
 
-        transformers_version = Version(transformers.__version__)
-        is_liger_available, liger_version = _is_package_available("liger_kernel", return_version=True)
-
-        if not is_liger_available:
+        is_liger_kernel_available, liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
+        if not (is_liger_kernel_available and Version(liger_kernel_version) < Version("0.6.5")):
             return
 
-        liger_version = Version(liger_version)
-        if liger_version <= Version("0.6.4") and transformers_version >= Version("5.0.0.dev0"):
+        transformers_version = Version(transformers.__version__)
+        if transformers_version >= Version("5.0.0.dev0"):
             import transformers.cache_utils as cache_utils
 
             cache_utils.HybridCache = cache_utils.Cache
