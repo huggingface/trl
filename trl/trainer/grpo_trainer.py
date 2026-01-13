@@ -28,7 +28,6 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from string import Template
 from typing import Any
 
 import datasets
@@ -792,9 +791,10 @@ class GRPOTrainer(BaseTrainer):
                 exist_ok=True,
             )
             template_path = pkg_resources.files("trl").joinpath("templates/completions_dataset_card.md")
-            card_template = Template(template_path.read_text(encoding="utf-8"))
-            card = DatasetCard(
-                card_template.safe_substitute(log_completions_hub_repo=self.args.log_completions_hub_repo)
+            card = DatasetCard.from_template(
+                template_path=str(template_path),
+                log_completions_hub_repo=self.args.log_completions_hub_repo,
+                hub_model_id=self.args.hub_model_id,
             )
             card.push_to_hub(self.args.log_completions_hub_repo)
             os.makedirs(f"{self.args.output_dir}/completions", exist_ok=True)

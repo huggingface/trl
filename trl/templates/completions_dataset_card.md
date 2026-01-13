@@ -9,6 +9,10 @@ tags:
 
 This dataset contains the completions generated during training using `trl`.
 
+{% if hub_model_id %}
+Find the trained model at https://huggingface.co/{{ hub_model_id }}.
+
+{% endif %}
 The completions are stored in parquet files, and each file contains the completions for a single step of training (depending on the `logging_steps` argument).
 
 Each file contains the following columns:
@@ -27,7 +31,7 @@ You can load the dataset using the `datasets` library:
 ```python
 import datasets
 
-dataset = datasets.load_dataset("$log_completions_hub_repo")
+dataset = datasets.load_dataset("{{ log_completions_hub_repo }}")
 ```
 
 You can also load the dataset using Polars:
@@ -36,5 +40,5 @@ You can also load the dataset using Polars:
 import polars as pl
 
 # Login using e.g. `huggingface-cli login` to access this dataset if it's private
-df = pl.read_parquet(f"hf://datasets/$log_completions_hub_repo/**/*.parquet")
+df = pl.read_parquet(f"hf://datasets/{{ log_completions_hub_repo }}/**/*.parquet")
 ```
