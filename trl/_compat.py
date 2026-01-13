@@ -43,7 +43,13 @@ def _patch_vllm_disabled_tqdm() -> None:
     """
     try:
         import vllm.model_executor.model_loader.weight_utils
+        from packaging.version import Version
         from tqdm import tqdm
+        from transformers.utils.import_utils import _is_package_available
+
+        _is_vllm_available, vllm_version = _is_package_available("vllm", return_version=True)
+        if not (_is_vllm_available and Version(vllm_version) < Version("0.11.1")):
+            return
 
         class DisabledTqdm(tqdm):
             def __init__(self, *args, **kwargs):
@@ -60,15 +66,21 @@ def _patch_vllm_cached_tokenizer() -> None:
     Fix get_cached_tokenizer for transformers v5 compatibility.
 
     - Issue: vLLM's get_cached_tokenizer accesses all_special_tokens_extended
-    - Removed in transformers v5
-    - This patch removes the problematic attribute access
-    - This can be removed when TRL requires vLLM with transformers v5 support
+    - Removed in transformers: https://github.com/huggingface/transformers/pull/40936 (transformers>=5.0.0.dev0)
+    - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
+    - This can be removed when TRL requires vLLM>=0.12.0
     """
     try:
         import contextlib
         import copy
 
         import vllm.transformers_utils.tokenizer
+        from packaging.version import Version
+        from transformers.utils.import_utils import _is_package_available
+
+        _is_vllm_available, vllm_version = _is_package_available("vllm", return_version=True)
+        if not (_is_vllm_available and Version(vllm_version) < Version("0.12.0")):
+            return
 
         def get_cached_tokenizer(tokenizer):
             cached_tokenizer = copy.copy(tokenizer)
