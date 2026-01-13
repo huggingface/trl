@@ -25,22 +25,27 @@ import warnings
 from .import_utils import is_vllm_available
 
 
-def _package_needs_patch(package_name: str, fixed_in_version: str) -> bool:
+def _is_package_version_below(package_name: str, version_threshold: str) -> bool:
     """
-    Check if package requires compatibility patch.
-
-    Returns True if package is installed with version < fixed_in_version.
+    Check if installed package version is below the given threshold.
 
     Args:
         package_name (str): Package name.
-        fixed_in_version (str): Version when the issue was fixed and the patch is no longer necessary.
+        version_threshold (str): Version upper threshold to compare against.
+
+    Returns:
+        - True if package is installed and version < version_threshold.
+        - False if package is not installed or version >= version_threshold.
     """
     try:
         from packaging.version import Version
         from transformers.utils.import_utils import _is_package_available
 
         is_available, version = _is_package_available(package_name, return_version=True)
-        return is_available and Version(version) < Version(fixed_in_version)
+        if not is_available:
+            return False
+
+        return Version(version) < Version(version_threshold)
     except Exception as e:
         warnings.warn(
             f"Failed to check {package_name} version against {version_threshold}: {e}. "
@@ -67,7 +72,7 @@ def _patch_vllm_disabled_tqdm() -> None:
     - Since TRL currently supports vLLM v0.10.2-0.12.0, we patch it here
     - This can be removed when TRL requires vLLM>=0.11.1
     """
-    if _package_needs_patch("vllm", "0.11.1"):
+    if _is_package_version_below("vllm", "0.11.1"):
         try:
             import vllm.model_executor.model_loader.weight_utils
             from tqdm import tqdm
@@ -91,7 +96,7 @@ def _patch_vllm_cached_tokenizer() -> None:
     - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
     - This can be removed when TRL requires vLLM>=0.12.0
     """
-    if _package_needs_patch("vllm", "0.12.0"):
+    if _is_package_version_below("vllm", "0.12.0"):
         try:
             import contextlib
             import copy
@@ -151,7 +156,7 @@ def _patch_transformers_hybrid_cache() -> None:
     - Fixed in https://github.com/linkedin/Liger-Kernel/pull/1002 (will be released in liger_kernel>=0.6.5)
     - This patch can be removed when TRL requires liger_kernel>=0.6.5
     """
-    if _package_needs_patch("liger_kernel", "0.6.5"):
+    if _is_package_version_below("liger_kernel", "0.6.5"):
         try:
             import transformers
             from packaging.version import Version
