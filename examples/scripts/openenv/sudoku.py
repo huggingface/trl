@@ -81,6 +81,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from datasets import Dataset
 from transformers import AutoTokenizer
@@ -760,7 +761,7 @@ def main() -> None:
     grpo_config.trackio_space_id = args.trackio_space_id
     grpo_config.gradient_checkpointing = args.gradient_checkpointing
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
         all_prompt_ids = []
         all_completion_ids = []
         all_logprobs = []
@@ -770,7 +771,7 @@ def main() -> None:
         all_repetition = []
         all_progress = []
 
-        for _ in prompts:
+        for _ in inputs:
             episode = rollout_once(
                 trainer=trainer,
                 env=client,

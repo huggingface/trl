@@ -68,6 +68,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from datasets import Dataset
 from browsergym_env import BrowserGymAction, BrowserGymEnv
@@ -446,16 +447,17 @@ def main() -> None:
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
         completion_rewards: list[float] = []
 
         if args.debug:
-            print(f"\n[DEBUG] rollout_func called with {len(prompts)} prompts (LLM mode, text-only)")
+            print(f"\n[DEBUG] rollout_func called with {len(inputs)} inputs (LLM mode, text-only)")
 
-        for i, prompt_text in enumerate(prompts):
+        for i, inp in enumerate(inputs):
+            prompt_text = inp["prompt"]
             if args.debug:
                 print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
             episode = rollout_once(

@@ -79,6 +79,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import requests
 from datasets import Dataset
@@ -246,7 +247,7 @@ def main():
         gradient_accumulation_steps=4,
     )
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
         """Generate completions via vLLM (colocated or server) and compute environment rewards."""
         env_rewards: list[float] = []
         all_prompt_ids: list[list[int]] = []
@@ -254,7 +255,8 @@ def main():
         all_logprobs: list[list[float]] = []
         tokenizer = trainer.processing_class
 
-        for base_prompt in prompts:
+        for inp in inputs:
+            base_prompt = inp["prompt"]
             env_result = client.reset()
             obs = env_result.observation
             total_reward = 0.0

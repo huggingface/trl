@@ -72,6 +72,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from datasets import Dataset
 from transformers import AutoTokenizer
@@ -469,7 +470,7 @@ def main() -> None:
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
     grpo_config.trackio_space_id = args.trackio_space_id
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
@@ -478,7 +479,8 @@ def main() -> None:
         yellow_rewards: list[float] = []
         repetition_rewards: list[float] = []
 
-        for prompt_text in prompts:
+        for inp in inputs:
+            prompt_text = inp["prompt"]
             episode = rollout_once(
                 trainer=trainer,
                 env=client,
