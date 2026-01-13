@@ -47,9 +47,10 @@ def _package_needs_patch(package_name: str, fixed_in_version: str) -> bool:
 
 def _patch_vllm_logging() -> None:
     """Set vLLM logging level to ERROR by default to reduce noise."""
-    import os
+    if is_vllm_available():
+        import os
 
-    os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
+        os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
 
 
 def _patch_vllm_disabled_tqdm() -> None:
@@ -160,10 +161,9 @@ def _patch_transformers_hybrid_cache() -> None:
 
 
 # Apply vLLM patches
-if is_vllm_available():
-    _patch_vllm_logging()
-    _patch_vllm_disabled_tqdm()
-    _patch_vllm_cached_tokenizer()
+_patch_vllm_logging()
+_patch_vllm_disabled_tqdm()
+_patch_vllm_cached_tokenizer()
 
 # Apply transformers patches
 _patch_transformers_hybrid_cache()
