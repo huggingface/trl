@@ -22,6 +22,8 @@ Each patch should be removed when minimum version requirements eliminate the nee
 
 import warnings
 
+from packaging.version import Version
+
 from .import_utils import is_vllm_available
 
 
@@ -38,7 +40,6 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
         - False if package is not installed or version >= version_threshold.
     """
     try:
-        from packaging.version import Version
         from transformers.utils.import_utils import _is_package_available
 
         is_available, version = _is_package_available(package_name, return_version=True)
@@ -159,7 +160,6 @@ def _patch_transformers_hybrid_cache() -> None:
     if _is_package_version_below("liger_kernel", "0.6.5"):
         try:
             import transformers
-            from packaging.version import Version
 
             transformers_version = Version(transformers.__version__)
             if transformers_version >= Version("5.0.0.dev0"):
