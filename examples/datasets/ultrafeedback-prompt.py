@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
 from huggingface_hub import ModelCard
@@ -30,7 +29,7 @@ class ScriptArguments:
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/ultrafeedback-prompt"`):
             Hugging Face repository ID to push the dataset to.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of workers to use for dataset processing.
     """
 
@@ -42,7 +41,7 @@ class ScriptArguments:
         default="trl-lib/ultrafeedback-prompt",
         metadata={"help": "Hugging Face repository ID to push the dataset to."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of workers to use for dataset processing."},
     )

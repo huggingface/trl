@@ -1,12 +1,12 @@
 # PRM Trainer
 
-[![](https://img.shields.io/badge/All_models-PRM-blue)](https://huggingface.co/models?other=prm,trl)
+[![model badge](https://img.shields.io/badge/All_models-PRM-blue)](https://huggingface.co/models?other=prm,trl)
 
-<Tip warning={true}>
+> [!TIP]
+> PRMTrainer has been moved to `trl.experimental.prm.PRMTrainer`. The `trl.trainer` version is deprecated and will be removed in TRL 0.29.0. Please update your imports to use `trl.experimental.prm.PRMTrainer` instead. See [issue #4467](https://github.com/huggingface/trl/issues/4467) for more information.
 
-PRM Trainer is an experimental API which is subject to change at any time.
-
-</Tip>
+> [!WARNING]
+> PRM Trainer is an experimental API which is subject to change at any time.
 
 ## Overview
 
@@ -17,7 +17,6 @@ The abstract from the paper is the following:
 > Recent work has shown that asking language models to generate reasoning steps improves performance on many reasoning tasks. When moving beyond prompting, this raises the question of how we should supervise such models: outcome-based approaches which supervise the final result, or process-based approaches which supervise the reasoning process itself? Differences between these approaches might naturally be expected not just in final-answer errors but also in reasoning errors, which can be difficult to detect and are problematic in many real-world domains such as education. We run the first comprehensive comparison between process- and outcome-based approaches trained on a natural language task, GSM8K. We find that pure outcome-based supervision produces similar final-answer error rates with less label supervision. However, for correct reasoning steps we find it necessary to use processbased supervision or supervision from learned reward models that emulate process-based feedback. In total, we improve the previous best results from 16.8% → 12.7% final-answer error and 14.0% → 3.4% reasoning error among final-answer-correct solutions.
 
 This post-training method was contributed by [Gaetan Lopez](https://github.com/gaetanlop), [Lewis Tunstall](https://huggingface.co/lewtun), [Quentin Gallouédec](https://huggingface.co/qgallouedec) and [Agustín Piqueres](https://huggingface.co/plaguss).
-
 
 ## Quick start
 
@@ -35,14 +34,14 @@ Below is the script to train the model:
 ```python
 # train_prm.py
 from datasets import load_dataset
-from trl import PRMConfig, PRMTrainer
+from trl.experimental.prm import PRMConfig, PRMTrainer
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
 model = AutoModelForTokenClassification.from_pretrained("Qwen/Qwen2-0.5B", num_labels=2)
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B")
 train_dataset = load_dataset("trl-lib/math_shepherd", split="train[:10%]")
 
-training_args = PRMConfig(output_dir="Qwen2-0.5B-Reward-Math-Sheperd", logging_steps=10)
+training_args = PRMConfig(output_dir="Qwen2-0.5B-Reward-Math-Sheperd")
 trainer = PRMTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
@@ -56,7 +55,6 @@ accelerate launch train_prm.py
 Distributed across 8 GPUs, the training takes approximately 1 hour.
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward-Math-Sheperd) performs, you can use the following script.
-
 
 ```python
 from datasets import load_dataset
@@ -112,14 +110,16 @@ accelerate launch examples/scripts/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/math_shepherd \
     --num_train_epochs 1 \
-    --logging_steps 25 \
     --output_dir Qwen2-0.5B-Reward-Math-Sheperd
 ```
 
 ## PRMTrainer
 
-[[autodoc]] PRMTrainer
+[[autodoc]] experimental.prm.PRMTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## PRMConfig
 
-[[autodoc]] PRMConfig
+[[autodoc]] experimental.prm.PRMConfig
