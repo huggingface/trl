@@ -127,7 +127,6 @@ class TestXPOTrainer(TrlTestCase):
     def test_training_pre_pefted_model_implicit_ref(self):
         lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
         peft_model_instance = get_peft_model(self.model, lora_config)
-        peft_model_instance.enable_input_require_grads()
 
         training_args = XPOConfig(
             output_dir=self.tmp_dir,

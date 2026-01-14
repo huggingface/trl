@@ -178,7 +178,6 @@ class TestNashMDTrainer(TrlTestCase):
         lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
         # self.model from setUp is a base AutoModelForCausalLM
         peft_model_instance = get_peft_model(self.model, lora_config)
-        peft_model_instance.enable_input_require_grads()
 
         training_args = NashMDConfig(
             output_dir=self.tmp_dir,
