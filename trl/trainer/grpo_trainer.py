@@ -2464,7 +2464,7 @@ class GRPOTrainer(BaseTrainer):
                     rows = df_dedup.values.tolist()
                     table = logging_backend.echarts.Table()
                     table.add(headers, rows)
-                    logging_backend.log({"completions": table})
+                    logging_backend.log({mode: {"completions": table}})
                 else:
                     # wandb/trackio: support images
                     if images_raw:
