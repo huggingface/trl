@@ -16,6 +16,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
 
 
