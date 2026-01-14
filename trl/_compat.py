@@ -56,6 +56,30 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
         return False
 
 
+def _is_package_version_at_least(package_name: str, version_threshold: str) -> bool:
+    """
+    Check if installed package version is at least the given threshold.
+
+    Args:
+        package_name (str): Package name.
+        version_threshold (str): Minimum version threshold.
+
+    Returns:
+        - True if package is installed and version >= version_threshold.
+        - False if package is not installed or version < version_threshold.
+    """
+    try:
+        is_available, version = _is_package_available(package_name, return_version=True)
+        return is_available and Version(version) >= Version(version_threshold)
+    except Exception as e:
+        warnings.warn(
+            f"Failed to check {package_name} version against {version_threshold}: {e}. "
+            f"Compatibility patch may not be applied.",
+            stacklevel=2,
+        )
+        return False
+
+
 def _patch_vllm_logging() -> None:
     """Set vLLM logging level to ERROR by default to reduce noise."""
     if is_vllm_available():
