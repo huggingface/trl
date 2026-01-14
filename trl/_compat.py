@@ -25,8 +25,6 @@ import warnings
 from packaging.version import Version
 from transformers.utils.import_utils import _is_package_available
 
-from .import_utils import is_vllm_available
-
 
 def _is_package_version_below(package_name: str, version_threshold: str) -> bool:
     """
@@ -78,7 +76,7 @@ def _is_package_version_at_least(package_name: str, version_threshold: str) -> b
 
 def _patch_vllm_logging() -> None:
     """Set vLLM logging level to ERROR by default to reduce noise."""
-    if is_vllm_available():
+    if _is_package_available("vllm"):
         import os
 
         os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
