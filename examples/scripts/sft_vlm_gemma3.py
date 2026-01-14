@@ -143,7 +143,6 @@ def prepare_dataset(dataset: DatasetDict, dataset_name: str) -> DatasetDict:
 def main():
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.max_length = None
 
     ################
