@@ -23,6 +23,7 @@ Each patch should be removed when minimum version requirements eliminate the nee
 import warnings
 
 from packaging.version import Version
+from transformers.utils.import_utils import _is_package_available
 
 from .import_utils import is_vllm_available
 
@@ -33,20 +34,15 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
 
     Args:
         package_name (str): Package name.
-        version_threshold (str): Version upper threshold to compare against.
+        version_threshold (str): Maximum version threshold.
 
     Returns:
         - True if package is installed and version < version_threshold.
         - False if package is not installed or version >= version_threshold.
     """
     try:
-        from transformers.utils.import_utils import _is_package_available
-
         is_available, version = _is_package_available(package_name, return_version=True)
-        if not is_available:
-            return False
-
-        return Version(version) < Version(version_threshold)
+        return is_available and Version(version) < Version(version_threshold)
     except Exception as e:
         warnings.warn(
             f"Failed to check {package_name} version against {version_threshold}: {e}. "
