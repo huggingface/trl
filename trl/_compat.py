@@ -99,51 +99,55 @@ def _patch_vllm_cached_tokenizer() -> None:
     """
     if _is_package_version_below("vllm", "0.12.0"):
         try:
-            import contextlib
-            import copy
+            import transformers
 
-            import vllm.transformers_utils.tokenizer
+            transformers_version = Version(transformers.__version__)
+            if transformers_version >= Version("5.0.0.dev0"):
+                import contextlib
+                import copy
 
-            def get_cached_tokenizer(tokenizer):
-                cached_tokenizer = copy.copy(tokenizer)
-                tokenizer_all_special_ids = tokenizer.all_special_ids
-                tokenizer_all_special_tokens = tokenizer.all_special_tokens
-                tokenizer_vocab = tokenizer.get_vocab()
-                tokenizer_len = len(tokenizer)
+                import vllm.transformers_utils.tokenizer
 
-                max_token_id = max(tokenizer_vocab.values())
-                if hasattr(tokenizer, "vocab_size"):
-                    with contextlib.suppress(NotImplementedError):
-                        max_token_id = max(max_token_id, tokenizer.vocab_size)
+                def get_cached_tokenizer(tokenizer):
+                    cached_tokenizer = copy.copy(tokenizer)
+                    tokenizer_all_special_ids = tokenizer.all_special_ids
+                    tokenizer_all_special_tokens = tokenizer.all_special_tokens
+                    tokenizer_vocab = tokenizer.get_vocab()
+                    tokenizer_len = len(tokenizer)
 
-                class CachedTokenizer(tokenizer.__class__):  # type: ignore
-                    @property
-                    def all_special_ids(self) -> list[int]:
-                        return tokenizer_all_special_ids
+                    max_token_id = max(tokenizer_vocab.values())
+                    if hasattr(tokenizer, "vocab_size"):
+                        with contextlib.suppress(NotImplementedError):
+                            max_token_id = max(max_token_id, tokenizer.vocab_size)
 
-                    @property
-                    def all_special_tokens(self) -> list[str]:
-                        return tokenizer_all_special_tokens
+                    class CachedTokenizer(tokenizer.__class__):  # type: ignore
+                        @property
+                        def all_special_ids(self) -> list[int]:
+                            return tokenizer_all_special_ids
 
-                    @property
-                    def max_token_id(self) -> int:
-                        return max_token_id
+                        @property
+                        def all_special_tokens(self) -> list[str]:
+                            return tokenizer_all_special_tokens
 
-                    def get_vocab(self) -> dict[str, int]:
-                        return tokenizer_vocab
+                        @property
+                        def max_token_id(self) -> int:
+                            return max_token_id
 
-                    def __len__(self) -> int:
-                        return tokenizer_len
+                        def get_vocab(self) -> dict[str, int]:
+                            return tokenizer_vocab
 
-                    def __reduce__(self):
-                        return get_cached_tokenizer, (tokenizer,)
+                        def __len__(self) -> int:
+                            return tokenizer_len
 
-                CachedTokenizer.__name__ = f"Cached{tokenizer.__class__.__name__}"
+                        def __reduce__(self):
+                            return get_cached_tokenizer, (tokenizer,)
 
-                cached_tokenizer.__class__ = CachedTokenizer
-                return cached_tokenizer
+                    CachedTokenizer.__name__ = f"Cached{tokenizer.__class__.__name__}"
 
-            vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
+                    cached_tokenizer.__class__ = CachedTokenizer
+                    return cached_tokenizer
+
+                vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
         except (ImportError, AttributeError) as e:
             warnings.warn(f"Failed to patch vLLM cached_tokenizer: {e}", stacklevel=2)
 
