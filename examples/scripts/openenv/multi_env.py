@@ -61,7 +61,7 @@ python examples/scripts/openenv/multi_env.py \
     --vllm-mode colocate \
     --num-wordle 500 \
     --num-sudoku 500 \
-    --num-generations 2 \
+    --num-generations 8 \
     --wordle-max-turns 6 \
     --sudoku-max-turns 100 \
     --sudoku-difficulty easy
@@ -861,7 +861,7 @@ def main() -> None:
         per_device_train_batch_size=args.per_device_batch_size,
         warmup_steps=args.warmup_steps,
         num_generations=args.num_generations,
-        max_completion_length=8,  # Small for single-turn moves
+        max_completion_length=32,  # Enough tokens for single-turn moves like [1 2 3]
         logging_steps=args.logging_steps,
         save_strategy="steps",
         save_steps=args.save_interval,
