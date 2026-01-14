@@ -92,15 +92,7 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize(
-        "config",
-        [
-            pytest.param("ddp", marks=pytest.mark.xfail(reason="PEFT + multi-GPU is broken, see #4782")),
-            "zero2",
-            "zero3",
-            "fsdp2",
-        ],
-    )
+    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
     def test_sft_peft(self, config):
         # fmt: off
         run_command(
