@@ -470,6 +470,10 @@ def main() -> None:
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
     grpo_config.trackio_space_id = args.trackio_space_id
 
+    # In server mode, rollout_func receives deduplicated inputs and must generate num_generations per input
+    # In colocate mode, the dataloader handles duplication, so we generate 1 per input
+    num_gens = args.num_generations if args.vllm_mode == "server" else 1
+
     def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
@@ -481,21 +485,23 @@ def main() -> None:
 
         for inp in inputs:
             prompt_text = inp["prompt"]
-            episode = rollout_once(
-                trainer=trainer,
-                env=client,
-                tokenizer=tokenizer,
-                dataset_prompt=prompt_text,
-                system_prompt=system_prompt,
-                max_turns=args.max_turns,
-            )
-            episode_prompt_ids.append(episode["prompt_ids"])
-            episode_completion_ids.append(episode["completion_ids"])
-            episode_logprobs.append(episode["logprobs"])
-            correctness_rewards.append(episode["correct_reward"])
-            green_rewards.append(episode["green_reward"])
-            yellow_rewards.append(episode["yellow_reward"])
-            repetition_rewards.append(episode["repetition_reward"])
+            # Generate num_gens rollouts per input (needed for server mode; colocate uses num_gens=1)
+            for _ in range(num_gens):
+                episode = rollout_once(
+                    trainer=trainer,
+                    env=client,
+                    tokenizer=tokenizer,
+                    dataset_prompt=prompt_text,
+                    system_prompt=system_prompt,
+                    max_turns=args.max_turns,
+                )
+                episode_prompt_ids.append(episode["prompt_ids"])
+                episode_completion_ids.append(episode["completion_ids"])
+                episode_logprobs.append(episode["logprobs"])
+                correctness_rewards.append(episode["correct_reward"])
+                green_rewards.append(episode["green_reward"])
+                yellow_rewards.append(episode["yellow_reward"])
+                repetition_rewards.append(episode["repetition_reward"])
 
         return {
             "prompt_ids": episode_prompt_ids,

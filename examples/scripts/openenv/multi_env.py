@@ -146,10 +146,10 @@ def parse_args() -> argparse.Namespace:
         "--sudoku-difficulty",
         type=str,
         choices=["easy", "medium", "hard"],
-        default="hard",
+        default="easy",
         help="Sudoku difficulty: easy=guaranteed+options, medium=only options, hard=no hints.",
     )
-    parser.add_argument("--api-delay", type=float, default=0.0, help="Delay between API calls to avoid rate limiting.")
+    parser.add_argument("--api-delay", type=float, default=0.1, help="Delay between API calls to avoid rate limiting.")
 
     # Sampling
     parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature.")
@@ -159,10 +159,10 @@ def parse_args() -> argparse.Namespace:
     # Training
     parser.add_argument("--learning-rate", type=float, default=5e-6, help="Learning rate.")
     parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay.")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=64, help="Gradient accumulation steps.")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=16, help="Gradient accumulation steps.")
     parser.add_argument("--warmup-steps", type=int, default=20, help="Warmup steps.")
     parser.add_argument("--per-device-batch-size", type=int, default=1, help="Per-device train batch size.")
-    parser.add_argument("--num-generations", type=int, default=2, help="Number of rollout generations per prompt.")
+    parser.add_argument("--num-generations", type=int, default=8, help="Number of rollout generations per prompt.")
     parser.add_argument("--num-epochs", type=int, default=1, help="Number of training epochs.")
 
     # Checkpoints
@@ -250,9 +250,8 @@ def wordle_rollout_once(
     time.sleep(api_delay)
     observation = result.observation
 
-    prompt_ids: list[int] = []
-    completion_ids: list[int] = []
-    logprobs: list[float] = []
+    # Only keep the last turn's prompt/completion for backprop (consistent with Sudoku below).
+    last_turn_data: dict[str, Any] | None = None
     raw_rewards: list[float] = []
     green_scores: list[float] = []
     yellow_scores: list[float] = []
@@ -278,9 +277,11 @@ def wordle_rollout_once(
         )
 
         rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
-        prompt_ids.extend(rollout_outputs["prompt_ids"])
-        completion_ids.extend(rollout_outputs["completion_ids"])
-        logprobs.extend(rollout_outputs["logprobs"])
+        last_turn_data = {
+            "prompt_ids": rollout_outputs["prompt_ids"],
+            "completion_ids": rollout_outputs["completion_ids"],
+            "logprobs": rollout_outputs["logprobs"],
+        }
         completion_text = rollout_outputs.get("text") or tokenizer.decode(
             rollout_outputs["completion_ids"], skip_special_tokens=True
         )
@@ -311,6 +312,15 @@ def wordle_rollout_once(
         correct_scores.append(correct_score)
 
     correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
+
+    if last_turn_data:
+        prompt_ids = last_turn_data["prompt_ids"]
+        completion_ids = last_turn_data["completion_ids"]
+        logprobs = last_turn_data["logprobs"]
+    else:
+        prompt_ids = []
+        completion_ids = []
+        logprobs = []
 
     return {
         "prompt_ids": prompt_ids,
@@ -867,6 +877,11 @@ def main() -> None:
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
     grpo_config.trackio_space_id = args.trackio_space_id
 
+    # Determine number of generations per prompt for server mode
+    # In server mode, rollout_func receives deduplicated inputs and must generate num_generations per input
+    # In colocate mode, the dataloader handles duplication, so we generate 1 per input
+    num_gens = args.num_generations if args.vllm_mode == "server" else 1
+
     def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
         """Composite rollout function that routes samples to the appropriate environment."""
         all_prompt_ids: list[list[int]] = []
@@ -889,65 +904,68 @@ def main() -> None:
 
         for inp in inputs:
             env_name = inp["env"]
-            all_env_names.append(env_name)
 
-            if env_name == "wordle":
-                episode = wordle_rollout_once(
-                    trainer=trainer,
-                    env=wordle_client,
-                    tokenizer=tokenizer,
-                    dataset_prompt=inp["prompt"],
-                    system_prompt=wordle_system_prompt,
-                    max_turns=args.wordle_max_turns,
-                    api_delay=args.api_delay,
-                )
-                all_prompt_ids.append(episode["prompt_ids"])
-                all_completion_ids.append(episode["completion_ids"])
-                all_logprobs.append(episode["logprobs"])
+            # Generate num_gens rollouts per input (needed for server mode; colocate uses num_gens=1)
+            for _ in range(num_gens):
+                all_env_names.append(env_name)
 
-                # Wordle rewards
-                all_wordle_correct.append(episode["wordle_correct_reward"])
-                all_wordle_green.append(episode["wordle_green_reward"])
-                all_wordle_yellow.append(episode["wordle_yellow_reward"])
-                all_wordle_repetition.append(episode["wordle_repetition_reward"])
+                if env_name == "wordle":
+                    episode = wordle_rollout_once(
+                        trainer=trainer,
+                        env=wordle_client,
+                        tokenizer=tokenizer,
+                        dataset_prompt=inp["prompt"],
+                        system_prompt=wordle_system_prompt,
+                        max_turns=args.wordle_max_turns,
+                        api_delay=args.api_delay,
+                    )
+                    all_prompt_ids.append(episode["prompt_ids"])
+                    all_completion_ids.append(episode["completion_ids"])
+                    all_logprobs.append(episode["logprobs"])
 
-                # Sudoku rewards are None for Wordle samples
-                all_sudoku_correct.append(None)
-                all_sudoku_valid_move.append(None)
-                all_sudoku_empty_cell.append(None)
-                all_sudoku_repetition.append(None)
-                all_sudoku_progress.append(None)
+                    # Wordle rewards
+                    all_wordle_correct.append(episode["wordle_correct_reward"])
+                    all_wordle_green.append(episode["wordle_green_reward"])
+                    all_wordle_yellow.append(episode["wordle_yellow_reward"])
+                    all_wordle_repetition.append(episode["wordle_repetition_reward"])
 
-            elif env_name == "sudoku":
-                episode = sudoku_rollout_once(
-                    trainer=trainer,
-                    env=sudoku_client,
-                    tokenizer=tokenizer,
-                    system_prompt=sudoku_system_prompt,
-                    max_turns=args.sudoku_max_turns,
-                    difficulty=args.sudoku_difficulty,
-                    api_delay=args.api_delay,
-                    debug=args.debug,
-                )
-                all_prompt_ids.append(episode["prompt_ids"])
-                all_completion_ids.append(episode["completion_ids"])
-                all_logprobs.append(episode["logprobs"])
+                    # Sudoku rewards are None for Wordle samples
+                    all_sudoku_correct.append(None)
+                    all_sudoku_valid_move.append(None)
+                    all_sudoku_empty_cell.append(None)
+                    all_sudoku_repetition.append(None)
+                    all_sudoku_progress.append(None)
 
-                # Wordle rewards are None for Sudoku samples
-                all_wordle_correct.append(None)
-                all_wordle_green.append(None)
-                all_wordle_yellow.append(None)
-                all_wordle_repetition.append(None)
+                elif env_name == "sudoku":
+                    episode = sudoku_rollout_once(
+                        trainer=trainer,
+                        env=sudoku_client,
+                        tokenizer=tokenizer,
+                        system_prompt=sudoku_system_prompt,
+                        max_turns=args.sudoku_max_turns,
+                        difficulty=args.sudoku_difficulty,
+                        api_delay=args.api_delay,
+                        debug=args.debug,
+                    )
+                    all_prompt_ids.append(episode["prompt_ids"])
+                    all_completion_ids.append(episode["completion_ids"])
+                    all_logprobs.append(episode["logprobs"])
 
-                # Sudoku rewards
-                all_sudoku_correct.append(episode["sudoku_correct_reward"])
-                all_sudoku_valid_move.append(episode["sudoku_valid_move_reward"])
-                all_sudoku_empty_cell.append(episode["sudoku_empty_cell_reward"])
-                all_sudoku_repetition.append(episode["sudoku_repetition_reward"])
-                all_sudoku_progress.append(episode["sudoku_progress_reward"])
+                    # Wordle rewards are None for Sudoku samples
+                    all_wordle_correct.append(None)
+                    all_wordle_green.append(None)
+                    all_wordle_yellow.append(None)
+                    all_wordle_repetition.append(None)
 
-            else:
-                raise ValueError(f"Unknown environment: {env_name}")
+                    # Sudoku rewards
+                    all_sudoku_correct.append(episode["sudoku_correct_reward"])
+                    all_sudoku_valid_move.append(episode["sudoku_valid_move_reward"])
+                    all_sudoku_empty_cell.append(episode["sudoku_empty_cell_reward"])
+                    all_sudoku_repetition.append(episode["sudoku_repetition_reward"])
+                    all_sudoku_progress.append(episode["sudoku_progress_reward"])
+
+                else:
+                    raise ValueError(f"Unknown environment: {env_name}")
 
         return {
             "prompt_ids": all_prompt_ids,
