@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import sys
-import warnings
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
+from . import _compat
 from .import_utils import _LazyModule
 
 
@@ -190,77 +190,3 @@ else:
         module_spec=__spec__,
         extra_objects={"__version__": __version__},
     )
-
-
-# Monkey-patches for vLLM.
-from .import_utils import is_vllm_available  # noqa: E402
-
-
-if is_vllm_available():
-    import os
-
-    os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
-
-    # Fix DisableTqdm
-    # Bug introduced in https://github.com/vllm-project/vllm/pull/52
-    # Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-    # Since TRL currently only supports vLLM v0.10.2-0.12.0, we patch it here. This can be removed when TRL requires
-    # vLLM >=0.11.1
-    import vllm.model_executor.model_loader.weight_utils
-    from tqdm import tqdm
-
-    class DisabledTqdm(tqdm):
-        def __init__(self, *args, **kwargs):
-            kwargs["disable"] = True
-            super().__init__(*args, **kwargs)
-
-    # Overwrite the class in the dependency
-    vllm.model_executor.model_loader.weight_utils.DisabledTqdm = DisabledTqdm
-
-    # Fix get_cached_tokenizer: remove all_special_tokens_extended, because it doesn't exist in transformers v5
-    import contextlib
-    import copy
-
-    import vllm.transformers_utils.tokenizer
-
-    def get_cached_tokenizer(tokenizer):
-        cached_tokenizer = copy.copy(tokenizer)
-        tokenizer_all_special_ids = tokenizer.all_special_ids
-        tokenizer_all_special_tokens = tokenizer.all_special_tokens
-        tokenizer_vocab = tokenizer.get_vocab()
-        tokenizer_len = len(tokenizer)
-
-        max_token_id = max(tokenizer_vocab.values())
-        if hasattr(tokenizer, "vocab_size"):
-            with contextlib.suppress(NotImplementedError):
-                max_token_id = max(max_token_id, tokenizer.vocab_size)
-
-        class CachedTokenizer(tokenizer.__class__):  # type: ignore
-            @property
-            def all_special_ids(self) -> list[int]:
-                return tokenizer_all_special_ids
-
-            @property
-            def all_special_tokens(self) -> list[str]:
-                return tokenizer_all_special_tokens
-
-            @property
-            def max_token_id(self) -> int:
-                return max_token_id
-
-            def get_vocab(self) -> dict[str, int]:
-                return tokenizer_vocab
-
-            def __len__(self) -> int:
-                return tokenizer_len
-
-            def __reduce__(self):
-                return get_cached_tokenizer, (tokenizer,)
-
-        CachedTokenizer.__name__ = f"Cached{tokenizer.__class__.__name__}"
-
-        cached_tokenizer.__class__ = CachedTokenizer
-        return cached_tokenizer
-
-    # Overwrite the function in the dependency
-    vllm.transformers_utils.tokenizer.get_cached_tokenizer = get_cached_tokenizer
