@@ -83,9 +83,9 @@ from trl.experimental.openenv import generate_rollout_completions
 # Ensure src/ is on the path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from envs.textarena_env import TextArenaAction, TextArenaEnv
-from envs.textarena_env.models import TextArenaMessage
-from envs.textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
+from textarena_env import TextArenaAction, TextArenaEnv
+from textarena_env.models import TextArenaMessage
+from textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
 
 
 def parse_args() -> argparse.Namespace:
