@@ -431,7 +431,7 @@ class VLLMClient:
                 host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
             )
             prefixed_store = c10d.PrefixStore("client2server", store)
-            xccl_options = c10d.ProcessGroupXCCL.Options() 
+            xccl_options = c10d.ProcessGroupXCCL.Options()
             pg = c10d.ProcessGroupXCCL(
                 store=prefixed_store,
                 rank=self.rank,
