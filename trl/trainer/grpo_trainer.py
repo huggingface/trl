@@ -1289,7 +1289,7 @@ class GRPOTrainer(BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _generate_single_turn(self, prompts: list, inputs: list[dict[str, Any]] | None = None):
+    def _generate_single_turn(self, prompts: list, inputs: list[dict[str, Any]]):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1730,7 +1730,7 @@ class GRPOTrainer(BaseTrainer):
             iteration_num += 1
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
-    def _generate(self, prompts: list, inputs: list[dict[str, Any]] | None = None):
+    def _generate(self, prompts: list, inputs: list[dict[str, Any]]):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1855,6 +1855,7 @@ class GRPOTrainer(BaseTrainer):
             num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
+        # inputs are forwarded to rollout_func if provided; standard generation uses prompts only
         ) = self._generate(prompts, inputs)
 
         # Convert lists of token IDs to padded tensors
