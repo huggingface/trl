@@ -821,6 +821,30 @@ SFTConfig(
 )
 ```
 
+### Entropy-Adaptive Fine-Tuning (EAFT)
+
+**📜 Paper**: https://huggingface.co/papers/2601.02151
+
+EAFT introduces an entropy-based gating mechanism to the standard Cross-Entropy loss:
+
+
+$$\mathcal{L}_{EAFT} (\theta) = - \sum_{t=1}^{T} \tilde{H}_t \cdot \log P_\theta(y_t | x, y_{<t})$$
+
+
+Where $\tilde{H}_t$ is the normalized entropy. This mechanism addresses catastrophic forgetting in supervised fine-tuning by using token-level entropy to distinguish uncertainty from knowledge conflict, enabling better preservation of general capabilities.
+
+The eaft_alpha parameter controls how strongly the loss is weighted based on entropy.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    loss_type="eaft",
+    eaft_alpha = 1.0, # default
+    ...
+)
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
