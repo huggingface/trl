@@ -37,6 +37,8 @@ import torch
 
 MODEL_REVISIONS = {
     # Add model_id: revision mappings here to test PRs
+    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration": "refs/pr/4",
+    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration": "refs/pr/8",
 }
 
 
