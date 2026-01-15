@@ -56,6 +56,10 @@ class FDivergenceConstants:
     ALPHA_DIVERGENCE_COEF_DEFAULT = 1.0
 
 
+# Architectures that require concatenating pixel values instead of padding them
+CONCAT_PIXEL_VALUES_ARCHITECTURE_NAMES = ["Qwen3VL"]
+
+
 @dataclass
 class DPOConfig(TrainingArguments):
     r"""
