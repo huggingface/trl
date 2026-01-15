@@ -79,7 +79,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install transformers==4.57.4  # Debug GH-4829
+          uv pip install "git+https://github.com/huggingface/transformers@7d5c2b5e9bab1be56aa49cb26c095d0f6e06dabe"
 
       - name: Test with pytest
         run: |
