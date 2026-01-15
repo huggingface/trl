@@ -48,7 +48,7 @@ jobs:
       group: aws-g4dn-2xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
-      options: --gpus all
+      options: --gpus all --memory=28g --memory-swap=28g --shm-size=2g
     defaults:
       run:
         shell: bash
