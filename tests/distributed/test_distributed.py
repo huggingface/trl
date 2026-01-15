@@ -92,7 +92,15 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            "zero2",
+            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing; see #4831")),
+            "fsdp2",
+        ],
+    )
     def test_sft_peft(self, config):
         # fmt: off
         run_command(

@@ -23,8 +23,7 @@ Each patch should be removed when minimum version requirements eliminate the nee
 import warnings
 
 from packaging.version import Version
-
-from .import_utils import is_vllm_available
+from transformers.utils.import_utils import _is_package_available
 
 
 def _is_package_version_below(package_name: str, version_threshold: str) -> bool:
@@ -33,20 +32,39 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
 
     Args:
         package_name (str): Package name.
-        version_threshold (str): Version upper threshold to compare against.
+        version_threshold (str): Maximum version threshold.
 
     Returns:
         - True if package is installed and version < version_threshold.
         - False if package is not installed or version >= version_threshold.
     """
     try:
-        from transformers.utils.import_utils import _is_package_available
-
         is_available, version = _is_package_available(package_name, return_version=True)
-        if not is_available:
-            return False
+        return is_available and Version(version) < Version(version_threshold)
+    except Exception as e:
+        warnings.warn(
+            f"Failed to check {package_name} version against {version_threshold}: {e}. "
+            f"Compatibility patch may not be applied.",
+            stacklevel=2,
+        )
+        return False
 
-        return Version(version) < Version(version_threshold)
+
+def _is_package_version_at_least(package_name: str, version_threshold: str) -> bool:
+    """
+    Check if installed package version is at least the given threshold.
+
+    Args:
+        package_name (str): Package name.
+        version_threshold (str): Minimum version threshold.
+
+    Returns:
+        - True if package is installed and version >= version_threshold.
+        - False if package is not installed or version < version_threshold.
+    """
+    try:
+        is_available, version = _is_package_available(package_name, return_version=True)
+        return is_available and Version(version) >= Version(version_threshold)
     except Exception as e:
         warnings.warn(
             f"Failed to check {package_name} version against {version_threshold}: {e}. "
@@ -58,7 +76,7 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
 
 def _patch_vllm_logging() -> None:
     """Set vLLM logging level to ERROR by default to reduce noise."""
-    if is_vllm_available():
+    if _is_package_available("vllm"):
         import os
 
         os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
@@ -97,7 +115,7 @@ def _patch_vllm_cached_tokenizer() -> None:
     - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
     - This can be removed when TRL requires vLLM>=0.12.0
     """
-    if _is_package_version_below("vllm", "0.12.0"):
+    if _is_package_version_at_least("transformers", "5.0.0.dev0") and _is_package_version_below("vllm", "0.12.0"):
         try:
             import contextlib
             import copy
@@ -158,15 +176,13 @@ def _patch_transformers_hybrid_cache() -> None:
     - Fixed in peft: https://github.com/huggingface/peft/pull/2735 (released in v0.18.0)
     - This can be removed when TRL requires liger_kernel>=0.6.5 and peft>=0.18.0
     """
-    if _is_package_version_below("liger_kernel", "0.6.5") or _is_package_version_below("peft", "0.18.0"):
+    if _is_package_version_at_least("transformers", "5.0.0.dev0") and (
+        _is_package_version_below("liger_kernel", "0.6.5") or _is_package_version_below("peft", "0.18.0")
+    ):
         try:
-            import transformers
+            import transformers.cache_utils as cache_utils
 
-            transformers_version = Version(transformers.__version__)
-            if transformers_version >= Version("5.0.0.dev0"):
-                import transformers.cache_utils as cache_utils
-
-                cache_utils.HybridCache = cache_utils.Cache
+            cache_utils.HybridCache = cache_utils.Cache
         except Exception as e:
             warnings.warn(f"Failed to patch transformers HybridCache compatibility: {e}", stacklevel=2)
 
