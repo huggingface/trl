@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,11 +36,6 @@ class KTOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int`, *optional*):
-            Maximum length of the completion. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
@@ -59,15 +54,9 @@ class KTOConfig(TrainingArguments):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int`, *optional*):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
             during evaluation.
-        is_encoder_decoder (`bool`, *optional*):
-            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
-            you need to specify if the model returned by the callable is an encoder-decoder model.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
@@ -140,20 +129,6 @@ class KTOConfig(TrainingArguments):
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
     )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
-    max_completion_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
     beta: float = field(
         default=0.1,
         metadata={
@@ -192,25 +167,11 @@ class KTOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
     )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long.",
-            "choices": ["keep_end", "keep_start"],
-        },
-    )
     generate_during_eval: bool = field(
         default=False,
         metadata={
             "help": "If `True`, generates and logs completions from both the model and the reference model to W&B "
             "during evaluation."
-        },
-    )
-    is_encoder_decoder: bool | None = field(
-        default=None,
-        metadata={
-            "help": "When using the `model_init` argument (callable) to instantiate the model instead of the `model` "
-            "argument, you need to specify if the model returned by the callable is an encoder-decoder model."
         },
     )
     disable_dropout: bool = field(

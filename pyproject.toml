@@ -30,7 +30,8 @@ requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
-    "transformers>=4.56.1",
+    "packaging>20.0",
+    "transformers>=4.56.2",
 ]
 dynamic = ["version"]
 
@@ -78,7 +79,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.10.2,<0.12.0",
+    "vllm>=0.10.2,<0.13.0",
     "fastapi",
     "pydantic",
     "requests",

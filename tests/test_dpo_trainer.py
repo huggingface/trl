@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -411,7 +411,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_precompute_ref_batch_size(self):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=2,
             precompute_ref_log_probs=True,
             precompute_ref_batch_size=4,
@@ -611,7 +611,7 @@ class TestDPOTrainer(TrlTestCase):
 
         # lora model
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+            model_id, dtype="float32", quantization_config=BitsAndBytesConfig(load_in_4bit=True)
         )
 
         training_args = DPOConfig(
@@ -695,7 +695,7 @@ class TestDPOTrainer(TrlTestCase):
 
         # lora model
         model = AutoModelForCausalLM.from_pretrained(
-            self.model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+            self.model_id, dtype="float32", quantization_config=BitsAndBytesConfig(load_in_4bit=True)
         )
 
         training_args = DPOConfig(

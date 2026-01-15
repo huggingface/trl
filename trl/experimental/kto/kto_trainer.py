@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,6 @@ from datasets import Dataset, concatenate_datasets
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
-    AutoModelForCausalLM,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -50,13 +49,13 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import create_reference_model, prepare_deepspeed
+from ...models.utils import create_reference_model, peft_module_casting_to_bf16, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
+    create_model_from_path,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
-    peft_module_casting_to_bf16,
     selective_log_softmax,
 )
 from ..utils import DPODataCollatorWithPadding
@@ -157,8 +156,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     """Process tokens of a KTO specific dataset.
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation in case the prompt +
-    completion responses is/are too long. First we truncate the prompt; if we're still too long, we truncate the
-    completion.
+    completion responses is/are too long. We truncate from the end (completion) to fit within max_length.
 
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
     prompt and the completion response, with label_pad_token_id for the prompt tokens.
@@ -172,105 +170,76 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         f"{kwargs['prefix']}label": example["label"],
     }
 
-    if not kwargs["is_encoder_decoder"]:
-        # Check issues below for more details
-        #  1. https://github.com/huggingface/trl/issues/907
-        #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-        #  3. https://github.com/LianjiaTech/BELLE/issues/337
+    # Check issues below for more details
+    #  1. https://github.com/huggingface/trl/issues/907
+    #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+    #  3. https://github.com/LianjiaTech/BELLE/issues/337
 
-        if not isinstance(prompt, str):
-            raise ValueError(f"prompt should be an str but got {type(prompt)}")
+    if not isinstance(prompt, str):
+        raise ValueError(f"prompt should be an str but got {type(prompt)}")
 
-        if not isinstance(completion, str):
-            raise ValueError(f"completion should be an str but got {type(completion)}")
+    if not isinstance(completion, str):
+        raise ValueError(f"completion should be an str but got {type(completion)}")
 
-        # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
-        all_tokens = {
-            "prompt_input_ids": example["prompt_input_ids"],
-            "prompt_attention_mask": example["prompt_attention_mask"],
-            "answer_input_ids": example["answer_input_ids"],
-            "answer_attention_mask": example["answer_attention_mask"],
-        }
+    # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
+    all_tokens = {
+        "prompt_input_ids": example["prompt_input_ids"],
+        "prompt_attention_mask": example["prompt_attention_mask"],
+        "answer_input_ids": example["answer_input_ids"],
+        "answer_attention_mask": example["answer_attention_mask"],
+    }
 
-        # calculate max length by checking if BOS/EOS is already there
-        max_length = kwargs["max_length"]
-        bos_token_id = kwargs["tokenizer"].bos_token_id
-        eos_token_id = kwargs["tokenizer"].eos_token_id
-        if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
-            max_length -= 1
-        if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
-            max_length -= 1
+    # calculate max length by checking if BOS/EOS is already there
+    max_length = kwargs["max_length"]
+    bos_token_id = kwargs["tokenizer"].bos_token_id
+    eos_token_id = kwargs["tokenizer"].eos_token_id
+    if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
+        max_length -= 1
+    if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
+        max_length -= 1
 
-        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                if kwargs["truncation_mode"] == "keep_start":
-                    all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
-                elif kwargs["truncation_mode"] == "keep_end":
-                    all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
+    # if combined sequence is too long, truncate the completion (answer) from the end
+    prompt_length = len(all_tokens["prompt_input_ids"])
+    completion_length = len(all_tokens["answer_input_ids"])
+    if prompt_length + completion_length > max_length:
+        max_completion_length = max_length - prompt_length
+        for k in ["answer_input_ids", "answer_attention_mask"]:
+            all_tokens[k] = all_tokens[k][:max_completion_length]
 
-        # if that's still too long, truncate the response
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["answer_input_ids", "answer_attention_mask"]:
-                all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
+    # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
+    batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
+    batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
+    batch[f"{kwargs['prefix']}completion_input_ids"] = all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
+    batch[f"{kwargs['prefix']}completion_attention_mask"] = (
+        all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
+    )
 
-        # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
-        batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
-        batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
-        batch[f"{kwargs['prefix']}completion_input_ids"] = (
-            all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
-        )
-        batch[f"{kwargs['prefix']}completion_attention_mask"] = (
-            all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
-        )
-
-        # add BOS, which affects both prompt and the full completion
-        if bos_token_id is not None:
-            if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
-                batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
-                    f"{kwargs['prefix']}prompt_input_ids"
-                ]
-                batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[
-                    f"{kwargs['prefix']}prompt_attention_mask"
-                ]
-                batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
-                    f"{kwargs['prefix']}completion_input_ids"
-                ]
-                batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
-                    f"{kwargs['prefix']}completion_attention_mask"
-                ]
-        # add EOS, which affects only the full completion
-        if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
-            batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
-                eos_token_id
+    # add BOS, which affects both prompt and the full completion
+    if bos_token_id is not None:
+        if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
+            batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
+                f"{kwargs['prefix']}prompt_input_ids"
             ]
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = batch[
+            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
+            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
+                f"{kwargs['prefix']}completion_input_ids"
+            ]
+            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
                 f"{kwargs['prefix']}completion_attention_mask"
-            ] + [1]
+            ]
+    # add EOS, which affects only the full completion
+    if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
+        batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
+            eos_token_id
+        ]
+        batch[f"{kwargs['prefix']}completion_attention_mask"] = batch[
+            f"{kwargs['prefix']}completion_attention_mask"
+        ] + [1]
 
-        batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
-        batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-            kwargs["label_pad_token_id"]
-        ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
-    else:
-        completion_tokens = kwargs["tokenizer"](
-            completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
-        )
-        prompt_tokens = kwargs["tokenizer"](
-            prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
-        )
-
-        batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
-        batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
-
-        batch[f"{kwargs['prefix']}completion_labels"] = completion_tokens["input_ids"]
-        batch[f"{kwargs['prefix']}completion_attention_mask"] = completion_tokens["attention_mask"]
-        if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-            batch[f"{kwargs['prefix']}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                labels=torch.tensor(batch["completion_labels"])
-            )
+    batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
+    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
+        kwargs["label_pad_token_id"]
+    ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
 
     return batch
 
@@ -367,49 +336,33 @@ class KTOTrainer(BaseTrainer):
                 "same as `model`, you must mass a copy of it, or `None` if you use peft."
             )
 
-        if args.model_init_kwargs is None:
-            model_init_kwargs = {}
-        elif not isinstance(model, str):
-            raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
-        else:
-            model_init_kwargs = args.model_init_kwargs
-            dtype = model_init_kwargs.get("dtype", "auto")
-            if dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
-                    )
-                model_init_kwargs["dtype"] = dtype
-            model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
-
-        if args.ref_model_init_kwargs is None:
-            ref_model_init_kwargs = {}
-        elif not isinstance(ref_model, str):
-            raise ValueError(
-                "You passed ref_model_kwargs to the KTOTrainer. But your ref_model is already instantiated."
-            )
-        else:
-            ref_model_init_kwargs = args.ref_model_init_kwargs
-            dtype = ref_model_init_kwargs.get("dtype", "auto")
-            if dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
-                    )
-                ref_model_init_kwargs["dtype"] = dtype
-            ref_model_init_kwargs["device_map"] = ref_model_init_kwargs.get("device_map", "auto")
-
+        # Model initialization
         if isinstance(model, str):
-            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Distributed training requires device_map=None ("auto" fails with DeepSpeed/FSDP)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the KTOConfig, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
 
+        # Reference model initialization
         if isinstance(ref_model, str):
-            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+            ref_model_init_kwargs = args.ref_model_init_kwargs or {}
+            # Distributed training requires device_map=None
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                ref_model_init_kwargs["device_map"] = None
+            ref_model = create_model_from_path(ref_model, **ref_model_init_kwargs)
+        else:
+            if ref_model is not None and args.ref_model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `ref_model_init_kwargs` to the KTOConfig, but your ref_model is already instantiated. "
+                    "The `ref_model_init_kwargs` will be ignored."
+                )
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
@@ -478,12 +431,12 @@ class KTOTrainer(BaseTrainer):
                 " Please install `wandb` or `comet-ml` to resolve."
             )
 
-        if model is not None:
-            self.is_encoder_decoder = model.config.is_encoder_decoder
-        elif args.is_encoder_decoder is None:
-            raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
-        else:
-            self.is_encoder_decoder = args.is_encoder_decoder
+        # KTO only supports causal language models, not encoder-decoder models
+        if model is not None and hasattr(model.config, "is_encoder_decoder") and model.config.is_encoder_decoder:
+            raise ValueError(
+                "KTO only supports causal language models. Encoder-decoder models are not supported. "
+                "Please use a causal LM (e.g., GPT, Llama, Mistral) instead of an encoder-decoder model (e.g., T5, BART)."
+            )
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
@@ -510,30 +463,10 @@ class KTOTrainer(BaseTrainer):
         if args.max_length is not None:
             max_length = args.max_length
 
-        if args.max_prompt_length is None:
-            logger.warning(
-                "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the KTOTrainer's init"
-                " it will be set to `128` by default, but you should do it yourself in the future.",
-            )
-            max_prompt_length = 128
-        if args.max_prompt_length is not None:
-            max_prompt_length = args.max_prompt_length
-
-        max_completion_length = None
-        if args.max_completion_length is None and self.is_encoder_decoder:
-            logger.warning(
-                "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
-                " it will be set to `128` by default, but you should do it yourself in the future.",
-            )
-            max_completion_length = 128
-        if args.max_completion_length is not None and self.is_encoder_decoder:
-            max_completion_length = args.max_completion_length
-
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
-                is_encoder_decoder=self.is_encoder_decoder,
             )
 
             if args.remove_unused_columns:
@@ -559,9 +492,6 @@ class KTOTrainer(BaseTrainer):
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
         self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
-        self.max_prompt_length = max_prompt_length
-        self.truncation_mode = args.truncation_mode
-        self.max_completion_length = max_completion_length
         self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
@@ -644,13 +574,9 @@ class KTOTrainer(BaseTrainer):
 
             fn_kwargs = {
                 "prefix": "",
-                "is_encoder_decoder": self.is_encoder_decoder,
                 "tokenizer": self.processing_class,
                 "max_length": self.max_length,
-                "truncation_mode": self.truncation_mode,
                 "label_pad_token_id": self.label_pad_token_id,
-                "max_prompt_length": self.max_prompt_length,
-                "max_completion_length": self.max_completion_length,
             }
 
             train_dataset = train_dataset.map(
@@ -940,64 +866,31 @@ class KTOTrainer(BaseTrainer):
         with torch.no_grad():
             if self.ref_model is None:
                 with self.null_ref_context():
-                    if self.is_encoder_decoder:
-                        completion_logits = self.model(
-                            padded_batch["prompt_input_ids"],
-                            attention_mask=padded_batch["prompt_attention_mask"],
-                            decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
-                            labels=padded_batch["completion_labels"],
-                        ).logits
-
-                        if self.calculate_KL:
-                            KL_logits = self.model(
-                                padded_batch["KL_prompt_input_ids"],
-                                attention_mask=padded_batch["KL_prompt_attention_mask"],
-                                decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                                labels=padded_batch["KL_completion_labels"],
-                            ).logits
-                    else:
-                        completion_logits = self.model(
-                            padded_batch["completion_input_ids"],
-                            attention_mask=padded_batch["completion_attention_mask"],
-                        ).logits
-
-                        if self.calculate_KL:
-                            KL_logits = self.model(
-                                padded_batch["KL_completion_input_ids"],
-                                attention_mask=padded_batch["KL_completion_attention_mask"],
-                            ).logits
-            else:
-                if self.is_encoder_decoder:
-                    completion_logits = self.ref_model(
-                        padded_batch["prompt_input_ids"],
-                        attention_mask=padded_batch["prompt_attention_mask"],
-                        decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
-                        labels=padded_batch["completion_labels"],
+                    completion_logits = self.model(
+                        padded_batch["completion_input_ids"],
+                        attention_mask=padded_batch["completion_attention_mask"],
                     ).logits
 
                     if self.calculate_KL:
-                        KL_logits = self.ref_model(
-                            padded_batch["KL_prompt_input_ids"],
-                            attention_mask=padded_batch["KL_prompt_attention_mask"],
-                            decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                            labels=padded_batch["KL_completion_labels"],
-                        ).logits
-                else:
-                    completion_logits = self.ref_model(
-                        padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
-                    ).logits
-
-                    if self.calculate_KL:
-                        KL_logits = self.ref_model(
+                        KL_logits = self.model(
                             padded_batch["KL_completion_input_ids"],
                             attention_mask=padded_batch["KL_completion_attention_mask"],
                         ).logits
+            else:
+                completion_logits = self.ref_model(
+                    padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
+                ).logits
+
+                if self.calculate_KL:
+                    KL_logits = self.ref_model(
+                        padded_batch["KL_completion_input_ids"],
+                        attention_mask=padded_batch["KL_completion_attention_mask"],
+                    ).logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
             padded_batch["completion_labels"],
             average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
@@ -1006,7 +899,6 @@ class KTOTrainer(BaseTrainer):
                 KL_logits,
                 padded_batch["KL_completion_labels"],
                 average_log_prob=False,
-                is_encoder_decoder=self.is_encoder_decoder,
                 label_pad_token_id=self.label_pad_token_id,
             )
         else:
@@ -1020,7 +912,6 @@ class KTOTrainer(BaseTrainer):
         labels: torch.LongTensor,
         average_log_prob: bool = False,
         label_pad_token_id: int = -100,
-        is_encoder_decoder: bool = False,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
 
@@ -1035,10 +926,6 @@ class KTOTrainer(BaseTrainer):
                 log probabilities of the (non-masked) tokens.
             label_pad_token_id:
                 The label value to ignore when computing log probabilities.
-            is_encoder_decoder:
-                Whether the model is an encoder-decoder model. If True, the labels are not shifted and the logits are
-                assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
-                position, and the logits are assumed to be aligned with the shifted labels.
 
         Returns:
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
@@ -1047,12 +934,9 @@ class KTOTrainer(BaseTrainer):
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
 
-        if not is_encoder_decoder:
-            labels = labels[:, 1:].clone()
-            logits = logits[:, :-1, :]
-        else:
-            # Fixes end-dec RuntimeError
-            labels = labels.clone()
+        # For causal LM, shift labels and logits by one position
+        labels = labels[:, 1:].clone()
+        logits = logits[:, :-1, :]
 
         loss_mask = labels != label_pad_token_id
 
@@ -1071,14 +955,7 @@ class KTOTrainer(BaseTrainer):
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         KL_logps = self._compute_kl_logps(model, batch)
 
-        model_kwargs = (
-            {
-                "labels": batch["completion_labels"],
-                "decoder_input_ids": batch.get("completion_decoder_input_ids"),
-            }
-            if self.is_encoder_decoder
-            else {}
-        )
+        model_kwargs = {}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
@@ -1093,7 +970,6 @@ class KTOTrainer(BaseTrainer):
             completion_logits,
             batch["completion_labels"],
             average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
@@ -1202,18 +1078,10 @@ class KTOTrainer(BaseTrainer):
         """Compute KL log probabilities for a given batch."""
         KL_logps = None
         if self.calculate_KL:
-            if self.is_encoder_decoder:
-                KL_model_kwargs = {
-                    "input_ids": batch["KL_prompt_input_ids"],
-                    "attention_mask": batch["KL_prompt_attention_mask"],
-                    "labels": batch["KL_completion_labels"],
-                    "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
-                }
-            else:
-                KL_model_kwargs = {
-                    "input_ids": batch["KL_completion_input_ids"],
-                    "attention_mask": batch["KL_completion_attention_mask"],
-                }
+            KL_model_kwargs = {
+                "input_ids": batch["KL_completion_input_ids"],
+                "attention_mask": batch["KL_completion_attention_mask"],
+            }
 
             with torch.no_grad():
                 KL_logits = model(**KL_model_kwargs).logits
@@ -1222,7 +1090,6 @@ class KTOTrainer(BaseTrainer):
                 KL_logits,
                 batch["KL_completion_labels"],
                 average_log_prob=False,
-                is_encoder_decoder=self.is_encoder_decoder,
                 label_pad_token_id=self.label_pad_token_id,
             )
         return KL_logps
@@ -1259,72 +1126,35 @@ class KTOTrainer(BaseTrainer):
         else:
             kl = torch.zeros(1).to(self.accelerator.device)
 
-        model_kwargs = (
-            {
-                "labels": batch["completion_labels"],
-                "decoder_input_ids": batch.get("completion_decoder_input_ids"),
-            }
-            if self.is_encoder_decoder
-            else {}
-        )
+        model_kwargs = {}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        if self.is_encoder_decoder:
-            # 1. Get encoder outputs
-            encoder_outputs = model.get_encoder()(
-                batch["completion_input_ids"],
-                attention_mask=batch["completion_attention_mask"],
-                return_dict=True,
-                **model_kwargs,
-            )
-            # 2. Get decoder outputs
-            outputs = model.get_decoder()(
-                input_ids=model_kwargs["decoder_input_ids"],
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                use_cache=False,
-                **model_kwargs,
-            )
-            # 1. Get reference encoder outputs
-            ref_encoder_outputs = self.ref_model.get_encoder()(
-                batch["completion_input_ids"],
-                attention_mask=batch["completion_attention_mask"],
-                return_dict=True,
-                **model_kwargs,
-            )
-            # 2. Get reference decoder outputs
-            ref_outputs = self.ref_model.get_decoder()(
-                input_ids=model_kwargs["decoder_input_ids"],
-                encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
-                use_cache=False,
-                **model_kwargs,
-            )
+        # skip the lm head and get the last hidden state
+        if hasattr(model, "get_decoder") and model.get_decoder() is not None:
+            base_model = model.get_decoder()
         else:
-            # skip the lm head and get the last hidden state
-            if hasattr(model, "get_decoder") and model.get_decoder() is not None:
-                base_model = model.get_decoder()
-            else:
-                base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
-                base_model = getattr(model, base_attr, model)
-            outputs = base_model(
-                batch["completion_input_ids"],
-                attention_mask=batch["completion_attention_mask"],
-                use_cache=False,
-                **model_kwargs,
-            )
+            base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
+            base_model = getattr(model, base_attr, model)
+        outputs = base_model(
+            batch["completion_input_ids"],
+            attention_mask=batch["completion_attention_mask"],
+            use_cache=False,
+            **model_kwargs,
+        )
 
-            # reference model
-            if hasattr(self.ref_model, "get_decoder") and self.ref_model.get_decoder() is not None:
-                ref_base_model = self.ref_model.get_decoder()
-            else:
-                ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
-                ref_base_model = getattr(self.ref_model, ref_attr, self.ref_model)
-            ref_outputs = ref_base_model(
-                batch["completion_input_ids"],
-                attention_mask=batch["completion_attention_mask"],
-                use_cache=False,
-                **model_kwargs,
-            )
+        # reference model
+        if hasattr(self.ref_model, "get_decoder") and self.ref_model.get_decoder() is not None:
+            ref_base_model = self.ref_model.get_decoder()
+        else:
+            ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
+            ref_base_model = getattr(self.ref_model, ref_attr, self.ref_model)
+        ref_outputs = ref_base_model(
+            batch["completion_input_ids"],
+            attention_mask=batch["completion_attention_mask"],
+            use_cache=False,
+            **model_kwargs,
+        )
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
@@ -1339,14 +1169,12 @@ class KTOTrainer(BaseTrainer):
                 rejected_rewards_sum,
             ),
         ) = self.kto_loss_fn(
-            _input=outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
+            _input=outputs.last_hidden_state[:, :-1],
             lin_weight=lm_head.weight,
             target=batch["completion_labels"][:, 1:],
             bias=lm_head.bias if hasattr(lm_head, "bias") else None,
             preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
-            ref_input=ref_outputs.last_hidden_state[:, :-1]
-            if not self.is_encoder_decoder
-            else outputs.last_hidden_state,
+            ref_input=ref_outputs.last_hidden_state[:, :-1],
             ref_weight=ref_lm_head.weight,
             ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
             kl=kl,
