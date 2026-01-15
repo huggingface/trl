@@ -7,15 +7,15 @@
 # dataset_path: "/lustre/fsw/portfolios/llmservice/users/cmunley/Gym/resources_servers/xlam_fc/data/train.jsonl"
 
 model_name: "Qwen/Qwen3-4B-Instruct-2507"
-dataset_path: "train-mcqa.jsonl"
-task: "mcqa"  # just used in wandb run_name if name not set explicitly
-output_dir: "outputs/trl_nemo_gym_mcqa"
+dataset_path: "train-workplace.jsonl"
+task: "workplace_IS_false"  # just used in wandb run_name if name not set explicitly
+output_dir: "outputs/trl_nemo_gym_workplace"
 project_name: "cmunley-nemo-gym-trl-int"
-learning_rate: 3.0e-6
+learning_rate: 1.0e-5
 max_steps: 1000000
 num_generations: 8
 per_device_train_batch_size: 1
-gradient_accumulation_steps: 8
+gradient_accumulation_steps: 16
 max_seq_length: 16384
 temperature: 1
 top_p: 0.999
@@ -28,6 +28,7 @@ save_steps: 900000
 report_to: "wandb"
 log_completions: true
 num_completions_to_print: 2
-eval_dataset_path: "val-mcqa-50.jsonl"
+eval_dataset_path: "val-workplace-50.jsonl"
 eval_strategy: "steps"
 eval_steps: 5
+vllm_importance_sampling_correction: false

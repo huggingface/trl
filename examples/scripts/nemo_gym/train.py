@@ -70,6 +70,7 @@ class TrainingConfig:
 
     output_dir: str = "outputs/trl_nemo_gym"
     save_steps: int = 100
+    save_total_limit: int = None
     report_to: str = "none"
     run_name: str = None  # Wandb
     project_name: str = None  # Wandb
@@ -79,6 +80,9 @@ class TrainingConfig:
     eval_dataset_path: Optional[str] = None
     eval_strategy: str = "no"
     eval_steps: int = 50
+    eval_on_start: bool = False
+
+    vllm_importance_sampling_correction: bool = False
 
 def reward_fn(completions: List[str], **kwargs) -> List[float]:
     env_rewards = kwargs.get("env_reward")
@@ -96,6 +100,7 @@ async def call_nemo_gym_agent(
 ) -> List[Dict[str, Any]]:
     print(f"Calling Nemo Gym agent at {agent_server} with {len(prompts)} prompts")
 
+    # todo: increase limits
     async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
         tasks = []
         for prompt, item in zip(prompts, dataset_items):
@@ -118,16 +123,13 @@ async def call_nemo_gym_agent(
             )
             tasks.append(task)
 
-        responses = []
-        with tqdm(total=len(tasks), desc="Agent requests") as pbar:
-            for coro in asyncio.as_completed(tasks):
-                result = await coro
-                responses.append(result)
-                pbar.update(1)
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
 
         results = []
         for i, response in enumerate(responses):
             try:
+                if isinstance(response, Exception):
+                    raise response
                 json_data = await response.json()
                 if not isinstance(json_data, dict):
                     raise ValueError(f"Expected dict, got {type(json_data)}")
@@ -198,7 +200,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
     
     prompt_ids: List[List[int]] = []
     completion_ids: List[List[int]] = []
-    completion_mask: List[List[int]] = []  # 1 for action, 0 for observation
+    completion_mask: List[List[int]] = []  # 1 for action, 0 for observation/user
     logprobs: List[List[float]] = []
     env_rewards: List[float] = []
     num_turns_list: List[int] = []
@@ -254,7 +256,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
 
         for idx, item in enumerate(output_items):
             if "prompt_token_ids" not in item or "generation_token_ids" not in item:
-                raise ValueError(f"Item {idx} missing prompt_token_ids or generation_token_ids")
+                continue
 
             num_turns += 1
             item_prompt_ids = item["prompt_token_ids"]
@@ -278,7 +280,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
                     interleaved_completion.extend(tool_result_tokens)
                     interleaved_mask.extend([0] * len(tool_result_tokens))
                     interleaved_logprobs.extend([0.0] * len(tool_result_tokens))
-            
+
             interleaved_completion.extend(item_gen_ids)
             interleaved_mask.extend([1] * len(item_gen_ids))
             assert len(item_logprobs) == len(item_gen_ids), f"Logprobs len {len(item_logprobs)} != gen len {len(item_gen_ids)}"
@@ -375,10 +377,17 @@ def main():
                         help="vLLM server hostname/IP")
     parser.add_argument("--head_server_host", type=str, default="127.0.0.1",
                         help="Head server hostname/IP for ng_run")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Path to checkpoint to resume from")
     args = parser.parse_args()
 
     with open(args.config) as f:
         config = TrainingConfig(**yaml.safe_load(f))
+
+    if isinstance(config.learning_rate, str):
+        config.learning_rate = float(config.learning_rate)
+    if isinstance(config.weight_decay, str):
+        config.weight_decay = float(config.weight_decay)
 
     agent_server = get_agent_server(
         head_server_host=args.head_server_host,
@@ -440,6 +449,7 @@ def main():
 
         max_steps=config.max_steps,
         save_steps=config.save_steps,
+        save_total_limit=config.save_total_limit,
         logging_steps=1,
         report_to=config.report_to,
         output_dir=config.output_dir,
@@ -448,6 +458,7 @@ def main():
         eval_strategy=config.eval_strategy,
         eval_steps=config.eval_steps,
 
+        vllm_importance_sampling_correction=config.vllm_importance_sampling_correction,
         epsilon=0.2,
         epsilon_high=0.28,
         loss_type="grpo",
@@ -457,7 +468,6 @@ def main():
 
         max_prompt_length=config.max_prompt_length,
         max_completion_length=config.max_seq_length - config.max_prompt_length,
-
         shuffle_dataset=False,
 
         model_init_kwargs={
@@ -477,7 +487,7 @@ def main():
         args=training_args,
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
 if __name__ == "__main__":
     main()

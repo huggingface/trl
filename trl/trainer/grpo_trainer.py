@@ -1809,7 +1809,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+        
+        # attend to all non-padding tokens, but mask out user/tool result tokens in loss
+        completion_attention_mask = (completion_ids != self.pad_token_id).long()
+        attention_mask = torch.cat([prompt_mask, completion_attention_mask], dim=1)  # (B, P+C)
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
@@ -1863,6 +1866,19 @@ class GRPOTrainer(BaseTrainer):
                 )
             else:
                 old_per_token_logps = None
+
+            # track sampling logp diff even when IS off for debugging
+            # could remove this 
+            if self.use_vllm and sampling_per_token_logps is not None and old_per_token_logps is None:
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    batch_size,
+                    num_images=num_images,
+                    **forward_kwargs,
+                )
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
@@ -2000,7 +2016,9 @@ class GRPOTrainer(BaseTrainer):
         if images is not None:
             self._logs["images"].extend(gather_object(images))
 
-        if self.use_vllm and self.vllm_importance_sampling_correction:
+        # track sampling logp diff even when IS off for debugging
+        # could remove this 
+        if self.use_vllm and old_per_token_logps is not None and sampling_per_token_logps is not None:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if not self.tools else (completion_mask * tool_mask).bool()
             delta = delta[mask]
@@ -2013,6 +2031,8 @@ class GRPOTrainer(BaseTrainer):
                 self.accelerator.gather(max_delta).max().item()
             )
 
+        # track IS ratio only when IS correction is enabled
+        if self.use_vllm and self.vllm_importance_sampling_correction:
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:
