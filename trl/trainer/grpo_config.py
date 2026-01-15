@@ -678,13 +678,13 @@ class GRPOConfig(TrainingArguments):
     multi_objective_aggregation: str = field(
         default="sum_then_normalize",
         metadata={
-            "help": "Specifies the multi-objective aggregation strategy when using multiple reward functions. "
-            "Supported values are: "
-            "`'sum_then_normalize'` (default): Rewards are first summed together and then normalized as a single "
-            "entity. The normalization strategy depends on the `scale_rewards` parameter."
-            "`'normalize_then_sum'`: Each reward is normalized individually before being summed to form the final "
-            "reward. This is the suggested approach from GDPO: Group reward-Decoupled Normalization Policy "
-            "Optimization for Multi-reward RL Optimization (https://huggingface.co/papers/2601.05242)."
+            "help": "Method to aggregate multiple reward functions. Supported values are: "
+            "`'sum_then_normalize'` (default): First sums the weighted rewards from each reward function, then "
+            "applies reward scaling/normalization as specified by `scale_rewards` (see `scale_rewards` for details). "
+            "`'normalize_then_sum'`: First normalizes/scales each reward function across generations (within each "
+            "group), then sums the normalized rewards using the specified weights. The aggregated reward is then "
+            "normalized at the batch level when forming advantages. This is the suggested approach from the paper "
+            "GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization."
         },
     )
     scale_rewards: str = field(
