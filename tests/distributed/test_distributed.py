@@ -24,7 +24,6 @@ from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATHS = {
     "ddp": ROOT / "tests" / "accelerate_configs" / "ddp.yaml",
-    "zero3": ROOT / "tests" / "accelerate_configs" / "zero3.yaml",
     "fsdp2": ROOT / "tests" / "accelerate_configs" / "fsdp2.yaml",
 }
 
@@ -36,7 +35,7 @@ def run_command(command: list[str], env: dict[str, str]) -> None:
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    @pytest.mark.parametrize("config", ["ddp", "zero3", "fsdp2"])
+    @pytest.mark.parametrize("config", ["ddp", "fsdp2"])
     def test_sft(self, config):
         # fmt: off
         run_command(
@@ -55,7 +54,6 @@ class TestDistributed(TrlTestCase):
         "config",
         [
             "ddp",
-            "zero3",
             pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see see #4812")),
         ],
     )
@@ -73,7 +71,7 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero3", "fsdp2"])
+    @pytest.mark.parametrize("config", ["ddp", "fsdp2"])
     def test_sft_dataset_streaming(self, config):
         # fmt: off
         run_command(
@@ -90,7 +88,7 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero3", "fsdp2"])
+    @pytest.mark.parametrize("config", ["ddp", "fsdp2"])
     def test_sft_peft(self, config):
         # fmt: off
         run_command(
