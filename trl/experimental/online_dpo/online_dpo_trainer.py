@@ -667,14 +667,7 @@ class OnlineDPOTrainer(BaseTrainer):
         else:
             model.gradient_checkpointing_enable()
 
-        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
-        use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-        )
-
-        if use_reentrant:
-            model.enable_input_require_grads()
-
+        model.enable_input_require_grads()
         return model
 
     def _generate_vllm(self, prompts, images=None):
