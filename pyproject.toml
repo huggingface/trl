@@ -31,7 +31,7 @@ dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
     "packaging>20.0",
-    "transformers>=4.56.2",
+    "transformers>=4.56.2,<=4.57.3",
 ]
 dynamic = ["version"]
 
