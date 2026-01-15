@@ -1195,7 +1195,8 @@ class SFTTrainer(BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         if self.args.use_liger_kernel:
-            token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
+            token_accuracy = outputs.token_accuracy or 0.0
+            token_accuracy = self.accelerator.gather_for_metrics(token_accuracy).mean().item()
             self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
         else:
             # Compute accuracy from logits using argmax (traditional method)
