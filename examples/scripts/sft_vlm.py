@@ -78,7 +78,6 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.max_length = None
 
     ################
