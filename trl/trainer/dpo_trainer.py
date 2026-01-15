@@ -194,7 +194,6 @@ class DataCollatorForPreference(DataCollatorMixin):
         return output
 
 
-@dataclass
 class DPOTrainer(BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method.
@@ -777,11 +776,9 @@ class DPOTrainer(BaseTrainer):
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
         prompt_input_ids = processed_features["input_ids"][0]
-        pixel_values = None
-        if type(processing_class).__name__ == "Qwen3VLProcessor":
-            pixel_values = processed_features["pixel_values"]
-        else:
-            pixel_values = processed_features["pixel_values"][0]
+        pixel_values = processed_features["pixel_values"]
+        if isinstance(pixel_values, list):
+            pixel_values = pixel_values[0]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
 
