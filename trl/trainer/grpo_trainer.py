@@ -2015,8 +2015,8 @@ class GRPOTrainer(BaseTrainer):
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
         if self.multi_objective_aggregation == "sum_then_normalize":
-            # Apply weights to each reward function's output
-            rewards = torch.matmul(rewards_per_func, self.reward_weights.to(device))
+            # Apply weights to each reward function's output and sum
+            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1)
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
             if self.scale_rewards == "group":
@@ -2046,7 +2046,7 @@ class GRPOTrainer(BaseTrainer):
             std_k = nanstd(grouped, dim=1, keepdim=True) if num_generations > 1 else torch.zeros_like(mean_k)
             reward_k = (grouped - mean_k) / (std_k + 1e-4)
             reward_k = reward_k.view(-1, len(self.reward_funcs))
-            advantages = torch.matmul(reward_k, self.reward_weights.to(device))
+            advantages = (reward_k * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             std_advantages = (
                 advantages.std().expand_as(advantages) if advantages.numel() > 1 else torch.zeros_like(advantages)
             )
@@ -2071,7 +2071,6 @@ class GRPOTrainer(BaseTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-
         rewards = rewards_per_func.nansum(dim=1)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(rewards.std().item())
