@@ -1200,12 +1200,13 @@ class SFTTrainer(BaseTrainer):
                 token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
                 self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
             else:
+                # liger-kernel<=0.6.4 can omit token_accuracy even when requested; fixed for Gemma3 in
+                # https://github.com/linkedin/Liger-Kernel/pull/1010
                 warnings.warn(
-                    "liger-kernel did not return token_accuracy when requested. "
-                    "The mean_token_accuracy metric will not be logged. "
-                    "This may indicate an outdated liger-kernel version. "
-                    "Consider upgrading to the latest version. "
-                    "If the issue persists after upgrading, please report it to the liger-kernel repository.",
+                    "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
+                    "not be logged. This may indicate an outdated liger-kernel version. Consider upgrading to the "
+                    "latest version. If the issue persists after upgrading, please report it to the liger-kernel "
+                    "repository.",
                     stacklevel=2,
                 )
         else:
