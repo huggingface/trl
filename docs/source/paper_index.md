@@ -187,19 +187,39 @@ training_args = GRPOConfig(
 
 GDPO is a reinforcement learning optimization method designed for multi-reward training. While existing approaches commonly apply Group Relative Policy Optimization (GRPO) in multi-reward settings, the authors show that this leads to reward advantages collapse, reducing training signal resolution and causing unstable or failed convergence. GDPO resolves this issue by decoupling reward normalization across individual rewards, preserving their relative differences and enabling more faithful preference optimization. To enable GDPO for multi-reward RL training, simply set:
 
+For a group of  \\( N \\) rewards and  \\( G \\) samples per group, GDPO normalizes each reward independently:
+
+$$
+A_n^{(i,j)} = \frac{r_n^{(i,j)} - \text{mean}\{r_n^{(i,1)}, \ldots, r_n^{(i,G)}\}}{\text{std}\{r_n^{(i,1)}, \ldots, r_n^{(i,G)}\} + \epsilon}
+$$
+
+The normalized group advantage is then aggregated across rewards:
+
+$$
+A^{(i,j)} = \sum_{n=1}^{N} w_n A_n^{(i,j)}
+$$
+
+The final per-batch normalization produces:
+
+$$
+\hat{A}^{(i,j)} = \frac{A^{(i,j)} - \text{mean}_{i',j'}\{A^{(i',j')}\}}{\text{std}_{i',j'}\{A^{(i',j')}\} + \epsilon}
+$$
+
+Here,  \\( \text{mean}_{i',j'}\{A^{(i',j')}\} \\) and  \\( \text{std}_{i',j'}\{A^{(i',j')}\} \\) denote statistics over all groups in the batch.
+
 ```python
 from trl import GRPOConfig
 
 
 training_args = GRPOConfig(
     ...,
-    apply_gdpo=True,
+    multi_objective_aggregation="normalize_then_sum",
 )
 ```
 
 Note that this method only has an effect when training involve more than one reward function.
 
-We also provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
+The authors provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
 
 ### Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)
 
