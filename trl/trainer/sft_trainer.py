@@ -14,6 +14,7 @@
 
 import contextlib
 import os
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1205,7 +1206,7 @@ class SFTTrainer(BaseTrainer):
                     "This may indicate an outdated liger-kernel version. "
                     "Consider upgrading to the latest version. "
                     "If the issue persists after upgrading, please report it to the liger-kernel repository.",
-                    stacklevel=2
+                    stacklevel=2,
                 )
         else:
             # Compute accuracy from logits using argmax (traditional method)
