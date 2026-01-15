@@ -33,7 +33,7 @@ import torch.utils.data
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -98,7 +98,7 @@ if is_vllm_available():
     import vllm
     from vllm import LLM, SamplingParams
 
-    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+    if Version(vllm.__version__) <= Version("0.10.2"):
         from vllm.sampling_params import GuidedDecodingParams
     else:
         from vllm.sampling_params import StructuredOutputsParams
@@ -1133,7 +1133,7 @@ class RLOOTrainer(BaseTrainer):
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
-                if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                if Version(vllm.__version__) <= Version("0.10.2"):
                     structured_outputs_key = "guided_decoding"
                     if self.structured_outputs_regex:
                         structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
@@ -1405,7 +1405,7 @@ class RLOOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
         # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
         # Temporarily disable checkpointing to avoid this warning during inference.
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):

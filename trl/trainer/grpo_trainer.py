@@ -18,6 +18,7 @@ import copy
 import inspect
 import json
 import os
+import sys
 import textwrap
 import time
 import warnings
@@ -36,7 +37,6 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -106,7 +106,7 @@ if is_vllm_available():
     import vllm
     from vllm import LLM, SamplingParams
 
-    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+    if Version(vllm.__version__) <= Version("0.10.2"):
         from vllm.sampling_params import GuidedDecodingParams
     else:
         from vllm.sampling_params import StructuredOutputsParams
@@ -329,7 +329,7 @@ class GRPOTrainer(BaseTrainer):
                 "with the new `peft_config` to the trainer."
             )
 
-        if is_peft_available() and is_peft_model(model) and self.args.beta != 0.0:
+        if is_peft_available() and is_peft_model(model) and args.beta != 0.0:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during GRPO training.
             model.add_adapter("ref", model.peft_config["default"])
@@ -465,6 +465,7 @@ class GRPOTrainer(BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.max_tool_calling_iterations = args.max_tool_calling_iterations or sys.maxsize
         self.num_generations_eval = args.num_generations_eval or self.num_generations
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.temperature = args.temperature
@@ -1411,7 +1412,7 @@ class GRPOTrainer(BaseTrainer):
                     completion_ids = output["completion_ids"]
                     logprobs = output["logprobs"]
                 else:
-                    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                    if Version(vllm.__version__) <= Version("0.10.2"):
                         structured_outputs_key = "guided_decoding"
                         if self.structured_outputs_regex:
                             structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
@@ -1594,8 +1595,8 @@ class GRPOTrainer(BaseTrainer):
         tool_mask = [[1] * len(ids) for ids in completion_ids]  # 0 for tool result tokens, 1 elsewhere
         tool_call_count = 0
         tool_failure_count = 0
-
-        while idxs_with_tool:
+        iteration_num = 0
+        while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
 
             # Call the tools, and build the new prompt for generation
@@ -1722,7 +1723,7 @@ class GRPOTrainer(BaseTrainer):
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
-
+            iteration_num += 1
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
     def _generate(self, prompts: list):
@@ -1906,7 +1907,7 @@ class GRPOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
         # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
         # Temporarily disable checkpointing to avoid this warning during inference.
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):

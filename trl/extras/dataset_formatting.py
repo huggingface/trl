@@ -15,10 +15,10 @@
 
 import datasets
 from datasets import Value
-from packaging import version
+from packaging.version import Version
 
 
-if version.parse(datasets.__version__) >= version.parse("4.0.0"):
+if Version(datasets.__version__) >= Version("4.0.0"):
     from datasets import List
 
     FORMAT_MAPPING = {
