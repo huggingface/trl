@@ -70,7 +70,6 @@ class TrainingConfig:
 
     output_dir: str = "outputs/trl_nemo_gym"
     save_steps: int = 100
-    save_total_limit: int = None
     report_to: str = "none"
     run_name: str = None  # Wandb
     project_name: str = None  # Wandb
@@ -80,7 +79,6 @@ class TrainingConfig:
     eval_dataset_path: Optional[str] = None
     eval_strategy: str = "no"
     eval_steps: int = 50
-    eval_on_start: bool = False
 
     vllm_importance_sampling_correction: bool = False
 
@@ -449,7 +447,6 @@ def main():
 
         max_steps=config.max_steps,
         save_steps=config.save_steps,
-        save_total_limit=config.save_total_limit,
         logging_steps=1,
         report_to=config.report_to,
         output_dir=config.output_dir,
