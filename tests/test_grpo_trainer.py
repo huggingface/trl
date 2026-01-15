@@ -206,7 +206,6 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-
     def test_training_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
@@ -935,100 +934,6 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-
-    def test_training_with_GDPO(self):
-        SYSTEM_PROMPT = system_prompt = """
-        You are a helpful AI assistant.
-
-        For every request, you should carefully think through the math problem step by step, then provide the fianl answer in integer format.
-
-        Steps for Each Request:
-        1. Think: Provide detailed, step-by-step reasoning, calculations, or derivations.
-        2. Produce Final Answer: After step-by-step reasoning, output the final answer in integer format.
-
-        Output Format:
-        <think>Your thoughts and reasoning</think>
-        <answer>Final answer in integer format</answer>
-
-        Important Notes:
-        1. You must include your reasoning steps inside <think>.
-        2. You must always output the Final Answer within <answer> after the reasoning steps is done.
-        3. You should consistently work through the solution step by step before giving the final answer.
-        4. The final answer can only be an integer.
-        """
-
-        dataset = load_dataset('openai/gsm8k', 'main')["train"][:20] # type: ignore
-        dataset = dataset.map(lambda x: { # type: ignore
-            'prompt': [
-                {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': x['question']}
-            ],
-            'answer': extract_hash_answer(x['answer'])
-        })
-
-        def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
-            responses = [completion[0]['content'] for completion in completions]
-            q = prompts[0][-1]['content']
-            extracted_responses = [extract_xml_answer(r) for r in responses]
-            print('-'*20, f"Question:\n{q}", f"\nAnswer:\n{answer[0]}", f"\nResponse:\n{responses[0]}", f"\nExtracted:\n{extracted_responses[0]}")
-            return [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
-
-        def int_reward_func(completions, **kwargs) -> list[float]:
-            responses = [completion[0]['content'] for completion in completions]
-            extracted_responses = [extract_xml_answer(r) for r in responses]
-            return [1.0 if r.isdigit() else 0.0 for r in extracted_responses]
-
-        def format_reward_func(completions, **kwargs) -> list[float]:
-            """Reward function that checks if the completion has a specific format."""
-            rewards = []
-            for completion in completions:
-                response = completion[0]["content"]
-                
-                pattern = r"^<think>.*?</think>\n<answer>.*?</answer>$"
-
-                if re.search(pattern, response, re.DOTALL) and response.count("<answer>") == 1 and response.count("</answer>") == 1:
-                    rewards.append(1.0)
-                else:
-                    rewards.append(0.0)
-
-            return rewards
-
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
-            per_device_train_batch_size=4,  # reduce the batch size to reduce memory usage
-            num_generations=4,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
-        
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[
-            correctness_reward_func,
-            int_reward_func,
-            format_reward_func,
-            ],
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-
-
-
-
     @pytest.mark.parametrize(
         "model_name",
         ["trl-internal-testing/tiny-Qwen3ForCausalLM", "trl-internal-testing/tiny-Gemma2ForCausalLM"],
@@ -1265,6 +1170,44 @@ class TestGRPOTrainer(TrlTestCase):
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_training_normalize_then_sum_aggregation(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func1(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion)) for completion in completions]
+
+        def reward_func2(completions, **kwargs):
+            """Reward function that rewards completions with more unique letters."""
+            return [float(len(set(completion))) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            multi_objective_aggregation="normalize_then_sum",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[reward_func1, reward_func2],
             args=training_args,
             train_dataset=dataset,
         )

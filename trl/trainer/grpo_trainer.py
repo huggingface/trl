@@ -397,8 +397,6 @@ class GRPOTrainer(BaseTrainer):
         else:
             self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
 
-        self.apply_gdpo = args.apply_gdpo
-            
         # Reward processing class
         if reward_processing_classes is None:
             reward_processing_classes = [None] * len(reward_funcs)
@@ -484,6 +482,7 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
+        self.multi_objective_aggregation = args.multi_objective_aggregation
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
@@ -2012,70 +2011,51 @@ class GRPOTrainer(BaseTrainer):
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
-        ### only apply gdpo when having more than one reward
-        if self.apply_gdpo and len(self.reward_weights) > 1:
-            ## Make sure every reward contain no nan value
-            rewards_per_func_filter = torch.nan_to_num(rewards_per_func)
-
-            G = self.num_generations
-            BG, R = rewards_per_func_filter.shape
-            assert BG % G == 0, "First dimension must be divisible by num_generations"
-            B = BG // G
-
-            # [B, G, R]
-            r = rewards_per_func_filter.view(B, G, R)
-
-            # group-wise stats over generations (dim=1): [B, 1, R]
-            mean = r.mean(dim=1, keepdim=True)
-            std  = r.std(dim=1, keepdim=True)  # same default behavior as your original std()
-
-            # advantages: [B, G, R]
-            adv = (r - mean) / (std + 1e-4)
-            combined_reward_advantage = adv.reshape(BG, R)
-            pre_bn_advantages = (combined_reward_advantage * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-
-            ## compute batch-wise mean and std
-            bn_advantages_mean = pre_bn_advantages.mean()
-            bn_advantages_std = pre_bn_advantages.std()
-
-            advantages = (pre_bn_advantages - bn_advantages_mean) / (bn_advantages_std + 1e-4)
-
-
-        else:
-            # Apply weights to each reward function's output and sum
-            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-
-            # Compute grouped-wise rewards
-            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+        if self.multi_objective_aggregation == "sum_then_normalize":
+            # Apply weights to each reward function's output
+            rewards = torch.matmul(rewards_per_func, self.reward_weights.to(device))
             mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1)
-
-            # Normalize the rewards to compute the advantages
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
-            advantages = rewards - mean_grouped_rewards
-
-            if self.scale_rewards in ["group", "none"]:
-                # If self.scale_rewards = "none", we'll still log group level std
+            if self.scale_rewards == "group":
                 if num_generations > 1:
                     std_rewards = rewards.view(-1, num_generations).std(dim=1)
                     std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
-                else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+                else:  # doesn't occur during training, but could occur in eval when num_generations_eval=1
                     std_rewards = torch.zeros_like(rewards)
             elif self.scale_rewards == "batch":
                 # Compute global std
                 if rewards.numel() > 1:
                     std_rewards = rewards.std().expand_as(rewards)
-                else:  # this case doesn't occur during training, but could in eval when num_generations_eval=batch_size=1
+                else:  # doesn't occur during training, but could occur in eval when num_generations_eval=batch_size=1
                     std_rewards = torch.zeros_like(rewards)
             else:
                 raise ValueError(
                     f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
                 )
-
-            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
+            advantages = rewards - mean_grouped_rewards
             if self.scale_rewards != "none":
                 advantages = advantages / (std_rewards + 1e-4)
+            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
+        elif self.multi_objective_aggregation == "normalize_then_sum":
+            grouped = rewards_per_func.view(-1, num_generations, len(self.reward_funcs))
+            mean_k = torch.nanmean(grouped, dim=1, keepdim=True)
+            std_k = nanstd(grouped, dim=1, keepdim=True) if num_generations > 1 else torch.zeros_like(mean_k)
+            reward_k = (grouped - mean_k) / (std_k + 1e-4)
+            reward_k = reward_k.view(-1, len(self.reward_funcs))
+            advantages = torch.matmul(reward_k, self.reward_weights.to(device))
+            std_advantages = (
+                advantages.std().expand_as(advantages) if advantages.numel() > 1 else torch.zeros_like(advantages)
+            )
+            advantages = (advantages - advantages.mean()) / (std_advantages + 1e-4)
+            is_std_zero = torch.isclose(std_advantages, torch.zeros_like(std_advantages))  # for logging
+        else:
+            raise ValueError(
+                f"Invalid multi_objective_aggregation: {self.multi_objective_aggregation}. Must be "
+                "'sum_then_normalize' or 'normalize_then_sum'."
+            )
         # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
@@ -2091,40 +2071,10 @@ class GRPOTrainer(BaseTrainer):
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
 
-        if self.apply_gdpo and len(self.reward_weights) > 1:
-            ## simply for logging reward dynamic, we need to re-calculate the following values:
-
-            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-
-            # Compute grouped-wise rewards
-            if self.scale_rewards in ["group", "none"]:
-                # If self.scale_rewards = "none", we'll still log group level std
-                if num_generations > 1:
-                    std_rewards = rewards.view(-1, num_generations).std(dim=1)
-                    std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
-                else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
-                    std_rewards = torch.zeros_like(rewards)
-            elif self.scale_rewards == "batch":
-                # Compute global std
-                if rewards.numel() > 1:
-                    std_rewards = rewards.std().expand_as(rewards)
-                else:  # this case doesn't occur during training, but could in eval when num_generations_eval=batch_size=1
-                    std_rewards = torch.zeros_like(rewards)
-            else:
-                raise ValueError(
-                    f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
-                )
-
-            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
-
-            self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-            self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
-            self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
-
-        else:
-            self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-            self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
-            self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
+        rewards = rewards_per_func.nansum(dim=1)
+        self._metrics[mode]["reward"].append(rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(rewards.std().item())
+        self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
         self._logs["prompt"].extend(gather_object(prompts_text))
