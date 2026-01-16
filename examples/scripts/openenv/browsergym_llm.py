@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 

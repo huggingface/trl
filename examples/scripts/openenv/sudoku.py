@@ -12,6 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio",
+#     "kernels",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/openenv/sudoku",
+# ]
+# ///
+
 """
 GRPO training for Sudoku with TextArena environment.
 
