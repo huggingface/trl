@@ -153,11 +153,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
 
     for idx_str in prompts:
         idx = int(idx_str)
-        item = dict(dataset[idx])
-
-        for key in ["responses_create_params", "expected_answers", "metadata", "ground_truth", "options", "template_metadata", "agent_ref"]:
-            if key in item and isinstance(item[key], str):
-                item[key] = json.loads(item[key])
+        item = json.loads(dataset[idx]["metadata"])
 
         for _ in range(num_generations):
             expanded_prompts.append(idx_str)
@@ -302,14 +298,10 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
         for idx, line in enumerate(f):
             if line.strip():
                 item = json.loads(line)
-                item["prompt"] = str(idx)
-
-                for key in ["responses_create_params", "expected_answers", "metadata", "ground_truth", "options", "template_metadata", "agent_ref"]:
-                    if key in item and isinstance(item[key], (dict, list)):
-                        item[key] = json.dumps(item[key])
-
-                data.append(item)
-
+                data.append({
+                    "prompt": str(idx), # use index for lookup as not all nemo gym datasets have the same metadata fields. maybe not the most elegant
+                    "metadata": json.dumps(item),
+                })
     return Dataset.from_list(data)
 
 def main():
@@ -357,7 +349,6 @@ def main():
         dataset = load_dataset_from_jsonl(config.dataset_path)
     else:
         dataset = load_dataset(config.dataset_path, split="train")
-
 
     eval_dataset = None
     if config.eval_dataset_path:
@@ -413,7 +404,7 @@ def main():
     )
 
     training_args.agent_servers = agent_servers
-    training_args.request_timeout = 6000
+    training_args.request_timeout = 10800
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_name, truncation_side="left", padding_side="left")
 
