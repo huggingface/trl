@@ -127,7 +127,7 @@ if TYPE_CHECKING:
     from .rloo_config import RLOOConfig
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
-    from .sft_trainer import GenerativeSFTTrainer, SFTTrainer
+    from .sft_trainer import SFTTrainer, GenerativeSFTTrainer
     from .utils import (
         RunningMoments,
         disable_dropout_in_model,
