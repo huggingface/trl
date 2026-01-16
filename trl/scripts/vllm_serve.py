@@ -132,7 +132,7 @@ class WeightSyncWorkerExtension:
         if is_torch_xpu_available():
             store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
             prefixed_store = c10d.PrefixStore("client2server", store)
-            xccl_options = c10d.ProcessGroupXCCL.Options() 
+            xccl_options = c10d.ProcessGroupXCCL.Options()
             pg = c10d.ProcessGroupXCCL(
                 store=prefixed_store,
                 rank=rank,

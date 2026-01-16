@@ -68,8 +68,8 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from datasets import Dataset
 from browsergym_env import BrowserGymAction, BrowserGymEnv
+from datasets import Dataset
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer

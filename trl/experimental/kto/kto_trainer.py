@@ -352,17 +352,11 @@ class KTOTrainer(BaseTrainer):
 
         # Reference model initialization
         if isinstance(ref_model, str):
-            ref_model_init_kwargs = args.ref_model_init_kwargs or {}
+            ref_model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 ref_model_init_kwargs["device_map"] = None
             ref_model = create_model_from_path(ref_model, **ref_model_init_kwargs)
-        else:
-            if ref_model is not None and args.ref_model_init_kwargs is not None:
-                logger.warning(
-                    "You passed `ref_model_init_kwargs` to the KTOConfig, but your ref_model is already instantiated. "
-                    "The `ref_model_init_kwargs` will be ignored."
-                )
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
