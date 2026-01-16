@@ -484,10 +484,6 @@ class GRPOTrainer(BaseTrainer):
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
-        if args.scale_rewards not in ["batch", "group", "none"]:
-            raise ValueError(
-                f"Invalid value for scale_rewards: {args.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
-            )
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
@@ -2023,7 +2019,8 @@ class GRPOTrainer(BaseTrainer):
             rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1)
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
-            if self.scale_rewards == "group":
+            if self.scale_rewards in ["group", "none"]:
+                # If self.scale_rewards = "none", we'll only use std_rewards to check for zero std for logging
                 if num_generations > 1:
                     std_rewards = rewards.view(-1, num_generations).std(dim=1)
                     std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
@@ -2035,6 +2032,10 @@ class GRPOTrainer(BaseTrainer):
                     std_rewards = rewards.std().expand_as(rewards)
                 else:  # doesn't occur during training, but could occur in eval when num_generations_eval=batch_size=1
                     std_rewards = torch.zeros_like(rewards)
+            else:
+                raise ValueError(
+                    f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+                )
 
             advantages = rewards - mean_grouped_rewards
             if self.scale_rewards != "none":
