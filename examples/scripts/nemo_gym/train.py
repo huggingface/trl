@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datasets import Dataset, load_dataset
 from trl import GRPOConfig, GRPOTrainer
+from transformers import AutoTokenizer
 import wandb
 
 @dataclass
@@ -17,7 +18,7 @@ class TrainingConfig:
     model_name: str
     dataset_path: str
 
-    run_name_prefix: Optional[str] = None
+    task: Optional[str] = None
 
     learning_rate: float = 5e-6
     max_steps: int = 100
@@ -63,16 +64,16 @@ def get_agent_servers(
         global_config_dict = OmegaConf.create(yaml.safe_load(global_config_yaml))
 
         agent_servers = {}
-        for _, project_config in global_config_dict.items():
+        for project_name, project_config in global_config_dict.items():
             if hasattr(project_config, 'responses_api_agents'):
                 agents = project_config.responses_api_agents
-                for name in agents.keys():
-                    agent_config = getattr(agents, name)
+                for agent_key in agents.keys():
+                    agent_config = getattr(agents, agent_key)
                     if hasattr(agent_config, 'host') and hasattr(agent_config, 'port'):
                         agent_host = agent_config.host
                         if agent_host in ("127.0.0.1", "0.0.0.0", "localhost"):
                             agent_host = head_server_host
-                        agent_servers[name] = f"http://{agent_host}:{agent_config.port}"
+                        agent_servers[project_name] = f"http://{agent_host}:{agent_config.port}"
 
         if not agent_servers:
             raise ValueError("No agents found in global config")
@@ -87,7 +88,7 @@ def reward_fn(completions: List[str], **kwargs) -> List[float]:
     assert env_rewards is not None, "env_reward not found in kwargs"
     return [float(r) for r in env_rewards]
 
-async def call_nemo_gym_agent(
+async def call_nemo_gym_agents(
     prompts: List[str],
     dataset_items: List[Dict[str, Any]],
     agent_servers: Dict[str, str],
@@ -166,7 +167,7 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
     asyncio.set_event_loop(loop)
     try:
         responses = loop.run_until_complete(
-            call_nemo_gym_agent(
+            call_nemo_gym_agents(
                 expanded_prompts,
                 expanded_dataset_items,
                 trainer.args.agent_servers,
@@ -339,10 +340,10 @@ def main():
         os.environ["WANDB_PROJECT"] = config.project_name
 
     if config.run_name is None:
-        run_name_prefix = config.run_name_prefix or os.path.basename(config.dataset_path).replace('.jsonl', '').replace('.json', '')
+        task = config.task or os.path.basename(config.dataset_path).replace('.jsonl', '').replace('.json', '')
         model_short = config.model_name.split("/")[-1]
         config.run_name = (
-            f"{run_name_prefix}_{model_short}"
+            f"{task}_{model_short}"
             f"_rpp{config.num_generations}"
             f"_dbs{config.per_device_train_batch_size}"
             f"_ga{config.gradient_accumulation_steps}"
@@ -403,7 +404,7 @@ def main():
         num_completions_to_print=config.num_completions_to_print,
 
         max_prompt_length=config.max_prompt_length,
-        max_completion_length=config.max_seq_length - config.max_prompt_length,
+        max_completion_length=config.max_seq_length - config.max_prompt_length if config.max_prompt_length else config.max_seq_length,
         shuffle_dataset=False,
 
         model_init_kwargs={
@@ -414,8 +415,11 @@ def main():
     training_args.agent_servers = agent_servers
     training_args.request_timeout = 6000
 
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name, truncation_side="left", padding_side="left")
+
     trainer = GRPOTrainer(
         model=config.model_name,
+        processing_class=tokenizer,
         reward_funcs=reward_fn,
         train_dataset=dataset,
         eval_dataset=eval_dataset,
