@@ -54,8 +54,6 @@ class KTOConfig(TrainingArguments):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, *optional*):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
             during evaluation.
@@ -164,10 +162,6 @@ class KTOConfig(TrainingArguments):
         metadata={
             "help": "Label pad token id. This argument is required if you want to use the default data collator."
         },
-    )
-    padding_value: int | None = field(
-        default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
     )
     generate_during_eval: bool = field(
         default=False,
