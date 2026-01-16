@@ -1222,6 +1222,44 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_training_normalize_then_sum_aggregation(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func1(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion)) for completion in completions]
+
+        def reward_func2(completions, **kwargs):
+            """Reward function that rewards completions with more unique letters."""
+            return [float(len(set(completion))) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            multi_objective_aggregation="normalize_then_sum",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[reward_func1, reward_func2],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @pytest.mark.parametrize("scale_rewards", [False, "group", "batch", True, "none"])
     def test_training_scale_rewards(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
