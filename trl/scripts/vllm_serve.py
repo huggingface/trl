@@ -26,7 +26,7 @@ from multiprocessing.connection import Connection
 
 import torch
 import torch.distributed.distributed_c10d as c10d
-from packaging import version
+from packaging.version import Version
 from transformers import is_torch_xpu_available, is_vision_available
 
 from trl import TrlParser
@@ -63,7 +63,7 @@ if is_vllm_available():
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.utils import get_open_port
 
-    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+    if Version(vllm.__version__) <= Version("0.10.2"):
         from vllm.sampling_params import GuidedDecodingParams
     else:
         from vllm.sampling_params import StructuredOutputsParams
@@ -132,10 +132,12 @@ class WeightSyncWorkerExtension:
         if is_torch_xpu_available():
             store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
             prefixed_store = c10d.PrefixStore("client2server", store)
+            xccl_options = c10d.ProcessGroupXCCL.Options()
             pg = c10d.ProcessGroupXCCL(
                 store=prefixed_store,
                 rank=rank,
                 size=world_size,
+                options=xccl_options,
             )
             self.communicator = pg
         else:
@@ -571,7 +573,7 @@ def main(script_args: ScriptArguments):
             prompts.append(row)
 
         # Structured outputs, if enabled
-        if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        if Version(vllm.__version__) <= Version("0.10.2"):
             structured_outputs_key = "guided_decoding"
             if request.structured_outputs_regex is not None:
                 structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
@@ -712,7 +714,7 @@ def main(script_args: ScriptArguments):
                             part["image_pil"] = Image.open(BytesIO(base64.b64decode(part["image_pil"])))
 
         # Structured outputs, if enabled
-        if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+        if Version(vllm.__version__) <= Version("0.10.2"):
             structured_outputs_key = "guided_decoding"
             if request.structured_outputs_regex is not None:
                 structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)

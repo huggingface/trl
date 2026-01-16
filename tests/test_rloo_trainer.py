@@ -50,7 +50,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -126,7 +126,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -159,7 +159,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -240,7 +240,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
@@ -287,7 +287,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -322,7 +322,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -357,7 +357,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -395,7 +395,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -436,7 +436,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
@@ -474,7 +474,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
@@ -518,7 +518,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -558,7 +558,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -598,7 +598,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -627,7 +627,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -658,7 +658,7 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             beta=0.0,  # set beta to zero value to test the case where the reference model is not used
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -693,7 +693,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -736,7 +736,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -768,7 +768,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -805,7 +805,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -840,7 +840,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -870,7 +870,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -920,7 +920,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -958,7 +958,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -993,7 +993,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1017,7 +1017,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             num_generations=6,  # the number of generations is larger than the batch size, but
@@ -1047,7 +1047,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1077,7 +1077,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1132,7 +1132,7 @@ class TestRLOOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             gradient_accumulation_steps=3,  # can be anything in this test
             # steps_per_generation*per_device_train_batch_size=24 is divisible by num_generations=4
@@ -1199,7 +1199,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1251,7 +1251,7 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1299,7 +1299,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1346,7 +1346,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
@@ -1388,7 +1388,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1418,7 +1418,7 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(
             bf16=False,
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,

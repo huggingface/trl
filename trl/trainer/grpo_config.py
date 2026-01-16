@@ -15,6 +15,8 @@
 import warnings
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -192,6 +194,16 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
+        multi_objective_aggregation (`str`, *optional*, defaults to `"sum_then_normalize"`):
+            Method to aggregate multiple reward functions. Supported values are:
+
+            - `"sum_then_normalize"` (default): First sums the weighted rewards from each reward function, then applies
+              reward scaling/normalization as specified by `scale_rewards` (see `scale_rewards` for details).
+            - `"normalize_then_sum"`: First normalizes/scales each reward function across generations (within each
+              group), then sums the normalized rewards using the specified weights. The aggregated reward is then
+              normalized at the batch level when forming advantages. This is the suggested approach from the paper
+              [GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL
+              Optimization](https://huggingface.co/papers/2601.05242).
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
             Specifies the scaling strategy for rewards. Supported values are:
 
@@ -663,6 +675,18 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
+    multi_objective_aggregation: str = field(
+        default="sum_then_normalize",
+        metadata={
+            "help": "Method to aggregate multiple reward functions. Supported values are: "
+            "`'sum_then_normalize'` (default): First sums the weighted rewards from each reward function, then "
+            "applies reward scaling/normalization as specified by `scale_rewards` (see `scale_rewards` for details). "
+            "`'normalize_then_sum'`: First normalizes/scales each reward function across generations (within each "
+            "group), then sums the normalized rewards using the specified weights. The aggregated reward is then "
+            "normalized at the batch level when forming advantages. This is the suggested approach from the paper "
+            "GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization."
+        },
+    )
     scale_rewards: str = field(
         default="group",
         metadata={
@@ -839,6 +863,15 @@ class GRPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         if self.top_k is None:
             self.top_k = 0
             warnings.warn(
