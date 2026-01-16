@@ -1,34 +1,32 @@
-# model_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-# model_name: "Qwen/Qwen3-0.6B"
-# model_name: "Qwen/Qwen2.5-1.5B-Instruct"
-# model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
-# dataset_path: "/lustre/fsw/portfolios/llmservice/users/cmunley/Gym/resources_servers/reasoning_gym/data/train_knights_knaves.jsonl"
-# dataset_path: "train-workplace.jsonl"
-# dataset_path: "/lustre/fsw/portfolios/llmservice/users/cmunley/Gym/resources_servers/xlam_fc/data/train.jsonl"
-
 model_name: "Qwen/Qwen3-4B-Instruct-2507"
-dataset_path: "train-workplace.jsonl"
-task: "workplace_IS_false"  # just used in wandb run_name if name not set explicitly
-output_dir: "outputs/trl_nemo_gym_workplace"
-project_name: "cmunley-nemo-gym-trl-int"
+
+dataset_path: "data/train.jsonl"
+eval_dataset_path: "data/val.jsonl"
+
+output_dir: "outputs/nemo_gym"
+run_name_prefix: "nemo_gym"
+report_to: "wandb"
+project_name: "trl-nemo-gym"
+log_completions: true
+num_completions_to_print: 2
+
 learning_rate: 1.0e-5
-max_steps: 1000000
+max_steps: 1000
 num_generations: 8
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 16
 max_seq_length: 16384
-temperature: 1
-top_p: 0.999
-weight_decay: 0.00
-# warmup_ratio: 0.0
 warmup_steps: 10
 lr_scheduler_type: "linear"
 optim: "adamw_torch_fused"
-save_steps: 900000
-report_to: "wandb"
-log_completions: true
-num_completions_to_print: 2
-eval_dataset_path: "val-workplace-50.jsonl"
-eval_strategy: "steps"
-eval_steps: 5
+weight_decay: 0.0
 vllm_importance_sampling_correction: false
+
+temperature: 1.0
+top_p: 0.999
+
+save_steps: 100
+
+eval_strategy: "steps"
+eval_steps: 50
+
