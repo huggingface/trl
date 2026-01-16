@@ -23,8 +23,10 @@ from urllib.parse import urlparse
 
 import torch
 import torch.distributed.distributed_c10d as c10d
+from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers import is_torch_xpu_available
+from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -128,6 +130,21 @@ class VLLMClient:
             raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
+
+        # Configure retry strategy
+        retry_strategy = Retry(
+            total=5,
+            connect=5,
+            read=5,
+            status=3,
+            status_forcelist=[500, 502, 503],
+            backoff_factor=2,
+            allowed_methods=["POST", "GET"],
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         if base_url is not None:
             # Parse the base_url to extract host and port
