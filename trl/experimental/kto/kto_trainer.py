@@ -485,7 +485,6 @@ class KTOTrainer(BaseTrainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
