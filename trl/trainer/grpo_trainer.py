@@ -2052,6 +2052,7 @@ class GRPOTrainer(BaseTrainer):
             std_rewards = rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
             advantages = (rewards - rewards.mean()) / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
+
         else:
             raise ValueError(
                 f"Invalid multi_objective_aggregation: {self.multi_objective_aggregation}. Must be "
