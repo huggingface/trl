@@ -20,7 +20,7 @@ from contextlib import nullcontext
 
 import torch
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
-from packaging import version
+from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import is_bitsandbytes_available
 
@@ -35,7 +35,7 @@ if is_vllm_available():
     import vllm
     from vllm import LLM, SamplingParams
 
-    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+    if Version(vllm.__version__) <= Version("0.10.2"):
         from vllm.sampling_params import GuidedDecodingParams
     else:
         from vllm.sampling_params import StructuredOutputsParams
@@ -47,8 +47,8 @@ if is_bitsandbytes_available():
 class VLLMGeneration:
     """Handles vLLM-based generation for trainers.
 
-    Extracts all vLLM-specific logic (initialization, generation, weight sync)
-    from trainers into a separate, testable class.
+    Extracts all vLLM-specific logic (initialization, generation, weight sync) from trainers into a separate, testable
+    class.
     """
 
     def __init__(
@@ -118,9 +118,9 @@ class VLLMGeneration:
             tools: Optional tools for function calling
             chat_template: Optional chat template
             rollout_func: Optional custom rollout function that accepts prompts and returns
-                a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields.
-                Should be a single-argument callable: rollout_func(prompts) -> dict.
-                To pass additional context (e.g., trainer), use a closure or functools.partial:
+                a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields. Should be a
+                single-argument callable: rollout_func(prompts) -> dict. To pass additional context (e.g., trainer),
+                use a closure or functools.partial:
                     rollout_func = lambda prompts: my_custom_rollout(prompts, trainer)
                 The closure will hold a reference to trainer and see its state updates.
         """
@@ -527,7 +527,7 @@ class VLLMGeneration:
                 completion_ids = output["completion_ids"]
                 logprobs = output["logprobs"]
             else:
-                if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                if Version(vllm.__version__) <= Version("0.10.2"):
                     structured_outputs_key = "guided_decoding"
                     if self.structured_outputs_regex:
                         structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)

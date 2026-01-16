@@ -43,6 +43,7 @@ from transformers import (
     PreTrainedModel,
     is_comet_available,
 )
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     is_peft_available,
@@ -917,22 +918,40 @@ class RepeatSampler(Sampler):
 
 
 # torch.nanstd doesn't exist, so we define it here
-def nanstd(tensor: torch.Tensor) -> torch.Tensor:
+def nanstd(tensor: torch.Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False) -> torch.Tensor:
     """
-    Compute the standard deviation of a tensor, ignoring NaNs. This function only supports 1D tensors.
+    Compute the standard deviation of a tensor, ignoring NaNs.
 
     Args:
         tensor (`torch.Tensor`):
-            Input tensor of shape `(N,)`.
+            Input tensor.
+        dim (`int` or `tuple[int, ...]`, *optional*):
+            Dimension(s) to reduce. Defaults to all dimensions.
+        keepdim (`bool`, *optional*, defaults to `False`):
+            Whether to keep reduced dimensions.
 
     Returns:
         `torch.Tensor`:
             Standard deviation of the tensor, ignoring NaNs.
     """
-    variance = torch.nanmean((tensor - torch.nanmean(tensor, keepdim=True)) ** 2)  # Compute variance ignoring NaNs
-    count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
-    variance *= count / (count - 1)  # Bessel's correction
-    return torch.sqrt(variance)
+    # Compute variance ignoring NaNs
+    mean = torch.nanmean(tensor, dim=dim, keepdim=True)
+    variance = torch.nanmean((tensor - mean) ** 2, dim=dim, keepdim=True)
+    count = torch.sum(~torch.isnan(tensor), dim=dim, keepdim=True)  # count of non-NaN values
+    correction = count / (count - 1)
+    correction = torch.where(count > 1, correction, torch.full_like(correction, float("nan")))
+    variance *= correction  # Bessel's correction
+    std = torch.sqrt(variance)
+    if keepdim:
+        return std
+    if dim is None:
+        return std.squeeze()
+    if isinstance(dim, int):
+        return std.squeeze(dim)
+    dims = [(d if d >= 0 else d + std.ndim) for d in dim]
+    for d in sorted(dims, reverse=True):
+        std = std.squeeze(d)
+    return std
 
 
 def split_tensor_dict(
@@ -1126,13 +1145,13 @@ def create_model_from_path(
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
-            or `'auto'`.
+            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`.
 
     Returns:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
-    dtype = kwargs.get("dtype", "auto")
+    dtype = kwargs.get("dtype", "float32")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
     elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
@@ -1163,6 +1182,66 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@dataclass
+class CausalLMOutputWithPastAndFlatLogits(CausalLMOutputWithPast):
+    flat_logits: torch.Tensor | None = None
+
+
+def forward_masked_logits(
+    model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs
+) -> CausalLMOutputWithPastAndFlatLogits:
+    """
+    Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
+
+    These are always equal:
+
+    ```python
+    full_outputs = model(input_ids=input_ids)
+    masked_outputs = forward_masked_logits(model, mask, input_ids=input_ids)
+
+    assert torch.equal(
+        masked_outputs.flat_logits,
+        full_outputs.logits[mask.bool()],
+    )
+    ```
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            A causal language model.
+        logits_mask (`torch.LongTensor`):
+            Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
+            input sequence shape in `kwargs` (typically `[batch, seq_len]`).
+        **kwargs:
+            Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
+
+    Returns:
+        `CausalLMOutputWithPastAndFlatLogits`: Output containing logits only for the unmasked positions.
+
+    Raises:
+        ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
+    """
+    if kwargs.get("logits_to_keep") is not None:
+        raise ValueError("`logits_to_keep` is not supported by this forward helper.")
+    if kwargs.get("labels") is not None:
+        raise ValueError("`labels` is not yet supported by this forward helper.")
+
+    outputs: BaseModelOutputWithPast = model.get_decoder()(**kwargs)
+    hidden_states = outputs.last_hidden_state
+
+    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+    flat_logits = model.lm_head(hidden_states[logits_mask.bool()])
+    if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
+        flat_logits = flat_logits * model.logit_scale
+
+    return CausalLMOutputWithPastAndFlatLogits(
+        flat_logits=flat_logits,
+        # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
+        past_key_values=outputs.get("past_key_values"),
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.get("attentions"),
+    )
 
 
 @contextmanager

@@ -14,6 +14,7 @@
 
 import contextlib
 import os
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -609,11 +610,22 @@ class SFTTrainer(BaseTrainer):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
+        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+        # batches from multiple processes, leading to mismatch errors.
+        if isinstance(train_dataset, IterableDataset):
+            if args.accelerator_config.dispatch_batches is True:
+                logger.warning(
+                    "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
+                    "is forced to `False` when using an `IterableDataset`. To remove this warning, unset "
+                    "`dispatch_batches` in `SFTConfig` or set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+
         # Model
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if args.distributed_state.distributed_type == "DEEPSPEED":
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
@@ -1184,8 +1196,19 @@ class SFTTrainer(BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         if self.args.use_liger_kernel:
-            token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
-            self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+            if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
+                token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
+                self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+            else:
+                # liger-kernel<=0.6.4 can omit token_accuracy even when requested; fixed for Gemma3 in
+                # https://github.com/linkedin/Liger-Kernel/pull/1010
+                warnings.warn(
+                    "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
+                    "not be logged. This may indicate an outdated liger-kernel version. Consider upgrading to the "
+                    "latest version. If the issue persists after upgrading, please report it to the liger-kernel "
+                    "repository.",
+                    stacklevel=2,
+                )
         else:
             # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():
