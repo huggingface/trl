@@ -1742,11 +1742,15 @@ class DPOTrainer(BaseTrainer):
             chosen_rewards = model_output["chosen_rewards"]
             rejected_rewards = model_output["rejected_rewards"]
 
-
             # Guard token accuracy aggregation (fix NoneType crash)
-            if self.args.use_liger_kernel and getattr(model_output, "token_accuracy", None) is not None:
-                    token_accuracy = self.accelerator.gather_for_metrics(model_output.token_accuracy).mean().item()
-                    metrics[f"{prefix}mean_token_accuracy"] = token_accuracy
+            if getattr(model_output, "token_accuracy", None) is not None:
+                token_accuracy = (
+                    self.accelerator
+                    .gather_for_metrics(model_output.token_accuracy)
+                    .mean()
+                    .item()
+                )
+                metrics[f"{prefix}mean_token_accuracy"] = token_accuracy
         else:
             model_output = self.concatenated_forward(model, batch)
 
