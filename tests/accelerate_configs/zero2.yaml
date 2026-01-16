@@ -1,0 +1,4 @@
+distributed_type: DEEPSPEED
+deepspeed_config:
+  zero_stage: 2
+num_processes: 2
