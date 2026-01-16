@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -175,7 +175,8 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_model(self):
         # Instantiate the model
         model = AutoModelForSequenceClassification.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            dtype="float32",
         )
 
         # Get the dataset
@@ -231,7 +232,7 @@ class TestRewardTrainer(TrlTestCase):
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
             model_init_kwargs={"dtype": torch.float16},
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = RewardTrainer(

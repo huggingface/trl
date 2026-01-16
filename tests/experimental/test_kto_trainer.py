@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 import pytest
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.kto import KTOConfig, KTOTrainer
 from trl.experimental.kto.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
@@ -31,26 +31,16 @@ class TestKTOTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
     @pytest.mark.parametrize(
-        "name, config_name, loss_type, pre_compute, eval_dataset",
+        "config_name, loss_type, pre_compute, eval_dataset",
         [
-            ("qwen", "standard_preference", "kto", True, True),
-            # ("t5", "standard_implicit_prompt_preference", "kto", True, False), # KTO broken for enc-dec
-            ("qwen", "standard_unpaired_preference", "kto", False, True),
-            # ("t5", "conversational_preference", "kto", False, False),
-            ("qwen", "conversational_implicit_prompt_preference", "apo_zero_unpaired", True, True),
-            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", True, False),
-            ("qwen", "standard_unpaired_preference", "apo_zero_unpaired", False, True),
-            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", False, False),
+            ("standard_preference", "kto", True, True),
+            ("standard_unpaired_preference", "kto", False, True),
+            ("conversational_implicit_prompt_preference", "apo_zero_unpaired", True, True),
+            ("standard_unpaired_preference", "apo_zero_unpaired", False, True),
         ],
     )
-    def test_kto_trainer(self, name, config_name, loss_type, pre_compute, eval_dataset):
+    def test_kto_trainer(self, config_name, loss_type, pre_compute, eval_dataset):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -67,20 +57,11 @@ class TestKTOTrainer(TrlTestCase):
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-        if name == "qwen":
-            model = self.model
-            ref_model = self.ref_model
-            tokenizer = self.tokenizer
-        elif name == "t5":
-            model = self.t5_model
-            ref_model = self.t5_ref_model
-            tokenizer = self.t5_tokenizer
-
         trainer = KTOTrainer(
-            model=model,
-            ref_model=ref_model,
+            model=self.model,
+            ref_model=self.ref_model,
             args=training_args,
-            processing_class=tokenizer,
+            processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"] if eval_dataset else None,
         )
@@ -172,12 +153,9 @@ class TestKTOTrainer(TrlTestCase):
 
         fn_kwargs = {
             "prefix": "",
-            "is_encoder_decoder": trainer.is_encoder_decoder,
             "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
-            "truncation_mode": trainer.truncation_mode,
             "label_pad_token_id": trainer.label_pad_token_id,
-            "max_prompt_length": trainer.max_prompt_length,
         }
         processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
         assert processed_dataset["prompt"][:] == train_dataset["prompt"][:]
