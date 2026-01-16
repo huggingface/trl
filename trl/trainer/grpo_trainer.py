@@ -2046,12 +2046,12 @@ class GRPOTrainer(BaseTrainer):
             std_k = nanstd(grouped, dim=1, keepdim=True) if num_generations > 1 else torch.zeros_like(mean_k)
             reward_k = (grouped - mean_k) / (std_k + 1e-4)
             reward_k = reward_k.view(-1, len(self.reward_funcs))
-            advantages = (reward_k * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-            std_advantages = (
-                advantages.std().expand_as(advantages) if advantages.numel() > 1 else torch.zeros_like(advantages)
+            rewards = (reward_k * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+            std_rewards = (
+                rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
             )
-            advantages = (advantages - advantages.mean()) / (std_advantages + 1e-4)
-            is_std_zero = torch.isclose(std_advantages, torch.zeros_like(std_advantages))  # for logging
+            advantages = (rewards - rewards.mean()) / (std_rewards + 1e-4)
+            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
         else:
             raise ValueError(
                 f"Invalid multi_objective_aggregation: {self.multi_objective_aggregation}. Must be "
