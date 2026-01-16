@@ -2,7 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - ci-*
   pull_request:
     paths:
       # Run only when relevant files are modified
@@ -77,7 +79,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
-          uv pip install transformers==4.57.4  # Hotfix for GH-4829
+          uv pip install -U "git+https://github.com/huggingface/transformers@ee9aed55cd5b876a40f3e4eb23eb53e692750f77"
 
       - name: Test with pytest
         run: |
