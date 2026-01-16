@@ -1,0 +1,17 @@
+Given: Anthropic prompt only dataset , Number of training epochs N, helpful reward model, harmful reward model,
+sft model, dirichlet alpha=1, beta = 0.1
+policy_model = sft_model
+for epoch in n_epochs:
+    for prompt in prompts:
+        w ~ dirichlet(alpha) # The weight is the helpful reward model preference truncated to 1 decimal place
+        prompt ="""[Begin System Instruction]
+                    Helpfulness: < w >, Harmlessness: <1-w>
+                    [End System Instruction]""" + prompt
+        y1,y2 = llm(prompt,num_completions=2)
+        s1 = w*helpful(y1) + (1-w)*harmful(y1)
+        s2 = w*helpful(y2) + (1-w)*harmful(y2)
+        y_win,y_loss = y1,y2 if s1>s2 else y_win,y_loss = y2,y1
+        store {policy_model,y_win,y_loss,beta}
+        calculate DPO loss on this data
+    update policy model optimizing DPO loss
+

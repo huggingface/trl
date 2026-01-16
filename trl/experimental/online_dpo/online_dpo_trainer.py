@@ -371,6 +371,7 @@ class OnlineDPOTrainer(BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
         self.vllm_model_impl = args.vllm_model_impl
 
+
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             tokenizer = processing_class.tokenizer
@@ -1137,7 +1138,6 @@ class OnlineDPOTrainer(BaseTrainer):
 
         # Add trainer state to reward kwargs for dynamic reward shaping
         reward_kwargs["trainer_state"] = self.state
-
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, strict=True)
         ):
@@ -1169,10 +1169,12 @@ class OnlineDPOTrainer(BaseTrainer):
         # Weight and sum across all reward functions
         if self.reward_weights is not None:
             total_rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+            #store the batchmean per reward function in wandb
+            
         else:
             total_rewards = rewards_per_func.nansum(dim=1)
 
-        return total_rewards
+        return total_rewards, rewards_per_func
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs=None):
         # Get the number of tokens to truncate from prompt
@@ -1311,7 +1313,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     reward_kwargs[key] = inputs[key]
 
             # Calculate rewards using reward functions
-            rewards = self._calculate_rewards_from_functions(
+            rewards, rewards_per_func = self._calculate_rewards_from_functions(
                 prompts=2 * prompts, completions=completions, completion_ids_list=completion_ids_list, **reward_kwargs
             )
 
@@ -1345,7 +1347,22 @@ class OnlineDPOTrainer(BaseTrainer):
         batch_range = torch.arange(batch_size, device=device)
         chosen_indices = batch_range + (~mask * batch_size)
         rejected_indices = batch_range + (mask * batch_size)
+        # add my own logging for rewards_per_func
+        chosen_rewards_per_func = rewards_per_func[chosen_indices]  # (B, n_funcs)
+        g = self.accelerator.gather_for_metrics(chosen_rewards_per_func.detach())  # gather across GPUs
 
+        if not hasattr(self, "_chosen_reward_func_sum"):
+            self._chosen_reward_func_sum = torch.zeros(g.size(1), device=g.device)
+            self._chosen_reward_func_cnt = torch.zeros(g.size(1), device=g.device)
+
+        self._chosen_reward_func_sum += torch.nan_to_num(g, nan=0.0).sum(dim=0)
+        self._chosen_reward_func_cnt += torch.isfinite(g).sum(dim=0).to(self._chosen_reward_func_cnt.dtype)
+
+        running_mean = self._chosen_reward_func_sum / self._chosen_reward_func_cnt.clamp(min=1)
+
+        # log as "current running mean so far" (overwrite so it doesn't get averaged)
+        for i, name in enumerate(self.reward_func_names):
+            self.stats[f"rewards/chosen_running/{name}"] = [running_mean[i].item()]
         # Build tensor so that the first half is the chosen examples and the second half the rejected examples
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
         cr_logprobs = logprobs[cr_indices]

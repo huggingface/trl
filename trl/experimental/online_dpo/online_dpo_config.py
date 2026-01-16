@@ -191,6 +191,7 @@ class OnlineDPOConfig(TrainingArguments):
             "help": "Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both."
         },
     )
+
     judge: str | None = field(
         default=None,
         metadata={
@@ -198,7 +199,7 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
     max_new_tokens: int = field(
-        default=64,
+        default=128,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
     max_length: int = field(
@@ -210,7 +211,7 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
     temperature: float = field(
-        default=0.9,
+        default=1.0,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
     top_p: float = field(
@@ -221,7 +222,7 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
     top_k: int = field(
-        default=0,
+        default=30,
         metadata={
             "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
             "top-k-filtering is disabled and all tokens are considered."
@@ -272,7 +273,7 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
     beta: list[float] = field(
-        default_factory=lambda: [0.1],
+        default_factory=lambda: [],
         metadata={
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
             "the reference model. For the IPO loss (`loss_type='ipo'`), β is the regularization parameter denoted by "
