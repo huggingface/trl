@@ -918,22 +918,40 @@ class RepeatSampler(Sampler):
 
 
 # torch.nanstd doesn't exist, so we define it here
-def nanstd(tensor: torch.Tensor) -> torch.Tensor:
+def nanstd(tensor: torch.Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False) -> torch.Tensor:
     """
-    Compute the standard deviation of a tensor, ignoring NaNs. This function only supports 1D tensors.
+    Compute the standard deviation of a tensor, ignoring NaNs.
 
     Args:
         tensor (`torch.Tensor`):
-            Input tensor of shape `(N,)`.
+            Input tensor.
+        dim (`int` or `tuple[int, ...]`, *optional*):
+            Dimension(s) to reduce. Defaults to all dimensions.
+        keepdim (`bool`, *optional*, defaults to `False`):
+            Whether to keep reduced dimensions.
 
     Returns:
         `torch.Tensor`:
             Standard deviation of the tensor, ignoring NaNs.
     """
-    variance = torch.nanmean((tensor - torch.nanmean(tensor, keepdim=True)) ** 2)  # Compute variance ignoring NaNs
-    count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
-    variance *= count / (count - 1)  # Bessel's correction
-    return torch.sqrt(variance)
+    # Compute variance ignoring NaNs
+    mean = torch.nanmean(tensor, dim=dim, keepdim=True)
+    variance = torch.nanmean((tensor - mean) ** 2, dim=dim, keepdim=True)
+    count = torch.sum(~torch.isnan(tensor), dim=dim, keepdim=True)  # count of non-NaN values
+    correction = count / (count - 1)
+    correction = torch.where(count > 1, correction, torch.full_like(correction, float("nan")))
+    variance *= correction  # Bessel's correction
+    std = torch.sqrt(variance)
+    if keepdim:
+        return std
+    if dim is None:
+        return std.squeeze()
+    if isinstance(dim, int):
+        return std.squeeze(dim)
+    dims = [(d if d >= 0 else d + std.ndim) for d in dim]
+    for d in sorted(dims, reverse=True):
+        std = std.squeeze(d)
+    return std
 
 
 def split_tensor_dict(
