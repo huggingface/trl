@@ -345,6 +345,24 @@ class DPOConfig(TrainingArguments):
             "instead."
         },
     )
+    base_model_attribute_name: str | None = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.29.0. The base model is now "
+            "automatically retrieved with `model.get_decoder()`."
+        },
+    )
+    rpo_alpha: float | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "This parameter is deprecated and will be removed in version 0.29.0. `rpo_alpha` previously "
+                "controlled the weight of the NLL (SFT) term in RPO. With support for combining multiple loss types "
+                "in DPO, this is now equivalent to including 'sft' in `loss_type` with weight `rpo_alpha`. To "
+                "migrate, add 'sft' to `loss_type` and set its weight in `loss_weights` to `rpo_alpha`."
+            )
+        },
+    )
 
     # Parameters that need to be implemented
     precompute_ref_log_probs: bool = field(
@@ -361,22 +379,6 @@ class DPOConfig(TrainingArguments):
             "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
             "than the training batch size to speed up preprocessing. If `None`, defaults to "
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
-        },
-    )
-    base_model_attribute_name: str = field(
-        default="model",
-        metadata={
-            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
-            "model  from the model when the model does not have a `get_decoder` method in the case when "
-            "`use_liger_kernel` is `True`."
-        },
-    )
-    rpo_alpha: float | None = field(
-        default=None,
-        metadata={
-            "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
-            "If `None`, no weighting is applied and the loss is the same as the DPO loss. The paper recommends "
-            "`rpo_alpha=1.0`."
         },
     )
     ref_model_mixup_alpha: float = field(
@@ -408,7 +410,7 @@ class DPOConfig(TrainingArguments):
 
         if "aot_pair" in self.loss_type:
             warnings.warn(
-                "`loss_type='aot_pair'` is deprecated and will be removed in a version 0.28.0. Please use "
+                "`loss_type='aot_pair'` is deprecated and will be removed in a version 0.29.0. Please use "
                 "`loss_type='aot_unpaired'` instead.",
                 FutureWarning,
                 stacklevel=2,
@@ -521,5 +523,18 @@ class DPOConfig(TrainingArguments):
                 stacklevel=2,
             )
             self.use_liger_kernel = self.use_liger_loss
+        if self.rpo_alpha is not None:
+            warnings.warn(
+                "The `rpo_alpha` argument is deprecated and will be removed in version 0.29.0. To migrate, add 'sft' "
+                "to `loss_type` and set its weight in `loss_weights` to `rpo_alpha`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            if "sft" not in self.loss_type:
+                self.loss_type.append("sft")
+                if self.loss_weights is None:
+                    self.loss_weights = [1.0] * (len(self.loss_type) - 1) + [self.rpo_alpha]
+                else:
+                    self.loss_weights.append(self.rpo_alpha)
 
         super().__post_init__()

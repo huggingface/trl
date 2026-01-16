@@ -766,6 +766,29 @@ training_args = DPOConfig(
 
 For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
+### Iterative Reasoning Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2404.19733
+
+Iterative RPO improves reasoning by repeatedly generating chain-of-thought candidates, building preference pairs from correct vs. incorrect answers, and training with a DPO + NLL objective. The extra NLL term is key for learning to actually generate winning traces.
+
+TRL can express the DPO + NLL objective by mixing `"sigmoid"` (DPO) with `"sft"` (NLL):
+
+```python
+from trl import DPOConfig, DPOTrainer
+
+training_args = DPOConfig(
+    loss_type=["sigmoid", "sft"],
+    loss_weights=[1.0, 1.0],  # alpha in the paper, recommended value is 1.0
+)
+trainer = DPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
+Note that the paper uses an iterative loop: each iteration regenerates CoT candidates with the current model, then retrains on fresh preference pairs. TRL does not automate that loop for you.
+
 ### Self-Play Preference Optimization for Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2405.00675
