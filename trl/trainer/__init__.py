@@ -64,7 +64,6 @@ _import_structure = {
     "rloo_config": ["RLOOConfig"],
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
-<<<<<<< HEAD
     "sft_trainer": ["SFTTrainer", "GenerativeSFTTrainer"],
     "utils": [
         "RunningMoments",
@@ -78,20 +77,6 @@ _import_structure = {
     ],
     "xpo_config": ["XPOConfig"],
     "xpo_trainer": ["XPOTrainer"],
-=======
-    "sft_trainer": ["SFTTrainer"],
-    "utils": [
-        "RunningMoments",
-        "disable_dropout_in_model",
-        "empty_cache",
-        "ensure_master_addr_port",
-        "get_kbit_device_map",
-        "get_peft_config",
-        "get_quantization_config",
-    ],
-    "xpo_config": ["XPOConfig"],  # deprecated import
-    "xpo_trainer": ["XPOTrainer"],  # deprecated import
->>>>>>> afcf0818cc5665ab7bad21b607170c46e50a3c69
 }
 
 if TYPE_CHECKING:
@@ -141,7 +126,6 @@ if TYPE_CHECKING:
     from .rloo_config import RLOOConfig
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
-<<<<<<< HEAD
     from .sft_trainer import GenerativeSFTTrainer, SFTTrainer
     from .utils import (
         RunningMoments,
@@ -155,20 +139,6 @@ if TYPE_CHECKING:
     )
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
-=======
-    from .sft_trainer import SFTTrainer
-    from .utils import (
-        RunningMoments,
-        disable_dropout_in_model,
-        empty_cache,
-        ensure_master_addr_port,
-        get_kbit_device_map,
-        get_peft_config,
-        get_quantization_config,
-    )
-    from .xpo_config import XPOConfig  # deprecated import
-    from .xpo_trainer import XPOTrainer  # deprecated import
->>>>>>> afcf0818cc5665ab7bad21b607170c46e50a3c69
 else:
     import sys
 
