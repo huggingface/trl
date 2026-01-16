@@ -1204,25 +1204,23 @@ class SFTTrainer(BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Guard token accuracy aggregation (fix NoneType crash)
-        if (
-            self.args.use_liger_kernel
-            and getattr(outputs, "token_accuracy", None) is not None
-        ):
-            token_accuracy = (
-                self.accelerator
-                .gather_for_metrics(outputs.token_accuracy)
-                .mean()
-                .item()
-            )
-            self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
-        else:
-            warnings.warn(
-                "liger-kernel did not return token_accuracy when requested. "
-                "The mean_token_accuracy metric will not be logged. "
-                "This may indicate an outdated liger-kernel version. "
-                "Consider upgrading.",
-                stacklevel=2,
-            )
+        if self.args.use_liger_kernel:
+            if getattr(outputs, "token_accuracy", None) is not None:
+                token_accuracy = (
+                    self.accelerator
+                    .gather_for_metrics(outputs.token_accuracy)
+                    .mean()
+                    .item()
+                )
+                self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+            else:
+                warnings.warn(
+                    "liger-kernel did not return token_accuracy when requested. "
+                    "The mean_token_accuracy metric will not be logged. "
+                    "This may indicate an outdated liger-kernel version. "
+                    "Consider upgrading.",
+                    stacklevel=2,
+                )
         else:
             # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():
