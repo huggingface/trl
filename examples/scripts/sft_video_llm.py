@@ -181,7 +181,6 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
 
     # Configure training args
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
 
     # Load dataset

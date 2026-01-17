@@ -76,7 +76,6 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     ################
     # Model & Tokenizer

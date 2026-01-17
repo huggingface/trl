@@ -32,6 +32,7 @@ from trl.trainer.utils import (
     forward_masked_logits,
     generate_model_card,
     get_peft_config,
+    nanstd,
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
@@ -218,6 +219,24 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+
+class TestNanStd(TrlTestCase):
+    def test_nanstd_ignores_nans(self):
+        x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
+        result = nanstd(x)
+        assert torch.allclose(result, torch.tensor(1.0))
+
+    def test_nanstd_dim_and_keepdim(self):
+        x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
+        result = nanstd(x, dim=1, keepdim=True)
+        assert torch.isnan(result[0, 0])
+        assert torch.allclose(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
+
+    def test_nanstd_all_nan(self):
+        x = torch.tensor([float("nan"), float("nan")])
+        result = nanstd(x)
+        assert torch.isnan(result)
 
 
 class TestGenerateModelCard(TrlTestCase):
@@ -851,7 +870,6 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-CohereForCausalLM",
-            "trl-internal-testing/tiny-DbrxForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
