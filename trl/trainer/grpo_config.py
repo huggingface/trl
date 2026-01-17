@@ -272,9 +272,9 @@ class GRPOConfig(TrainingArguments):
                 - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
                   C and applied to all tokens in the sequence.
                 - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
-        vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
-            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
-            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+        vllm_importance_sampling_max (`float`, *optional*, defaults to `3.0`):
+            Importance sampling C_max used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
+            ratios are clipped from above at C_max. For `*_mask` modes, ratios larger than C are set to zero.
         vllm_importance_sampling_min (`float`, *optional*, defaults to `0.0`):
             Importance sampling lower bound used by `vllm_importance_sampling_mode`. For `*_truncate` modes, this
             setting is not supported. For `*_mask` modes, ratios below the min value are set to zero.
