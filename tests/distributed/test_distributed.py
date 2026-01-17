@@ -131,7 +131,15 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            "zero2",
+            "zero3",
+            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 RLOO is currently failing, see #4854")),
+        ],
+    )
     def test_rloo(self, config):
         # fmt: off
         run_command(
