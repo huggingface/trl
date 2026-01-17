@@ -147,6 +147,64 @@ class TestVLLMClientServer(TrlTestCase):
         # Test resetting the prefix cache
         self.client.reset_prefix_cache()
 
+    def test_chat_completions_endpoint(self):
+        data = self.client.chat_completions(
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+        )
+
+        assert "id" in data
+        assert "choices" in data
+        assert "usage" in data
+        assert len(data["choices"]) > 0
+        assert data["choices"][0]["message"]["role"] == "assistant"
+        assert data["choices"][0]["finish_reason"] in ["stop", "length", "tool_calls"]
+
+    def test_chat_completions_with_tools(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather information for a location",
+                    "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+                },
+            }
+        ]
+        data = self.client.chat_completions(
+            messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+            tools=tools,
+            max_tokens=100,
+        )
+
+        assert "choices" in data
+        assert len(data["choices"]) > 0
+        assert "message" in data["choices"][0]
+
+    def test_chat_completions_with_params(self):
+        data = self.client.chat_completions(
+            messages=[{"role": "user", "content": "Tell me a joke"}],
+            n=2,
+            temperature=0.8,
+            top_p=0.9,
+            max_tokens=32,
+        )
+
+        assert len(data["choices"]) == 2
+
+        for choice in data["choices"]:
+            assert "message" in choice
+            assert choice["message"]["role"] == "assistant"
+
+    def test_tokenize_endpoint(self):
+        data = self.client.tokenize(messages=[{"role": "user", "content": "Hello, how are you?"}])
+
+        assert "tokens" in data
+        assert "model" in data
+        assert isinstance(data["tokens"], list)
+        assert len(data["tokens"]) > 0
+        assert all(isinstance(tok, int) for tok in data["tokens"])
+
     @classmethod
     def teardown_class(cls):
         # Close the client

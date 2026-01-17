@@ -1,12 +1,12 @@
-# NeMo Gym TRL GRPO integration 
+# Post-training with NeMo Gym and TRL
 
-Multi-step GRPO with TRL and NeMo Gym.
+This integration supports training language models in NeMo-Gym environments using TRL GRPO.
 
-## Setup
+## Interactive single node 
 
 1. Launch vLLM server:
 ```bash
-CUDA_VISIBLE_DEVICES=4,5,6,7 trl vllm-serve \
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve \
   --model Qwen/Qwen3-4B-Instruct-2507 \
   --tensor-parallel-size 4 \
   --max-model-len 8192 \
@@ -21,7 +21,14 @@ ng_run "+config_paths=[resources_servers/workplace_assistant/configs/workplace_a
 
 3. Run training:
 ```bash
-CUDA_VISIBLE_DEVICES=0 python train.py --config config.yaml
+CUDA_VISIBLE_DEVICES=4 python train.py --config config.yaml
 ```
 
-multinode is working, an example will be uploaded soon! 
+## Multinode with slurm
+
+See submit.sh for a multinode example!
+
+```
+
+
+```
