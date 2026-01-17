@@ -52,7 +52,7 @@ srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     source .venv/bin/activate && \
     uv sync && \
     ray stop --force && \
-    ng_run +config_paths=[responses_api_models/vllm_model/configs/vllm_model.yaml,resources_servers/workplace_assistant/configs/workplace_assistant.yaml] +head_server.host=0.0.0.0 +head_server.port=11000) > \${LOG_DIR}/ng_run.log 2>&1 &
+    ng_run +config_paths=[responses_api_models/vllm_model/configs/vllm_model.yaml,resources_servers/workplace_assistant/configs/workplace_assistant.yaml] +head_server.host=0.0.0.0) > \${LOG_DIR}/ng_run.log 2>&1 &
 
     sleep 10
 
