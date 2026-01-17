@@ -1218,6 +1218,9 @@ class GRPOTrainer(BaseTrainer):
         # This allows for dynamic reward shaping based on training progress.
         reward_kwargs["trainer_state"] = self.state
 
+        # Context for shared computation between reward functions
+        reward_kwargs["context"] = {}
+
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1247,6 +1250,9 @@ class GRPOTrainer(BaseTrainer):
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
+                    # Cache the result for subsequent functions
+                    reward_kwargs["context"][reward_func_name] = output_reward_func
+
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
@@ -1269,6 +1275,10 @@ class GRPOTrainer(BaseTrainer):
             async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+                # Cache the result for subsequent functions
+                reward_func_name = self.reward_func_names[idx]
+                reward_kwargs["context"][reward_func_name] = output_reward_func
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():

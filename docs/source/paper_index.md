@@ -516,6 +516,46 @@ Note that this method only has an effect when training involve more than one rew
 
 The authors provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
 
+#### Effective incorporation of priority variation
+
+The authors also introduce a mechanism to handle priority variation among different rewards, specifically addressing "reward hacking" where models might optimize for easier secondary objectives at the expense of primary ones. Section 3.2 of the [GDPO paper](https://huggingface.co/papers/2601.05242) proposes a conditional reward structure:
+
+$$
+\tilde{r}^{(i,j)}_k = \begin{cases}
+r^{(i,j)}_k & \text{if } r^{(i,j)}_l \ge \delta \\
+0 & \text{otherwise}
+\end{cases}
+$$
+
+where $\tilde{r}^{(i,j)}_k$ is the conditioned secondary reward, $r^{(i,j)}_k$ is the original secondary reward, $r^{(i,j)}_l$ is the primary reward, and $\delta$ is the threshold.
+
+To implement this logic in TRL, you can use the `conditioned_reward` utility:
+
+```python
+from trl.rewards import conditioned_reward
+
+def primary_reward(prompts, completions, **kwargs):
+    # check for correctness, reasoning format, etc.
+    ...
+
+def secondary_reward(prompts, completions, **kwargs):
+    # compute length penalty, etc.
+    ...
+
+# Only apply secondary reward if primary reward >= 1.0
+conditioned_secondary = conditioned_reward(primary_reward, secondary_reward, condition=1.0)
+
+trainer = GRPOTrainer(
+    model=...,
+    args=...,
+    train_dataset=...,
+    # Pass the primary reward and the conditioned secondary reward
+    reward_funcs=[primary_reward, conditioned_secondary],
+)
+```
+
+Note that `GRPOTrainer` computes rewards in order. If `primary_reward` is passed before `conditioned_secondary`, its result is cached in a context dictionary. `conditioned_reward` automatically detects and uses this cached result to avoid redundant computation of the primary reward.
+
 ## Direct Policy Optimization
 
 - Papers relating to the [`DPOTrainer`]
