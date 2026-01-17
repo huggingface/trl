@@ -1667,10 +1667,10 @@ class GRPOTrainer(BaseTrainer):
                 tokenize=True,
                 add_generation_prompt=True,
                 chat_template=self.chat_template,
+                return_dict=True,
                 **self.chat_template_kwargs,
             )
-            if isinstance(pct_ids, dict):
-                pct_ids = pct_ids["input_ids"]
+            pct_ids = pct_ids["input_ids"]
 
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
