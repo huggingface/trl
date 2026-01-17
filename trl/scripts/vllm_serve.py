@@ -34,7 +34,6 @@ from transformers import is_torch_xpu_available, is_vision_available
 from transformers import AutoTokenizer
 
 from trl import TrlParser
-# from trl.chat_template_utils import add_response_schema  # For native tool call parsing
 from trl.import_utils import (
     is_fastapi_available,
     is_pydantic_available,
@@ -522,21 +521,10 @@ def main(script_args: ScriptArguments):
         connections.append(parent_connection)
         processes.append(process)
 
-    cached_tokenizer = None
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal cached_tokenizer
-
         logger.info(f"Loading tokenizer for {script_args.model}...")
-        cached_tokenizer = AutoTokenizer.from_pretrained(script_args.model, trust_remote_code=script_args.trust_remote_code)
-
-        # uncomment for native tool call parsing
-        # try:
-        #     cached_tokenizer = add_response_schema(cached_tokenizer)
-        #     logger.info("Response schema added - vLLM will use native tool call parsing")
-        # except (ValueError, AttributeError) as e:
-        #     logger.warning(f"Could not add response schema: {e}. Will fall back to XML parsing if tools are used.")
+        app.state.tokenizer = AutoTokenizer.from_pretrained(script_args.model, trust_remote_code=script_args.trust_remote_code)
 
         # Wait for all workers to send "ready"
         ready_connections = set()
@@ -994,10 +982,10 @@ def main(script_args: ScriptArguments):
         )
 
         if has_prefix_token_ids:
-            # do on policy token id correction and call generate instead of chat 
+            # do on policy token id correction and call generate instead of chat
             # see https://docs.nvidia.com/nemo/gym/latest/contribute/rl-framework-integration/openai-compatible-http-server-on-policy-correction.html
             # and https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
-            tokenizer = cached_tokenizer
+            tokenizer = app.state.tokenizer
 
             # preprocess full conversation
             connections[0].send({"type": "call", "method": "preprocess_chat", "kwargs": {
@@ -1194,7 +1182,7 @@ def main(script_args: ScriptArguments):
         result_tokens = template_prompt["prompt_token_ids"]
 
         if has_prefix_token_ids:
-            tokenizer = cached_tokenizer
+            tokenizer = app.state.tokenizer
 
             # Extract model prefix tokens from last assistant message
             model_prefix_tokens = None

@@ -27,8 +27,3 @@ CUDA_VISIBLE_DEVICES=4 python train.py --config config.yaml
 ## Multinode with slurm
 
 See submit.sh for a multinode example!
-
-```
-
-
-```
