@@ -1873,6 +1873,7 @@ class GRPOTrainer(BaseTrainer):
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
+                
                 if sequence_level_is:
                     per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
                     logps_diff = per_sequence_logps_diff
