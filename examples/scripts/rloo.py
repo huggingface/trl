@@ -70,7 +70,6 @@ def main():
         output_dir="Qwen3-0.6B-RLOO",
         model_init_kwargs={"dtype": torch.bfloat16},
         learning_rate=1e-5,
-        gradient_checkpointing_kwargs=dict(use_reentrant=False),
         log_completions=True,
         num_completions_to_print=2,
         max_prompt_length=2048,
