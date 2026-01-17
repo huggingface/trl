@@ -1867,19 +1867,6 @@ class GRPOTrainer(BaseTrainer):
             else:
                 old_per_token_logps = None
 
-            # track sampling logp diff even when IS off for debugging
-            # could remove this 
-            if self.use_vllm and sampling_per_token_logps is not None and old_per_token_logps is None:
-                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                    self.model,
-                    prompt_completion_ids,
-                    attention_mask,
-                    logits_to_keep,
-                    batch_size,
-                    num_images=num_images,
-                    **forward_kwargs,
-                )
-
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask if not self.tools else completion_mask * tool_mask
@@ -2016,9 +2003,7 @@ class GRPOTrainer(BaseTrainer):
         if images is not None:
             self._logs["images"].extend(gather_object(images))
 
-        # track sampling logp diff even when IS off for debugging
-        # could remove this 
-        if self.use_vllm and old_per_token_logps is not None and sampling_per_token_logps is not None:
+        if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask.bool() if not self.tools else (completion_mask * tool_mask).bool()
             delta = delta[mask]
@@ -2030,9 +2015,6 @@ class GRPOTrainer(BaseTrainer):
             self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
                 self.accelerator.gather(max_delta).max().item()
             )
-
-        # track IS ratio only when IS correction is enabled
-        if self.use_vllm and self.vllm_importance_sampling_correction:
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:
