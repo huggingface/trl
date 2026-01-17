@@ -20,7 +20,7 @@ warmup_steps: 10
 lr_scheduler_type: "linear"
 optim: "adamw_torch_fused"
 weight_decay: 0.0
-vllm_importance_sampling_correction: false
+vllm_importance_sampling_correction: true
 
 temperature: 1.0
 top_p: 0.999
