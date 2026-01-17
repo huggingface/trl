@@ -820,8 +820,6 @@ def main(script_args: ScriptArguments):
                 "sampling_params": sampling_params,
                 "chat_template_kwargs": request.chat_template_kwargs,
                 "tools": request.tools if request.tools else None,
-                # "tool_choice": request.tool_choice,
-                # "parallel_tool_calls": request.parallel_tool_calls,
             }
             
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
@@ -1082,10 +1080,8 @@ def main(script_args: ScriptArguments):
                 tool_calls = None
                 finish_reason = "stop"
 
-                if hasattr(gen_output, "tool_calls") and gen_output.tool_calls: # native tool call parsing 
-                    tool_calls = gen_output.tool_calls
-                    finish_reason = "tool_calls"
-                elif request.tools and text: # try manual tool call parsing eg qwen3 style xml format... this is a hack. 
+                # Manual XML-json tool call parsing
+                if request.tools and text:
                     pattern = r'<tool_call>(.*?)</tool_call>'
                     matches = re.findall(pattern, text, re.DOTALL)
                     if matches:
