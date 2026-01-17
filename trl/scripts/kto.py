@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -73,14 +73,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     DatasetMixtureConfig,
-    KTOConfig,
-    KTOTrainer,
     ModelConfig,
     ScriptArguments,
     TrlParser,
     get_dataset,
     get_peft_config,
 )
+from trl.experimental.kto import KTOConfig, KTOTrainer
 
 
 logger = logging.get_logger(__name__)

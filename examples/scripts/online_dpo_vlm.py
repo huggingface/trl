@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -92,14 +92,13 @@ from transformers import AutoConfig, AutoProcessor, GenerationConfig
 from trl import (
     LogCompletionsCallback,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 from trl.rewards import accuracy_reward, think_format_reward
 
 

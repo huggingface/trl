@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,38 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio>=0.13.0",
+#     "kernels",
+#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
+#     "openenv_core",
+# ]
+# ///
+
+
 """
 Simple script to run GRPO training with OpenEnv's Echo environment and vLLM. The reward function encourages
 longer completions.
 
-Setup:
+Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+uv pip install git+https://huggingface.co/spaces/openenv/echo-env
 ```
 
-Usage:
+Setup (Option B - Clone OpenEnv repo):
 
-# Start the docker container for the Echo environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
 ```sh
-docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/echo_env
+uv pip install -e .
 ```
 
-# Option 1: Colocated vLLM (1 GPU required)
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
 ```sh
-python examples/scripts/openenv/echo.py --vllm-mode colocate
+python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
 
-# Spin up vLLM server
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 ```
 
-# Run training
+# Run training (Terminal 2)
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode server --vllm-server-url http://localhost:8000
+```
+
+# Option 3: Local + Colocated vLLM (1 GPU required)
+
+# Start the environment only if using --env-mode docker-local
+```sh
+docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+```
+
+```sh
+python examples/scripts/openenv/echo.py --env-mode docker-local --vllm-mode colocate
 ```
 """
 
@@ -57,8 +81,8 @@ from pathlib import Path
 
 import requests
 from datasets import load_dataset
-from envs.echo_env import EchoEnv
-from envs.echo_env.models import EchoAction
+from echo_env import EchoEnv
+from echo_env.models import EchoAction
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
 from trl.experimental.openenv import generate_rollout_completions
@@ -71,9 +95,9 @@ def parse_args():
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the Echo environment.")
     parser.add_argument(
         "--env-mode",
-        choices=["local", "docker", "space"],
-        default="docker",
-        help="Where to run the Echo environment: 'local' to launch it, 'docker' if already running, or 'space' to use a remote Space URL.",
+        choices=["local", "docker-local", "docker-image", "docker-hub", "space"],
+        default="docker-image",
+        help="Where to run the Echo environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
     parser.add_argument(
         "--model",
@@ -86,6 +110,9 @@ def parse_args():
         type=str,
         default="trl-lib/ultrafeedback-prompt",
         help="Dataset to use for training.",
+    )
+    parser.add_argument(
+        "--env-image", type=str, default="echo-env:latest", help="Docker image for the Echo environment."
     )
     parser.add_argument(
         "--vllm-mode",
@@ -110,7 +137,7 @@ def start_env_server(env_host: str, env_port: int):
 
     work_dir = str(Path.cwd().parent.absolute())
     process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "envs.echo_env.server.app:app", "--host", env_host, "--port", str(env_port)],
+        [sys.executable, "-m", "uvicorn", "echo_env.server.app:app", "--host", env_host, "--port", str(env_port)],
         env={**os.environ, "PYTHONPATH": f"{work_dir}/src"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -146,27 +173,37 @@ def main():
     if args.env_mode == "local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = start_env_server(args.env_host, args.env_port)
-    elif args.env_mode == "docker":
+    elif args.env_mode == "docker-local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = None
         print(f"🌍 Using existing Echo Environment (Docker) at: {env_url}")
+    elif args.env_mode == "docker-image":
+        client = EchoEnv.from_docker_image(args.env_image)
+        server_process = None
+        print("🌍 Using Echo Environment (Docker) from local Image")
+    elif args.env_mode == "docker-hub":
+        client = EchoEnv.from_hub(args.env_image)
+        server_process = None
+        print("🌍 Using existing Echo Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
         server_process = None
-        print(f"🚀 Using Hugging Face Space environment at: {env_url}")
+        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
     else:
         raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
-    client = EchoEnv(base_url=env_url)
+    if args.env_mode != "docker-hub" and args.env_mode != "docker-image":
+        client = EchoEnv(base_url=env_url)
     dataset = load_dataset(args.dataset, split="train[:1000]")
 
     training_args = GRPOConfig(
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Rollout",
         use_vllm=True,
         vllm_mode=args.vllm_mode,
-        vllm_server_url=args.vllm_server_url if args.vllm_mode == "server" else None,
+        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         logging_steps=1,
         report_to="trackio",
+        trackio_space_id=f"{args.model.split('/')[-1]}-GRPO-Rollout",
         num_train_epochs=1,
         max_completion_length=2048,
         gradient_accumulation_steps=4,

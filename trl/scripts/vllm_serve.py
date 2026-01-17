@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ from multiprocessing.connection import Connection
 
 import torch
 import torch.distributed.distributed_c10d as c10d
+from packaging.version import Version
 from transformers import is_torch_xpu_available, is_vision_available
 
 from trl import TrlParser
@@ -55,12 +56,17 @@ if is_vision_available():
 
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
-    from vllm.sampling_params import GuidedDecodingParams
     from vllm.utils import get_open_port
+
+    if Version(vllm.__version__) <= Version("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
 
     if is_vllm_ascend_available():
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
@@ -126,10 +132,12 @@ class WeightSyncWorkerExtension:
         if is_torch_xpu_available():
             store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
             prefixed_store = c10d.PrefixStore("client2server", store)
+            xccl_options = c10d.ProcessGroupXCCL.Options()
             pg = c10d.ProcessGroupXCCL(
                 store=prefixed_store,
                 rank=rank,
                 size=world_size,
+                options=xccl_options,
             )
             self.communicator = pg
         else:
@@ -495,7 +503,7 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         truncate_prompt_tokens: int | None = None
-        guided_decoding_regex: str | None = None
+        structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
 
     class GenerateResponse(BaseModel):
@@ -528,8 +536,8 @@ def main(script_args: ScriptArguments):
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
-                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
-                  model will only generate tokens that match this regex pattern.
+                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
+                  the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
                   `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
                   keys that conflict with the other parameters, they will override them.
@@ -564,11 +572,19 @@ def main(script_args: ScriptArguments):
                 row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
             prompts.append(row)
 
-        # Guided decoding, if enabled
-        if request.guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(regex=request.guided_decoding_regex)
+        # Structured outputs, if enabled
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            structured_outputs_key = "guided_decoding"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
         else:
-            guided_decoding = None
+            structured_outputs_key = "structured_outputs"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
 
         generation_kwargs = {
             "n": request.n,
@@ -579,9 +595,9 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "guided_decoding": guided_decoding,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
+        generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
@@ -625,7 +641,7 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         truncate_prompt_tokens: int | None = None
-        guided_decoding_regex: str | None = None
+        structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
 
@@ -658,8 +674,8 @@ def main(script_args: ScriptArguments):
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
-                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
-                  model will only generate tokens that match this regex pattern.
+                - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
+                  the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
                   `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
                   keys that conflict with the other parameters, they will override them.
@@ -697,11 +713,19 @@ def main(script_args: ScriptArguments):
                         if part["type"] == "image_pil":
                             part["image_pil"] = Image.open(BytesIO(base64.b64decode(part["image_pil"])))
 
-        # Guided decoding, if enabled
-        if request.guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(regex=request.guided_decoding_regex)
+        # Structured outputs, if enabled
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            structured_outputs_key = "guided_decoding"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
         else:
-            guided_decoding = None
+            structured_outputs_key = "structured_outputs"
+            if request.structured_outputs_regex is not None:
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = None
 
         generation_kwargs = {
             "n": request.n,
@@ -712,9 +736,9 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "guided_decoding": guided_decoding,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
+        generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 

@@ -52,32 +52,92 @@ Example, these configurations are equivalent, and should yield the same results:
 > [!TIP]
 > Having one model per GPU can lead to high memory usage, which may not be feasible for large models or low-memory GPUs. In such cases, you can leverage [DeepSpeed](https://github.com/deepspeedai/DeepSpeed), which provides optimizations like model sharding, Zero Redundancy Optimizer, mixed precision training, and offloading to CPU or NVMe. Check out our [DeepSpeed Integration](deepspeed_integration) guide for more details.
 
-## Context Parallelism
+## Sequence Parallelism for Long Context Training
 
-Context Parallelism (CP) is a parallelization technique that enables training with longer sequences by splitting the sequence dimension across multiple GPUs. Each GPU processes a portion of the sequence, allowing you to train with sequences longer than what would fit on a single GPU's memory.
+Sequence Parallelism (also called Context Parallelism) is a parallelization technique that enables training with longer sequences by splitting the sequence dimension across multiple GPUs. Each GPU processes a portion of the sequence, allowing you to train with sequences longer than what would fit on a single GPU's memory.
 
-For more details on CP, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
+> [!NOTE]
+> **Terminology clarification:** This section describes parallelism techniques for splitting sequences to enable longer context training:
+> - **Context Parallelism (CP)**: Splits sequences across GPUs (implemented as Ring Attention with FSDP2)
+> - **Sequence Parallelism (SP)**: Another form of sequence splitting (implemented as ALST/Ulysses with DeepSpeed)
+>
+> Both CP and SP are different from traditional Sequence Parallelism used with Tensor Parallelism (TP+SP) to reduce activation memory. With the techniques here, parallelism dimensions multiply: `TP=2` and `CP=2` would require 4 GPUs (2×2), whereas traditional `TP+SP=2` only needs 2 GPUs as they share the same ranks.
+>
+> In Accelerate's `ParallelismConfig`:
+> - Use `cp_size` with `cp_backend="torch"` for Ring Attention (FSDP2)
+> - Use `sp_size` with `sp_backend="deepspeed"` for ALST/Ulysses (DeepSpeed)
 
-CP is particularly useful when:
+Sequence parallelism is particularly useful when:
 
 - You want to train with very long sequences (>32k tokens)
 - Single GPU memory is insufficient for your desired sequence length
 - You need to maintain sequence coherence across the full context
 
-### Requirements and Limitations
+### Available Implementations
 
-CP has specific requirements:
+TRL supports two sequence parallelism implementations, each with different characteristics:
 
-1. **Accelerate 1.10 or higher** is required
+1. **Ring Attention (FSDP2)** - Uses ring-based communication for memory-efficient processing of extremely long sequences
+2. **ALST/Ulysses (DeepSpeed)** - Uses attention head parallelism for faster training with high-bandwidth interconnects
+
+> [!IMPORTANT]
+> **Sequence Length Terminology:** When using Context Parallelism, the sequence is split across GPUs, introducing two concepts:
+> - **Global sequence length**: The full sequence length before splitting across GPUs
+> - **Micro sequence length**: The sequence length per GPU after splitting
+>
+> In TRL, `max_seq_length` (or `max_length`) refers to the **global sequence length**. The framework automatically handles splitting into micro sequences:
+> - **Ring Attention (FSDP2)**: Uses `cp_size` to split sequences. With `max_seq_length=8192` and `cp_size=4`, each GPU processes 2048 tokens.
+> - **ALST/Ulysses (DeepSpeed)**: Uses `sp_size` (with `sp_backend="deepspeed"`) to split sequences. With `max_seq_length=8192` and `sp_size=2`, each GPU processes 4096 tokens.
+>
+> The Trainer automatically accounts for context parallelism when calculating batch sizes and training metrics.
+
+### Choosing Between Ring Attention and Ulysses
+
+The comparison table below highlights the key differences between the two approaches:
+
+| Feature | Ring Attention (FSDP2) | ALST/Ulysses (DeepSpeed) |
+|---------|----------|-------------------------|
+| **Method** | Ring Self-Attention | Attention Head Parallelism |
+| **Backend** | PyTorch FSDP2 | DeepSpeed ZeRO |
+| **Attention** | SDPA only | Flash Attention 2 or SDPA |
+| **Minimum Accelerate** | 1.11.0+ | 1.12.0+ |
+| **Minimum DeepSpeed** | N/A | 0.18.1+ |
+| **Sequence Divisibility** | `cp_size * 2` | `sp_size` |
+| **Zero Stage** | N/A | ZeRO Stage 1/2/3 |
+
+**Ring Attention is better when:**
+- You need to handle extremely long sequences (1M+ tokens)
+- The model has limited attention heads (Ring Attention is not constrained by head count)
+- You want flexibility in scaling to any sequence length
+- Network topology is limited (Ring Attention works with simple P2P ring communication)
+
+**Ulysses is better when:**
+- You have high-bandwidth, low-latency interconnects (NVLink, InfiniBand)
+- The model has many attention heads that can be split across GPUs
+- You want lower communication volume
+- You want faster training speed for moderate sequence lengths (up to ~500k tokens)
+
+**Key Trade-offs:**
+- **Communication Volume:** Ulysses has lower communication volume, making it more efficient with good interconnects. Ring Attention has higher communication volume but is more flexible with different network topologies.
+- **Attention Head Constraints:** Ulysses is limited by the number of attention heads (requires `num_heads >= sp_size`). Ring Attention scales with sequence length regardless of model architecture.
+- **Network Sensitivity:** Ulysses all-to-all communication is sensitive to network latency. Ring Attention uses P2P ring communication which is more tolerant of varying network conditions.
+
+For a detailed comparison, see the [Ulysses and Ring Attention blog post](https://huggingface.co/blog/exploding-gradients/ulysses-ring-attention).
+
+### Ring Attention Implementation (FSDP2)
+
+Ring Attention uses a ring-like communication pattern where each GPU processes a portion of the sequence and passes information to the next GPU in the ring.
+
+#### Requirements and Limitations
+
+1. **Accelerate 1.11.0 or higher** is required for Ring Attention / Context Parallelism support
 2. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
-3. **SDPA attention** - Flash Attention is currently not supported with CP
-4. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is now automatically handled using the `pad_to_multiple_of` parameter in the data collator, which works seamlessly with both standard and padding-free modes.
+3. **SDPA attention** - Flash Attention is currently not supported
+4. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is automatically handled using the `pad_to_multiple_of` parameter in the data collator.
 
-### Configuration
+#### Configuration
 
-To enable CP, you need to configure both Accelerate and your training arguments:
-
-#### Accelerate Configuration
+##### Accelerate Configuration
 
 Use one of the provided accelerate config files (e.g. [`context_parallel_2gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/context_parallel_2gpu.yaml) for 2 GPUs):
 
@@ -113,7 +173,7 @@ parallelism_config:
   parallelism_config_cp_size: 2  # Context parallel size
 ```
 
-#### Training Configuration
+##### Training Configuration
 
 ```python
 from trl import SFTConfig
@@ -137,7 +197,7 @@ Then, launch your training script with the appropriate accelerate config file:
 accelerate launch --config_file context_parallel_2gpu.yaml train.py
 ```
 
-### Best Practices
+#### Best Practices
 
 1. **Use the `pad_to_multiple_of` parameter** - This is now the recommended way to ensure sequence length divisibility:
    - For `cp_size=2`: use `pad_to_multiple_of=4` (since `cp_size * 2 = 4`)
@@ -154,9 +214,9 @@ accelerate launch --config_file context_parallel_2gpu.yaml train.py
 
 5. **Monitor memory usage** across all GPUs to ensure balanced workload
 
-### Benchmarking Context Parallelism
+#### Benchmarking Ring Attention
 
-We benchmarked CP to highlight its potential improvements in training efficiency.  
+We benchmarked Ring Attention to highlight its potential improvements in training efficiency.  
 Our experiments were conducted using **1, 2, 4, and 8 H100 GPUs**, though the results can be extended to larger clusters with more nodes and GPUs.
 
 For the setup, we fine-tuned an **8B model** ([Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)) using the provided accelerate configuration  
@@ -178,12 +238,141 @@ These results show that **Context Parallelism (CP) scales effectively with more 
 >
 > You can learn more and explore configuration examples in the [Accelerate ND-parallelism guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism).
 
-### Further Reading on Context Parallelism
+### ALST/Ulysses Implementation (DeepSpeed)
 
-- [Accelerate: Context Parallelism Guide](https://github.com/huggingface/accelerate/blob/main/docs/source/concept_guides/context_parallelism.md)  
-- [Accelerate Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)  
-- [Hugging Face Blog: Enabling Long-Context Training with Sequence Parallelism in Axolotl](https://huggingface.co/blog/axolotl-ai-co/long-context-with-sequence-parallelism-in-axolotl)  
-- [Snowflake Engineering Blog: Arctic Long Sequence Training (ALST) — Scalable and Efficient Training for Multi-Million Token Sequences (Note that they use a different strategy)](https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/)
+ALST (Arctic Long Sequence Training) / Ulysses uses attention head parallelism to split long sequences across GPUs, working with DeepSpeed's ZeRO optimizer.
+
+> [!NOTE]
+> **Technical Note on Parallelism Configuration:**
+> - **DeepSpeed ALST/Ulysses** uses `sp_size` with `sp_backend="deepspeed"` in both YAML and Python API
+> - **Ring Attention (FSDP2)** uses `cp_size` with `cp_backend="torch"`
+>
+> The Trainer automatically accounts for both CP and SP when calculating effective batch sizes and training metrics.
+
+#### Requirements and Limitations
+
+1. **DeepSpeed 0.18.1 or higher** is required
+2. **Accelerate 1.12.0 or higher** is required for ALST/Ulysses sequence parallelism support
+3. **Attention implementation** - Flash Attention 2 recommended (clean output), SDPA works as fallback
+4. **Sequence length divisibility** - sequences must be divisible by `sp_size`. Use `pad_to_multiple_of` in your training config.
+5. **Parallelism configuration** - You must ensure `dp_replicate_size × dp_shard_size × sp_size = num_processes`
+
+#### Configuration
+
+##### Accelerate Configuration
+
+Use the provided accelerate config file ([`alst_ulysses_4gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/alst_ulysses_4gpu.yaml)):
+
+```yaml
+compute_environment: LOCAL_MACHINE
+debug: false
+deepspeed_config:
+  zero_stage: 3
+  seq_parallel_communication_data_type: bf16
+distributed_type: DEEPSPEED
+mixed_precision: bf16
+num_machines: 1
+num_processes: 4  # Number of GPUs
+parallelism_config:
+  parallelism_config_dp_replicate_size: 1
+  parallelism_config_dp_shard_size: 2  # Enables 2D parallelism with SP
+  parallelism_config_tp_size: 1
+  parallelism_config_sp_size: 2  # Sequence parallel size
+  parallelism_config_sp_backend: deepspeed
+  parallelism_config_sp_seq_length_is_variable: true
+  parallelism_config_sp_attn_implementation: flash_attention_2
+```
+
+##### Training Configuration
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    # required
+    pad_to_multiple_of=2,    # Must equal sp_size
+    # to get the most out of SP
+    max_seq_length=4096,
+    packing=True,
+    gradient_checkpointing=True,
+    attn_implementation="flash_attention_2",
+    per_device_train_batch_size=1,
+    ...
+)
+```
+
+Then, launch your training script with the appropriate accelerate config file:
+
+```bash
+accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.yaml train.py
+```
+
+#### 2D Parallelism
+
+The 4 GPU configuration above automatically enables 2D parallelism by combining Data Parallelism (DP) with Sequence Parallelism (SP). With `sp_size=2` and `dp_shard_size=2`, the 4 GPUs are organized as:
+- 2 sequence parallel groups (processing the same data split across sequences)
+- 2 data parallel groups (processing different data)
+
+To adjust the parallelism for different GPU counts, modify the YAML config:
+
+| GPUs | sp_size | dp_shard_size | Use Case | YAML Changes |
+|------|---------|---------------|----------|--------------|
+| 4 | 2 | 2 | Balanced - longer sequences + more data | `num_processes: 4`, `sp_size: 2`, `dp_shard_size: 2` |
+| 4 | 4 | 1 | Pure SP for maximum sequence length | `num_processes: 4`, `sp_size: 4`, `dp_shard_size: 1` |
+| 8 | 2 | 4 | Large-scale training | `num_processes: 8`, `sp_size: 2`, `dp_shard_size: 4` |
+
+#### Best Practices
+
+1. **Use `pad_to_multiple_of`** to ensure sequences are divisible by `sp_size`
+2. **Use Flash Attention 2** for clean output (SDPA works but shows packing warnings)
+3. **Start with `sp_size=2`** before scaling to larger values
+4. **Use DeepSpeed ZeRO Stage 3** for large models
+5. **Combine with memory optimizations** like Liger kernels and gradient checkpointing
+6. **Validate parallelism config**: Ensure `dp_replicate_size × dp_shard_size × sp_size = num_processes`
+
+#### Complete Example
+
+Here's how to run ALST/Ulysses training using the built-in [`sft.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) script with 4 GPUs:
+
+```bash
+accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.yaml \
+    trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2e-4 \
+    --max_steps 100 \
+    --max_seq_length 4096 \
+    --packing \
+    --packing_strategy wrapped \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --attn_implementation flash_attention_2 \
+    --output_dir output-alst-4gpu \
+    --logging_steps 10 \
+    --report_to trackio
+```
+
+This command automatically:
+- Configures 2D parallelism (SP=2, DP=2) across 4 GPUs
+- Uses Flash Attention 2 for clean training
+- Enables packing with automatic padding to ensure sequence divisibility
+- Leverages DeepSpeed ZeRO Stage 3 for memory efficiency
+
+### Further Reading
+
+#### General Resources
+- [Hugging Face Blog: Understanding Ulysses and Ring Attention](https://huggingface.co/blog/exploding-gradients/ulysses-ring-attention) - Detailed comparison of Ring Attention vs Ulysses approaches
+- [Accelerate: Context Parallelism Guide](https://huggingface.co/docs/accelerate/concept_guides/context_parallelism)
+- [Hugging Face Blog: Enabling Long-Context Training with Sequence Parallelism in Axolotl](https://huggingface.co/blog/axolotl-ai-co/long-context-with-sequence-parallelism-in-axolotl)
+
+#### Ring Attention (FSDP2)
+- [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism)
+- [Accelerate Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)
+- [Accelerate ND-parallelism Guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism)
+
+#### ALST/Ulysses (DeepSpeed)
+- [DeepSpeed Sequence Parallelism Documentation](https://www.deepspeed.ai/tutorials/ds-sequence/)
+- [Snowflake Engineering Blog: Arctic Long Sequence Training (ALST)](https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/)
 
 ## Multi-Node Training
 

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -222,16 +224,6 @@ class DPOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to generate and log completions from both the model and the reference model to W&B or Comet during
             evaluation.
-
-        > Deprecated parameters
-
-        padding_value:
-
-            <Deprecated version="0.24.0">
-
-            This parameter is deprecated and will be removed in version 0.26.0. Use `pad_token` (`str`) instead.
-
-            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
@@ -508,14 +500,17 @@ class DPOConfig(TrainingArguments):
         },
     )
 
-    # Deprecated arguments
-    padding_value: int | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `pad_token` (str) instead."},
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         self.f_divergence_type = FDivergenceType(self.f_divergence_type)
 
         # Normalize loss_type to string format for internal use

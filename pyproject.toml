@@ -30,7 +30,8 @@ requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
-    "transformers>=4.56.1",
+    "packaging>20.0",
+    "transformers>=4.56.2",
 ]
 dynamic = ["version"]
 
@@ -56,7 +57,7 @@ kernels = [
     "kernels"
 ]
 liger = [
-    "liger-kernel>=0.6.2"
+    "liger-kernel>=0.6.4"
 ]
 peft = [
     "peft>=0.8.0"
@@ -73,12 +74,13 @@ scikit = [
 ]
 test = [
     "pytest-cov",
+    "pytest-datadir",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest"
 ]
 vllm = [
-    "vllm==0.10.2",
+    "vllm>=0.10.2,<0.13.0",
     "fastapi",
     "pydantic",
     "requests",
@@ -104,7 +106,7 @@ dev = [
     # kernels
     "kernels",
     # liger
-    "liger-kernel>=0.6.2",
+    "liger-kernel>=0.6.4",
     # peft
     "peft>=0.8.0",
     # quality
@@ -115,6 +117,7 @@ dev = [
     # scikit: included in bco
     # test
     "pytest-cov",
+    "pytest-datadir",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
@@ -122,7 +125,9 @@ dev = [
     # vlm
     "Pillow",
     "torchvision",
-    "num2words==0.5.14"
+    "num2words==0.5.14",
+    # for response parsing (required for training with tools)
+    "jmespath",
 ]
 
 [tool.setuptools]

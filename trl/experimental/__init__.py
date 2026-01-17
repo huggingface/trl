@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,11 +24,13 @@ To silence this notice set environment variable TRL_EXPERIMENTAL_SILENCE=1.
 import os
 import warnings
 
+from ..import_utils import TRLExperimentalWarning
+
 
 if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
     warnings.warn(
         "You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without "
         "notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.",
-        UserWarning,
+        TRLExperimentalWarning,
         stacklevel=2,
     )

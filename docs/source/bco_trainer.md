@@ -22,6 +22,8 @@ For a detailed example have a look at the `examples/scripts/bco.py` script. At a
 The `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
 
 ```python
+from trl.experimental.bco import BCOConfig, BCOTrainer
+
 training_args = BCOConfig(
     beta=0.1,
 )

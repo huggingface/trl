@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,38 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio>=0.13.0",
+#     "kernels",
+#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
+#     "openenv_core",
+# ]
+# ///
+
+
 """
 Simple script to run GRPO training with OpenEnv's Catch environment (OpenSpiel) and vLLM. The reward function
 is based on the catch game where the agent tries to catch falling balls.
 
-Setup:
+Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+uv pip install git+https://huggingface.co/spaces/openenv/openspiel_env
 ```
 
-Usage:
+Setup (Option B - Clone OpenEnv repo):
 
-# Start the docker container for the Catch environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
 ```sh
-docker run -d -p 8001:8001 registry.hf.space/openenv-openspiel-env:latest
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/openspiel_env
+uv pip install -e .
 ```
 
-# Option 1: Colocated vLLM (1 GPU required)
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
 ```sh
-python examples/scripts/openenv/catch.py --vllm-mode colocate
+python examples/scripts/openenv/catch.py --env-mode space --env-host https://openenv-openspiel-env.hf.space --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
 
-# Spin up vLLM server
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 ```
 
-# Run training
+# Run training (Terminal 2)
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/catch.py --vllm-mode server --vllm-server-url http://localhost:8000
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/catch.py --env-mode space --env-host https://openenv-openspiel-env.hf.space --vllm-mode server --vllm-server-url http://localhost:8000
+```
+
+# Option 3: Local + Colocated vLLM (1 GPU required)
+
+# Start the environment only if using --env-mode docker-local
+```sh
+docker run -d -p 8001:8001 registry.hf.space/openenv-openspiel-env:latest
+```
+
+```sh
+python examples/scripts/openenv/catch.py --env-mode docker-local --vllm-mode colocate
 ```
 """
 
@@ -58,8 +82,8 @@ from pathlib import Path
 
 import requests
 from datasets import Dataset
-from envs.openspiel_env import OpenSpielEnv
-from envs.openspiel_env.models import OpenSpielAction
+from openspiel_env import OpenSpielEnv
+from openspiel_env.models import OpenSpielAction
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback, apply_chat_template
 from trl.experimental.openenv import generate_rollout_completions
@@ -73,9 +97,9 @@ def parse_args():
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the environment server.")
     parser.add_argument(
         "--env-mode",
-        choices=["local", "docker", "space"],
-        default="docker",
-        help="Where to run the environment: 'local', 'docker', or 'space'.",
+        choices=["local", "docker-local", "docker-image", "docker-hub", "space"],
+        default="docker-image",
+        help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
     # --- Generation and model config ---
     parser.add_argument(
@@ -89,6 +113,9 @@ def parse_args():
         type=int,
         default=1000,
         help="Number of prompts to use for training dataset.",
+    )
+    parser.add_argument(
+        "--env-image", type=str, default="openspiel-env:latest", help="Docker image for the OpenSpiel environment."
     )
     parser.add_argument(
         "--vllm-mode",
@@ -183,27 +210,37 @@ def main():
     if args.env_mode == "local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = start_env_server(args.env_host, args.env_port)
-    elif args.env_mode == "docker":
+    elif args.env_mode == "docker-local":
         env_url = f"http://{args.env_host}:{args.env_port}"
         server_process = None
-        print(f"🌍 Using existing Docker environment at {env_url}")
+        print(f"🌍 Using existing OpenSpiel Environment (Docker) at: {env_url}")
+    elif args.env_mode == "docker-image":
+        client = OpenSpielEnv.from_docker_image(args.env_image)
+        server_process = None
+        print("🌍 Using OpenSpiel Environment (Docker) from local Image")
+    elif args.env_mode == "docker-hub":
+        client = OpenSpielEnv.from_hub(args.env_image)
+        server_process = None
+        print("🌍 Using existing OpenSpiel Environment (Docker) from Hub Image")
     elif args.env_mode == "space":
         env_url = args.env_host
         server_process = None
-        print(f"🚀 Using Hugging Face Space environment at {env_url}")
+        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
     else:
-        raise ValueError(f"Unknown env mode: {args.env_mode}")
+        raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
-    client = OpenSpielEnv(base_url=env_url)
+    if args.env_mode != "docker-hub" and args.env_mode != "docker-image":
+        client = OpenSpielEnv(base_url=env_url)
     dataset = Dataset.from_dict({"prompt": [BASE_PROMPT] * args.dataset_size})
 
     training_args = GRPOConfig(
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Catch",
         use_vllm=True,
         vllm_mode=args.vllm_mode,
-        vllm_server_url=args.vllm_server_url if args.vllm_mode == "server" else None,
+        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         logging_steps=1,
         report_to="trackio",
+        trackio_space_id=f"{args.model.split('/')[-1]}-GRPO-Catch",
         num_train_epochs=1,
         max_completion_length=4,
         gradient_accumulation_steps=4,

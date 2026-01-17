@@ -226,7 +226,6 @@ from rapidfireai.automl import RFGRPOConfig
 training_args = RFGRPOConfig(
     learning_rate=5e-6,
     num_generations=8,
-    max_prompt_length=256,
     max_completion_length=256,
     # ... all other GRPOConfig parameters supported
 )

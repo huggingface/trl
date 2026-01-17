@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ class PAPOTrainer(GRPOTrainer):
 
     ```python
     from datasets import load_dataset
-    from trl import PAPOTrainer, PAPOConfig
+    from trl.experimental.papo import PAPOTrainer, PAPOConfig
 
     dataset = load_dataset("your-vlm-dataset", split="train")
 

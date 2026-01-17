@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,38 +12,55 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio>=0.13.0",
+#     "kernels",
+#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
+#     "openenv_core",
+# ]
+# ///
+
+
 """
 Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
 Setup:
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+uv pip install git+https://huggingface.co/spaces/burtenshaw/wordle
 ```
 
-Usage:
-
-# Start the docker container for the Wordle environment (recommended). Alternatively, you can run it locally or directly from a HF Space.
-```sh
-docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
-# or TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 python -m src.envs.textarena_env.server.app
-```
-
-# Option 1: Colocated vLLM (1 GPU required)
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
 ```sh
 python examples/scripts/openenv/wordle.py --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
 
-# Spin up vLLM server
+# Spin up vLLM server (Terminal 1)
 ```sh
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
 ```
 
-# Run training
+# Run training (Terminal 2)
 ```sh
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
+```
+
+# Option 3: Local + Colocated vLLM (1 GPU required)
+
+Usage:
+
+# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
+```sh
+docker run -d -p 8001:8001 registry.hf.space/burtenshaw-wordle:latest
+```
+
+```sh
+python examples/scripts/openenv/wordle.py --vllm-mode colocate
 ```
 """
 
@@ -66,9 +83,9 @@ from trl.experimental.openenv import generate_rollout_completions
 # Ensure src/ is on the path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from envs.textarena_env import TextArenaAction, TextArenaEnv
-from envs.textarena_env.models import TextArenaMessage
-from envs.textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
+from textarena_env import TextArenaAction, TextArenaEnv
+from textarena_env.models import TextArenaMessage
+from textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,9 +103,7 @@ def parse_args() -> argparse.Namespace:
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
     parser.add_argument(
-        "--env-url",
-        default="https://burtenshaw-textarena.hf.space",
-        help="URL for the TextArena Wordle environment.",
+        "--env-url", type=str, default="https://burtenshaw-wordle.hf.space", help="URL for the environment server."
     )
     parser.add_argument(
         "--system-prompt-path",
@@ -411,46 +426,48 @@ def reward_repetition(completions: list[str], **kwargs) -> list[float]:
 
 
 def main() -> None:
-    cli_args = parse_args()
+    args = parse_args()
 
-    tokenizer = AutoTokenizer.from_pretrained(cli_args.tokenizer_id)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    env = TextArenaEnv(base_url=cli_args.env_url)
+    client = TextArenaEnv(base_url=args.env_url)
 
-    system_prompt = resolve_system_prompt(cli_args.system_prompt_path)
+    system_prompt = resolve_system_prompt(args.system_prompt_path)
 
-    dataset = Dataset.from_dict({"prompt": [cli_args.dataset_prompt] * cli_args.dataset_size})
+    dataset = Dataset.from_dict({"prompt": [args.dataset_prompt] * args.dataset_size})
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    default_output_dir = Path("outputs") / f"wordle-grpo-{sanitize_name(cli_args.model_id)}-{timestamp}"
-    output_dir = Path(cli_args.output_dir or default_output_dir)
+    default_output_dir = Path("outputs") / f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}"
+    output_dir = Path(args.output_dir or default_output_dir)
 
     grpo_config = GRPOConfig(
         use_vllm=True,
-        vllm_mode=cli_args.vllm_mode,
-        vllm_server_url=cli_args.vllm_server_url if cli_args.vllm_mode == "server" else None,
+        vllm_mode=args.vllm_mode,
+        vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         output_dir=str(output_dir),
-        num_train_epochs=cli_args.num_epochs,
-        learning_rate=cli_args.learning_rate,
-        weight_decay=cli_args.weight_decay,
-        gradient_accumulation_steps=cli_args.gradient_accumulation_steps,
-        per_device_train_batch_size=cli_args.per_device_batch_size,
-        warmup_steps=cli_args.warmup_steps,
-        num_generations=cli_args.num_generations,
-        max_completion_length=cli_args.max_new_tokens,
-        logging_steps=cli_args.logging_steps,
+        num_train_epochs=args.num_epochs,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        per_device_train_batch_size=args.per_device_batch_size,
+        warmup_steps=args.warmup_steps,
+        num_generations=args.num_generations,
+        max_completion_length=args.max_new_tokens,
+        logging_steps=args.logging_steps,
+        report_to="trackio",
+        trackio_space_id=f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
-        save_steps=cli_args.save_interval,
-        save_total_limit=cli_args.save_total_limit,
-        temperature=cli_args.temperature,
-        top_k=cli_args.top_k,
-        top_p=cli_args.top_p,
+        save_steps=args.save_interval,
+        save_total_limit=args.save_total_limit,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
     )
 
-    grpo_config.run_name = cli_args.run_name or f"run-{timestamp}"
-    grpo_config.project = cli_args.project or f"group-{sanitize_name(cli_args.model_id)}"
-    grpo_config.trackio_space_id = cli_args.trackio_space_id
+    grpo_config.run_name = args.run_name or f"run-{timestamp}"
+    grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
+    grpo_config.trackio_space_id = args.trackio_space_id
 
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
@@ -464,11 +481,11 @@ def main() -> None:
         for prompt_text in prompts:
             episode = rollout_once(
                 trainer=trainer,
-                env=env,
+                env=client,
                 tokenizer=tokenizer,
                 dataset_prompt=prompt_text,
                 system_prompt=system_prompt,
-                max_turns=cli_args.max_turns,
+                max_turns=args.max_turns,
             )
             episode_prompt_ids.append(episode["prompt_ids"])
             episode_completion_ids.append(episode["completion_ids"])
@@ -489,7 +506,7 @@ def main() -> None:
         }
 
     trainer = GRPOTrainer(
-        model=cli_args.model_id,
+        model=args.model_id,
         processing_class=tokenizer,
         reward_funcs=[
             reward_correct,
@@ -503,12 +520,12 @@ def main() -> None:
     )
 
     print("Starting GRPO training with Wordle environment...")
-    print(f"Using {cli_args.num_generations} rollouts per dataset prompt")
+    print(f"Using {args.num_generations} rollouts per dataset prompt")
 
     try:
         trainer.train()
     finally:
-        env.close()
+        client.close()
 
 
 if __name__ == "__main__":

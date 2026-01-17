@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -37,7 +39,7 @@ class RewardConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`RewardTrainer`] is provided as a string. If you're training a MoE architecture and want
-            to include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            to include the load balancing/auxiliary loss as a part of the final loss, remember to set
             `output_router_logits=True` in this dictionary.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
@@ -116,7 +118,9 @@ class RewardConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `RewardTrainer` is provided as a string."
+            "the `RewardTrainer` is provided as a string. If you're training a MoE architecture and want to include "
+            "the load balancing/auxiliary loss as a part of the final loss, remember to set "
+            "`output_router_logits=True` in this dictionary."
         },
     )
     chat_template_path: str | None = field(
@@ -178,4 +182,13 @@ class RewardConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__post_init__()

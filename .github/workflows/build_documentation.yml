@@ -7,6 +7,9 @@ on:
       - doc-builder*
       - v*-release
 
+env:
+  TRL_EXPERIMENTAL_SILENCE: 1
+
 jobs:
    build:
     uses: huggingface/doc-builder/.github/workflows/build_main_documentation.yml@main
