@@ -30,12 +30,7 @@ requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
-    "fastapi>=0.124.4",
-    "omegaconf>=2.3.0",
     "transformers>=4.56.1",
-    "uvicorn>=0.38.0",
-    "vllm>=0.11.2",
-    "wandb>=0.23.1",
 ]
 dynamic = ["version"]
 
