@@ -643,7 +643,6 @@ def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tu
         return flushed_mask
     return flushed_mask, *flushed_tensors
 
-
 def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
@@ -678,7 +677,7 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         per_token_logps = torch.stack(per_token_logps)
     return per_token_logps
 
-
+@torch.compile
 def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Tensor:
     """
     Compute the Shannon entropy (in nats) for each row of *logits* in a memory-efficient way.
