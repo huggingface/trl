@@ -2286,10 +2286,7 @@ class GRPOTrainer(BaseTrainer):
         if self.off_policy_mask_threshold is not None:
             # If using vLLM, we use sampling_per_token_logps as the old policy logprobs.
             sampling_per_token_logps = inputs.get("sampling_per_token_logps")
-            if sampling_per_token_logps is not None:
-                old_logps = sampling_per_token_logps
-            else:
-                old_logps = old_per_token_logps
+            old_logps = sampling_per_token_logps if sampling_per_token_logps is not None else old_per_token_logps
 
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
