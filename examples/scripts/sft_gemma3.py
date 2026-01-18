@@ -54,7 +54,6 @@ def main():
         bf16=True,
         use_liger_kernel=True,
         gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
         max_length=8192,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,

@@ -18,6 +18,7 @@
 
 import torch
 from huggingface_hub import HfApi, ModelCard
+from peft import LoraConfig, get_peft_model
 from torch import nn
 from transformers import (
     AutoConfig,
@@ -26,8 +27,6 @@ from transformers import (
     BartModel,
     CohereConfig,
     CohereForCausalLM,
-    DbrxConfig,
-    DbrxForCausalLM,
     DeepseekV3Config,
     DeepseekV3ForCausalLM,
     FalconMambaConfig,
@@ -112,8 +111,9 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, f
         print(f"Model {repo_id} already exists, skipping")
     else:
         model.push_to_hub(repo_id)
-        tokenizer.push_to_hub(repo_id)
         model_card.push_to_hub(repo_id)
+        if tokenizer is not None:
+            tokenizer.push_to_hub(repo_id)
         if generation_config is not None:
             generation_config.push_to_hub(repo_id)
 
@@ -212,19 +212,6 @@ for model_id, config_class, model_class, dtype, suffix in [
     model = model_class(config).to(dtype=dtype)
     init_weights_tiny_model(model)
     push_to_hub(model, tokenizer, generation_config, "tiny", suffix)
-
-# Special case for databricks/dbrx-instruct as it requires specific changes in the config
-model_id = "databricks/dbrx-instruct"
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-generation_config = GenerationConfig.from_pretrained(model_id)
-config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=6, d_model=24)
-# transformers mistakenly ignores ffn_config keys when loading from pretrained. We need to set them manually after
-# loading the config
-config.ffn_config.ffn_hidden_size = 24
-config.attn_config.kv_n_heads = 2
-model = DbrxForCausalLM(config).to(dtype=torch.bfloat16)
-init_weights_tiny_model(model)
-push_to_hub(model, tokenizer, generation_config, "tiny")
 
 # Two slightly bigger models, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
@@ -380,3 +367,15 @@ for model_id, model_class, dtype in [
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=dtype)
     push_to_hub(model, processor, generation_config, "tiny")
+
+# PEFT models
+model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
+model = get_peft_model(model, LoraConfig())
+generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+push_to_hub(model, None, None, "tiny")
+
+# Same model, but different weights
+model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
+model = get_peft_model(model, LoraConfig())
+generation_config = GenerationConfig.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+push_to_hub(model, None, None, "tiny", "2")

@@ -31,7 +31,8 @@ requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
-    "transformers>=4.56.1",
+    "packaging>20.0",
+    "transformers>=4.56.2",
 ]
 dynamic = ["version"]
 
@@ -74,6 +75,7 @@ scikit = [
 ]
 test = [
     "pytest-cov",
+    "pytest-datadir",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest"
@@ -116,6 +118,7 @@ dev = [
     # scikit: included in bco
     # test
     "pytest-cov",
+    "pytest-datadir",
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
