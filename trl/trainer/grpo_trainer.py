@@ -2230,10 +2230,10 @@ class GRPOTrainer(BaseTrainer):
         Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper. Returns a (B, 1) tensor where 1.0 indicates
         "Keep" and 0.0 indicates "Drop".
         """
-        # K1 estimator: log(pi_old) - log(pi_theta)
-        k1_divergence = old_per_token_logps - per_token_logps.detach()
+        # forward KL div: log(pi_old) - log(pi_theta)
+        kl_div = old_per_token_logps - per_token_logps.detach()
         # Sequence-level Mean KL (ignoring prompt+padding)
-        seq_kl_sum = (k1_divergence * mask).sum(dim=1, keepdim=True)
+        seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
         # Keep if (Advantage >= 0) OR (KL <= delta)
         is_pos_adv = advantages >= 0
