@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 
 import transformers
@@ -265,15 +264,6 @@ class GRPOConfig(TrainingArguments):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
             `max_model_length`.
-        use_liger_loss (`bool`, *optional*):
-            Whether to use Liger loss.
-
-            <Deprecated version="0.25.0">
-
-            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel`
-            instead.
-
-            </Deprecated>
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
@@ -312,26 +302,6 @@ class GRPOConfig(TrainingArguments):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
-
-        > Deprecated arguments
-
-        max_prompt_length:
-
-            <Deprecated version="0.26.0">
-
-            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
-            filter your dataset before training to ensure that prompts do not exceed your desired length.
-
-            </Deprecated>
-
-        vllm_guided_decoding_regex:
-
-            <Deprecated version="0.27.0">
-
-            Parameter `vllm_guided_decoding_regex` is deprecated and will be removed in version 0.28.0. You should
-            instead use `vllm_structured_outputs_regex`.
-
-            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -775,10 +745,6 @@ class GRPOConfig(TrainingArguments):
             "response length reaches `max_model_length`."
         },
     )
-    use_liger_loss: bool = field(
-        default=None,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
-    )
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
@@ -848,19 +814,6 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
-    # Deprecated arguments
-    max_prompt_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
-            "desired length."
-        },
-    )
-    vllm_guided_decoding_regex: str | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `vllm_structured_outputs_regex` instead."},
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
@@ -871,15 +824,6 @@ class GRPOConfig(TrainingArguments):
         if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
             self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
-
-        if self.top_k is None:
-            self.top_k = 0
-            warnings.warn(
-                "The value `None` for `top_k` is deprecated and will raise an error in TRL 0.28. "
-                "Use `top_k=0` to disable top-k filtering instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
 
         super().__post_init__()
 
@@ -932,31 +876,5 @@ class GRPOConfig(TrainingArguments):
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
-        if self.use_liger_loss is not None:
-            warnings.warn(
-                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
-                "`use_liger_kernel` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.use_liger_kernel = self.use_liger_loss
-
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
-
-        if self.max_prompt_length is not None:
-            warnings.warn(
-                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
-                "instead filter your dataset before training to ensure that prompts do not exceed your desired "
-                "length.",
-                FutureWarning,
-                stacklevel=2,
-            )
-        if self.vllm_guided_decoding_regex is not None:
-            warnings.warn(
-                "The `vllm_guided_decoding_regex` argument is deprecated and will be removed in version 0.28.0. You "
-                "should instead use `vllm_structured_outputs_regex`.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex
