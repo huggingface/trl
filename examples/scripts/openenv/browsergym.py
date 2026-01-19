@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -30,33 +29,26 @@ This example automatically detects and uses vision capabilities when VLM models 
 Screenshots from BrowserGym are collected and passed to the model during training. The GRPO
 trainer auto-detects multimodal support by checking for images in the rollout data.
 
-Setup:
+Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
-# Hotfix: https://github.com/huggingface/trl/pull/4740
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
+uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 ```
 
-Usage:
+Setup (Option B - Clone OpenEnv repo):
 
-# Build and start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
-# ```sh
-cd OpenEnv
-docker build -t openenv-base:latest -f src/core/containers/images/Dockerfile .
-docker build -t browsergym-env:latest -f src/envs/browsergym_env/server/Dockerfile .
-docker run -d -p 8000:8000 \
-  -e BROWSERGYM_BENCHMARK="miniwob" \
-  -e BROWSERGYM_TASK_NAME="click-test" \
-  browsergym-env:latest
+```sh
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/browsergym_env
+uv pip install -e .
 ```
 
-# Option 1: Colocated vLLM (1 GPU required)
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
 ```sh
 python examples/scripts/openenv/browsergym.py --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
 
 # Spin up vLLM server (Terminal 1)
 ```sh
@@ -67,6 +59,23 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-VL-2B-Instruct --host 0
 ```sh
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/browsergym.py --vllm-mode server --vllm-server-url http://localhost:8001
 ```
+
+# Option 3: Local + Colocated vLLM (1 GPU required)
+
+# Build and start the environment only if using --env-mode docker-local
+```sh
+cd OpenEnv
+docker build -t openenv-base:latest -f src/core/containers/images/Dockerfile .
+docker build -t browsergym-env:latest -f src/envs/browsergym_env/server/Dockerfile .
+docker run -d -p 8001:8001 \
+  -e BROWSERGYM_BENCHMARK="miniwob" \
+  -e BROWSERGYM_TASK_NAME="click-test" \
+  browsergym-env:latest
+```
+
+```sh
+python examples/scripts/openenv/browsergym.py --env-mode docker-local --vllm-mode colocate
+```
 """
 
 from __future__ import annotations
@@ -76,8 +85,8 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from browsergym_env import BrowserGymAction, BrowserGymEnv
 from datasets import Dataset
-from envs.browsergym_env import BrowserGymAction, BrowserGymEnv
 from PIL import Image
 from transformers import AutoTokenizer
 
@@ -97,12 +106,17 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen3-VL-2B-Instruct",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
-    parser.add_argument("--env-host", type=str, default="0.0.0.0", help="Host for the Echo environment.")
-    parser.add_argument("--env-port", type=int, default=8001, help="Port for the Echo environment.")
+    parser.add_argument(
+        "--env-host",
+        type=str,
+        default="https://openenv-browsergym-env.hf.space",
+        help="Host for the BrowserGym environment.",
+    )
+    parser.add_argument("--env-port", type=int, default=8001, help="Port for the BrowserGym environment.")
     parser.add_argument(
         "--env-mode",
         choices=["docker-local", "docker-image", "docker-hub", "space"],
-        default="docker-image",
+        default="space",
         help="Where to run the environment: 'local' to launch it, 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
     )
     parser.add_argument(

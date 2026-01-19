@@ -12,12 +12,20 @@ In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel 
 
 ## Installation
 
-To use OpenEnv with TRL, install the framework:
+To use OpenEnv with TRL, install the environment package. You have two options:
+
+**Option A - Install from HF Space:**
 
 ```bash
-# pip install git+https://github.com/meta-pytorch/OpenEnv.git
-# Hotfix: https://github.com/huggingface/trl/pull/4740
-pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
+pip install git+https://huggingface.co/spaces/openenv/echo_env
+```
+
+**Option B - Clone OpenEnv repo:**
+
+```bash
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/echo_env
+pip install -e .
 ```
 
 ## Using `rollout_func` with OpenEnv environments
@@ -213,7 +221,7 @@ Environments are tightly integrated with the Hub, allowing you to **push new env
 The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the [Echo environment](https://meta-pytorch.org/OpenEnv/environments/echo/) rewards completions based on their text length, encouraging the model to generate longer outputs. This pattern can be extended to any custom environment that provides structured feedback or task-based rewards:
 
 ```python
-from envs.echo_env import EchoEnv, EchoAction
+from echo_env import EchoEnv, EchoAction
 from trl import GRPOConfig, GRPOTrainer
 from trl.experimental.openenv import generate_rollout_completions
 
@@ -300,7 +308,7 @@ You can run the example in either colocate mode (1 GPU) or server mode (2 GPUs):
 **Colocate mode (1 GPU, recommended)**
 
 ```bash
-python examples/scripts/openenv/echo.py --vllm-mode colocate
+python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode colocate
 ```
 
 This runs vLLM in the same process as training, requiring only a single GPU.
@@ -316,7 +324,7 @@ This runs vLLM in the same process as training, requiring only a single GPU.
 CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
 
 # Terminal 2: Run GRPO training with OpenEnv
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 
 This runs vLLM as a separate server process, useful when you want to:
@@ -333,15 +341,10 @@ Alternatively, you can manually start the Echo environment in a Docker container
 ```bash
 # Launch the Echo environment
 docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+
+# Run training with docker-local mode
+python examples/scripts/openenv/echo.py --env-mode docker-local --vllm-mode colocate
 ```
-
-Then, initialize the client using:
-
-`client = EchoEnv(base_url="http://0.0.0.0:8001")` 
-
-instead of:
-
-`client = EchoEnv.from_docker_image("echo-env:latest")`.
 
 Below is the reward curve from training:
 

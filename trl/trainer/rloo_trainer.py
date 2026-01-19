@@ -33,7 +33,7 @@ import torch.utils.data
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -98,7 +98,7 @@ if is_vllm_available():
     import vllm
     from vllm import LLM, SamplingParams
 
-    if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+    if Version(vllm.__version__) <= Version("0.10.2"):
         from vllm.sampling_params import GuidedDecodingParams
     else:
         from vllm.sampling_params import StructuredOutputsParams
@@ -1133,7 +1133,7 @@ class RLOOTrainer(BaseTrainer):
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
-                if version.parse(vllm.__version__) <= version.parse("0.10.2"):
+                if Version(vllm.__version__) <= Version("0.10.2"):
                     structured_outputs_key = "guided_decoding"
                     if self.structured_outputs_regex:
                         structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
@@ -1405,7 +1405,7 @@ class RLOOTrainer(BaseTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+        # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
         # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
         # Temporarily disable checkpointing to avoid this warning during inference.
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
@@ -1459,6 +1459,7 @@ class RLOOTrainer(BaseTrainer):
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
@@ -1475,14 +1476,12 @@ class RLOOTrainer(BaseTrainer):
             kl = gather(kl)  # rewards are gathered, so kl must be too
             rewards = rewards - self.beta * kl
 
-        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
         grouped_rewards = rewards.view(-1, num_generations)
         mean_grouped_rewards = grouped_rewards.mean(dim=1)
         if num_generations > 1:
             std_rewards = grouped_rewards.std(dim=1)
-        else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+        else:  # doesn't occur during training, but could occur in eval when num_generations_eval=1
             std_rewards = torch.zeros_like(mean_grouped_rewards)
-        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
 
         # RLOO advantages computation
         grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
@@ -1496,6 +1495,8 @@ class RLOOTrainer(BaseTrainer):
         # Normalize advantages
         if self.normalize_advantages:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-4)
+
+        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1516,8 +1517,9 @@ class RLOOTrainer(BaseTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
+        rewards = rewards_per_func.nansum(dim=1)
+        self._metrics[mode]["reward"].append(rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(rewards.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts

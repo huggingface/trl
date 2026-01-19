@@ -12,20 +12,74 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio",
+#     "kernels",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/openenv/sudoku",
+# ]
+# ///
+
 """
 GRPO training for Sudoku with TextArena environment.
 
-Usage:
-    python examples/scripts/openenv/sudoku.py \
-        --vllm-mode colocate \
-        --env-mode space \
-        --env-host https://sergiopaniego-textarena.hf.space \
-        --num-generations 8 \
-        --per-device-batch-size 1 \
-        --max-turns 100 \
-        --gradient-accumulation-steps 8 \
-        --difficulty easy \
-        --dataset-size 100
+Setup (Option A - Install from HF Space):
+
+```sh
+uv pip install git+https://huggingface.co/spaces/openenv/sudoku
+```
+
+Setup (Option B - Clone OpenEnv repo):
+
+```sh
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/textarena_env
+uv pip install -e .
+```
+
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
+```sh
+python examples/scripts/openenv/sudoku.py --vllm-mode colocate
+```
+
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
+
+# Spin up vLLM server (Terminal 1)
+```sh
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
+```
+
+# Run training (Terminal 2)
+```sh
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/sudoku.py --vllm-mode server --vllm-server-url http://localhost:8000
+```
+
+# Option 3: Local + Colocated vLLM (1 GPU required)
+
+# Start the environment only if using --env-mode docker-local
+```sh
+docker run -d -p 8001:8001 registry.hf.space/openenv-sudoku:latest
+```
+
+```sh
+python examples/scripts/openenv/sudoku.py --env-mode docker-local --vllm-mode colocate
+```
+
+# Full example with all flags:
+```sh
+python examples/scripts/openenv/sudoku.py \
+    --vllm-mode colocate \
+    --env-mode space \
+    --env-host https://openenv-sudoku.hf.space \
+    --num-generations 8 \
+    --per-device-batch-size 1 \
+    --max-turns 100 \
+    --gradient-accumulation-steps 8 \
+    --difficulty easy \
+    --dataset-size 100
+```
 """
 
 from __future__ import annotations
@@ -48,7 +102,7 @@ from trl.experimental.openenv import generate_rollout_completions
 # Ensure src/ is on the path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from envs.textarena_env import TextArenaAction, TextArenaEnv
+from textarena_env import TextArenaAction, TextArenaEnv
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +117,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B")
 
     # Environment
-    parser.add_argument("--env-host", type=str, default="0.0.0.0")
+    parser.add_argument("--env-host", type=str, default="https://openenv-sudoku.hf.space")
     parser.add_argument("--env-port", type=int, default=8001)
-    parser.add_argument(
-        "--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="docker-image"
-    )
+    parser.add_argument("--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space")
     parser.add_argument("--env-image", type=str, default="textarena-env:latest")
 
     # Prompts

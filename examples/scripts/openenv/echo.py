@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-echo-env @ git+https://huggingface.co/spaces/openenv/echo_env",
 # ]
 # ///
 
@@ -28,27 +27,26 @@
 Simple script to run GRPO training with OpenEnv's Echo environment and vLLM. The reward function encourages
 longer completions.
 
-Setup:
+Setup (Option A - Install from HF Space):
 
 ```sh
-# uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
-# Hotfix: https://github.com/huggingface/trl/pull/4740
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git@bf5e968286e0d49cdc03fd904d48faff4b15a437 openenv_core==0.1.1
+uv pip install git+https://huggingface.co/spaces/openenv/echo_env
 ```
 
-Usage:
+Setup (Option B - Clone OpenEnv repo):
 
-# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
 ```sh
-docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/echo_env
+uv pip install -e .
 ```
 
-# Option 1: Colocated vLLM (1 GPU required)
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
 ```sh
-python examples/scripts/openenv/echo.py --vllm-mode colocate
+python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
 
 # Spin up vLLM server (Terminal 1)
 ```sh
@@ -57,7 +55,18 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 
 
 # Run training (Terminal 2)
 ```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode server --vllm-server-url http://localhost:8000
+```
+
+# Option 3: Local + Colocated vLLM (1 GPU required)
+
+# Start the environment only if using --env-mode docker-local
+```sh
+docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+```
+
+```sh
+python examples/scripts/openenv/echo.py --env-mode docker-local --vllm-mode colocate
 ```
 """
 
@@ -71,8 +80,8 @@ from pathlib import Path
 
 import requests
 from datasets import load_dataset
-from envs.echo_env import EchoEnv
-from envs.echo_env.models import EchoAction
+from echo_env import EchoEnv
+from echo_env.models import EchoAction
 
 from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
 from trl.experimental.openenv import generate_rollout_completions
@@ -127,7 +136,7 @@ def start_env_server(env_host: str, env_port: int):
 
     work_dir = str(Path.cwd().parent.absolute())
     process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "envs.echo_env.server.app:app", "--host", env_host, "--port", str(env_port)],
+        [sys.executable, "-m", "uvicorn", "echo_env.server.app:app", "--host", env_host, "--port", str(env_port)],
         env={**os.environ, "PYTHONPATH": f"{work_dir}/src"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

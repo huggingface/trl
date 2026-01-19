@@ -15,6 +15,8 @@
 import warnings
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -211,15 +213,6 @@ class RLOOConfig(TrainingArguments):
 
             Parameter `max_prompt_length` is deprecated and will be removed in version 0.29.0. You should instead
             filter your dataset before training to ensure that prompts do not exceed your desired length.
-
-            </Deprecated>
-
-        vllm_guided_decoding_regex:
-
-            <Deprecated version="0.27.0">
-
-            Parameter `vllm_guided_decoding_regex` is deprecated and will be removed in version 0.28.0. You should
-            instead use `vllm_structured_outputs_regex`.
 
             </Deprecated>
     """
@@ -589,21 +582,17 @@ class RLOOConfig(TrainingArguments):
             "desired length."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `vllm_structured_outputs_regex` instead."},
-    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-        if self.top_k is None:
-            self.top_k = 0
-            warnings.warn(
-                "The value `None` for `top_k` is deprecated and will raise an error in TRL 0.28. "
-                "Use `top_k=0` to disable top-k filtering instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__post_init__()
 
@@ -662,11 +651,3 @@ class RLOOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
-        if self.vllm_guided_decoding_regex is not None:
-            warnings.warn(
-                "The `vllm_guided_decoding_regex` argument is deprecated and will be removed in version 0.28.0. You "
-                "should instead use `vllm_structured_outputs_regex`.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex
