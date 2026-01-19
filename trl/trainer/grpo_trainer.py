@@ -2284,7 +2284,10 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         if self.off_policy_mask_threshold is not None:
-            # If using vLLM, we use sampling_per_token_logps as the old policy logprobs.
+            # OPSM should use inference-time logprobs to detect both sources of off-policyness:                                                                                                                      
+            # 1. Drift from gradient updates (always present)                                                                                                                                                        
+            # 2. Drift from training-inference mismatch (when using vLLM)                                                                                                                                            
+            # If using vLLM, prioritize sampling_per_token_logps as the old policy logprobs; otherwise use old_per_token_logps
             sampling_per_token_logps = inputs.get("sampling_per_token_logps")
             old_logps = sampling_per_token_logps if sampling_per_token_logps is not None else old_per_token_logps
 
