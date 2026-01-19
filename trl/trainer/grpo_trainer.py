@@ -642,6 +642,17 @@ class GRPOTrainer(BaseTrainer):
             "advantages": deque(maxlen=args.generation_batch_size),
         }
 
+        # HA-DW: History-Aware Adaptive Difficulty Weighting
+        # Introduced in "Your Group-Relative Advantage Is Biased" (https://huggingface.co/papers/2601.08521)
+        self.use_hadw = args.use_hadw
+        self.hadw_eta = args.hadw_eta
+        self.hadw_lambda_scale = args.hadw_lambda_scale
+        self.hadw_history_window = args.hadw_history_window
+        # C_t^- : Prior belief of model's solving capability
+        self._hadw_capability_prior = None
+        # History buffer to store recent C_t values for computing standard deviation
+        self._hadw_history_buffer = deque(maxlen=self.hadw_history_window)
+
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
@@ -2059,13 +2070,28 @@ class GRPOTrainer(BaseTrainer):
                 "'sum_then_normalize' or 'normalize_then_sum'."
             )
 
+        # Apply HA-DW reweighting if enabled
+        # Note: For binary rewards (0 or 1), we use the raw rewards from rewards_per_func.nansum(dim=1)
+        # which represent the actual success/failure for each completion
+        raw_rewards = rewards_per_func.nansum(dim=1)
+        hadw_reweighting_factors = self._compute_hadw_reweighting(
+            advantages=advantages,
+            rewards=raw_rewards,
+            num_generations=num_generations,
+            mode=mode,
+        )
+
+        # Store reweighting factors to apply in loss computation
+        # We'll multiply the advantages by these factors in the loss
+        hadw_reweighted_advantages = advantages * hadw_reweighting_factors
+
         # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
             (self.accelerator.process_index + 1) * len(prompts),
         )
-        all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
-        advantages = advantages[process_slice]
+        all_process_advantages = hadw_reweighted_advantages.clone()  # keep the aggregated advantages for logging
+        advantages = hadw_reweighted_advantages[process_slice]
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -2154,6 +2180,100 @@ class GRPOTrainer(BaseTrainer):
         if self.tools:
             output["tool_mask"] = tool_mask
         return output
+
+    def _compute_hadw_reweighting(
+        self,
+        advantages: torch.Tensor,
+        rewards: torch.Tensor,
+        num_generations: int,
+        mode: str,
+    ) -> torch.Tensor:
+        """
+        Compute History-Aware Adaptive Difficulty Weighting (HA-DW) reweighting factors.
+
+        Args:
+            advantages: Tensor of shape (batch_size * num_generations,) containing advantages
+            rewards: Tensor of shape (batch_size * num_generations,) containing rewards
+            num_generations: Number of generations per prompt
+            mode: "train" or "eval"
+
+        Returns:
+            reweighting_factors: Tensor of same shape as advantages containing reweighting factors
+        """
+        if not self.use_hadw or mode != "train":
+            # No reweighting in eval mode or when HA-DW is disabled
+            return torch.ones_like(advantages)
+
+        # Compute batch accuracy y_t = K_t / B_t
+        # K_t is the total number of correct responses (reward = 1)
+        # B_t is the total number of responses
+        batch_accuracy = rewards.mean().item()
+
+        # Initialize capability prior on first batch
+        if self._hadw_capability_prior is None:
+            self._hadw_capability_prior = batch_accuracy
+            self._hadw_history_buffer.append(batch_accuracy)
+            return torch.ones_like(advantages)
+
+        # Compute adaptive forgetting factor η_t = η * σ_t
+        if len(self._hadw_history_buffer) > 1:
+            history_tensor = torch.tensor(list(self._hadw_history_buffer), dtype=torch.float32)
+            sigma_t = history_tensor.std().item()
+        else:
+            sigma_t = 1.0
+
+        eta_t = self.hadw_eta * sigma_t
+
+        # Update capability belief: C_t^+ = (1 - η_t) * C_t^- + η_t * y_t
+        capability_posterior = (1 - eta_t) * self._hadw_capability_prior + eta_t * batch_accuracy
+
+        # Update history buffer and prior for next iteration
+        self._hadw_history_buffer.append(capability_posterior)
+        capability_prior_for_current_batch = self._hadw_capability_prior  # Save for computing diff
+        self._hadw_capability_prior = capability_posterior  # Update for next batch
+
+        # Reshape to (num_prompts, num_generations)
+        advantages_grouped = advantages.view(-1, num_generations)
+        rewards_grouped = rewards.view(-1, num_generations)
+
+        # Compute group-level metrics (per prompt)
+        # \hat{p}_t is the empirical success rate per prompt
+        p_hat = rewards_grouped.mean(dim=1)  # (num_prompts,)
+
+        # History-based difficulty: diff^his_t = \hat{p}_t - C_t^-
+        diff_his = p_hat - capability_prior_for_current_batch
+
+        # Compute reweighting factors per prompt group
+        reweighting_factors = []
+        for i in range(advantages_grouped.size(0)):
+            # Direction: D_{t,i} = -sgn(\hat{A}_{t,i}) * sgn(diff^his_t)
+            # Magnitude: M_t = |diff^his_t|
+            M_t = torch.abs(diff_his[i])
+            sign_diff = torch.sign(diff_his[i])
+
+            # Compute per-sample reweighting for this group
+            group_advantages = advantages_grouped[i]  # (num_generations,)
+            sign_advantages = torch.sign(group_advantages)
+
+            # D_{t,i} for each sample in the group
+            D = -sign_advantages * sign_diff
+
+            # Φ_{t,i} = λ_scale * exp(D_{t,i} * M_t)
+            phi = self.hadw_lambda_scale * torch.exp(D * M_t)
+            reweighting_factors.append(phi)
+
+        # Stack and flatten to match original shape
+        reweighting_factors = torch.stack(reweighting_factors).view(-1)
+
+        # Log HA-DW metrics
+        self._metrics[mode]["hadw/capability_prior"].append(capability_prior_for_current_batch)
+        self._metrics[mode]["hadw/capability_posterior"].append(capability_posterior)
+        self._metrics[mode]["hadw/batch_accuracy"].append(batch_accuracy)
+        self._metrics[mode]["hadw/eta_t"].append(eta_t)
+        self._metrics[mode]["hadw/reweighting_mean"].append(reweighting_factors.mean().item())
+        self._metrics[mode]["hadw/reweighting_std"].append(reweighting_factors.std().item())
+
+        return reweighting_factors
 
     def compute_liger_loss(self, unwrapped_model, inputs):
         # Compute the per-token log probabilities for the model
