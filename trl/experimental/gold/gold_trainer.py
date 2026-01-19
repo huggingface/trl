@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,7 +72,7 @@ if is_wandb_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -381,13 +381,15 @@ class ULDLoss(nn.Module):
                 )
 
                 # Merge student probabilities using student alignment groups
+                # Pass student_token_ids to enable corrected conditional probability merging
                 student_aligned = self._merge_probabilities_with_alignment_groups(
-                    student_probs, student_alignment_groups
+                    student_probs, student_alignment_groups, student_token_ids
                 )
 
                 # Merge teacher probabilities using teacher alignment groups
+                # Pass teacher_token_ids to enable corrected conditional probability merging
                 teacher_aligned = self._merge_probabilities_with_alignment_groups(
-                    teacher_probs, teacher_alignment_groups
+                    teacher_probs, teacher_alignment_groups, teacher_token_ids
                 )
             else:
                 min_length = min(len(student_token_ids), len(teacher_token_ids))
@@ -517,16 +519,34 @@ class ULDLoss(nn.Module):
 
         return s_groups, t_groups
 
-    def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups):
+    def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
         """
-        Merge probabilities based on alignment groups.
+        Merge probabilities based on alignment groups with corrected conditional probability handling.
+
+        For a group merging tokens at positions [i, i+1, ..., i+k], we compute:
+            P_merged(y | x) = P(y | x) × P(token_{i+1} | token_i, x) × ... × P(token_{i+k} | ..., x)
+
+        Where:
+        - P(y | x) is the marginal probability distribution over all vocabulary tokens at position i
+        - token_{i+1}, ..., token_{i+k} are the ACTUAL tokens that were generated
+        - The conditional probabilities P(token_j | ..., x) are extracted as SCALARS
+        - y ranges over all vocabulary tokens at position i
+
+        This ensures the probability of the actual generated sequence is correct (by the chain rule), while introducing
+        a known bias for counterfactual tokens (since we don't have P(token_{i+k} | y, x) for y != token_i). The merged
+        distribution is unnormalized but preserves correct relative probabilities.
 
         Args:
             probs: Probability tensor [seq_len, vocab_size]
             alignment_groups: List of alignment groups (each group is a list of positions to merge)
+            token_ids: Actual token IDs that were generated [seq_len]. REQUIRED when any group has
+                      len(group) > 1. If None when multi-token groups exist, raises ValueError.
 
         Returns:
             Merged probability tensor [num_groups, vocab_size]
+
+        Raises:
+            ValueError: If token_ids is None when merging multi-token groups
         """
         if not alignment_groups:
             return probs
@@ -534,19 +554,40 @@ class ULDLoss(nn.Module):
         # Create aligned tensor
         vocab_size = probs.size(-1)
         target_len = len(alignment_groups)
-        aligned_probs = torch.zeros(target_len, vocab_size, device=probs.device)
+        aligned_probs = torch.zeros(target_len, vocab_size, device=probs.device, dtype=probs.dtype)
+        eps = 1e-8
 
         # Process each alignment group
         for group_idx, group in enumerate(alignment_groups):
             # Handle probability merging
             if len(group) > 1:
-                # Multiple tokens map to this group - merge them
-                eps = 1e-8
-                logp = torch.log(probs[group[0]].clamp_min(eps))
+                # Multiple tokens map to this group - merge using corrected conditional probability approach
+                if token_ids is None:
+                    raise ValueError(
+                        "token_ids must be provided when merging multi-token groups. "
+                        "This is required for mathematically correct probability merging."
+                    )
+
+                # Start with the marginal distribution at the first position
+                first_pos = group[0]
+                marginal_probs = probs[first_pos]  # P(y | x₀) for all y
+
+                # For each subsequent token in the group, extract the SCALAR conditional probability
+                # of the actual token that was generated, and multiply
+                conditional_prob_product = 1.0
                 for idx in group[1:]:
-                    if idx < probs.size(0):
-                        logp = logp + torch.log(probs[idx].clamp_min(eps))
-                aligned_probs[group_idx] = torch.softmax(logp, dim=-1)
+                    # Get the actual token ID that was generated at this position
+                    actual_token_id = token_ids[idx]
+                    # Extract its probability (scalar)
+                    token_prob = probs[idx, actual_token_id].clamp_min(eps)
+                    conditional_prob_product *= token_prob
+
+                # Merge: multiply the scalar conditional prob product with the entire marginal distribution
+                # This gives: P(y | x_0) × P(token_1 | token_0, x) × ... × P(token_k | ..., x)
+                # Note: This is unnormalized, but preserves the correct joint probability for the actual sequence
+                merged_probs = marginal_probs * conditional_prob_product
+                aligned_probs[group_idx] = merged_probs
+
             elif len(group) == 1:
                 aligned_probs[group_idx] = probs[group[0]]
             else:
@@ -978,7 +1019,7 @@ class GOLDTrainer(SFTTrainer):
                 self.accelerator.wait_for_everyone()
             else:
                 raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
-            self.vllm_guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.vllm_structured_outputs_regex = args.vllm_structured_outputs_regex
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
 
@@ -1675,7 +1716,7 @@ class GOLDTrainer(SFTTrainer):
                     top_k=top_k,
                     min_p=min_p,
                     max_tokens=max_completion_length,
-                    guided_decoding_regex=self.vllm_guided_decoding_regex,
+                    structured_outputs_regex=self.vllm_structured_outputs_regex,
                 )["completion_ids"]
             else:
                 completion_ids = [None] * len(all_prompts_text)
@@ -1686,10 +1727,12 @@ class GOLDTrainer(SFTTrainer):
             )
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
-            if self.vllm_guided_decoding_regex:
-                guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.vllm_guided_decoding_regex)
+            if self.vllm_structured_outputs_regex:
+                structured_outputs = StructuredOutputsParams(
+                    backend="outlines", regex=self.vllm_structured_outputs_regex
+                )
             else:
-                guided_decoding = None
+                structured_outputs = None
             sampling_params = SamplingParams(
                 n=1,
                 repetition_penalty=repetition_penalty,
@@ -1698,7 +1741,7 @@ class GOLDTrainer(SFTTrainer):
                 top_k=top_k,
                 min_p=min_p,
                 max_tokens=max_completion_length,
-                guided_decoding=guided_decoding,
+                structured_outputs=structured_outputs,
             )
 
             if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:

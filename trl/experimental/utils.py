@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,12 +20,13 @@ from typing import Any
 
 import torch
 from accelerate.utils import is_peft_model
-from packaging import version
+from packaging.version import Version
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainingArguments
 from transformers.utils import is_peft_available
 
-from ..trainer.utils import pad, peft_module_casting_to_bf16
+from ..models.utils import peft_module_casting_to_bf16
+from ..trainer.utils import pad
 
 
 if is_peft_available():
@@ -496,7 +497,7 @@ def prepare_peft_model(
     # Create PEFT model
     if peft_config is not None:
         if (
-            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
+            Version(peft.__version__) >= Version("0.12")  # autocast_adapter_dtype introduced in 0.12
             and getattr(model, "is_loaded_in_4bit", False)
             and is_sharded_qlora
         ):

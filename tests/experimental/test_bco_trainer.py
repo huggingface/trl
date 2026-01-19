@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -92,7 +92,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             precompute_ref_log_probs=True,
             report_to="none",
         )
@@ -235,7 +235,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -282,7 +282,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -320,7 +320,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
