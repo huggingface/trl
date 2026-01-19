@@ -2222,7 +2222,7 @@ class GRPOTrainer(BaseTrainer):
     def get_off_policy_mask(
         advantages: torch.Tensor,
         per_token_logps: torch.Tensor,
-        old_per_token_logps: torch.Tensor,
+        sampling_per_token_logps: torch.Tensor,
         mask: torch.Tensor,
         off_policy_threshold: float,
     ) -> torch.Tensor:
@@ -2231,7 +2231,7 @@ class GRPOTrainer(BaseTrainer):
         "Keep" and 0.0 indicates "Drop".
         """
         # forward KL div: log(pi_old) - log(pi_theta)
-        kl_div = old_per_token_logps - per_token_logps.detach()
+        kl_div = sampling_per_token_logps - per_token_logps.detach()
         # Sequence-level Mean KL (ignoring prompt+padding)
         seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
@@ -2288,13 +2288,12 @@ class GRPOTrainer(BaseTrainer):
             # 1. Drift from gradient updates (always present)
             # 2. Drift from training-inference mismatch (when using vLLM)
             # If using vLLM, prioritize sampling_per_token_logps as the old policy logprobs; otherwise use old_per_token_logps
-            sampling_per_token_logps = inputs.get("sampling_per_token_logps")
-            pi_old_logps = sampling_per_token_logps if sampling_per_token_logps is not None else old_per_token_logps
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
 
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
                 per_token_logps=per_token_logps,
-                old_per_token_logps=pi_old_logps,
+                sampling_per_token_logps=sampling_per_token_logps,
                 mask=mask,
                 off_policy_threshold=self.off_policy_mask_threshold,
             )

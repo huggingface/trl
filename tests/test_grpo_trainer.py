@@ -851,7 +851,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
 
         advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
-        old_per_token_logps = torch.zeros((3, 4))
+        sampling_per_token_logps = torch.zeros((3, 4))
         per_token_logps = torch.zeros((3, 4))
 
         per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
@@ -863,7 +863,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -873,7 +873,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # 2 valid tokens
         advantages = torch.tensor([[-1.0]])  # Negative advantage
 
-        old_per_token_logps = torch.zeros((1, 4))
+        sampling_per_token_logps = torch.zeros((1, 4))
         per_token_logps = torch.zeros((1, 4))
 
         # Valid tokens have High KL (2.0)
@@ -890,7 +890,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -902,7 +902,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask_keep = torch.tensor([[1.0]])
 
         off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
@@ -968,7 +968,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_compute_loss_and_off_policy_mask_with_correct_pi_old_logps(self):
+    def test_compute_loss_and_off_policy_mask_with_correct_sampling_per_token_logps(self):
         """
         Test that _compute_loss correctly selects sampling_per_token_logps for OPSM if available or fallback to
         old_per_token_logps otherwise.
@@ -1017,7 +1017,7 @@ class TestGRPOTrainer(TrlTestCase):
 
             # Verify that get_off_policy_mask received the sampling logps (2.0)
             _, kwargs = mock_get_mask.call_args
-            torch.testing.assert_close(kwargs["old_per_token_logps"], inputs["sampling_per_token_logps"])
+            torch.testing.assert_close(kwargs["sampling_per_token_logps"], inputs["sampling_per_token_logps"])
 
         # Case 2: sampling_per_token_logps is absent (local PyTorch scenario)
         inputs.pop("sampling_per_token_logps")
@@ -1026,7 +1026,7 @@ class TestGRPOTrainer(TrlTestCase):
 
             # Verify that get_off_policy_mask fell back to old_per_token_logps (1.0)
             _, kwargs = mock_get_mask.call_args
-            torch.testing.assert_close(kwargs["old_per_token_logps"], inputs["old_per_token_logps"])
+            torch.testing.assert_close(kwargs["sampling_per_token_logps"], inputs["old_per_token_logps"])
 
     def test_training_with_bias_correction_kl(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
