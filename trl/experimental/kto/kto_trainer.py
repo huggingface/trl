@@ -1127,7 +1127,8 @@ class KTOTrainer(BaseTrainer):
         if hasattr(model, "get_decoder") and model.get_decoder() is not None:
             base_model = model.get_decoder()
         else:
-            base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
+            # Fallback to base_model_prefix (standard attribute)
+            base_attr = getattr(model, "base_model_prefix", "model")
             base_model = getattr(model, base_attr, model)
         outputs = base_model(
             batch["completion_input_ids"],
@@ -1140,7 +1141,8 @@ class KTOTrainer(BaseTrainer):
         if hasattr(self.ref_model, "get_decoder") and self.ref_model.get_decoder() is not None:
             ref_base_model = self.ref_model.get_decoder()
         else:
-            ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
+            # Fallback to base_model_prefix (standard attribute)
+            ref_attr = getattr(self.ref_model, "base_model_prefix", "model")
             ref_base_model = getattr(self.ref_model, ref_attr, self.ref_model)
         ref_outputs = ref_base_model(
             batch["completion_input_ids"],
