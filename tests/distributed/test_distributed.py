@@ -33,6 +33,7 @@ def run_command(command: list[str], env: dict[str, str]) -> None:
 def get_config_path(lazy_shared_datadir):
     def _get_config_path(config_name):
         return lazy_shared_datadir / "accelerate_configs" / f"{config_name}.yaml"
+
     return _get_config_path
 
 
