@@ -22,17 +22,18 @@ from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATHS = {
-    "ddp": ROOT / "tests" / "accelerate_configs" / "ddp.yaml",
-    "zero2": ROOT / "tests" / "accelerate_configs" / "zero2.yaml",
-    "zero3": ROOT / "tests" / "accelerate_configs" / "zero3.yaml",
-    "fsdp2": ROOT / "tests" / "accelerate_configs" / "fsdp2.yaml",
-}
 
 
 def run_command(command: list[str], env: dict[str, str]) -> None:
     result = subprocess.run(command, env=env, cwd=ROOT)
     assert result.returncode == 0
+
+
+@pytest.fixture
+def get_config_path(lazy_shared_datadir):
+    def _get_config_path(config_name):
+        return lazy_shared_datadir / "accelerate_configs" / f"{config_name}.yaml"
+    return _get_config_path
 
 
 @require_torch_multi_accelerator
