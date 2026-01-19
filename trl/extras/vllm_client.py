@@ -142,7 +142,7 @@ class VLLMClient:
             status=3,  # retry a limited number of times when we receive certain HTTP error responses from the server
             status_forcelist=[500, 502, 503],  # only retry on server-side errors that are usually temporary
             backoff_factor=2,  # exponential backoff between retries (2s, 4s, 8s, ...)
-            allowed_methods=["POST", "GET"],  # allow retries for POST as well, because safe to retry in this context
+            allowed_methods=["POST", "GET"],  # allow POST as well, even though we're not sure it's safe here
         )
 
         adapter = HTTPAdapter(max_retries=retry_strategy)
