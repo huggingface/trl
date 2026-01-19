@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env",
 # ]
 # ///
 

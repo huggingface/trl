@@ -2226,7 +2226,8 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        return loss / self.current_gradient_accumulation_steps
+        normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+        return loss / normalizer
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -2383,15 +2384,19 @@ class GRPOTrainer(BaseTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
+        mode = "train" if self.model.training else "eval"
         if self.loss_type in ["grpo", "sapo"]:
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
-            loss = loss / self.current_gradient_accumulation_steps
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            loss = loss / normalizer
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
-            loss = loss / self.current_gradient_accumulation_steps
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            loss = loss / normalizer
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-            loss = loss / self.current_gradient_accumulation_steps
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            loss = loss / normalizer
         elif self.loss_type in ["cispo", "dapo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
@@ -2399,8 +2404,6 @@ class GRPOTrainer(BaseTrainer):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
-        mode = "train" if self.model.training else "eval"
-
         completion_token_count = mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
