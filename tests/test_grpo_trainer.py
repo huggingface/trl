@@ -968,6 +968,66 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_compute_loss_and_off_policy_mask_with_correct_pi_old_logps(self):
+        """
+        Test that _compute_loss correctly selects sampling_per_token_logps for OPSM if available or fallback to
+        old_per_token_logps otherwise.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            off_policy_mask_threshold=0.5,
+            report_to="none",
+            bf16=False,
+            fp16=False,
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Mock inputs matching the structure for GRPOTrainer
+        batch_size = 2
+        seq_len = 4
+        device = trainer.accelerator.device
+        inputs = {
+            "prompt_ids": torch.zeros((batch_size, seq_len), dtype=torch.long, device=device),
+            "prompt_mask": torch.ones((batch_size, seq_len), dtype=torch.long, device=device),
+            "completion_ids": torch.zeros((batch_size, seq_len), dtype=torch.long, device=device),
+            "completion_mask": torch.ones((batch_size, seq_len), dtype=torch.long, device=device),
+            "advantages": torch.zeros((batch_size,), device=device),
+            "old_per_token_logps": torch.ones((batch_size, seq_len), device=device),
+            "sampling_per_token_logps": torch.ones((batch_size, seq_len), device=device) * 2.0,
+            "ref_per_token_logps": torch.zeros((batch_size, seq_len), device=device),
+            "num_items_in_batch": batch_size,
+        }
+
+        # Mock _get_per_token_logps_and_entropies to avoid running the model
+        per_token_logps = torch.zeros((batch_size, seq_len), device=device)
+        entropies = torch.zeros((batch_size, seq_len), device=device)
+        trainer._get_per_token_logps_and_entropies = lambda *args, **kwargs: (per_token_logps, entropies)
+
+        # Case 1: sampling_per_token_logps is present (vLLM scenario)
+        with patch.object(GRPOTrainer, "get_off_policy_mask", wraps=GRPOTrainer.get_off_policy_mask) as mock_get_mask:
+            trainer._compute_loss(trainer.model, inputs)
+
+            # Verify that get_off_policy_mask received the sampling logps (2.0)
+            _, kwargs = mock_get_mask.call_args
+            torch.testing.assert_close(kwargs["old_per_token_logps"], inputs["sampling_per_token_logps"])
+
+        # Case 2: sampling_per_token_logps is absent (local PyTorch scenario)
+        inputs.pop("sampling_per_token_logps")
+        with patch.object(GRPOTrainer, "get_off_policy_mask", wraps=GRPOTrainer.get_off_policy_mask) as mock_get_mask:
+            trainer._compute_loss(trainer.model, inputs)
+
+            # Verify that get_off_policy_mask fell back to old_per_token_logps (1.0)
+            _, kwargs = mock_get_mask.call_args
+            torch.testing.assert_close(kwargs["old_per_token_logps"], inputs["old_per_token_logps"])
+
     def test_training_with_bias_correction_kl(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
