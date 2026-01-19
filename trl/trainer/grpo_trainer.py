@@ -2484,7 +2484,7 @@ class GRPOTrainer(BaseTrainer):
                 logging_backends.append(trackio)
 
             table = {
-                "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                "step": [self.state.global_step] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
                 "completion": self._logs["completion"],
                 **self._logs["rewards"],
@@ -2492,7 +2492,6 @@ class GRPOTrainer(BaseTrainer):
             }
 
             df_base = pd.DataFrame(table)
-            df_base = df_base.astype({"step": "int64"})
             df_base.to_parquet(
                 os.path.join(f"{self.args.output_dir}/completions", f"completions_{self.state.global_step}.parquet")
             )
