@@ -39,11 +39,11 @@ def get_config_path(lazy_shared_datadir):
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
     @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
-    def test_sft(self, config):
+    def test_sft(self, config, get_config_path):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/sft.py",
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -62,11 +62,11 @@ class TestDistributed(TrlTestCase):
             pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see see #4812")),
         ],
     )
-    def test_dpo(self, config):
+    def test_dpo(self, config, get_config_path):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/dpo.py",
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -77,11 +77,11 @@ class TestDistributed(TrlTestCase):
         # fmt: on
 
     @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
-    def test_sft_dataset_streaming(self, config):
+    def test_sft_dataset_streaming(self, config, get_config_path):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/sft.py",
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -102,11 +102,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_sft_peft(self, config):
+    def test_sft_peft(self, config, get_config_path):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/sft.py",
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
