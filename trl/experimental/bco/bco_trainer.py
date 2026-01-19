@@ -568,7 +568,6 @@ class BCOTrainer(BaseTrainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
