@@ -24,11 +24,6 @@ from ...import_utils import is_vllm_available
 if is_vllm_available():
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
-else:
-    # To make sure _build_colocate_sampling_params's return type is defined.
-    # If vllm doesn't exist, this line (-> SamplingParams:) throws error otherwise
-    SamplingParams = None
-    StructuredOutputsParams = None
 
 
 def _build_colocate_sampling_params(
@@ -36,7 +31,7 @@ def _build_colocate_sampling_params(
     overrides: dict[str, Any] | None = None,
     *,
     logprobs: bool = True,
-) -> SamplingParams:
+) -> "SamplingParams":
     if trainer.structured_outputs_regex:
         structured_outputs = StructuredOutputsParams(regex=trainer.structured_outputs_regex)
     else:
