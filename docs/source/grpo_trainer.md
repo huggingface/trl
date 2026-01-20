@@ -593,7 +593,7 @@ RapidFire AI is an open-source experimentation engine that sits on top of TRL an
 ## Agent Training
 
 GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
-This parameter expects a list of Python functions that define the tools available to the agent:
+This parameter expects a list of Python functions (sync or async) that define the tools available to the agent:
 
 ```python
 from trl import GRPOTrainer
@@ -625,8 +625,21 @@ def multiply(a: int, b: int) -> int:
     """
     return a * b
 
+async def async_add(a: int, b: int) -> int:
+    """
+    Asynchronously adds two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The sum of the two integers.
+    """
+    return a + b
+
 trainer = GRPOTrainer(
-    tools=[multiply],
+    tools=[multiply, async_add],
     ...,
 )
 ```
