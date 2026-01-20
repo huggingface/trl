@@ -70,8 +70,6 @@ class CPOConfig(TrainingArguments):
             standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: `r = (1 - p^(-alpha))
             / alpha` from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). This parameter works with all
             loss types.
-        label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int`, *optional*):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`,*optional*,  defaults to `"keep_end"`):
@@ -183,10 +181,6 @@ class CPOConfig(TrainingArguments):
             "(default), uses standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: "
             "`r = (1 - p^(-alpha)) / alpha` from the AlphaPO paper. This parameter works with all loss types."
         },
-    )
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={"help": "Label pad token id."},
     )
     padding_value: int | None = field(
         default=None,
