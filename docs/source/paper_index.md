@@ -417,7 +417,9 @@ training_args = GRPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2512.02556
 
-DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement the *Unbiased KL Estimate*, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
+DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement:
+
+- The **Unbiased KL Estimate**, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
 ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
 
 $$
@@ -442,6 +444,77 @@ training_args = GRPOConfig(
     use_bias_correction_kl=True,
 )
 ```
+
+- The **Off-Policy Masking**, which stabilizes training by ignoring sequences where the policy performs poorly (negative advantage) **and** has drifted significantly from the old policy (high KL divergence).
+
+The off-policy binary mask  \\(\textcolor{red}{M_{i,t}}\\) is defined as:
+
+$$
+\textcolor{red}{M_{i,t}} = \begin{cases}
+0 & \text{if } \hat{A}_{i,t} < 0 \quad \text{and} \quad \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \log \frac{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} > \textcolor{blue}{\delta} \\
+1 & \text{otherwise}
+\end{cases}
+$$
+
+This mask is then applied to the GRPO loss as follows:
+
+$$
+\mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) \textcolor{red}{M_{i,t}} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right]
+$$
+
+To enable this feature, use the `off_policy_mask_threshold` (corresponding to  \\( \textcolor{blue}{\delta} \\)) in the [`GRPOConfig`]:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    off_policy_mask_threshold=0.5, 
+)
+```
+
+While the paper doesn't specify a  \\( \textcolor{blue}{\delta} \\) value used, a good starting point could be  \\( \textcolor{blue}{\delta} = 0.5 \\). If training seems too conservative or too many sequences are masked, you can increase the value.
+For reference,  \\( \textcolor{blue}{\delta} = 1.0 \\) corresponds to an average log-ratio divergence of 1 nat per token, i.e. on sequences where this threshold is exceeded, the old policy was on average  \\( e^1 \approx 2.7 \\) times more likely to generate these tokens than the current policy.
+
+### GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2601.05242
+
+GDPO is a reinforcement learning optimization method designed for multi-reward training. While existing approaches commonly apply Group Relative Policy Optimization (GRPO) in multi-reward settings, the authors show that this leads to reward advantages collapse, reducing training signal resolution and causing unstable or failed convergence. GDPO resolves this issue by decoupling reward normalization across individual rewards, preserving their relative differences and enabling more faithful preference optimization. To enable GDPO for multi-reward RL training, simply set:
+
+For a group of  \\( N \\) rewards and  \\( G \\) samples per group, GDPO normalizes each reward independently:
+
+$$
+A_n^{(i,j)} = \frac{r_n^{(i,j)} - \text{mean}\{r_n^{(i,1)}, \ldots, r_n^{(i,G)}\}}{\text{std}\{r_n^{(i,1)}, \ldots, r_n^{(i,G)}\} + \epsilon}
+$$
+
+The normalized group advantage is then aggregated across rewards:
+
+$$
+A^{(i,j)} = \sum_{n=1}^{N} w_n A_n^{(i,j)}
+$$
+
+The final per-batch normalization produces:
+
+$$
+\hat{A}^{(i,j)} = \frac{A^{(i,j)} - \text{mean}_{i',j'}\{A^{(i',j')}\}}{\text{std}_{i',j'}\{A^{(i',j')}\} + \epsilon}
+$$
+
+Here,  \\( \text{mean}_{i',j'}\{A^{(i',j')}\} \\) and  \\( \text{std}_{i',j'}\{A^{(i',j')}\} \\) denote statistics over all groups in the batch.
+
+```python
+from trl import GRPOConfig
+
+
+training_args = GRPOConfig(
+    ...,
+    multi_objective_aggregation="normalize_then_sum",
+)
+```
+
+Note that this method only has an effect when training involve more than one reward function.
+
+The authors provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
 
 ## Direct Policy Optimization
 
@@ -852,6 +925,35 @@ training_args = CPOConfig(
     learning_rate=7e-7,
     ...
 )
+```
+
+## Nash Learning from Human Feedback
+
+Papers relating to the [`experimental.nash_md.NashMDTrainer`]
+
+### Nash Learning from Human Feedback
+
+**📜 Paper**: https://huggingface.co/papers/2312.00886
+
+Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. Used in TRL via [`experimental.nash_md.NashMDTrainer`].
+
+```python
+from trl.experimental.judges import PairRMJudge
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+judge = PairRMJudge()
+
+trainer = NashMDTrainer(
+    model=model,
+    judge=judge,
+    args=NashMDConfig(),
+    processing_class=tokenizer,
+    train_dataset=...,
+)
+trainer.train()
 ```
 
 ## Reward Modeling

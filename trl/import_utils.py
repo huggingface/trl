@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ from itertools import chain
 from types import ModuleType
 from typing import Any
 
-from packaging import version
+from packaging.version import Version
 from transformers.utils.import_utils import _is_package_available
 
 
@@ -45,7 +45,7 @@ def is_joblib_available() -> bool:
 
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
     _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
-    return _liger_kernel_available and version.parse(_liger_kernel_version) >= version.parse(min_version)
+    return _liger_kernel_available and Version(_liger_kernel_version) >= Version(min_version)
 
 
 def is_llm_blender_available() -> bool:
@@ -79,9 +79,9 @@ def is_uvicorn_available() -> bool:
 def is_vllm_available() -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
-        if not (version.parse("0.10.2") <= version.parse(_vllm_version) <= version.parse("0.11.2")):
+        if not (Version("0.10.2") <= Version(_vllm_version) <= Version("0.12.0")):
             warnings.warn(
-                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2. You have version "
+                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2, 0.12.0. You have version "
                 f"{_vllm_version} installed. We recommend installing a supported version to avoid compatibility "
                 "issues.",
                 stacklevel=2,

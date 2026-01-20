@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -175,7 +175,8 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_model(self):
         # Instantiate the model
         model = AutoModelForSequenceClassification.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            dtype="float32",
         )
 
         # Get the dataset
@@ -231,7 +232,7 @@ class TestRewardTrainer(TrlTestCase):
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
             model_init_kwargs={"dtype": torch.float16},
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = RewardTrainer(
@@ -608,14 +609,14 @@ class TestRewardTrainer(TrlTestCase):
                 continue
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    def test_train_with_set_chat_template_from_path(self):
+    def test_train_with_set_chat_template_from_path(self, lazy_shared_datadir):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         # Initialize the trainer
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
-            chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
+            chat_template_path=str(lazy_shared_datadir / "template.jinja"),
             report_to="none",
         )
         # trl-internal-testing/tiny-GPTNeoXForSequenceClassification doesn't have a chat template set by default

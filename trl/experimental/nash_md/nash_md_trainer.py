@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -242,7 +242,13 @@ class NashMDTrainer(OnlineDPOTrainer):
 
     def _generate_completions(self, model, prompts):
         # Generate completions from the policy model.
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_for_gen_ctx:
+        with (
+            unwrap_model_for_generation(
+                model,
+                self.accelerator,
+                generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+            ) as unwrapped_policy_for_gen_ctx
+        ):
             model_output = unwrapped_policy_for_gen_ctx.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
@@ -280,6 +286,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 device=self.accelerator.device,
             )
 
+            # TODO: use self._override_model_generation_config for both models?
             mixture_output = mixture_model.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],

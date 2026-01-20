@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,14 +46,13 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
-from ...models.utils import create_reference_model, unwrap_model_for_generation
+from ...models.utils import create_reference_model, peft_module_casting_to_bf16, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
     log_table_to_comet_experiment,
     pad,
-    peft_module_casting_to_bf16,
     prepare_deepspeed,
     selective_log_softmax,
 )
@@ -398,9 +397,12 @@ class PPOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_confg, we merge and unload it first
             if isinstance(self.policy_model, PeftModel):
-                self.policy_model = self.policy_model.merge_and_unload()
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
+                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
+                    "model along with the new `peft_config` to the trainer."
+                )
 
             # get peft model with the given config
             self.policy_model = get_peft_model(self.policy_model, peft_config)
@@ -600,13 +602,14 @@ class PPOTrainer(BaseTrainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        generation_config = GenerationConfig(
-            max_new_tokens=args.response_length,
-            temperature=(args.temperature + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.response_length,
+            "temperature": (args.temperature + 1e-7),
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+        }
+        generation_config = GenerationConfig(**generation_kwargs)
 
         accelerator.print("===training policy===")
         start_time = time.time()
@@ -661,9 +664,14 @@ class PPOTrainer(BaseTrainer):
                 scores = []
                 sequence_lengths = []
                 values = []
-                with unwrap_model_for_generation(
-                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-                ) as unwrapped_model:
+                with (
+                    unwrap_model_for_generation(
+                        self.model,
+                        self.accelerator,
+                        gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                        generation_kwargs=generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    ) as unwrapped_model
+                ):
                     query_responses, logitss = batch_generation(
                         unwrapped_model.policy,
                         queries,
@@ -927,18 +935,24 @@ class PPOTrainer(BaseTrainer):
     def generate_completions(self, sampling: bool = False):
         args = self.args
         processing_class = self.processing_class
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.response_length,
-            temperature=(0.01 + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.response_length,
+            "temperature": (0.01 + 1e-7),
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+        }
+        generation_config = GenerationConfig(**generation_kwargs)
 
         table = defaultdict(list)
-        with unwrap_model_for_generation(
-            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-        ) as unwrapped_model:
+        with (
+            unwrap_model_for_generation(
+                self.model,
+                self.accelerator,
+                gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                generation_kwargs=generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+            ) as unwrapped_model
+        ):
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
                 with torch.no_grad():

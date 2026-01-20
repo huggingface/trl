@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,29 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio",
+#     "kernels",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/burtenshaw/wordle",
+# ]
+# ///
+
+
 """
 Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
 Setup:
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+uv pip install git+https://huggingface.co/spaces/burtenshaw/wordle
 ```
 
-Usage:
-
-# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
-```sh
-docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
-# or TEXTARENA_ENV_ID=Wordle-v0 TEXTARENA_NUM_PLAYERS=1 python -m src.envs.textarena_env.server.app
-```
-
-# Option 1: Colocated vLLM (1 GPU required)
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
 ```sh
 python examples/scripts/openenv/wordle.py --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
 
 # Spin up vLLM server (Terminal 1)
 ```sh
@@ -44,6 +47,19 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --p
 # Run training (Terminal 2)
 ```sh
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
+```
+
+# Option 3: Local + Colocated vLLM (1 GPU required)
+
+Usage:
+
+# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
+```sh
+docker run -d -p 8001:8001 registry.hf.space/burtenshaw-wordle:latest
+```
+
+```sh
+python examples/scripts/openenv/wordle.py --vllm-mode colocate
 ```
 """
 
@@ -66,9 +82,9 @@ from trl.experimental.openenv import generate_rollout_completions
 # Ensure src/ is on the path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from envs.textarena_env import TextArenaAction, TextArenaEnv
-from envs.textarena_env.models import TextArenaMessage
-from envs.textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
+from textarena_env import TextArenaAction, TextArenaEnv
+from textarena_env.models import TextArenaMessage
+from textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,16 +101,8 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen3-1.7B",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
-    parser.add_argument("--env-host", type=str, default="0.0.0.0", help="Host for the environment server.")
-    parser.add_argument("--env-port", type=int, default=8001, help="Port for the environment server.")
     parser.add_argument(
-        "--env-mode",
-        choices=["docker-local", "docker-image", "docker-hub", "space"],
-        default="docker-image",
-        help="Where to run the environment: 'docker-local' if already running locally, 'docker-image' to run from a Docker image, 'docker-hub' to run from Docker Hub, or 'space' to use a remote Space URL.",
-    )
-    parser.add_argument(
-        "--env-image", type=str, default="textarena-env:latest", help="Docker image for the TextArena environment."
+        "--env-url", type=str, default="https://burtenshaw-wordle.hf.space", help="URL for the environment server."
     )
     parser.add_argument(
         "--system-prompt-path",
@@ -422,23 +430,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Select environment mode
-    if args.env_mode == "docker-local":
-        env_url = f"http://{args.env_host}:{args.env_port}"
-        client = TextArenaEnv(base_url=env_url)
-        print(f"🌍 Using existing TextArena Environment (Docker) at: {env_url}")
-    elif args.env_mode == "docker-image":
-        client = TextArenaEnv.from_docker_image(args.env_image)
-        print("🌍 Using TextArena Environment (Docker) from local Image")
-    elif args.env_mode == "docker-hub":
-        client = TextArenaEnv.from_hub(args.env_image)
-        print("🌍 Using existing TextArena Environment (Docker) from Hub Image")
-    elif args.env_mode == "space":
-        env_url = args.env_host
-        client = TextArenaEnv(base_url=env_url)
-        print(f"🌍 Using Hugging Face Space environment at: {env_url}")
-    else:
-        raise ValueError(f"Unknown environment mode: {args.env_mode}")
+    client = TextArenaEnv(base_url=args.env_url)
 
     system_prompt = resolve_system_prompt(args.system_prompt_path)
 
@@ -462,6 +454,8 @@ def main() -> None:
         num_generations=args.num_generations,
         max_completion_length=args.max_new_tokens,
         logging_steps=args.logging_steps,
+        report_to="trackio",
+        trackio_space_id=f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
         save_steps=args.save_interval,
         save_total_limit=args.save_total_limit,

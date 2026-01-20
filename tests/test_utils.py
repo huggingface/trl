@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,9 @@ from unittest.mock import patch
 
 import pytest
 import torch
+import transformers
+from packaging.version import Version
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
@@ -26,8 +29,10 @@ from trl.trainer.utils import (
     entropy_from_logits,
     flush_left,
     flush_right,
+    forward_masked_logits,
     generate_model_card,
     get_peft_config,
+    nanstd,
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
@@ -35,13 +40,67 @@ from trl.trainer.utils import (
     split_pixel_values_by_grid,
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
+    use_adapter,
 )
 
 from .testing_utils import TrlTestCase, require_peft, require_rich
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import AutoPeftModelForCausalLM, LoraConfig
+
+
+@require_peft
+class TestUseAdapter(TrlTestCase):
+    def test_disables_on_none(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        with model.disable_adapter():
+            expected = model(input_ids).logits
+
+        with use_adapter(model, None):
+            output = model(input_ids).logits
+
+        assert torch.equal(output, expected)
+
+    def test_restores_previous_adapter(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        expected = model(input_ids).logits
+        with use_adapter(model, "my_adapter"):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+        with use_adapter(model, None):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+    def test_with_multiple_adapters(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter_1"
+        )
+        model.load_adapter("trl-internal-testing/tiny-PeftModel-2", "my_adapter_2")
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+
+        model.set_adapter("my_adapter_1")  # should be a no-op, but let's keep it for clarity
+        expected_1 = model(input_ids).logits
+        model.set_adapter("my_adapter_2")
+        expected_2 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_1"):
+            output_1 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_2"):
+            output_2 = model(input_ids).logits
+
+        assert torch.equal(output_1, expected_1)
+        assert torch.equal(output_2, expected_2)
 
 
 class TestPad(TrlTestCase):
@@ -160,6 +219,24 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+
+class TestNanStd(TrlTestCase):
+    def test_nanstd_ignores_nans(self):
+        x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
+        result = nanstd(x)
+        assert torch.allclose(result, torch.tensor(1.0))
+
+    def test_nanstd_dim_and_keepdim(self):
+        x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
+        result = nanstd(x, dim=1, keepdim=True)
+        assert torch.isnan(result[0, 0])
+        assert torch.allclose(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
+
+    def test_nanstd_all_nan(self):
+        x = torch.tensor([float("nan"), float("nan")])
+        result = nanstd(x)
+        assert torch.isnan(result)
 
 
 class TestGenerateModelCard(TrlTestCase):
@@ -786,3 +863,84 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         batch = {"pixel_values": original}
         result = unsplit_pixel_values_by_grid(batch)
         assert torch.equal(result["pixel_values"], original)
+
+
+class TestForwardMaskedLogits:
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-CohereForCausalLM",
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",
+            "trl-internal-testing/tiny-GemmaForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            "trl-internal-testing/tiny-Phi3ForCausalLM",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        ],
+    )
+    def test_llm(self, model_id):
+        device = torch.device("cuda")
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+        logits_mask = torch.tensor(
+            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
+            device=device,
+        )
+
+        full_outputs = model(input_ids=input_ids)
+        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
+
+        torch.testing.assert_close(
+            masked_outputs.flat_logits,
+            full_outputs.logits[logits_mask.bool()],
+        )
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__) >= Version("5.0.0.dev0"),
+                        reason="Blocked by upstream transformers bug (transformers#43334)",
+                    ),
+                ],
+            ),
+        ],
+    )
+    def test_vlm(self, model_id):
+        device = torch.device("cuda")
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8), device=device)
+        logits_mask = torch.tensor(
+            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
+            device=device,
+        )
+
+        full_outputs = model(input_ids=input_ids)
+        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
+
+        torch.testing.assert_close(
+            masked_outputs.flat_logits,
+            full_outputs.logits[logits_mask.bool()],
+        )
