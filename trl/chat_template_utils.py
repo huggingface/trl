@@ -545,7 +545,7 @@ def add_generation_tags(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     # Full credit to HuggingFace users 'waleko' and 'HarryMayne' for their progress with Qwen3, much of the code and the templates above is taken from:
     # https://huggingface.co/Qwen/Qwen3-8B/discussions/14 and https://github.com/HarryMayne/qwen_3_chat_templates
     if tokenizer.chat_template == qwen3_chat_template:
-        tokenizer.response_schema = qwen3_chat_template_all_assistant
+        tokenizer.chat_template = qwen3_chat_template_all_assistant
         return tokenizer
 
     raise ValueError(
