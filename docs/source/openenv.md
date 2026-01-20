@@ -17,7 +17,7 @@ To use OpenEnv with TRL, install the environment package. You have two options:
 **Option A - Install from HF Space:**
 
 ```bash
-pip install git+https://huggingface.co/spaces/openenv/echo-env
+pip install git+https://huggingface.co/spaces/openenv/echo_env
 ```
 
 **Option B - Clone OpenEnv repo:**
