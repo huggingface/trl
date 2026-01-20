@@ -142,7 +142,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
@@ -169,7 +169,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = DPOTrainer(
@@ -200,7 +200,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -245,7 +245,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             loss_type=loss_type,
             label_smoothing=1e-3 if loss_type == "exo_pair" else 0.0,
             report_to="none",
@@ -280,7 +280,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             loss_type=["sigmoid", "bco_pair", "sft"],  # this specific combination is used in MPO
             report_to="none",
         )
@@ -311,7 +311,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
             use_weighting=True,
         )
@@ -342,7 +342,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
             ld_alpha=0.5,
         )
@@ -377,7 +377,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
             f_divergence_type=f_divergence_type,
             f_alpha_divergence_coef=0.5,
@@ -439,6 +439,40 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             new_ref_param = trainer.ref_model.get_parameter(n)
             assert torch.allclose(param, new_ref_param), f"Reference model parameter {n} has changed"
+
+    def test_training_with_sync_ref_model(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # Initialize the trainer
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            sync_ref_model=True,
+            ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        assert trainer.ref_model is not None
+        previous_ref_params = {n: param.clone() for n, param in trainer.ref_model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            new_ref_param = trainer.ref_model.get_parameter(n)
+            assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
     def test_train_model_dtype(self):
         # Get the dataset
@@ -529,7 +563,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -576,7 +610,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -611,7 +645,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             gradient_checkpointing=True,
             report_to="none",
         )
@@ -653,7 +687,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             gradient_checkpointing=True,
             report_to="none",
         )
@@ -696,7 +730,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             gradient_checkpointing=True,
             report_to="none",
         )
@@ -731,7 +765,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             use_liger_kernel=True,
             report_to="none",
         )
@@ -760,7 +794,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_steps=3,
             report_to="none",
         )
@@ -791,7 +825,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             padding_free=True,
             model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
@@ -884,7 +918,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             gradient_checkpointing=True,
             report_to="none",
         )
@@ -1013,7 +1047,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
