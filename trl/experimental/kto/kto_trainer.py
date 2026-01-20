@@ -159,7 +159,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     completion responses is/are too long. We truncate from the end (completion) to fit within max_length.
 
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
-    prompt and the completion response, with label_pad_token_id for the prompt tokens.
+    prompt and the completion response, with `-100` for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -237,9 +237,9 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         ] + [1]
 
     batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
-    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-        kwargs["label_pad_token_id"]
-    ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
+    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [-100] * len(
+        batch[f"{kwargs['prefix']}prompt_input_ids"]
+    )
 
     return batch
 
@@ -460,7 +460,6 @@ class KTOTrainer(BaseTrainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
-                label_pad_token_id=args.label_pad_token_id,
             )
 
             if args.remove_unused_columns:
@@ -484,7 +483,6 @@ class KTOTrainer(BaseTrainer):
         self.loss_type = args.loss_type
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.label_pad_token_id = args.label_pad_token_id
         self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
@@ -569,7 +567,6 @@ class KTOTrainer(BaseTrainer):
                 "prefix": "",
                 "tokenizer": self.processing_class,
                 "max_length": self.max_length,
-                "label_pad_token_id": self.label_pad_token_id,
             }
 
             train_dataset = train_dataset.map(
@@ -737,9 +734,7 @@ class KTOTrainer(BaseTrainer):
                 raise ValueError(
                     "You cannot use `use_liger_kernel=True` with Peft models. Please set `use_liger_kernel=False`."
                 )
-            self.kto_loss_fn = LigerFusedLinearKTOLoss(
-                ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None)
-            )
+            self.kto_loss_fn = LigerFusedLinearKTOLoss(beta=self.beta, use_ref_model=(self.ref_model is not None))
 
     @contextmanager
     def null_ref_context(self):
@@ -884,7 +879,6 @@ class KTOTrainer(BaseTrainer):
             completion_logits,
             padded_batch["completion_labels"],
             average_log_prob=False,
-            label_pad_token_id=self.label_pad_token_id,
         )
 
         if self.calculate_KL:
@@ -892,7 +886,6 @@ class KTOTrainer(BaseTrainer):
                 KL_logits,
                 padded_batch["KL_completion_labels"],
                 average_log_prob=False,
-                label_pad_token_id=self.label_pad_token_id,
             )
         else:
             KL_logps = None
@@ -904,7 +897,6 @@ class KTOTrainer(BaseTrainer):
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
-        label_pad_token_id: int = -100,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
 
@@ -912,13 +904,11 @@ class KTOTrainer(BaseTrainer):
             logits:
                 Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
             labels:
-                Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are
-                ignored. Shape: (batch_size, sequence_length)
+                Labels for which to compute the log probabilities. Label tokens with a value of `-100` are ignored.
+                Shape: (batch_size, sequence_length)
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
-            label_pad_token_id:
-                The label value to ignore when computing log probabilities.
 
         Returns:
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
@@ -931,10 +921,10 @@ class KTOTrainer(BaseTrainer):
         labels = labels[:, 1:].clone()
         logits = logits[:, :-1, :]
 
-        loss_mask = labels != label_pad_token_id
+        loss_mask = labels != -100
 
         # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == label_pad_token_id] = 0
+        labels[labels == -100] = 0
 
         per_token_logps = selective_log_softmax(logits, labels)
 
@@ -963,7 +953,6 @@ class KTOTrainer(BaseTrainer):
             completion_logits,
             batch["completion_labels"],
             average_log_prob=False,
-            label_pad_token_id=self.label_pad_token_id,
         )
 
         if completion_logps.shape[0] != len(batch["label"]):
@@ -1083,7 +1072,6 @@ class KTOTrainer(BaseTrainer):
                 KL_logits,
                 batch["KL_completion_labels"],
                 average_log_prob=False,
-                label_pad_token_id=self.label_pad_token_id,
             )
         return KL_logps
 
