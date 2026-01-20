@@ -1620,9 +1620,9 @@ class GRPOTrainer(BaseTrainer):
                 for tool_call in tool_call_list:
                     tool_call_count += 1
                     if tool_call["type"] == "function":
-                        function = tool_call["function"]
-                        name = function["name"]
                         try:
+                            function = tool_call["function"]
+                            name = function["name"]
                             if name in self._sync_tool_dict:
                                 tool_call_results.append((name, self._sync_tool_dict[name](**function["arguments"])))
                             elif name in self._async_tool_dict:
