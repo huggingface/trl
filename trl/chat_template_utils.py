@@ -546,6 +546,7 @@ def add_generation_tags(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     # https://huggingface.co/Qwen/Qwen3-8B/discussions/14 and https://github.com/HarryMayne/qwen_3_chat_templates
     if tokenizer.chat_template == qwen3_chat_template:
         tokenizer.chat_template = qwen3_chat_template_all_assistant
+    # probably want to add support here for most other popular model families like Llama 2/3/3.1, OLMo 2/3/3.1 etc... is there a way to do this fully automatically?
         return tokenizer
 
     raise ValueError(
