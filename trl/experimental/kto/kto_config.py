@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,8 +51,6 @@ class KTOConfig(TrainingArguments):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
             during evaluation.
@@ -67,16 +64,6 @@ class KTOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
-        use_liger_loss (`bool`, *optional*):
-            Whether to use Liger loss.
-
-            <Deprecated version="0.25.0">
-
-            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel`
-            instead.
-
-            </Deprecated>
-
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
@@ -154,12 +141,6 @@ class KTOConfig(TrainingArguments):
             "undesirable pairs.",
         },
     )
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={
-            "help": "Label pad token id. This argument is required if you want to use the default data collator."
-        },
-    )
     generate_during_eval: bool = field(
         default=False,
         metadata={
@@ -189,10 +170,6 @@ class KTOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    use_liger_loss: bool = field(
-        default=None,
-        metadata={"help": "Whether to use Liger loss. It requires liger-kernel to be installed."},
-    )
     base_model_attribute_name: str = field(
         default="model",
         metadata={
@@ -212,14 +189,5 @@ class KTOConfig(TrainingArguments):
         if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
             self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
-
-        if self.use_liger_loss is not None:
-            warnings.warn(
-                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
-                "`use_liger_kernel` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.use_liger_kernel = self.use_liger_loss
 
         super().__post_init__()
