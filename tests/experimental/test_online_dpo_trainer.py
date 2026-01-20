@@ -13,9 +13,7 @@
 # limitations under the License.
 
 import pytest
-import transformers
 from datasets import Dataset, features, load_dataset
-from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
