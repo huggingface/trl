@@ -11,7 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from collections import defaultdict
+import numpy as np
+import torch
 import os
 import re
 import textwrap
@@ -62,7 +64,7 @@ from ..judges import BasePairwiseJudge
 from ..utils import SIMPLE_CHAT_TEMPLATE, DPODataCollatorWithPadding, prepare_peft_model, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
-
+from torch.distributions import Dirichlet, Multinomial
 if is_peft_available():
     from peft import PeftConfig, PeftModel
 
@@ -352,6 +354,8 @@ class OnlineDPOTrainer(BaseTrainer):
             "val/contain_eos_token": [],
             "beta": [],
         }
+        self.weights_count = defaultdict(int)
+        self.weight_reward_sum = defaultdict(lambda: torch.zeros(len(self.reward_func_names)))  # key -> sum rewards per model
         if self.reward_funcs is not None:
             self.stats["objective/rlhf_reward"] = []
             self.stats["objective/scores_margin"] = []
@@ -947,6 +951,31 @@ class OnlineDPOTrainer(BaseTrainer):
             name = name.replace(prefix, "")
         return name
 
+    def _sample_discrete_dirichlet_weights(self,alpha, step=0.1, batch_size=1, device=None):
+        """
+        Returns discrete weight vectors on a grid of multiples of `step`,
+        summing exactly to 1, driven by Dirichlet(alpha).
+
+        alpha: shape (K,) concentration params
+        step:  0.1 -> weights are multiples of 0.1
+        batch_size: number of samples
+        """
+        alpha = torch.as_tensor(alpha, dtype=torch.float32, device=device)
+        K = alpha.numel()
+        assert K >= 2
+
+        N = int(round(1.0 / step))  # step=0.1 -> N=10
+        assert abs(N * step - 1.0) < 1e-6, "step must divide 1.0 nicely (e.g., 0.1, 0.05, 0.02)"
+
+        # 1) continuous simplex weights
+        p = Dirichlet(alpha).sample((batch_size,))         # (B, K)
+
+        # 2) discretize to grid while keeping sum exact
+        counts = Multinomial(total_count=N, probs=p).sample()  # (B, K), integers sum to N
+        w = counts / N                                         # (B, K), multiples of step, sum to 1
+
+        return w.squeeze(0)
+
     def process_vision_row(
         self, features: dict[str, list | torch.Tensor], processing_class=None
     ) -> dict[str, list[int]]:
@@ -1128,8 +1157,43 @@ class OnlineDPOTrainer(BaseTrainer):
             completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
 
             return prompt_ids, prompt_mask, completion_ids, completion_mask
+    #ToDo: Look at this function
+    def _annotate_prompts_with_weights(self, prompts: list, weights: dict[str, float]) -> list:
+        """
+        Prepend system instruction with reward weights to each prompt.
+        
+        Args:
+            prompts: List of prompts (strings or conversational format)
+            weights: Dict mapping reward function names to their weights
+            
+        Returns:
+            List of annotated prompts with weight instructions prepended
+        """
+        if not weights:
+            return prompts
+        
+        # Build system instruction
+        weight_str = ", ".join(f"{name}: {w:.1f}" for name, w in weights.items())
+        system_instruction = f"[Begin System Instruction]\nYou are an assistant. Prioritize these objectives with the given weights: {weight_str}\n[End System Instruction]"
+        
+        annotated_prompts = []
+        for prompt in prompts:
+            if isinstance(prompt, list):  # Conversational format
+                # Deep copy to avoid mutating original
+                prompt = [msg.copy() for msg in prompt]
+                if prompt and prompt[0].get("role") == "system":
+                    prompt[0]["content"] = system_instruction + "\n" + prompt[0]["content"]
+                else:
+                    prompt.insert(0, {"role": "system", "content": system_instruction})
+                annotated_prompts.append(prompt)
+            else:  # String format
+                annotated_prompts.append(system_instruction + "\n" + prompt)
+        print(f"DEBUG: annotated_prompts[0] = {annotated_prompts[0]}")
+        exit()
+        return annotated_prompts
 
-    def _calculate_rewards_from_functions(self, prompts, completions, completion_ids_list, **reward_kwargs):
+
+    def _calculate_rewards_from_functions(self, prompts, completions, completion_ids_list,reward_weights, **reward_kwargs):
         """
         Calculate rewards using reward functions
         """
@@ -1167,14 +1231,49 @@ class OnlineDPOTrainer(BaseTrainer):
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Weight and sum across all reward functions
-        if self.reward_weights is not None:
-            total_rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        if reward_weights is not None:
+            total_rewards = (rewards_per_func * reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             #store the batchmean per reward function in wandb
             
         else:
             total_rewards = rewards_per_func.nansum(dim=1)
 
         return total_rewards, rewards_per_func
+
+    def _sample_uniform_discrete_weights(self, step=0.1, batch_size=1, device=None, K=None):
+        """
+        Uniformly sample discrete weight vectors on grid of multiples of `step`
+        summing exactly to 1.
+
+        Returns:
+        - (K,) if batch_size==1
+        - (B, K) otherwise
+        """
+        if K is None:
+            K = len(self.reward_func_names)
+        assert K >= 2
+
+        N = int(round(1.0 / step))
+        assert abs(N * step - 1.0) < 1e-6
+
+        # Sample integer counts uniformly among all compositions of N into K parts.
+        # Simple way: generate all compositions if K small and N small (e.g. K=2, N=10).
+        # For K=2 this is trivial and fast:
+        if K == 2:
+            a = torch.randint(0, N + 1, (batch_size,), device=device)
+            counts = torch.stack([a, N - a], dim=1)
+        else:
+            # For K>2, use a random "stars and bars" construction
+            # Pick K-1 cut points uniformly from {0..N} with replacement, sort them
+            cuts = torch.randint(0, N + 1, (batch_size, K - 1), device=device)
+            cuts, _ = torch.sort(cuts, dim=1)
+            zeros = torch.zeros((batch_size, 1), device=device, dtype=cuts.dtype)
+            Ns = torch.full((batch_size, 1), N, device=device, dtype=cuts.dtype)
+            pts = torch.cat([zeros, cuts, Ns], dim=1)  # (B, K+1)
+            counts = pts[:, 1:] - pts[:, :-1]          # (B, K)
+
+        w = counts.to(torch.float32) / float(N)
+        return w.squeeze(0)
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs=None):
         # Get the number of tokens to truncate from prompt
@@ -1218,9 +1317,26 @@ class OnlineDPOTrainer(BaseTrainer):
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
         model.train()
-
+        #sample the weights from a dritchlet distribution with alpha = 0.7
+        # reward_weights = self._sample_discrete_dirichlet_weights([0.8]*len(self.reward_func_names), 0.1, 1)
+        reward_weights = self._sample_uniform_discrete_weights(0.1, 1,None,len(self.reward_func_names))
         prompts = inputs["prompt"]
         batch_size = len(prompts)
+        # ToDo: Annotate the prompts with reward weights
+        # ToDo: need to get the reward model names
+
+        self.weights = {}
+        if reward_weights is not None:
+            for weight,name in zip(reward_weights, self.reward_func_names):
+                self.weights[name] = weight
+            # print(self.weights) # ToDo: remove this
+        
+        #store the no of times a reward weight is chosen. Just focus on one reward weight, the other is 1-w
+        self.weights_count[int((self.weights[self.reward_func_names[0]] * 100).item())] += 1
+
+        prompts_dashed = self._annotate_prompts_with_weights(prompts, self.weights)
+        
+
 
         # Handle images for VLM support
         has_images = "image" in inputs
@@ -1228,7 +1344,7 @@ class OnlineDPOTrainer(BaseTrainer):
         if has_images:
             images = inputs["image"]
             # Convert conversational prompts to include image tokens
-            for prompt in prompts:
+            for prompt in prompts_dashed:
                 if isinstance(prompt, list):
                     for message in prompt:
                         if not isinstance(message, dict):
@@ -1242,9 +1358,9 @@ class OnlineDPOTrainer(BaseTrainer):
                                 message["content"] = [{"type": "text", "text": content}]
 
         if self.args.use_vllm:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(prompts, images)
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(prompts_dashed, images)
         else:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts_dashed, images)
 
         contain_eos_token = torch.any(completion_ids == self.eos_token_id, dim=-1)
 
@@ -1294,8 +1410,18 @@ class OnlineDPOTrainer(BaseTrainer):
         # Decode the completions, and format them if the input is conversational
         device = logprobs.device
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        # Log prompt-completion pairs every 100 steps
+        
         if is_conversational({"prompt": prompts[0]}):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+                # --- Simple print to see completions in logs/console ---
+        
+            #store the prompts_dashed and completions in self.stats
+            
+        
+        
+
+        
 
         # Get the reward from reward functions or judge
         if self.reward_funcs is not None:
@@ -1314,7 +1440,7 @@ class OnlineDPOTrainer(BaseTrainer):
 
             # Calculate rewards using reward functions
             rewards, rewards_per_func = self._calculate_rewards_from_functions(
-                prompts=2 * prompts, completions=completions, completion_ids_list=completion_ids_list, **reward_kwargs
+                prompts=2 * prompts, completions=completions, completion_ids_list=completion_ids_list, reward_weights=reward_weights, **reward_kwargs
             )
 
             # Apply missing EOS penalty if configured
@@ -1349,8 +1475,12 @@ class OnlineDPOTrainer(BaseTrainer):
         rejected_indices = batch_range + (mask * batch_size)
         # add my own logging for rewards_per_func
         chosen_rewards_per_func = rewards_per_func[chosen_indices]  # (B, n_funcs)
+        #ToDo
         g = self.accelerator.gather_for_metrics(chosen_rewards_per_func.detach())  # gather across GPUs
-
+        w_key = int((reward_weights[0] * 100).item())  # bucket by first weight
+        self.weight_reward_sum[w_key] += torch.nan_to_num(chosen_rewards_per_func.detach(), nan=0.0).sum(dim=0).cpu()
+        # count chosen samples for that weight bucket
+        self.weights_count[w_key] += int(chosen_rewards_per_func.size(0))
         if not hasattr(self, "_chosen_reward_func_sum"):
             self._chosen_reward_func_sum = torch.zeros(g.size(1), device=g.device)
             self._chosen_reward_func_cnt = torch.zeros(g.size(1), device=g.device)
@@ -1473,14 +1603,23 @@ class OnlineDPOTrainer(BaseTrainer):
 
             # Add our metrics
             for key, val in self.stats.items():
+                print(key, val)
                 logs[key] = sum(val) / len(val)
             self.stats = {key: [] for key in self.stats}  # reset stats
 
             self._total_loss_scalar += tr_loss_scalar
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
-            self.log(logs, start_time)
+            # weights histogram + mean rewards per weight bucket
+            if hasattr(self, "weights_count") and hasattr(self, "weight_reward_sum"):
+                for key, cnt in self.weights_count.items():
+                    logs[f"weights/count/{key/100.0}"] = float(cnt)
 
+                    mean_vec = self.weight_reward_sum[key] / max(1, cnt)
+                    for i, name in enumerate(self.reward_func_names):
+                        logs[f"weights/mean_reward/{name}/{key/100.0}"] = float(mean_vec[i].item())
+
+            self.log(logs, start_time)
         metrics = None
         if self.control.should_evaluate:
             metrics = self._evaluate(trial, ignore_keys_for_eval)
