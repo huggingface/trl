@@ -78,6 +78,7 @@ if TYPE_CHECKING:
 
 logger = logging.get_logger(__name__)
 
+IGNORE_INDEX = -100
 RUNNING_NAME = "running.pt"
 
 
@@ -237,9 +238,9 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         ] + [1]
 
     batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
-    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [-100] * len(
-        batch[f"{kwargs['prefix']}prompt_input_ids"]
-    )
+    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
+        IGNORE_INDEX
+    ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
 
     return batch
 
@@ -914,7 +915,6 @@ class KTOTrainer(BaseTrainer):
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
             given logits.
         """
-        IGNORE_INDEX = -100
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
 
