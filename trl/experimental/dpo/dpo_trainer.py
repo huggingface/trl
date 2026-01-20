@@ -582,24 +582,24 @@ class DPOTrainer(BaseTrainer):
                         prepare_multimodal_messages(example["completion"], num_images=0)
                     prompt_ids = processing_class.apply_chat_template(
                         example["prompt"],
-                        return_dict=False,
-                        tokenize=True,
-                        add_generation_prompt=True,
                         tools=example.get("tools"),
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=False,
                         **example.get("chat_template_kwargs", {}),
                     )
                     prompt_chosen_processed = processing_class.apply_chat_template(
                         example["prompt"] + example["chosen"],
-                        return_dict=True,
-                        tokenize=True,
                         tools=example.get("tools"),
+                        tokenize=True,
+                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
                     )
                     prompt_rejected_processed = processing_class.apply_chat_template(
                         example["prompt"] + example["rejected"],
-                        return_dict=True,
-                        tokenize=True,
                         tools=example.get("tools"),
+                        tokenize=True,
+                        return_dict=True,
                         **example.get("chat_template_kwargs", {}),
                     )
                     # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
