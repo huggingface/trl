@@ -159,7 +159,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     completion responses is/are too long. We truncate from the end (completion) to fit within max_length.
 
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
-    prompt and the completion response, with label_pad_token_id for the prompt tokens.
+    prompt and the completion response, with `-100` for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -237,9 +237,9 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         ] + [1]
 
     batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
-    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-        kwargs["label_pad_token_id"]
-    ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
+    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [-100] * len(
+        batch[f"{kwargs['prefix']}prompt_input_ids"]
+    )
 
     return batch
 
