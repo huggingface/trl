@@ -246,6 +246,21 @@ class DPOConfig(TrainingArguments):
             "useful when training with PEFT methods, where the main model's weights change during training."
         },
     )
+    ref_model_mixup_alpha: float = field(
+        default=0.6,
+        metadata={
+            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
+            "previous reference policy during updates. The reference policy is updated according to the equation: "
+            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    ref_model_sync_steps: int = field(
+        default=512,
+        metadata={
+            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
+            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
 
     # Deprecated parameters
     max_prompt_length: int | None = field(
@@ -381,21 +396,6 @@ class DPOConfig(TrainingArguments):
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
-    ref_model_mixup_alpha: float = field(
-        default=0.6,
-        metadata={
-            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
-            "previous reference policy during updates. The reference policy is updated according to the equation: "
-            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`."
-        },
-    )
-    ref_model_sync_steps: int = field(
-        default=512,
-        metadata={
-            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
-            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
-        },
-    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -415,6 +415,7 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
+            self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
         if self.max_prompt_length is not None:
             warnings.warn(
                 "The `max_prompt_length` argument is deprecated and will be removed in version 0.29.0. This parameter "
@@ -433,17 +434,19 @@ class DPOConfig(TrainingArguments):
             )
         if self.ref_model_init_kwargs is not None:
             warnings.warn(
-                "The `ref_model_init_kwargs` argument is deprecated and will be removed in version 0.29.0. The "
-                "reference model is instantiated with the same keyword arguments as the main model. If you need to "
-                "customize the reference model initialization, we recommend instantiating the reference model "
-                "yourself and passing it to the `DPOTrainer`.",
+                "The `ref_model_init_kwargs` argument is deprecated and will be removed in version 0.29.0. This "
+                "parameter is no longer used. The reference model is instantiated with the same keyword arguments as "
+                "the main model. If you need to customize the reference model initialization, we recommend "
+                "instantiating the reference model yourself and passing it to the `DPOTrainer`. This argument is no "
+                "longer used.",
                 FutureWarning,
                 stacklevel=2,
             )
         if self.generate_during_eval is not None:
             warnings.warn(
-                "The `generate_during_eval` argument is deprecated and will be removed in version 0.29.0. Please use "
-                "a dedicated callback, like `LogCompletionsCallback`.",
+                "The `generate_during_eval` argument is deprecated and will be removed in version 0.29.0. This "
+                "parameter is no longer used. Please use a dedicated callback, like `LogCompletionsCallback`. This "
+                "argument is no longer used.",
                 FutureWarning,
                 stacklevel=2,
             )
@@ -494,8 +497,8 @@ class DPOConfig(TrainingArguments):
             )
         if self.tools is not None:
             warnings.warn(
-                "`tools` is deprecated and will be removed in version 0.29.0. Provide tools per example in the "
-                "dataset via a `tools` column instead.",
+                "`tools` is deprecated and will be removed in version 0.29.0. This parameter is no longer used. "
+                "Provide tools per example in the dataset via a `tools` column instead.",
                 FutureWarning,
                 stacklevel=2,
             )
@@ -509,9 +512,9 @@ class DPOConfig(TrainingArguments):
             self.f_divergence_type = self.f_divergence_type.value
         if self.reference_free is not None:
             warnings.warn(
-                "The `reference_free` argument is deprecated and will be removed in version 0.29.0. The DPO trainer "
-                "no longer supports reference-free training. For reference-free training, use the CPOTrainer "
-                "instead.",
+                "The `reference_free` argument is deprecated and will be removed in version 0.29.0. This parameter is "
+                "no longer used and the DPO trainer no longer supports reference-free training. For reference-free "
+                "training, use the CPOTrainer instead.",
                 FutureWarning,
                 stacklevel=2,
             )
