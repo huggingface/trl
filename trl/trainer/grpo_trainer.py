@@ -2259,7 +2259,12 @@ class GRPOTrainer(BaseTrainer):
             D = -sign_advantages * sign_diff
 
             # Φ_{t,i} = λ_scale * exp(D_{t,i} * M_t)
-            phi = self.hadw_lambda_scale * torch.exp(D * M_t)
+            exponent = D * M_t
+            # For fp16, clamp exponent to prevent overflow (exp(10) ≈ 22026, exp(-10) ≈ 0.000045)
+            # This is only needed for fp16; fp32/bf16 have sufficient dynamic range
+            if advantages.dtype == torch.float16:
+                exponent = torch.clamp(exponent, min=-10.0, max=10.0)
+            phi = self.hadw_lambda_scale * torch.exp(exponent)
             reweighting_factors.append(phi)
 
         # Stack and flatten to match original shape
