@@ -119,6 +119,60 @@ class TestVLLMClientServer(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_logprobs_match_with_non_default_sampling(self):
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        temperature = 0.7
+        repetition_penalty = 1.05
+        max_tokens = 8
+        seed = 1234
+
+        server_outputs = self.client.generate(
+            prompts,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            top_p=1.0,
+            top_k=-1,
+            max_tokens=max_tokens,
+            generation_kwargs={"seed": seed},
+        )
+
+        from vllm import LLM, SamplingParams
+
+        llm = LLM(
+            model=self.model_id,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.2,
+            max_model_len=128,
+            logprobs_mode="processed_logprobs",
+        )
+        sampling_params = SamplingParams(
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            top_p=1.0,
+            top_k=-1,
+            max_tokens=max_tokens,
+            logprobs=0,
+            seed=seed,
+        )
+        local_outputs = llm.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
+
+        local_prompt_ids = [output.prompt_token_ids for output in local_outputs]
+        local_completion_ids = [list(output.token_ids) for outputs in local_outputs for output in outputs.outputs]
+        local_logprobs = [
+            [next(iter(logprob.values())).logprob for logprob in output.logprobs]
+            for outputs in local_outputs
+            for output in outputs.outputs
+        ]
+
+        assert server_outputs["prompt_ids"] == local_prompt_ids
+        assert server_outputs["completion_ids"] == local_completion_ids
+
+        server_logprobs = server_outputs["logprobs"]
+        assert len(server_logprobs) == len(local_logprobs)
+        for server_seq, local_seq in zip(server_logprobs, local_logprobs, strict=True):
+            assert len(server_seq) == len(local_seq)
+            assert server_seq == pytest.approx(local_seq, rel=1e-6, abs=1e-6)
+
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
         completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[

@@ -360,6 +360,8 @@ def llm_worker(
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
         model_impl=script_args.vllm_model_impl,
+        # Keep logprobs consistent with colocate mode when sampling params are non-default.
+        logprobs_mode="processed_logprobs",
     )
 
     # Send ready signal to parent process
