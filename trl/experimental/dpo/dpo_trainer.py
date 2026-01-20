@@ -515,20 +515,20 @@ class DPOTrainer(BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        # if self.args.precompute_ref_log_probs:
-        #     self.train_dataset = self._precompute_ref_logps(
-        #         ref_model, self.train_dataset, self.args.per_device_train_batch_size, "train"
-        #     )
-        #     if self.eval_dataset is not None:
-        #         if isinstance(self.eval_dataset, dict):
-        #             self.eval_dataset = {
-        #                 key: self._precompute_ref_logps(ref_model, dataset, self.args.per_device_eval_batch_size, key)
-        #                 for key, dataset in self.eval_dataset.items()
-        #             }
-        #         else:
-        #             self.eval_dataset = self._precompute_ref_logps(
-        #                 self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
-        #             )
+        if args.precompute_ref_log_probs:
+            self.train_dataset = self._precompute_ref_logps(
+                ref_model, self.train_dataset, self.args.per_device_train_batch_size, "train"
+            )
+            if self.eval_dataset is not None:
+                if isinstance(self.eval_dataset, dict):
+                    self.eval_dataset = {
+                        key: self._precompute_ref_logps(ref_model, dataset, self.args.per_device_eval_batch_size, key)
+                        for key, dataset in self.eval_dataset.items()
+                    }
+                else:
+                    self.eval_dataset = self._precompute_ref_logps(
+                        ref_model, self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
+                    )
 
     def _prepare_dataset(
         self,
