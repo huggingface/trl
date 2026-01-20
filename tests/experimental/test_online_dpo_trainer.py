@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import pytest
+import transformers
 from datasets import Dataset, features, load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
@@ -405,6 +407,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):
+        if Version(transformers.__version__) < Version("4.57.0"):
+            pytest.xfail("Bug in transformers solved in GH#40692, released in 4.57.0.")
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
