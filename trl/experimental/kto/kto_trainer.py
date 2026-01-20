@@ -78,7 +78,6 @@ if TYPE_CHECKING:
 
 logger = logging.get_logger(__name__)
 
-IGNORE_INDEX = -100
 RUNNING_NAME = "running.pt"
 
 
@@ -238,9 +237,9 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         ] + [1]
 
     batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
-    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-        IGNORE_INDEX
-    ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
+    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [-100] * len(
+        batch[f"{kwargs['prefix']}prompt_input_ids"]
+    )
 
     return batch
 
@@ -922,10 +921,10 @@ class KTOTrainer(BaseTrainer):
         labels = labels[:, 1:].clone()
         logits = logits[:, :-1, :]
 
-        loss_mask = labels != IGNORE_INDEX
+        loss_mask = labels != -100
 
         # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == IGNORE_INDEX] = 0
+        labels[labels == -100] = 0
 
         per_token_logps = selective_log_softmax(logits, labels)
 
