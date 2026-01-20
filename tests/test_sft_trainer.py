@@ -1362,10 +1362,6 @@ class TestSFTTrainer(TrlTestCase):
                         Version(transformers.__version__) < Version("4.57.0"),
                         reason="Qwen3-VL series were introduced in transformers-4.57.0",
                     ),
-                    pytest.mark.xfail(
-                        Version(transformers.__version__) >= Version("5.0.0.dev0"),
-                        reason="Blocked by upstream transformers bug (transformers#43334)",
-                    ),
                 ],
             ),
         ],
