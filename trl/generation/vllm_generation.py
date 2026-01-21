@@ -49,6 +49,42 @@ class VLLMGeneration:
 
     Extracts all vLLM-specific logic (initialization, generation, weight sync) from trainers into a separate, testable
     class.
+
+    Args:
+        model: The model to use for generation
+        accelerator: Accelerator instance for distributed training
+        is_fsdp_enabled: Whether FSDP is enabled
+        processing_class: Tokenizer or processor for the model
+        mode: vLLM mode ('server' or 'colocate')
+        tensor_parallel_size: Tensor parallel size for vLLM
+        gpu_memory_utilization: GPU memory utilization (0.0-1.0)
+        enable_sleep_mode: Whether to enable sleep mode
+        max_num_seqs: Maximum number of sequences to process in parallel.
+            If None, calculated as per_device_train_batch_size * tensor_parallel_size * steps_per_generation
+        max_model_length: Maximum model length
+        model_impl: Model implementation
+        structured_outputs_regex: Regex for structured outputs
+        server_base_url: Base URL for vLLM server (server mode)
+        server_host: Host for vLLM server (server mode)
+        server_port: Port for vLLM server (server mode)
+        group_port: Group port for vLLM communicator (server mode)
+        server_timeout: Connection timeout for vLLM server (server mode)
+        generation_kwargs: Additional generation kwargs to pass to vLLM
+        temperature: Sampling temperature
+        top_p: Top-p sampling parameter
+        top_k: Top-k sampling parameter
+        min_p: Min-p sampling parameter
+        repetition_penalty: Repetition penalty
+        max_completion_length: Maximum completion length
+        chat_template_kwargs: Chat template kwargs
+        tools: Optional tools for function calling
+        chat_template: Optional chat template
+        rollout_func: Optional custom rollout function that accepts prompts and returns
+            a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields. Should be a
+            single-argument callable: rollout_func(prompts) -> dict. To pass additional context (e.g., trainer), use a
+            closure or functools.partial:
+                rollout_func = lambda prompts: my_custom_rollout(prompts, trainer)
+            The closure will hold a reference to trainer and see its state updates.
     """
 
     def __init__(
@@ -86,44 +122,6 @@ class VLLMGeneration:
         chat_template: str | None = None,
         rollout_func=None,
     ):
-        """Initialize vLLM generation.
-
-        Args:
-            model: The model to use for generation
-            accelerator: Accelerator instance for distributed training
-            is_fsdp_enabled: Whether FSDP is enabled
-            processing_class: Tokenizer or processor for the model
-            mode: vLLM mode ('server' or 'colocate')
-            tensor_parallel_size: Tensor parallel size for vLLM
-            gpu_memory_utilization: GPU memory utilization (0.0-1.0)
-            enable_sleep_mode: Whether to enable sleep mode
-            max_num_seqs: Maximum number of sequences to process in parallel.
-                If None, calculated as per_device_train_batch_size * tensor_parallel_size * steps_per_generation
-            max_model_length: Maximum model length
-            model_impl: Model implementation
-            structured_outputs_regex: Regex for structured outputs
-            server_base_url: Base URL for vLLM server (server mode)
-            server_host: Host for vLLM server (server mode)
-            server_port: Port for vLLM server (server mode)
-            group_port: Group port for vLLM communicator (server mode)
-            server_timeout: Connection timeout for vLLM server (server mode)
-            generation_kwargs: Additional generation kwargs to pass to vLLM
-            temperature: Sampling temperature
-            top_p: Top-p sampling parameter
-            top_k: Top-k sampling parameter
-            min_p: Min-p sampling parameter
-            repetition_penalty: Repetition penalty
-            max_completion_length: Maximum completion length
-            chat_template_kwargs: Chat template kwargs
-            tools: Optional tools for function calling
-            chat_template: Optional chat template
-            rollout_func: Optional custom rollout function that accepts prompts and returns
-                a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields. Should be a
-                single-argument callable: rollout_func(prompts) -> dict. To pass additional context (e.g., trainer),
-                use a closure or functools.partial:
-                    rollout_func = lambda prompts: my_custom_rollout(prompts, trainer)
-                The closure will hold a reference to trainer and see its state updates.
-        """
         self.model = model
         self.accelerator = accelerator
         self.is_fsdp_enabled = is_fsdp_enabled
