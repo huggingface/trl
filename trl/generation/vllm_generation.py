@@ -248,7 +248,7 @@ class VLLMGeneration:
         accelerator.wait_for_everyone()
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes=None):
-        """Fix parameter name for vLLM compatibility (lines 991-996)."""
+        """Fix parameter name for vLLM compatibility."""
         extra_prefixes = extra_prefixes or []
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
         for prefix in prefixes:
@@ -285,7 +285,7 @@ class VLLMGeneration:
                         llm_model.load_weights([(full_name, param.data)])
 
     def _sync_fsdp2_params_to_vllm(self, module):
-        """FSDP2-specific parameter synchronization (lines 1025-1046)."""
+        """FSDP2-specific parameter synchronization."""
         accelerator = self.accelerator
 
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
