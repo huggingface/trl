@@ -18,9 +18,9 @@ import subprocess
 import pytest
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
-from vllm import LLM, SamplingParams
 
 from trl.extras.vllm_client import VLLMClient
+from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
 from .testing_utils import (
@@ -30,6 +30,10 @@ from .testing_utils import (
     require_torch_multi_accelerator,
     require_vllm,
 )
+
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
 
 
 class TestChunkList(TrlTestCase):
