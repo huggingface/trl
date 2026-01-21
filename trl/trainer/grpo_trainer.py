@@ -1664,14 +1664,12 @@ class GRPOTrainer(BaseTrainer):
             pct_ids = self.processing_class.apply_chat_template(
                 prompt_completion_tools,
                 tools=self.tools,
-                tokenize=True,
-                add_generation_prompt=True,
                 chat_template=self.chat_template,
-                return_dict=True,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=False,
                 **self.chat_template_kwargs,
             )
-            pct_ids = pct_ids["input_ids"]
-
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
