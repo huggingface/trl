@@ -226,7 +226,9 @@ class VLLMGeneration:
                 "max_num_seqs": self.max_num_seqs,
                 "max_model_len": self.max_model_length,
                 "distributed_executor_backend": "external_launcher",
+                # Feed identical seed for tp groups to ensure sampling results are the same across workers
                 "seed": accelerator.process_index // self.tensor_parallel_size,
+                # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                 "max_num_batched_tokens": 4096,
                 "model_impl": self.model_impl,
                 "enable_sleep_mode": self.enable_sleep_mode,
