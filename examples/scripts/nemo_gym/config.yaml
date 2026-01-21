@@ -1,10 +1,10 @@
 model_name: "Qwen/Qwen3-4B-Instruct-2507"
 
-dataset_path: "data/train.jsonl"
-eval_dataset_path: "data/val.jsonl"
+dataset_path: "/path/to/data/train.jsonl"
+eval_dataset_path: "/path/to/data/val.jsonl"
 
 output_dir: "outputs/nemo_gym"
-run_name_prefix: "nemo_gym"
+task: "workplace"                # just used in wandb run name 
 report_to: "wandb"
 project_name: "trl-nemo-gym"
 log_completions: true
