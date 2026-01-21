@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,8 +21,9 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
-from packaging import version
-from transformers import PreTrainedModel
+import transformers
+from packaging.version import Version
+from transformers import GenerationConfig, PreTrainedModel
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
 
@@ -76,7 +77,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer
     else:
         raise RuntimeError("The model optimizer is None, which is not yet supported.")
-    if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
+    if Version(deepspeed.__version__) >= Version("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
         optimizer_offload._register_deepspeed_module(optimizer_offload.module)
     else:
@@ -84,7 +85,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 
 @contextmanager
-def unwrap_model_for_generation(
+def _unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
@@ -106,7 +107,7 @@ def unwrap_model_for_generation(
 
     Example:
     ```python
-    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+    with _unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         generated_outputs = unwrapped_model.generate(input_ids)
     ```
     """
@@ -128,6 +129,87 @@ def unwrap_model_for_generation(
         yield unwrapped_model
     if is_gradient_checkpointing:
         unwrapped_model.gradient_checkpointing_enable()
+
+
+@contextmanager
+def _override_model_generation_config(model, generation_kwargs=None):
+    """
+    Context manager to temporarily override a model's generation_config with training config.
+
+    This works around transformers' config merging logic that would otherwise overwrite values matching global defaults
+    with model-specific values (see upstream issue transformers#42762; fixed in transformers v5 by PR
+    `transformers#42702`).
+
+    By temporarily setting the model's generation_config to match the passed generation_config, we avoid the conflict.
+
+    The model's original generation_config is preserved outside this context, ensuring that saved/pushed models retain
+    their intended inference behavior.
+
+    Args:
+        model: The model (typically unwrapped_model) whose generation_config to temporarily override.
+        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
+    """
+    if (
+        # Issue fixed in transformers v5 by PR transformers#42702
+        Version(transformers.__version__) >= Version("5.0.0")
+        or generation_kwargs is None
+        or not hasattr(model, "generation_config")
+    ):
+        yield model
+        return
+    # If it is a PEFT model, override the underlying base model
+    if hasattr(model, "get_base_model"):
+        model = model.get_base_model()
+    # Keep original model generation_config
+    original_config = model.generation_config
+    # Create training-specific generation config from the model's original generation config
+    # Then overwrite it with the training-specific generation kwargs
+    generation_config = GenerationConfig.from_dict(model.generation_config.to_dict())
+    generation_config.update(**generation_kwargs)
+    model.generation_config = generation_config
+    try:
+        yield
+    finally:
+        model.generation_config = original_config
+
+
+@contextmanager
+def unwrap_model_for_generation(
+    model: "DistributedDataParallel | DeepSpeedEngine",
+    accelerator: "Accelerator",
+    gather_deepspeed3_params: bool = True,
+    generation_kwargs: dict | None = None,
+):
+    """
+    Context manager to unwrap distributed or accelerated models for generation tasks.
+
+    This function unwraps distributed models (FSDP, DeepSpeed) and optionally overrides the model's generation_config
+    temporarily during generation. This is useful for applying training-specific generation parameters without
+    permanently modifying the model's original generation_config.
+
+    Args:
+        model (`DistributedDataParallel | DeepSpeedEngine`):
+            Model to be unwrapped.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator instance managing the model.
+        gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
+            Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
+            can be more memory-efficient but may lead to slower generation times.
+        generation_kwargs (dict, *optional*):
+            If provided, temporarily overrides the model's generation_config during generation. The original config is
+            automatically restored when exiting the context. This is useful for using different generation parameters
+            during training vs. inference.
+
+    Yields:
+        Unwrapped model with optionally overridden generation_config.
+    """
+    with (
+        _unwrap_model_for_generation(
+            model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
+        ) as unwrapped_model,
+        _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
+    ):
+        yield unwrapped_model
 
 
 def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):

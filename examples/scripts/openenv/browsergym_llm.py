@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio",
+#     "kernels",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
+# ]
+# ///
+
 """
 Simple script to run GRPO training with OpenEnv's BrowserGym environment and vLLM for LLMs.
 
@@ -20,20 +30,26 @@ tree text from BrowserGym, making it memory-efficient.
 
 The environment runs on a Hugging Face Space by default.
 
-Setup:
+Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://github.com/meta-pytorch/OpenEnv.git
+uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 ```
 
-Usage:
+Setup (Option B - Clone OpenEnv repo):
 
-# Option 1: Colocated vLLM (1 GPU required)
+```sh
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/browsergym_env
+uv pip install -e .
+```
+
+# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
 ```sh
 python examples/scripts/openenv/browsergym_llm.py --vllm-mode colocate
 ```
 
-# Option 2: Separate vLLM server (2 GPUs required)
+# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
 
 # Spin up vLLM server (Terminal 1)
 ```sh
@@ -52,8 +68,8 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+from browsergym_env import BrowserGymAction, BrowserGymEnv
 from datasets import Dataset
-from envs.browsergym_env import BrowserGymAction, BrowserGymEnv
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
@@ -70,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--space-url",
         type=str,
-        default="https://burtenshaw-browsergym-v2.hf.space",
+        default="https://openenv-browsergym-env.hf.space",
         help="URL for the Hugging Face Space running the BrowserGym environment.",
     )
     parser.add_argument(
@@ -416,6 +432,8 @@ def main() -> None:
         generation_batch_size=args.num_generations,  # Must be divisible by num_generations
         max_completion_length=args.max_new_tokens,
         logging_steps=args.logging_steps,
+        report_to="trackio",
+        trackio_space_id=f"browsergym-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
         save_steps=args.save_interval,
         save_total_limit=args.save_total_limit,
