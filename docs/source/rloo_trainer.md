@@ -138,8 +138,8 @@ While training and evaluating, we record the following reward metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
-- `reward`: The overall average reward after applying reward weights.
-- `reward_std`: The standard deviation of rewards after applying reward weights. This is the average of the per-group standard deviations.
+- `reward`: The overall average reward after summing rewards across functions (unweighted).
+- `reward_std`: The standard deviation of summed rewards across functions (unweighted), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
@@ -541,7 +541,6 @@ accelerate launch \
   --learning_rate 1e-5 \
   --gradient_checkpointing \
   --dtype bfloat16 \
-  --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
@@ -551,15 +550,6 @@ accelerate launch \
 ```
 
 ### Configuration Tips
-
-> [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`RLOOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
->
-> ```python
-> RLOOConfig(max_prompt_length=None, ...)
-> ```
->
-> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage

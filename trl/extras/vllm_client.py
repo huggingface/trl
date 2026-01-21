@@ -23,8 +23,10 @@ from urllib.parse import urlparse
 
 import torch
 import torch.distributed.distributed_c10d as c10d
+from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers import is_torch_xpu_available
+from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -128,6 +130,24 @@ class VLLMClient:
             raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
+
+        # Configure retries for HTTP requests made through this session.
+        # This is not strictly required for correctness, but it helps make training more robust to rare, transient
+        # failures (network hiccups, temporary 5xx errors, overloaded servers). Without this, such failures could cause
+        # an otherwise healthy training run to fail.
+        retry_strategy = Retry(
+            total=5,  # global cap on the total number of retries across all failure types
+            connect=5,  # retry connection-level failures (DNS issues, refused connections, etc)
+            read=5,  # retry failures while reading the response after the connection was successfully established
+            status=3,  # retry a limited number of times when we receive certain HTTP error responses from the server
+            status_forcelist=[500, 502, 503],  # only retry on server-side errors that are usually temporary
+            backoff_factor=2,  # exponential backoff between retries (2s, 4s, 8s, ...)
+            allowed_methods=["POST", "GET"],  # allow POST as well, even though we're not sure it's safe here
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         if base_url is not None:
             # Parse the base_url to extract host and port
@@ -431,10 +451,12 @@ class VLLMClient:
                 host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
             )
             prefixed_store = c10d.PrefixStore("client2server", store)
+            xccl_options = c10d.ProcessGroupXCCL.Options()
             pg = c10d.ProcessGroupXCCL(
                 store=prefixed_store,
                 rank=self.rank,
                 size=world_size,
+                options=xccl_options,
             )
             self.communicator = pg
         else:

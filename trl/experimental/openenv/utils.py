@@ -31,7 +31,7 @@ def _build_colocate_sampling_params(
     overrides: dict[str, Any] | None = None,
     *,
     logprobs: bool = True,
-) -> SamplingParams:
+) -> "SamplingParams":
     if trainer.structured_outputs_regex:
         structured_outputs = StructuredOutputsParams(regex=trainer.structured_outputs_regex)
     else:

@@ -609,14 +609,14 @@ class TestRewardTrainer(TrlTestCase):
                 continue
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    def test_train_with_set_chat_template_from_path(self):
+    def test_train_with_set_chat_template_from_path(self, lazy_shared_datadir):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         # Initialize the trainer
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
-            chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
+            chat_template_path=str(lazy_shared_datadir / "template.jinja"),
             report_to="none",
         )
         # trl-internal-testing/tiny-GPTNeoXForSequenceClassification doesn't have a chat template set by default

@@ -14,6 +14,7 @@
 
 import contextlib
 import os
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1268,8 +1269,19 @@ class SFTTrainer(BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         if self.args.use_liger_kernel:
-            token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
-            self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+            if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
+                token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
+                self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+            else:
+                # liger-kernel<=0.6.4 can omit token_accuracy even when requested; fixed for Gemma3 in
+                # https://github.com/linkedin/Liger-Kernel/pull/1010
+                warnings.warn(
+                    "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
+                    "not be logged. This may indicate an outdated liger-kernel version. Consider upgrading to the "
+                    "latest version. If the issue persists after upgrading, please report it to the liger-kernel "
+                    "repository.",
+                    stacklevel=2,
+                )
         else:
             # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():

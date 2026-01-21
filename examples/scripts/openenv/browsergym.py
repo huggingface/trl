@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -86,8 +85,8 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from datasets import Dataset
 from browsergym_env import BrowserGymAction, BrowserGymEnv
+from datasets import Dataset
 from PIL import Image
 from transformers import AutoTokenizer
 
@@ -107,7 +106,12 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen3-VL-2B-Instruct",
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
-    parser.add_argument("--env-host", type=str, default="https://openenv-browsergym-env.hf.space", help="Host for the BrowserGym environment.")
+    parser.add_argument(
+        "--env-host",
+        type=str,
+        default="https://openenv-browsergym-env.hf.space",
+        help="Host for the BrowserGym environment.",
+    )
     parser.add_argument("--env-port", type=int, default=8001, help="Port for the BrowserGym environment.")
     parser.add_argument(
         "--env-mode",

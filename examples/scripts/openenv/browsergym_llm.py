@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
 # ]
 # ///
 
@@ -69,8 +68,8 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from datasets import Dataset
 from browsergym_env import BrowserGymAction, BrowserGymEnv
+from datasets import Dataset
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer

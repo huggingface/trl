@@ -71,6 +71,7 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 
 > [!TIP]
 > It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
+> Note that turning off std-based scaling also removes variance normalization, so update magnitudes depend directly on the raw reward scale and batch composition.
 
 > [!TIP]
 > As shown in [Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221), calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
@@ -179,10 +180,8 @@ While training and evaluating, we record the following reward metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
-- `reward`: The overall average reward after applying reward weights.
-- `reward_std`: The standard deviation of rewards after applying reward weights.  
-  - If `scale_rewards` is `"group"` or `"none"`, this is the average of the per-group standard deviations.
-  - If `scale_rewards` is `"batch"`, this is the standard deviation computed over all rewards in the batch (ignoring groups).
+- `reward`: The overall average reward after summing rewards across functions (unweighted).
+- `reward_std`: The standard deviation of summed rewards across functions (unweighted), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
@@ -594,7 +593,7 @@ RapidFire AI is an open-source experimentation engine that sits on top of TRL an
 ## Agent Training
 
 GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
-This parameter expects a list of Python functions that define the tools available to the agent:
+This parameter expects a list of Python functions (sync or async) that define the tools available to the agent:
 
 ```python
 from trl import GRPOTrainer
@@ -626,8 +625,21 @@ def multiply(a: int, b: int) -> int:
     """
     return a * b
 
+async def async_add(a: int, b: int) -> int:
+    """
+    Asynchronously adds two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The sum of the two integers.
+    """
+    return a + b
+
 trainer = GRPOTrainer(
-    tools=[multiply],
+    tools=[multiply, async_add],
     ...,
 )
 ```

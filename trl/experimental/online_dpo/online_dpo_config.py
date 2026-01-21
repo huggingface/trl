@@ -16,6 +16,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -175,8 +177,8 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -391,6 +393,14 @@ class OnlineDPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__post_init__()
 

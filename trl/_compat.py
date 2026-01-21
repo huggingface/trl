@@ -23,8 +23,7 @@ Each patch should be removed when minimum version requirements eliminate the nee
 import warnings
 
 from packaging.version import Version
-
-from .import_utils import is_vllm_available
+from transformers.utils.import_utils import _is_package_available
 
 
 def _is_package_version_below(package_name: str, version_threshold: str) -> bool:
@@ -33,20 +32,39 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
 
     Args:
         package_name (str): Package name.
-        version_threshold (str): Version upper threshold to compare against.
+        version_threshold (str): Maximum version threshold.
 
     Returns:
         - True if package is installed and version < version_threshold.
         - False if package is not installed or version >= version_threshold.
     """
     try:
-        from transformers.utils.import_utils import _is_package_available
-
         is_available, version = _is_package_available(package_name, return_version=True)
-        if not is_available:
-            return False
+        return is_available and Version(version) < Version(version_threshold)
+    except Exception as e:
+        warnings.warn(
+            f"Failed to check {package_name} version against {version_threshold}: {e}. "
+            f"Compatibility patch may not be applied.",
+            stacklevel=2,
+        )
+        return False
 
-        return Version(version) < Version(version_threshold)
+
+def _is_package_version_at_least(package_name: str, version_threshold: str) -> bool:
+    """
+    Check if installed package version is at least the given threshold.
+
+    Args:
+        package_name (str): Package name.
+        version_threshold (str): Minimum version threshold.
+
+    Returns:
+        - True if package is installed and version >= version_threshold.
+        - False if package is not installed or version < version_threshold.
+    """
+    try:
+        is_available, version = _is_package_available(package_name, return_version=True)
+        return is_available and Version(version) >= Version(version_threshold)
     except Exception as e:
         warnings.warn(
             f"Failed to check {package_name} version against {version_threshold}: {e}. "
@@ -58,7 +76,7 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
 
 def _patch_vllm_logging() -> None:
     """Set vLLM logging level to ERROR by default to reduce noise."""
-    if is_vllm_available():
+    if _is_package_available("vllm"):
         import os
 
         os.environ["VLLM_LOGGING_LEVEL"] = os.getenv("VLLM_LOGGING_LEVEL", "ERROR")
@@ -97,7 +115,7 @@ def _patch_vllm_cached_tokenizer() -> None:
     - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
     - This can be removed when TRL requires vLLM>=0.12.0
     """
-    if _is_package_version_below("vllm", "0.12.0"):
+    if _is_package_version_at_least("transformers", "5.0.0.dev0") and _is_package_version_below("vllm", "0.12.0"):
         try:
             import contextlib
             import copy
@@ -150,24 +168,49 @@ def _patch_vllm_cached_tokenizer() -> None:
 
 def _patch_transformers_hybrid_cache() -> None:
     """
-    Fix HybridCache import compatibility for liger_kernel<=0.6.4.
+    Fix HybridCache import for transformers v5 compatibility.
 
-    - Issue: liger_kernel imports HybridCache from transformers.cache_utils
+    - Issue: liger_kernel and peft import HybridCache from transformers.cache_utils
     - HybridCache removed in https://github.com/huggingface/transformers/pull/43168 (transformers>=5.0.0.dev0)
-    - Fixed in https://github.com/linkedin/Liger-Kernel/pull/1002 (will be released in liger_kernel>=0.6.5)
-    - This patch can be removed when TRL requires liger_kernel>=0.6.5
+    - Fixed in liger_kernel: https://github.com/linkedin/Liger-Kernel/pull/1002 (released in v0.6.5)
+    - Fixed in peft: https://github.com/huggingface/peft/pull/2735 (released in v0.18.0)
+    - This can be removed when TRL requires liger_kernel>=0.6.5 and peft>=0.18.0
     """
-    if _is_package_version_below("liger_kernel", "0.6.5"):
+    if _is_package_version_at_least("transformers", "5.0.0.dev0") and (
+        _is_package_version_below("liger_kernel", "0.6.5") or _is_package_version_below("peft", "0.18.0")
+    ):
         try:
-            import transformers
+            import transformers.cache_utils
+            from transformers.utils.import_utils import _LazyModule
 
-            transformers_version = Version(transformers.__version__)
-            if transformers_version >= Version("5.0.0.dev0"):
-                import transformers.cache_utils as cache_utils
+            Cache = transformers.cache_utils.Cache
 
-                cache_utils.HybridCache = cache_utils.Cache
+            # Patch for liger_kernel: Add HybridCache as an alias for Cache in the cache_utils module
+            transformers.cache_utils.HybridCache = Cache
+
+            # Patch for peft: Patch _LazyModule.__init__ to add HybridCache to transformers' lazy loading structures
+            _original_lazy_module_init = _LazyModule.__init__
+
+            def _patched_lazy_module_init(self, name, *args, **kwargs):
+                _original_lazy_module_init(self, name, *args, **kwargs)
+                if name == "transformers":
+                    # Update _LazyModule's internal structures
+                    if hasattr(self, "_import_structure") and "cache_utils" in self._import_structure:
+                        if "HybridCache" not in self._import_structure["cache_utils"]:
+                            self._import_structure["cache_utils"].append("HybridCache")
+
+                    if hasattr(self, "_class_to_module"):
+                        self._class_to_module["HybridCache"] = "cache_utils"
+
+                    if hasattr(self, "__all__") and "HybridCache" not in self.__all__:
+                        self.__all__.append("HybridCache")
+
+                    self.HybridCache = Cache
+
+            _LazyModule.__init__ = _patched_lazy_module_init
+
         except Exception as e:
-            warnings.warn(f"Failed to patch liger_kernel HybridCache compatibility: {e}", stacklevel=2)
+            warnings.warn(f"Failed to patch transformers HybridCache compatibility: {e}", stacklevel=2)
 
 
 # Apply vLLM patches

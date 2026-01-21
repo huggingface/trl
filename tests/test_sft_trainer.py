@@ -1191,14 +1191,14 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    def test_train_with_set_chat_template_from_path(self):
+    def test_train_with_set_chat_template_from_path(self, lazy_shared_datadir):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
+            chat_template_path=str(lazy_shared_datadir / "template.jinja"),
             report_to="none",
         )
         # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
@@ -1357,10 +1357,16 @@ class TestSFTTrainer(TrlTestCase):
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("4.57.0"),
-                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__) >= Version("5.0.0.dev0"),
+                        reason="Blocked by upstream transformers bug (transformers#43334)",
+                    ),
+                ],
             ),
         ],
     )

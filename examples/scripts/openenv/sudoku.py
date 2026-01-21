@@ -12,6 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio",
+#     "kernels",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/openenv/sudoku",
+# ]
+# ///
+
 """
 GRPO training for Sudoku with TextArena environment.
 
@@ -109,9 +119,7 @@ def parse_args() -> argparse.Namespace:
     # Environment
     parser.add_argument("--env-host", type=str, default="https://openenv-sudoku.hf.space")
     parser.add_argument("--env-port", type=int, default=8001)
-    parser.add_argument(
-        "--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space"
-    )
+    parser.add_argument("--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space")
     parser.add_argument("--env-image", type=str, default="textarena-env:latest")
 
     # Prompts
