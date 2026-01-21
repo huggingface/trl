@@ -137,6 +137,9 @@ class OnlineDPOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
 
         > Other parameters
 
@@ -365,6 +368,13 @@ class OnlineDPOConfig(TrainingArguments):
             "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set "
             "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
             "launching the vLLM server via the `--vllm_tensor_parallel_size` flag.",
+        },
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory "
+            "usage low, but waking the engine adds host–device transfer latency."
         },
     )
     ds3_gather_for_generation: bool = field(
