@@ -490,7 +490,7 @@ class OnlineDPOTrainer(BaseTrainer):
 
                 self.llm = LLM(**vllm_kwargs)
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
             # vLLM specific sampling arguments
@@ -782,7 +782,7 @@ class OnlineDPOTrainer(BaseTrainer):
         if self.args.vllm_enable_sleep_mode:
             # wake up colocated vLLM instances if needed
             torch.cuda.empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up()
+            self.llm.wake_up(tags=["weights"])
 
         # Update model weights if needed - only after gradient accumulation completes
         if self.state.global_step != self._last_loaded_step:
@@ -806,12 +806,15 @@ class OnlineDPOTrainer(BaseTrainer):
         else:
             vllm_inputs = prompts_text
 
+        if self.args.vllm_enable_sleep_mode:
+            self.llm.wake_up(tags=["kv_cache"])
+
         outputs = self.llm.generate(vllm_inputs, self.generation_config, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
         if self.args.vllm_enable_sleep_mode:
-            self.llm.sleep(level=1)
+            self.llm.sleep(level=2)
 
         return completion_ids, prompt_ids
 
