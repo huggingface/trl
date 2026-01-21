@@ -2137,6 +2137,8 @@ class GRPOTrainer(BaseTrainer):
             output["old_per_token_logps"] = old_per_token_logps
         if self.use_vllm and self.vllm_importance_sampling_correction:
             output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
+        if sampling_per_token_logps is not None:
+            output["sampling_per_token_logps"] = sampling_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in forward_kwargs:
@@ -2220,7 +2222,7 @@ class GRPOTrainer(BaseTrainer):
     def get_off_policy_mask(
         advantages: torch.Tensor,
         per_token_logps: torch.Tensor,
-        old_per_token_logps: torch.Tensor,
+        sampling_per_token_logps: torch.Tensor,
         mask: torch.Tensor,
         off_policy_threshold: float,
     ) -> torch.Tensor:
@@ -2228,10 +2230,10 @@ class GRPOTrainer(BaseTrainer):
         Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper. Returns a (B, 1) tensor where 1.0 indicates
         "Keep" and 0.0 indicates "Drop".
         """
-        # K1 estimator: log(pi_old) - log(pi_theta)
-        k1_divergence = old_per_token_logps - per_token_logps.detach()
+        # forward KL div: log(pi_old) - log(pi_theta)
+        kl_div = sampling_per_token_logps - per_token_logps.detach()
         # Sequence-level Mean KL (ignoring prompt+padding)
-        seq_kl_sum = (k1_divergence * mask).sum(dim=1, keepdim=True)
+        seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
         # Keep if (Advantage >= 0) OR (KL <= delta)
         is_pos_adv = advantages >= 0
@@ -2282,10 +2284,16 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         if self.off_policy_mask_threshold is not None:
+            # OPSM should use inference-time logprobs to detect both sources of off-policyness:
+            # 1. Drift from gradient updates (always present)
+            # 2. Drift from training-inference mismatch (when using vLLM)
+            # When using vLLM, prioritize sampling_per_token_logps, otherwise use old_per_token_logps
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
                 per_token_logps=per_token_logps,
-                old_per_token_logps=old_per_token_logps,
+                sampling_per_token_logps=sampling_per_token_logps,
                 mask=mask,
                 off_policy_threshold=self.off_policy_mask_threshold,
             )
