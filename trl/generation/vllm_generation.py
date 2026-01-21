@@ -71,7 +71,7 @@ class VLLMGeneration:
         server_host: str = "localhost",
         server_port: int = 8000,
         group_port: int | None = None,
-        server_timeout: int = 600,
+        server_timeout: float = 240.0,
         # Generation configuration
         generation_kwargs: dict | None = None,
         temperature: float | None = None,
