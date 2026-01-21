@@ -287,14 +287,13 @@ class VLLMGeneration:
     def _sync_fsdp2_params_to_vllm(self, module):
         """FSDP2-specific parameter synchronization (lines 1025-1046)."""
         accelerator = self.accelerator
-        model = self.model
 
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
             # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
-            if is_peft_model(model) and model.prefix in name:
+            if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
             if "original_module" in name:
