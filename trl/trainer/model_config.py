@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -31,7 +29,7 @@ class ModelConfig:
             Model checkpoint for weights initialization.
         model_revision (`str`, *optional*, defaults to `"main"`):
             Specific model version to use. It can be a branch name, a tag name, or a commit id.
-        dtype (`Literal["auto", "bfloat16", "float16", "float32"]`, *optional*):
+        dtype (`Literal["auto", "bfloat16", "float16", "float32"]`, *optional*, defaults to `"float32"`):
             Override the default `torch.dtype` and load the model under this dtype. Possible values are
 
                 - `"bfloat16"`: `torch.bfloat16`
@@ -44,8 +42,8 @@ class ModelConfig:
             be set to `True` for repositories you trust and in which you have read the code, as it will execute code
             present on the Hub on your local machine.
         attn_implementation (`str`, *optional*):
-            Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in which case
-            you must install this manually by running `pip install flash-attn --no-build-isolation`.
+            Which attention implementation to use. More information in the [Kernels Hub Integrations
+            Guide](kernels_hub).
         use_peft (`bool`, *optional*, defaults to `False`):
             Whether to use PEFT for training.
         lora_r (`int`, *optional*, defaults to `16`):
@@ -54,9 +52,9 @@ class ModelConfig:
             LoRA alpha.
         lora_dropout (`float`, *optional*, defaults to `0.05`):
             LoRA dropout.
-        lora_target_modules (`Union[str, list[str]]`, *optional*):
+        lora_target_modules (`str | list[str]`, *optional*):
             LoRA target modules.
-        lora_target_parameters (`Union[str, list[str]]`, *optional*):
+        lora_target_parameters (`str | list[str]`, *optional*):
             List of target parameters for LoRA.
         lora_modules_to_save (`list[str]`, *optional*):
             Model layers to unfreeze & train.
@@ -82,7 +80,7 @@ class ModelConfig:
             Whether to use nested quantization.
     """
 
-    model_name_or_path: Optional[str] = field(
+    model_name_or_path: str | None = field(
         default=None,
         metadata={"help": "Model checkpoint for weights initialization."},
     )
@@ -90,10 +88,10 @@ class ModelConfig:
         default="main",
         metadata={"help": "Specific model version to use. It can be a branch name, a tag name, or a commit id."},
     )
-    dtype: Optional[str] = field(
-        default=None,
+    dtype: str | None = field(
+        default="float32",
         metadata={
-            "help": "Override the default `torch.dtype` and load the model under this dtype.",
+            "help": "Override the default `torch.dtype` and load the model under this dtype. It defaults to `'float32'`.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
@@ -105,7 +103,7 @@ class ModelConfig:
             "execute code present on the Hub on your local machine."
         },
     )
-    attn_implementation: Optional[str] = field(
+    attn_implementation: str | None = field(
         default=None,
         metadata={
             "help": "Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in "
@@ -128,15 +126,15 @@ class ModelConfig:
         default=0.05,
         metadata={"help": "LoRA dropout."},
     )
-    lora_target_modules: Optional[list[str]] = field(
+    lora_target_modules: list[str] | None = field(
         default=None,
         metadata={"help": "LoRA target modules."},
     )
-    lora_target_parameters: Optional[list[str]] = field(
+    lora_target_parameters: list[str] | None = field(
         default=None,
         metadata={"help": "List of target parameters for LoRA."},
     )
-    lora_modules_to_save: Optional[list[str]] = field(
+    lora_modules_to_save: list[str] | None = field(
         default=None,
         metadata={"help": "Model layers to unfreeze & train."},
     )
@@ -177,25 +175,14 @@ class ModelConfig:
         default=False,
         metadata={"help": "Whether to use nested quantization."},
     )
-    # Deprecated params
-    torch_dtype: Optional[str] = field(
+    bnb_4bit_quant_storage: str | None = field(
         default=None,
-        metadata={
-            "help": "Override the default `torch.dtype` and load the model under this dtype.",
-            "choices": ["auto", "bfloat16", "float16", "float32"],
-        },
+        metadata={"help": "Quantization storage dtype"},
     )
 
     def __post_init__(self):
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
-
-        if self.torch_dtype and not self.dtype:
-            warnings.warn(
-                "`torch_dtype` is deprecated and will be removed in version 0.27.0, please use `dtype` instead.",
-                DeprecationWarning,
-            )
-            self.dtype = self.torch_dtype
 
         if hasattr(self.lora_target_modules, "__len__") and len(self.lora_target_modules) == 1:
             self.lora_target_modules = self.lora_target_modules[0]

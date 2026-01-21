@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,16 +34,8 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import (
-    ModelConfig,
-    PPOConfig,
-    PPOTrainer,
-    ScriptArguments,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl import ModelConfig, ScriptArguments, get_kbit_device_map, get_peft_config, get_quantization_config
+from trl.experimental.ppo import PPOConfig, PPOTrainer
 
 
 # Enable logging in a Hugging Face Space
@@ -106,22 +98,26 @@ if __name__ == "__main__":
         model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     value_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
+        training_args.reward_model_path,
+        trust_remote_code=model_args.trust_remote_code,
+        num_labels=1,
+        **model_kwargs,
     )
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
+        training_args.reward_model_path,
+        trust_remote_code=model_args.trust_remote_code,
+        num_labels=1,
+        **model_kwargs,
     )
     policy = AutoModelForCausalLM.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
+        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
 
     peft_config = get_peft_config(model_args)
     if peft_config is None:
         ref_policy = AutoModelForCausalLM.from_pretrained(
-            training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
+            training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
         )
     else:
         ref_policy = None

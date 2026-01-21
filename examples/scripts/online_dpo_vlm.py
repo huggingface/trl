@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -87,22 +87,19 @@ import os
 import torch
 import transformers
 from datasets import load_dataset
-from latex2sympy2_extended import NormalizationConfig
-from math_verify import LatexExtractionConfig, parse, verify
 from transformers import AutoConfig, AutoProcessor, GenerationConfig
 
 from trl import (
     LogCompletionsCallback,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
-from trl.rewards import think_format_reward
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
+from trl.rewards import accuracy_reward, think_format_reward
 
 
 # Enable logging in a Hugging Face Space
@@ -191,54 +188,6 @@ if __name__ == "__main__":
 
     train_dataset = dataset["train"]
     eval_dataset = dataset["test"] if training_args.eval_strategy != "no" else None
-
-    ################
-    # Reward Function for Training (same as GRPO VLM)
-    ################
-    def accuracy_reward(completions, solution: list[str], **kwargs):
-        """Reward function that checks if the completion matches the ground truth.
-        - If both gold and prediction are parseable → use math verification.
-        - If not parseable → compare as normalized text.
-        """
-        rewards = []
-        contents = [completion[0]["content"] for completion in completions]
-        for content, sol in zip(contents, solution):
-            try:
-                gold_parsed = parse(sol, extraction_mode="first_match")
-            except Exception:
-                gold_parsed = []
-
-            if len(gold_parsed) != 0:
-                # Try parsing predicted answer too
-                try:
-                    answer_parsed = parse(
-                        content,
-                        extraction_config=[
-                            LatexExtractionConfig(
-                                normalization_config=NormalizationConfig(
-                                    nits=False,
-                                    malformed_operators=False,
-                                    basic_latex=True,
-                                    boxed="all",
-                                    units=True,
-                                ),
-                                boxed_match_priority=0,
-                                try_extract_without_anchor=False,
-                            )
-                        ],
-                        extraction_mode="first_match",
-                    )
-                    reward = float(verify(gold_parsed, answer_parsed))
-                except Exception as e:
-                    print(f"verify failed: {e}, answer: {content}, gold: {sol}")
-                    reward = None
-            else:
-                # fallback to text match
-                reward = float(content.strip().lower() == sol.strip().lower())
-
-            rewards.append(reward)
-
-        return rewards
 
     ################
     # Training

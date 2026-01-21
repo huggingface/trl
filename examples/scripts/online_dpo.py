@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,20 +56,16 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
-    HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
-    OpenAIPairwiseJudge,
-    PairRMJudge,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 
 # Enable logging in a Hugging Face Space
@@ -131,8 +127,6 @@ if __name__ == "__main__":
         trust_remote_code=model_args.trust_remote_code,
         **model_kwargs,
     )
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 

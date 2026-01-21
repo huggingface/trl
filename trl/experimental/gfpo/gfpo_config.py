@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,14 +13,13 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from ...trainer.grpo_config import GRPOConfig as _GRPOConfig
 
 
 @dataclass
 class GFPOConfig(_GRPOConfig):
-    num_remains_in_group: Optional[int] = field(
+    num_remains_in_group: int | None = field(
         default=None,
         metadata={
             "help": "number inputs remains after group filter function, `'num_remains_in_group'` must be >=2 if given."

@@ -14,7 +14,7 @@ This post-training method was contributed by [Michael Noukhovitch](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`experimental.judges.PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
@@ -28,7 +28,8 @@ Below is the script to train the model:
 ```python
 # train_online_dpo.py
 from datasets import load_dataset
-from trl import OnlineDPOConfig, OnlineDPOTrainer, PairRMJudge
+from trl.experimental.judges import PairRMJudge
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
@@ -65,7 +66,7 @@ The best programming language depends on your specific needs and priorities. Som
 
 ## Expected dataset type
 
-Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`experimental.online_dpo.OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -74,7 +75,7 @@ Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (u
 Instead of a judge, you can chose to use a reward model -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use. Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
 
 ```diff
-- from trl import PairRMJudge
+- from trl.experimental.judges import PairRMJudge
 + from transformers import AutoModelForSequenceClassification
 
 - judge = PairRMJudge()
@@ -92,7 +93,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
 
 ### Encourage EOS token generation
 
-When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`OnlineDPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`OnlineDPOConfig`]:
+When using a reward model, we may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`experimental.online_dpo.OnlineDPOConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`experimental.online_dpo.OnlineDPOConfig`]:
 
 ```python
 training_args = OnlineDPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
@@ -146,7 +147,7 @@ While training and evaluating, we record the following reward metrics. Here is a
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/contain_eos_token`: The fraction of completions which contain an EOS token.
-* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`OnlineDPOConfig`].
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`experimental.online_dpo.OnlineDPOConfig`].
 
 ## Benchmark experiments
 
@@ -260,11 +261,11 @@ The online DPO checkpoint gets increasingly more win rate as we scale up the mod
 
 ## OnlineDPOTrainer
 
-[[autodoc]] OnlineDPOTrainer
+[[autodoc]] experimental.online_dpo.OnlineDPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## OnlineDPOConfig
 
-[[autodoc]] OnlineDPOConfig
+[[autodoc]] experimental.online_dpo.OnlineDPOConfig

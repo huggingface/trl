@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import sys
 from typing import TYPE_CHECKING
 
@@ -20,12 +19,14 @@ from ..import_utils import _LazyModule
 
 
 _import_structure = {
+    "accuracy_rewards": ["accuracy_reward", "reasoning_accuracy_reward"],
     "format_rewards": ["think_format_reward"],
     "other_rewards": ["get_soft_overlong_punishment"],
 }
 
 
 if TYPE_CHECKING:
+    from .accuracy_rewards import accuracy_reward, reasoning_accuracy_reward
     from .format_rewards import think_format_reward
     from .other_rewards import get_soft_overlong_punishment
 

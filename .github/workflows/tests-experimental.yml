@@ -1,0 +1,70 @@
+name: Tests (experimental)
+
+on:
+  pull_request:
+    paths:
+      # Run only when relevant files are modified
+      - "trl/experimental/**"
+      - "tests/experimental/**"
+
+env:
+  TQDM_DISABLE: 1
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  TRL_EXPERIMENTAL_SILENCE: 1
+
+jobs:
+  check_code_quality:
+    name: Check code quality
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.13
+      - uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files
+
+  tests:
+    name: Tests (experimental)
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.13
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install ".[dev]"
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test_experimental

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,43 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import dataclasses
 import importlib.resources as pkg_resources
 import json
 import os
 import random
 import socket
-import warnings
+import threading
 from collections.abc import Mapping, Sequence, Sized
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
-from typing import Any, Literal, Optional, TypeVar, Union
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
-from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
     BitsAndBytesConfig,
-    EvalPrediction,
-    GenerationConfig,
+    PretrainedConfig,
     PreTrainedModel,
-    PreTrainedTokenizerBase,
-    TrainerState,
-    TrainingArguments,
     is_comet_available,
 )
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
-    ModelOutput,
     is_peft_available,
     is_rich_available,
     is_torch_mlu_available,
@@ -69,109 +66,10 @@ if is_comet_available():
     import comet_ml
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig
+    from peft import LoraConfig, PeftConfig, PeftModel
 
 
 logger = logging.get_logger(__name__)
-
-
-@dataclass
-class DataCollatorForChatML:
-    """
-    Data collator for ChatML format datasets.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    ignore_index: int = -100
-    max_length: int = None
-    prompt_key: str = "prompt"
-    messages_key: str = "messages"
-
-    def __post_init__(self):
-        if self.tokenizer.pad_token_id is None:
-            raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
-        if self.max_length is None:
-            # set a sensible default
-            self.max_length = min(self.tokenizer.model_max_length, 1024)
-
-    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        input_ids = []
-        attention_mask = []
-        prompts_input_ids = []
-        prompt_attention_mask = []
-        labels = []
-
-        for example in examples:
-            formatted_prompt = example.get(self.prompt_key, None)
-            if formatted_prompt is None:
-                prompt = example[self.messages_key][:-1]
-                formatted_prompt = self.tokenizer.apply_chat_template(
-                    prompt, tokenize=False, add_generation_prompt=True
-                )
-
-            if "input_ids" not in example:
-                message = example[self.messages_key]
-                formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=False
-                )
-                tokenized_message = self.tokenizer(
-                    formatted_message,
-                    truncation=True,
-                    max_length=self.max_length,
-                    padding=False,
-                    return_tensors=None,
-                    add_special_tokens=False,
-                )
-                input_ids.append(tokenized_message["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(tokenized_message["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
-            else:
-                input_ids.append(example["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(example["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(example["input_ids"]))
-
-            tokenized_prompt = self.tokenizer(
-                formatted_prompt,
-                truncation=True,
-                max_length=len(input_ids[-1]),
-                padding=False,
-                return_tensors=None,
-                add_special_tokens=False,
-            )
-
-            prompts_input_ids.append(tokenized_prompt["input_ids"])
-            prompt_attention_mask.append(tokenized_prompt["attention_mask"])
-
-            # Create the labels that will have all but the completion tokens of the example["input_ids"] set to ignore_index
-            label = [self.ignore_index] * len(input_ids[-1])
-            completion_start_idx = len(tokenized_prompt["input_ids"])
-            label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
-            labels.append(label)
-
-        # convert to list of tensors and pad
-        input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
-        attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
-        labels = [torch.tensor(label, dtype=torch.long) for label in labels]
-        input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-        attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
-        labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
-
-        prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
-        prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
-        prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-        prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-            "prompts": prompts_input_ids,
-            "prompt_attention_mask": prompt_attention_mask,
-        }
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -194,7 +92,7 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = None) -> None:
+def ensure_master_addr_port(addr: str | None = None, port: int | None = None) -> None:
     """
     Ensure `MASTER_ADDR`/`MASTER_PORT` are set safely.
 
@@ -215,102 +113,11 @@ def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = No
     os.environ["MASTER_PORT"] = str(_find_free_port() if port in (None, 0) else port)
 
 
-@dataclass
-class RewardDataCollatorWithPadding:
-    # docstyle-ignore
-    r"""
-    Reward DataCollator class that pads the inputs to the maximum length of the batch.
-
-    > [!WARNING]
-    > This class is deprecated and will be removed in version 0.27.0. Please use
-    `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
-
-    Args:
-        tokenizer (`PreTrainedTokenizerBase`):
-            The tokenizer used for encoding the data.
-        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
-            padding_strategy to pass to the tokenizer.
-        pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
-            If set will pad the sequence to a multiple of the provided value.
-        return_tensors (`str`, `optional`, defaults to `"pt"`):
-            The tensor type to use.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str] = True
-    pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
-
-    def __init__(self, *args, **kwargs) -> None:
-        warnings.warn(
-            "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
-            "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
-            DeprecationWarning,
-        )
-        super().__init__(*args, **kwargs)
-
-    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        features_chosen = []
-        features_rejected = []
-        margin = []
-        # check if we have a margin. If we do, we need to batch it as well
-        has_margin = "margin" in features[0]
-        for feature in features:
-            # check if the keys are named as expected
-            if (
-                "input_ids_chosen" not in feature
-                or "input_ids_rejected" not in feature
-                or "attention_mask_chosen" not in feature
-                or "attention_mask_rejected" not in feature
-            ):
-                raise ValueError(
-                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
-                )
-
-            features_chosen.append(
-                {
-                    "input_ids": feature["input_ids_chosen"],
-                    "attention_mask": feature["attention_mask_chosen"],
-                }
-            )
-            features_rejected.append(
-                {
-                    "input_ids": feature["input_ids_rejected"],
-                    "attention_mask": feature["attention_mask_rejected"],
-                }
-            )
-            if has_margin:
-                margin.append(feature["margin"])
-        batch_chosen = self.tokenizer.pad(
-            features_chosen,
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch_rejected = self.tokenizer.pad(
-            features_rejected,
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch = {
-            "input_ids_chosen": batch_chosen["input_ids"],
-            "attention_mask_chosen": batch_chosen["attention_mask"],
-            "input_ids_rejected": batch_rejected["input_ids"],
-            "attention_mask_rejected": batch_rejected["attention_mask"],
-            "return_loss": True,
-        }
-        if has_margin:
-            margin = torch.tensor(margin, dtype=torch.float)
-            batch["margin"] = margin
-        return batch
-
-
 def pad(
     tensors: list[torch.Tensor],
     padding_value: int = 0,
     padding_side: str = "right",
-    pad_to_multiple_of: Optional[int] = None,
+    pad_to_multiple_of: int | None = None,
 ) -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
@@ -370,90 +177,6 @@ def pad(
         output[i][slices] = t
 
     return output
-
-
-@dataclass
-class DPODataCollatorWithPadding:
-    r"""
-    DPO DataCollator class that pads the tokenized inputs to the maximum length of the batch.
-
-    Args:
-        pad_token_id (`int` defaults to 0):
-            The tokenizer's pad_token_id.
-        label_pad_token_id (`int`, defaults to -100):
-            The label used for masking.
-        is_encoder_decoder (`bool` or `None`, `optional`, defaults to `None`):
-            Whether you model has an encoder_decoder architecture.
-    """
-
-    pad_token_id: int = 0
-    label_pad_token_id: int = -100
-    is_encoder_decoder: Optional[bool] = False
-
-    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        # first, pad everything to the same length
-        padded_batch = {}
-        for k in features[0].keys():
-            if k.endswith(("_input_ids", "_attention_mask", "_labels", "_pixel_values")):
-                if self.is_encoder_decoder:
-                    to_pad = [torch.LongTensor(ex[k]) for ex in features]
-
-                    if (k.startswith("prompt")) and (k.endswith("input_ids")):
-                        if self.pad_token_id is None:
-                            raise ValueError(
-                                "Padding is enabled, but the tokenizer is not configured with a padding token."
-                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
-                                " before calling the trainer."
-                            )
-                        padding_value = self.pad_token_id
-                    elif k.endswith("_attention_mask"):
-                        padding_value = 0
-                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
-                        padding_value = self.label_pad_token_id
-                    else:
-                        raise ValueError(f"Unexpected key in batch '{k}'")
-                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                else:
-                    # Set padding value based on the key
-                    if k.endswith("_input_ids"):
-                        if self.pad_token_id is None:
-                            raise ValueError(
-                                "Padding is enabled, but the tokenizer is not configured with a padding token."
-                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
-                                " before calling the trainer."
-                            )
-                        padding_value = self.pad_token_id
-                    elif k.endswith("_labels"):
-                        padding_value = self.label_pad_token_id
-                    elif k.endswith("_attention_mask"):
-                        padding_value = 0
-                    elif k.endswith("_pixel_values"):
-                        padding_value = 0  # TODO: check if this is correct
-                    else:
-                        raise ValueError(f"Unexpected key in batch '{k}'")
-
-                    # Set padding side based on the key
-                    if k in ["prompt_input_ids", "prompt_attention_mask"]:
-                        padding_side = "left"
-                    else:
-                        padding_side = "right"
-
-                    # Set the dtype
-                    if k.endswith("_pixel_values"):
-                        dtype = torch.float32  # will be downcasted if necessary by the Trainer
-                    else:
-                        dtype = torch.int64
-
-                    # Convert to tensor and pad
-                    to_pad = [torch.tensor(ex[k], dtype=dtype) for ex in features]
-                    padded_batch[k] = pad(to_pad, padding_value=padding_value, padding_side=padding_side)
-            elif k.endswith("_logps"):
-                # the cached reference model logprobs
-                padded_batch[k] = torch.tensor([ex[k] for ex in features])
-            else:
-                padded_batch[k] = [ex[k] for ex in features]
-
-        return padded_batch
 
 
 @dataclass
@@ -536,47 +259,7 @@ def get_global_statistics(
     return global_mean.to(device), global_var.to(device), count.item()
 
 
-def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
-    predictions, labels = eval_pred
-    if predictions.ndim == 3:
-        # Token classification task. Shapes are (batch_size, seq_len, num_labels) and (batch_size, seq_len)
-        # Used to compute the accuracy in the prm_trainer.
-        predictions = np.argmax(predictions, axis=2)
-
-        # Flatten the predictions and labels to remove the ignored tokens.
-        predictions = np.array(
-            [p for prediction, label in zip(predictions, labels) for (p, lbl) in zip(prediction, label) if lbl != -100]
-        )
-        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
-
-    else:
-        # Here, predictions is rewards_chosen and rewards_rejected. Shapes are (batch_size, 2) and (batch_size,)
-        # We want to see how much of the time rewards_chosen > rewards_rejected.
-        equal_mask = predictions[:, 0] == predictions[:, 1]
-        equal_predictions_count = int(equal_mask.sum())
-
-        if equal_predictions_count > 0:
-            # Before using the logger, the accelerate state must be initialized. It'susually the case when using this
-            # function inside a Trainer, but it may not be the case otherwise, in particular when unit testing.
-            PartialState()
-
-            logger.warning(
-                f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
-                "for both options are equal. These instances are ignored in the accuracy computation.",
-            )
-
-        # Filter out equal predictions
-        predictions = predictions[~equal_mask]
-        labels = labels[~equal_mask]
-
-        # Use the remaining predictions for accuracy calculation
-        predictions = np.argmax(predictions, axis=1)
-
-    accuracy = np.array(predictions == labels, dtype=float).mean().item()
-    return {"accuracy": accuracy}
-
-
-def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float], dim: int = -1) -> torch.Tensor:
+def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float, dim: int = -1) -> torch.Tensor:
     if tensor.size(dim) >= length:
         return tensor
     else:
@@ -597,31 +280,14 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
             module.p = 0
 
 
-def exact_div(a, b, custom_error_message=""):
-    q = a // b
-    if a != q * b:
-        raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
-    return q
-
-
-def peft_module_casting_to_bf16(model):
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
-            module = module.to(torch.float32)
-        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
-            if hasattr(module, "weight"):
-                if module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
-
-
-def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
+def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=model_args.dtype,  # For consistency with model weights, we use the same value as `dtype`
             bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_args.dtype,
+            bnb_4bit_quant_storage=model_args.bnb_4bit_quant_storage,
         )
     elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -633,14 +299,14 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
     return quantization_config
 
 
-def get_kbit_device_map() -> Optional[dict[str, int]]:
+def get_kbit_device_map() -> dict[str, int] | None:
     if torch.cuda.is_available() or is_torch_xpu_available():
         return {"": PartialState().local_process_index}
     else:
         return None
 
 
-def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
+def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     if model_args.use_peft is False:
         return None
 
@@ -654,6 +320,7 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
         task_type=model_args.lora_task_type,
         r=model_args.lora_r,
         target_modules=model_args.lora_target_modules,
+        target_parameters=model_args.lora_target_parameters,
         lora_alpha=model_args.lora_alpha,
         lora_dropout=model_args.lora_dropout,
         bias="none",
@@ -686,335 +353,6 @@ def cap_exp(value, cap=-1):
     # Cap the exponent value below the upper-bound to avoid overflow, before calling torch.exp
     cap = get_exp_cap(value) if cap < 0 else cap
     return torch.exp(torch.clamp(value, max=cap))
-
-
-def print_rich_table(df: pd.DataFrame) -> None:
-    if not is_rich_available():
-        raise ImportError(
-            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
-        )
-    console = Console()
-    table = Table(show_lines=True)
-    for column in df.columns:
-        table.add_column(column)
-    for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
-    console.print(table)
-
-
-SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
-# SIMPLE_SFT_CHAT_TEMPLATE simply ends things with an EOS token, this helps the SFT model learn to end the completions with EOS tokens
-
-SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
-
-
-@dataclass
-class OnlineTrainerState(TrainerState):
-    """
-    Training state for online/on-policy trainers.
-
-    Extends [`~transformers.TrainerState`] with an `episode` counter to track the current rollout/episode.
-
-    Args:
-        episode (`int`, defaults to 0): Zero-based episode index.
-    """
-
-    episode: int = 0
-
-
-@dataclass
-class OnPolicyConfig(TrainingArguments):
-    r"""
-    Base configuration class for on-policy trainers.
-
-    This class includes only the parameters that are specific to some on-policy training. For a full list of training
-    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
-    class may differ from those in [`~transformers.TrainingArguments`].
-
-    Using [`~transformers.HfArgumentParser`] we can turn this class into
-    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
-    command line.
-
-    Parameters:
-        run_name (`str`, *optional*):
-            Name of the run.
-        dataset_num_proc (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        num_mini_batches (`int`, *optional*, defaults to `1`):
-            Number of minibatches to split a batch into.
-        total_episodes (`int`, *optional*):
-            Total number of episodes in the dataset.
-        local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
-            Per rank no grad forward pass in the rollout phase.
-        num_sample_generations (`int`, *optional*, defaults to `10`):
-            Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
-        response_length (`int`, *optional*, defaults to `53`):
-            Length of the response.
-        stop_token (`str`, *optional*):
-            Specifies the stop token to use for text generation. This parameter is mutually exclusive with
-            `stop_token_id`.
-
-            - `None`: No stop token is applied, unless `stop_token_id` is specified.
-            - `'eos'`: Uses the tokenizer's `eos_token`.
-
-        stop_token_id (`int`, *optional*):
-            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
-            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
-        temperature (`float`, *optional*, defaults to `0.7`):
-            Sampling temperature.
-        missing_eos_penalty (`float`, *optional*):
-            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
-            generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
-            value.
-        sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
-            Path to the SFT model.
-        world_size (`int`, *optional*):
-            Number of processes (GPUs) to use for the training.
-        num_total_batches (`int`, *optional*):
-            Number of total batches to train.
-        micro_batch_size (`int`, *optional*):
-            Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
-        local_batch_size (`int`, *optional*):
-            Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
-        batch_size (`int`, *optional*):
-            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` *
-            `gradient_accumulation_steps`).
-        local_mini_batch_size (`int`, *optional*):
-            Mini batch size per GPU.
-        mini_batch_size (`int`, *optional*):
-            Mini batch size across GPUs.
-        push_to_hub (`bool`, *optional*, defaults to `False`):
-            Whether to push the model to the Hub after training.
-    """
-
-    # Parameters whose default values are overridden from TrainingArguments
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
-
-    run_name: Optional[str] = field(
-        default=None,
-        metadata={"help": "Name of the run."},
-    )
-    dataset_num_proc: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    num_mini_batches: int = field(
-        default=1,
-        metadata={"help": "Number of minibatches to split a batch into."},
-    )
-    total_episodes: Optional[int] = field(
-        default=None,
-        metadata={"help": "Total number of episodes in the dataset."},
-    )
-    local_rollout_forward_batch_size: int = field(
-        default=64,
-        metadata={"help": "Per rank no grad forward pass in the rollout phase."},
-    )
-    num_sample_generations: int = field(
-        default=10,
-        metadata={
-            "help": "Number of debugging samples generations (i.e., `generate_completions` calls) throughout training."
-        },
-    )
-    response_length: int = field(
-        default=53,
-        metadata={"help": "Length of the response."},
-    )
-    stop_token: Optional[Literal["eos"]] = field(
-        default=None,
-        metadata={
-            "help": "Specifies the stop token to use for text generation. This parameter is mutually exclusive with "
-            "`stop_token_id`."
-        },
-    )
-    stop_token_id: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
-            "applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`."
-        },
-    )
-    temperature: float = field(
-        default=0.7,
-        metadata={"help": "Sampling temperature."},
-    )
-    missing_eos_penalty: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
-            "encourage to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be "
-            "a positive value."
-        },
-    )
-    sft_model_path: str = field(
-        default="EleutherAI/pythia-160m",
-        metadata={"help": "Path to the SFT model."},
-    )
-    world_size: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of processes (GPUs) to use for the training."},
-    )
-    num_total_batches: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of total batches to train."},
-    )
-    micro_batch_size: Optional[int] = field(
-        default=None,
-        metadata={"help": "Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)."},
-    )
-    local_batch_size: Optional[int] = field(
-        default=None,
-        metadata={"help": "Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)."},
-    )
-    batch_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * "
-            "`gradient_accumulation_steps`)."
-        },
-    )
-    local_mini_batch_size: Optional[int] = field(
-        default=None,
-        metadata={"help": "Mini batch size per GPU."},
-    )
-    mini_batch_size: Optional[int] = field(
-        default=None,
-        metadata={"help": "Mini batch size across GPUs."},
-    )
-    push_to_hub: bool = field(
-        default=False,
-        metadata={"help": "Whether to push the model to the Hub after training."},
-    )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()
-
-
-def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
-    """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving the position of the
-    first True in each "row".
-
-    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
-
-    Args:
-        bools (`torch.Tensor`):
-            An N-dimensional boolean tensor.
-        dtype (`torch.dtype`, optional):
-            The desired data type of the output tensor. Defaults to `torch.long`.
-
-    Returns:
-        `torch.Tensor`:
-            An (N-1)-dimensional tensor of integers indicating the position of the first True in each row. If no True
-            value is found in a row, returns the length of the row.
-    """
-    row_len = bools.size(-1)
-    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
-    return torch.min(zero_or_index, dim=-1).values
-
-
-def get_reward(
-    model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Computes the reward logits and the rewards for a given model and query responses.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model used to compute the reward logits.
-        query_responses (`torch.Tensor`):
-            The tensor containing the query responses.
-        pad_token_id (`int`):
-            The token ID representing the pad token.
-        context_length (`int`):
-            The length of the context in the query responses.
-
-    Returns:
-        tuple:
-            - `reward_logits` (`torch.Tensor`):
-                The logits for the reward model.
-            - `final_rewards` (`torch.Tensor`):
-                The final rewards for each query response.
-            - `sequence_lengths` (`torch.Tensor`):
-                The lengths of the sequences in the query responses.
-    """
-    attention_mask = query_responses != pad_token_id
-    position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-    lm_backbone = getattr(model, model.base_model_prefix)
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    output = lm_backbone(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-        use_cache=False,  # otherwise mistral-based RM would error out
-    )
-    reward_logits = model.score(output.hidden_states[-1])
-    sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
-    # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
-    return (
-        reward_logits,
-        reward_logits[
-            torch.arange(reward_logits.size(0), device=reward_logits.device),
-            sequence_lengths,
-        ].squeeze(-1),
-        sequence_lengths,
-    )
-
-
-def forward(
-    model: torch.nn.Module,
-    query_responses: torch.Tensor,
-    pad_token_id: int,
-) -> ModelOutput:
-    """
-    Performs a forward pass through the model with the given query responses and pad token ID.
-
-    Args:
-        model (`torch.nn.Module`):
-            The model to perform the forward pass.
-        query_responses (`torch.Tensor`):
-            The tensor containing the query responses.
-        pad_token_id (`int`):
-            The token ID representing the pad token.
-
-    Returns:
-        `ModelOutput`:
-            The output of the model, including hidden states.
-    """
-    attention_mask = query_responses != pad_token_id
-    position_ids = attention_mask.cumsum(1) - attention_mask.long()
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    return model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-    )
 
 
 def prepare_deepspeed(
@@ -1075,164 +413,6 @@ def prepare_deepspeed(
     return model
 
 
-def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
-    """
-    Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
-
-    Args:
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs.
-        pad_token_id (`int`):
-            The token ID representing the pad token used to fill the truncated responses.
-        responses (`torch.Tensor`):
-            The tensor containing the responses to be truncated.
-
-    Returns:
-        `torch.Tensor`:
-            The truncated responses tensor with pad tokens filled after the stop token.
-    """
-    trunc_idxs = first_true_indices(responses == stop_token_id).unsqueeze(-1)
-    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
-    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
-    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, pad_token_id)
-    return postprocessed_responses
-
-
-def generate(
-    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Generates sequences from the language model backbone in a way that does not affect padding tokens.
-
-    Args:
-        lm_backbone (`torch.nn.Module`):
-            The language model backbone used for generation.
-        queries (`torch.Tensor`):
-            The tensor containing the input queries.
-        pad_token_id (`int`):
-            The token ID representing the pad token.
-        generation_config (`GenerationConfig`):
-            The configuration for the generation process.
-
-    Returns:
-        tuple:
-            - `generated_sequences` (`torch.Tensor`):
-                The concatenated tensor of input queries and generated sequences.
-            - `logits` (`torch.Tensor`):
-                The logits output from the generation process.
-    """
-    context_length = queries.shape[1]
-    attention_mask = queries != pad_token_id
-    input_ids = torch.masked_fill(queries, ~attention_mask, 0)
-    output = lm_backbone.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
-        # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
-        generation_config=generation_config,
-        return_dict_in_generate=True,
-        output_scores=True,
-    )
-    logits = torch.stack(output.scores, 1)
-    return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
-
-
-@torch.no_grad()
-def batch_generation(
-    model: torch.nn.Module,
-    queries: torch.Tensor,
-    local_rollout_forward_batch_size: int,
-    pad_token_id: int,
-    generation_config: GenerationConfig,
-):
-    query_responses = []
-    logitss = []
-    batch_size = queries.shape[0]
-    for i in range(0, batch_size, local_rollout_forward_batch_size):
-        query = queries[i : i + local_rollout_forward_batch_size]
-        query_response, logits = generate(
-            model,
-            query,
-            pad_token_id,
-            generation_config,
-        )
-        query_responses.append(query_response)
-        logitss.append(logits)
-
-    # padding tensors
-    padded_query_responses = pad(query_responses, padding_value=pad_token_id, padding_side="right")
-    padded_logitss = pad(logitss, padding_value=0, padding_side="right")
-
-    # reshaping
-    padded_query_responses = padded_query_responses.view(-1, padded_query_responses.shape[-1])[:batch_size]
-    padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
-
-    return padded_query_responses, padded_logitss
-
-
-def add_bos_token_if_needed(
-    bos_token_id: Optional[int],
-    prompt_len_input_ids: int,
-    prompt_tokens: dict[str, list[int]],
-    chosen_prompt_len_input_ids: int,
-    chosen_tokens: dict[str, list[int]],
-    rejected_prompt_len_input_ids: int,
-    rejected_tokens: dict[str, list[int]],
-):
-    if bos_token_id is not None:
-        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
-            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
-            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
-            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
-    return prompt_tokens, chosen_tokens, rejected_tokens
-
-
-def add_eos_token_if_needed(
-    eos_token_id: int, chosen_tokens: dict[str, list[int]], rejected_tokens: dict[str, list[int]]
-):
-    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
-        chosen_tokens["input_ids"].append(eos_token_id)
-        chosen_tokens["attention_mask"].append(1)
-    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
-        rejected_tokens["input_ids"].append(eos_token_id)
-        rejected_tokens["attention_mask"].append(1)
-    return chosen_tokens, rejected_tokens
-
-
-def truncate_right(
-    input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Truncates the input tensor from the right side after the first occurrence of the stop token.
-
-    Args:
-        input_ids (`torch.Tensor`):
-            The tensor containing the responses to be truncated
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs
-        pad_token_id (`int`):
-            The token ID representing the pad token used to fill the truncated responses
-
-    Returns:
-        tuple:
-            - `output_ids` (`torch.Tensor`):
-                The truncated responses tensor with pad tokens filled after the stop token
-            - `mask` (`torch.Tensor`):
-                The mask tensor to indicate the padding tokens
-    """
-    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
-    new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
-    idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
-    output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
-    mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
-    return output_ids, mask
-
-
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
@@ -1251,50 +431,22 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
-    # docstyle-ignore
-    """
-    Decodes the input tensor and strips the padding tokens.
-
-    > [!WARNING]
-    > This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy
-    > the code into your codebase and use it from there.
-
-    Args:
-        inputs (`torch.Tensor`):
-            The input tensor to be decoded.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer used to decode the input tensor.
-
-    Returns:
-        `list[str]`:
-            The list of decoded strings with padding tokens stripped.
-    """
-    warnings.warn(
-        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
-        "to keep using it, please copy the code into your codebase and use it from there.",
-        DeprecationWarning,
-    )
-    decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
-    return [d.replace(tokenizer.pad_token, "") for d in decoded]
-
-
 def generate_model_card(
-    base_model: Optional[str],
+    base_model: str | None,
     model_name: str,
     hub_model_id: str,
-    dataset_name: Optional[str],
+    dataset_name: str | None,
     tags: list[str],
-    wandb_url: Optional[str],
+    wandb_url: str | None,
     trainer_name: str,
-    trainer_citation: Optional[str] = None,
-    template_file: Optional[str] = None,
-    paper_title: Optional[str] = None,
-    paper_id: Optional[str] = None,
-    comet_url: Optional[str] = None,
+    trainer_citation: str | None = None,
+    template_file: str | None = None,
+    paper_title: str | None = None,
+    paper_id: str | None = None,
+    comet_url: str | None = None,
 ) -> ModelCard:
     """
-    Generate a `ModelCard` from a template.
+    Generate a [`~huggingface_hub.ModelCard`] from a template.
 
     Args:
         base_model (`str` or `None`):
@@ -1323,7 +475,7 @@ def generate_model_card(
             ArXiv paper ID as `YYMM.NNNNN`.
 
     Returns:
-        `ModelCard`:
+        [`~huggingface_hub.ModelCard`]:
             A ModelCard object.
     """
     card_data = ModelCardData(
@@ -1357,7 +509,7 @@ def generate_model_card(
     return card
 
 
-def get_comet_experiment_url() -> Optional[str]:
+def get_comet_experiment_url() -> str | None:
     """
     If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
     """
@@ -1377,7 +529,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     Args:
         name (`str`):
             Table name.
-        table (`pd.DataFrame`):
+        table (`pandas.DataFrame`):
             The Pandas DataFrame containing the table to log.
     """
     if not is_comet_available():
@@ -1388,7 +540,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
         experiment.log_table(tabular_data=table, filename=name)
 
 
-def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the left.
 
@@ -1453,7 +605,7 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor
     return flushed_mask, *flushed_tensors
 
 
-def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, ...]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
     """
@@ -1510,7 +662,7 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
     else:
         # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
-        for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
+        for row_logits, row_labels in zip(logits, index, strict=True):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
             row_per_token_logps = row_logps.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
             per_token_logps.append(row_per_token_logps)
@@ -1725,7 +877,7 @@ class RepeatSampler(Sampler):
         batch_size: int = 1,
         repeat_count: int = 1,
         shuffle: bool = True,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ):
         self.data_source = data_source
         self.mini_repeat_count = mini_repeat_count
@@ -1766,27 +918,45 @@ class RepeatSampler(Sampler):
 
 
 # torch.nanstd doesn't exist, so we define it here
-def nanstd(tensor: torch.Tensor) -> torch.Tensor:
+def nanstd(tensor: torch.Tensor, dim: int | tuple[int, ...] | None = None, keepdim: bool = False) -> torch.Tensor:
     """
-    Compute the standard deviation of a tensor, ignoring NaNs. This function only supports 1D tensors.
+    Compute the standard deviation of a tensor, ignoring NaNs.
 
     Args:
         tensor (`torch.Tensor`):
-            Input tensor of shape `(N,)`.
+            Input tensor.
+        dim (`int` or `tuple[int, ...]`, *optional*):
+            Dimension(s) to reduce. Defaults to all dimensions.
+        keepdim (`bool`, *optional*, defaults to `False`):
+            Whether to keep reduced dimensions.
 
     Returns:
         `torch.Tensor`:
             Standard deviation of the tensor, ignoring NaNs.
     """
-    variance = torch.nanmean((tensor - torch.nanmean(tensor, keepdim=True)) ** 2)  # Compute variance ignoring NaNs
-    count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
-    variance *= count / (count - 1)  # Bessel's correction
-    return torch.sqrt(variance)
+    # Compute variance ignoring NaNs
+    mean = torch.nanmean(tensor, dim=dim, keepdim=True)
+    variance = torch.nanmean((tensor - mean) ** 2, dim=dim, keepdim=True)
+    count = torch.sum(~torch.isnan(tensor), dim=dim, keepdim=True)  # count of non-NaN values
+    correction = count / (count - 1)
+    correction = torch.where(count > 1, correction, torch.full_like(correction, float("nan")))
+    variance *= correction  # Bessel's correction
+    std = torch.sqrt(variance)
+    if keepdim:
+        return std
+    if dim is None:
+        return std.squeeze()
+    if isinstance(dim, int):
+        return std.squeeze(dim)
+    dims = [(d if d >= 0 else d + std.ndim) for d in dim]
+    for d in sorted(dims, reverse=True):
+        std = std.squeeze(d)
+    return std
 
 
 def split_tensor_dict(
-    tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
-) -> list[dict[str, Optional[torch.Tensor]]]:
+    tensor_dict: dict[str, torch.Tensor | None], num_chunks: int
+) -> list[dict[str, torch.Tensor | None]]:
     """
     Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
 
@@ -1819,7 +989,7 @@ def split_tensor_dict(
     return chunks
 
 
-def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
+def shuffle_sequence_dict(seq_dict: dict[str, Sequence | None]) -> dict[str, Sequence | None]:
     """
     Shuffles all sequence-like values in a dictionary along the first dimension in unison.
 
@@ -1839,7 +1009,7 @@ def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, 
     batch_size = len(next(v for v in seq_dict.values() if v is not None))
     permutation = torch.randperm(batch_size)
 
-    def permute(v: Optional[Sequence]) -> Optional[Sequence]:
+    def permute(v: Sequence | None) -> Sequence | None:
         if v is None:
             return None
         if isinstance(v, torch.Tensor) and v.ndim == 0:
@@ -1886,7 +1056,7 @@ def identity(x):
     return x
 
 
-def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
+def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | list[torch.Tensor]]:
     """
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
     and batch["num_images"] while keeping other entries unchanged.
@@ -1907,7 +1077,7 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Unio
     return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
 
 
-def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
+def unsplit_pixel_values_by_grid(batch: dict[str, torch.Tensor | list[torch.Tensor]]) -> dict[str, torch.Tensor]:
     """
     Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]` back into a single
     tensor along the first dimension.
@@ -1960,23 +1130,28 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         raise TypeError("Input must be a list or a dictionary.")
 
 
-def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
+def create_model_from_path(
+    model_id: str, architecture: _BaseAutoModelClass | None = None, **kwargs
+) -> PreTrainedModel:
     """
     Create a model from a given path using the specified initialization arguments.
 
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+            Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
+            this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
-            or `'auto'`.
+            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`.
 
     Returns:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
-    dtype = kwargs.get("dtype")
+    dtype = kwargs.get("dtype", "float32")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
     elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
@@ -1986,7 +1161,176 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
-    config = AutoConfig.from_pretrained(model_id)
-    architecture = getattr(transformers, config.architectures[0])
+    kwargs["device_map"] = kwargs.get("device_map", "auto")
+    if architecture is None:
+        config = AutoConfig.from_pretrained(model_id)
+        architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
+
+
+def get_config_model_id(config: PretrainedConfig) -> str:
+    """
+    Retrieve the model identifier from a given model configuration.
+
+    Args:
+        config ([`~transformers.PreTrainedConfig`]):
+            Configuration from which to extract the model identifier.
+
+    Returns:
+        `str`:
+            The model identifier associated with the model configuration.
+    """
+    return getattr(config, "_name_or_path", "")
+
+
+@dataclass
+class CausalLMOutputWithPastAndFlatLogits(CausalLMOutputWithPast):
+    flat_logits: torch.Tensor | None = None
+
+
+def forward_masked_logits(
+    model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs
+) -> CausalLMOutputWithPastAndFlatLogits:
+    """
+    Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
+
+    These are always equal:
+
+    ```python
+    full_outputs = model(input_ids=input_ids)
+    masked_outputs = forward_masked_logits(model, mask, input_ids=input_ids)
+
+    assert torch.equal(
+        masked_outputs.flat_logits,
+        full_outputs.logits[mask.bool()],
+    )
+    ```
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            A causal language model.
+        logits_mask (`torch.LongTensor`):
+            Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
+            input sequence shape in `kwargs` (typically `[batch, seq_len]`).
+        **kwargs:
+            Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
+
+    Returns:
+        `CausalLMOutputWithPastAndFlatLogits`: Output containing logits only for the unmasked positions.
+
+    Raises:
+        ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
+    """
+    if kwargs.get("logits_to_keep") is not None:
+        raise ValueError("`logits_to_keep` is not supported by this forward helper.")
+    if kwargs.get("labels") is not None:
+        raise ValueError("`labels` is not yet supported by this forward helper.")
+
+    outputs: BaseModelOutputWithPast = model.get_decoder()(**kwargs)
+    hidden_states = outputs.last_hidden_state
+
+    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+    flat_logits = model.lm_head(hidden_states[logits_mask.bool()])
+    if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
+        flat_logits = flat_logits * model.logit_scale
+
+    return CausalLMOutputWithPastAndFlatLogits(
+        flat_logits=flat_logits,
+        # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
+        past_key_values=outputs.get("past_key_values"),
+        hidden_states=outputs.hidden_states,
+        attentions=outputs.get("attentions"),
+    )
+
+
+@contextmanager
+def use_adapter(model: "PeftModel", adapter_name: str | None):
+    """
+    Context manager to temporarily set and reset the active adapter in a PEFT model.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model to manage.
+        adapter_name (`str` or `None`):
+            Name of the adapter to set as active. If `None`, the context manager will disable all adapters.
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import use_adapter
+    >>> from peft import AutoPeftModelForCausalLM
+    >>> import torch
+
+    >>> model = AutoPeftModelForCausalLM.from_pretrained("path/to/model")
+    >>> input_ids = torch.tensor([[1, 2, 3]])
+    >>> with use_adapter(model, "adapter_name"):
+    ...     outputs = model(input_ids)
+    ```
+    """
+
+    if not is_peft_available():
+        raise ImportError(
+            "You're trying to use a PEFT adapter but PEFT is not installed. Please install it with `pip install peft`."
+        )
+    if adapter_name is None:
+        with model.disable_adapter():
+            yield
+    else:
+        previous_adapter = model.active_adapter
+        model.set_adapter(adapter_name)
+        try:
+            yield
+        finally:
+            model.set_adapter(previous_adapter)
+
+
+def start_event_loop_in_daemon(
+    name: str | None = None,
+) -> tuple[threading.Thread, asyncio.AbstractEventLoop, threading.Event]:
+    """
+    This function creates a new daemon thread that runs the provided event loop.
+
+    Args:
+        name (`str`, *optional*):
+            Name of the thread. If `None`, the default thread naming will be used.
+
+    Returns:
+        `threading.Thread`:
+            The thread running the event loop.
+        `asyncio.AbstractEventLoop`:
+            The event loop being run in the thread.
+        `threading.Event`:
+            An event that is set when the loop is ready.
+    """
+    loop = asyncio.new_event_loop()
+    loop_ready_event = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop_ready_event.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop, name=name, daemon=True)
+    thread.start()
+    return thread, loop, loop_ready_event
+
+
+def shutdown_event_loop_in_daemon(
+    thread: threading.Thread | None,
+    loop: asyncio.AbstractEventLoop | None,
+) -> None:
+    """
+    Shutdown an asyncio event loop running in a separate thread.
+
+    This function stops the event loop and waits for the associated thread to finish execution.
+
+    Args:
+        thread (`threading.Thread`):
+            The thread running the event loop.
+        loop (`asyncio.AbstractEventLoop`):
+            The asyncio event loop to shut down.
+    """
+    if loop is None or thread is None:
+        return
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)

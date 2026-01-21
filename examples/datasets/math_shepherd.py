@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 import re
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Optional
 
 from datasets import load_dataset
 from huggingface_hub import ModelCard
@@ -44,7 +43,7 @@ class ScriptArguments:
         default="trl-lib/math_shepherd",
         metadata={"help": "Hugging Face repository ID to push the dataset to."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of workers to use for dataset processing."},
     )
@@ -64,7 +63,7 @@ def process_example(example):
     labels = [example["label"][idx] == "+" for idx in indexes]
 
     # Split the inputs into steps (caution, the first step is missing here, it is the prompt)
-    steps = [inputs[i:j] for i, j in zip(chain([0], indexes), chain(indexes, [None]))]
+    steps = [inputs[i:j] for i, j in zip(chain([0], indexes), chain(indexes, [None]), strict=True)]
 
     # Remove the last step (single ⶻ)
     steps = steps[:-1]

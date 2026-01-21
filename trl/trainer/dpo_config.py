@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,10 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -123,7 +125,7 @@ class DPOConfig(TrainingArguments):
             Batch size to use when precomputing reference model log probabilities. This can be set higher than the
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
-        tools (`Optional[list[Union[dict, Callable]]]`, *optional*):
+        tools (`list[dict] | None`, *optional*):
             List of tools (callable functions) that will be accessible to the model. If the template does not support
             function calling, this argument will have no effect.
 
@@ -155,12 +157,10 @@ class DPOConfig(TrainingArguments):
             Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair", "sft"]` for
             [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
             corresponding weights for each loss type.
-
-        use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use Liger loss.
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
-            the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
+            `True`.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -212,16 +212,6 @@ class DPOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to generate and log completions from both the model and the reference model to W&B or Comet during
             evaluation.
-
-        > Deprecated parameters
-
-        padding_value:
-
-            <Deprecated version="0.24.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `pad_token` (`str`) instead.
-
-            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
@@ -244,7 +234,7 @@ class DPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -252,27 +242,37 @@ class DPOConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
     # Parameters that control the model and reference model
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `DPOTrainer` is provided as a string."
         },
     )
-    ref_model_init_kwargs: Optional[dict[str, Any]] = field(
+    ref_model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument "
             "of the `DPOTrainer` is provided as a string."
         },
     )
-    model_adapter_name: Optional[str] = field(
+    model_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
     )
-    ref_adapter_name: Optional[str] = field(
+    ref_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
     )
@@ -297,11 +297,11 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    pad_token: Optional[str] = field(
+    pad_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
@@ -312,15 +312,15 @@ class DPOConfig(TrainingArguments):
         default=-100,
         metadata={"help": "Padding value to use for labels."},
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={"help": "Maximum length of the prompt."},
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=None,
         metadata={"help": "Maximum length of the completion."},
     )
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
     )
@@ -350,7 +350,7 @@ class DPOConfig(TrainingArguments):
             "probabilities on-the-fly."
         },
     )
-    precompute_ref_batch_size: Optional[int] = field(
+    precompute_ref_batch_size: int | None = field(
         default=None,
         metadata={
             "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
@@ -358,7 +358,7 @@ class DPOConfig(TrainingArguments):
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
-    tools: Optional[list[Union[dict, Callable]]] = field(
+    tools: list[dict] | None = field(
         default=None,
         metadata={
             "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
@@ -377,16 +377,12 @@ class DPOConfig(TrainingArguments):
             "corresponding weights for each loss type."
         },
     )
-    use_liger_loss: bool = field(
-        default=False,
-        metadata={"help": "Whether to use Liger loss."},
-    )
     base_model_attribute_name: str = field(
         default="model",
         metadata={
             "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
             "model  from the model when the model does not have a `get_decoder` method in the case when "
-            "`use_liger_loss` is `True`."
+            "`use_liger_kernel` is `True`."
         },
     )
     beta: float = field(
@@ -396,7 +392,7 @@ class DPOConfig(TrainingArguments):
             "Higher β means less deviation from the reference model."
         },
     )
-    f_divergence_type: Union[FDivergenceType, str] = field(
+    f_divergence_type: FDivergenceType | str = field(
         default=FDivergenceType.REVERSE_KL,
         metadata={
             "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
@@ -425,7 +421,7 @@ class DPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to weight the loss as done in the WPO paper."},
     )
-    rpo_alpha: Optional[float] = field(
+    rpo_alpha: float | None = field(
         default=None,
         metadata={
             "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
@@ -433,7 +429,7 @@ class DPOConfig(TrainingArguments):
             "`rpo_alpha=1.0`."
         },
     )
-    ld_alpha: Optional[float] = field(
+    ld_alpha: float | None = field(
         default=None,
         metadata={
             "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
@@ -448,7 +444,7 @@ class DPOConfig(TrainingArguments):
             "loss. The paper recommends the default value `discopop_tau=0.05`."
         },
     )
-    loss_weights: Optional[list[float]] = field(
+    loss_weights: list[float] | None = field(
         default=None,
         metadata={
             "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
@@ -488,14 +484,17 @@ class DPOConfig(TrainingArguments):
         },
     )
 
-    # Deprecated arguments
-    padding_value: Optional[int] = field(
-        default=None,
-        metadata={"help": "Deprecated, use `pad_token` (str) instead."},
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         self.f_divergence_type = FDivergenceType(self.f_divergence_type)
 
         # Normalize loss_type to string format for internal use
@@ -510,4 +509,5 @@ class DPOConfig(TrainingArguments):
                     f"Length of loss_weights list ({self.loss_weights}) must match number of loss types "
                     f"({loss_types})."
                 )
+
         super().__post_init__()

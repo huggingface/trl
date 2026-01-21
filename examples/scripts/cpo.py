@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -63,8 +63,8 @@ import os
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import CPOConfig, CPOTrainer, ModelConfig, ScriptArguments, get_peft_config
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl import ModelConfig, ScriptArguments, get_peft_config
+from trl.experimental.cpo import CPOConfig, CPOTrainer
 
 
 # Enable logging in a Hugging Face Space
@@ -90,8 +90,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     ################
     # Training

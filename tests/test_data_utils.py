@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,13 +13,12 @@
 # limitations under the License.
 
 import copy
-import itertools
 import textwrap
 from time import strftime
 
+import pytest
 from datasets import Dataset, DatasetDict
-from parameterized import parameterized
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
     apply_chat_template,
@@ -32,13 +31,19 @@ from trl.data_utils import (
     maybe_unpair_preference_dataset,
     pack_dataset,
     prepare_multimodal_messages,
+    prepare_multimodal_messages_vllm,
     truncate_dataset,
     unpair_preference_dataset,
 )
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_vision
 
 
+if is_vision_available():
+    from PIL import Image
+
+
+@require_vision
 class TestPrepareMultimodalMessages:
     def test_basic_user_assistant_conversation(self):
         """Test basic conversation with user and assistant messages."""
@@ -46,30 +51,46 @@ class TestPrepareMultimodalMessages:
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
-
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
         ]
 
         assert messages == expected
 
     def test_first_user_message_gets_image(self):
-        """Test that only the first user message gets an image placeholder."""
+        """Test that only the first user message gets an image."""
         messages = [
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
             {"role": "user", "content": "How about the grass?"},
         ]
 
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
-            {"role": "user", "content": [{"type": "text", "text": "How about the grass?"}]},
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "How about the grass?"}],
+            },
         ]
 
         assert messages == expected
@@ -80,20 +101,23 @@ class TestPrepareMultimodalMessages:
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
-
-        prepare_multimodal_messages(messages, num_images=3)
+        images = [Image.new("RGB", (10, 10), color=color) for color in ["red", "green", "blue"]]
+        messages = prepare_multimodal_messages(messages, images=images)
 
         expected = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "image"},
-                    {"type": "image"},
-                    {"type": "image"},
+                    {"type": "image", "image": images[0]},
+                    {"type": "image", "image": images[1]},
+                    {"type": "image", "image": images[2]},
                     {"type": "text", "text": "What color is the sky?"},
                 ],
             },
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
         ]
 
         assert messages == expected
@@ -105,11 +129,18 @@ class TestPrepareMultimodalMessages:
             {"role": "user", "content": "What color is the sky?"},
         ]
 
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
-            {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant"}]},
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are a helpful assistant"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
         ]
 
         assert messages == expected
@@ -122,10 +153,25 @@ class TestPrepareMultimodalMessages:
             {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
         ]
 
-        original = copy.deepcopy(messages)
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
-        assert messages == original
+        expected = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are a helpful assistant"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
+        ]
+
+        assert messages == expected
 
     def test_mixed_prepared_and_unprepared_messages(self):
         """Test handling of mixed prepared and unprepared messages."""
@@ -135,15 +181,117 @@ class TestPrepareMultimodalMessages:
             {"role": "user", "content": "What about the grass?"},
         ]
 
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
-            {"role": "user", "content": [{"type": "text", "text": "What about the grass?"}]},
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What about the grass?"}],
+            },
         ]
 
         assert messages == expected
+
+
+@require_vision
+class TestPrepareMultimodalMessagesVLLM:
+    def test_single_image_conversion(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                    {"type": "text", "text": "What color is the sky?"},
+                ],
+            }
+        ]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        # Original should remain unchanged (deepcopy test)
+        assert messages[0]["content"][0]["type"] == "image"
+
+        # Converted version should have correct structure
+        assert result[0]["content"][0]["type"] == "image_pil"
+        assert "image_pil" in result[0]["content"][0]
+        assert "image" not in result[0]["content"][0]
+        assert isinstance(result[0]["content"][0]["image_pil"], Image.Image)
+        assert result[0]["content"][1]["type"] == "text"
+
+    def test_mixed_content_conversion(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is the sky?"},
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                ],
+            }
+        ]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        # The image part should be converted, text should be unchanged
+        assert result[0]["content"][0]["type"] == "text"
+        assert result[0]["content"][1]["type"] == "image_pil"
+
+    def test_no_images(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "What color is the sky?"}]}]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        # Should be identical since there are no images
+        assert result == messages
+        # And a deepcopy — not the same object
+        assert result is not messages
+        assert result[0] is not messages[0]
+
+    def test_multiple_messages(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is the sky?"},
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
+        ]
+
+        result = prepare_multimodal_messages_vllm(messages)
+
+        assert result[0]["content"][1]["type"] == "image_pil"
+        assert result[1]["content"][0]["type"] == "text"
+        assert result[1]["content"][0]["text"] == "It is blue."
+
+    def test_deepcopy_integrity(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is the sky?"},
+                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
+                ],
+            },
+        ]
+        original = copy.deepcopy(messages)
+
+        _ = prepare_multimodal_messages_vllm(messages)
+
+        # Original should not be mutated
+        assert messages == original
 
 
 class TestIsConversational(TrlTestCase):
@@ -247,11 +395,11 @@ class TestIsConversational(TrlTestCase):
         {"prompt": "The sky is", "completion": " blue.", "label": True},
     ]
 
-    @parameterized.expand(itertools.product(conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples)
     def test_conversational(self, example):
         assert is_conversational(example)
 
-    @parameterized.expand(itertools.product(non_conversational_examples))
+    @pytest.mark.parametrize("example", non_conversational_examples)
     def test_non_conversational(self, example):
         assert not is_conversational(example)
 
@@ -283,7 +431,6 @@ class TestIsConversationalFromValue(TrlTestCase):
 class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
-        "trl-internal-testing/tiny-DbrxForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
@@ -345,7 +492,8 @@ class TestApplyChatTemplate(TrlTestCase):
         {"prompt": "The sky is", "completion": " blue.", "label": True},  # Unpaired preference
     ]
 
-    @parameterized.expand(itertools.product(tokenizers, conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples)
+    @pytest.mark.parametrize("tokenizer_id", tokenizers)
     def test_apply_chat_template(self, tokenizer_id, example):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
         result = apply_chat_template(example, tokenizer)
@@ -371,7 +519,8 @@ class TestApplyChatTemplate(TrlTestCase):
             assert result["label"] == example["label"]
 
     # both conversational and non-conversational examples
-    @parameterized.expand(itertools.product(tokenizers, conversational_examples + non_conversational_examples))
+    @pytest.mark.parametrize("example", conversational_examples + non_conversational_examples)
+    @pytest.mark.parametrize("tokenizer_id", tokenizers)
     def test_maybe_apply_chat_template(self, tokenizer_id, example):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
         result = maybe_apply_chat_template(example, tokenizer)
@@ -435,7 +584,7 @@ class TestApplyChatTemplate(TrlTestCase):
         # Define test case
         test_case = {
             "prompt": [
-                {"content": "Whats the temperature in London?", "role": "user"},
+                {"content": "What's the temperature in London?", "role": "user"},
             ]
         }
         # Test with tools
@@ -850,13 +999,11 @@ class TestPackDatasetBfd(TrlTestCase):
     def test_simple(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
-            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
@@ -865,30 +1012,41 @@ class TestPackDatasetBfd(TrlTestCase):
     def test_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
-            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         num_examples = len(examples[next(iter(examples))])
         assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
 
-    def test_with_truncation(self):
+    def test_with_overlong_0(self):
         examples = {
             "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
-            "attention_mask": [[1, 1, 1, 1, 1], [1, 1], [1, 1, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
         seq_length = 4
         expected_output = {
-            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
-            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
-            "seq_lengths": [[4], [4], [2, 1]],
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
+            "seq_lengths": [[4], [4], [2, 1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        assert dataset.to_dict() == expected_output
+
+    def test_with_overlong_two_coluns(self):
+        examples = {
+            "col1": [[1, -2, 3, -4, 5, -6], [7, -8, 9], [-10, 11, -12], [13, -14, 15, -16]],
+            "col2": [[-1, 2, -3, 4, -5, 6], [-7, 8, -9], [10, -11, 12], [-13, 14, -15, 16]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "col1": [[1, -2, 3, -4], [13, -14, 15, -16], [7, -8, 9], [-10, 11, -12], [5, -6]],
+            "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
+            "seq_lengths": [[4], [4], [3], [3], [2]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
@@ -896,13 +1054,11 @@ class TestPackDatasetBfd(TrlTestCase):
     def test_with_non_power_of_2(self):
         examples = {
             "input_ids": [[1, 2, 3, 4, 5], [6], [7, 8, 9, 10], [11, 12, 13]],
-            "attention_mask": [[1, 0, 0, 1, 1], [0], [0, 1, 0, 0], [1, 0, 1]],
         }
         dataset = Dataset.from_dict(examples)
         seq_length = 5
         expected_output = {
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
-            "attention_mask": [[1, 0, 0, 1, 1], [0, 1, 0, 0, 0], [1, 0, 1]],
             "seq_lengths": [[5], [4, 1], [3]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")

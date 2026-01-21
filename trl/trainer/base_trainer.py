@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,11 +13,10 @@
 # limitations under the License.
 
 import os
-from typing import Optional, Union
 
 from transformers import Trainer, is_wandb_available
 
-from .utils import generate_model_card, get_comet_experiment_url
+from .utils import generate_model_card, get_comet_experiment_url, get_config_model_id
 
 
 if is_wandb_available():
@@ -32,9 +31,9 @@ class BaseTrainer(Trainer):
 
     def create_model_card(
         self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Optional[Union[str, list[str]]] = None,
+        model_name: str | None = None,
+        dataset_name: str | None = None,
+        tags: str | list[str] | None = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -50,8 +49,9 @@ class BaseTrainer(Trainer):
         if not self.is_world_process_zero():
             return
 
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
+        model_name_or_path = get_config_model_id(self.model.config)
+        if model_name_or_path and not os.path.isdir(model_name_or_path):
+            base_model = model_name_or_path
         else:
             base_model = None
 

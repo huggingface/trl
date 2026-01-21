@@ -8,8 +8,8 @@ For a full example have a look at  [`examples/scripts/bco.py`].
 
 ## Expected dataset type
 
-The [`BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
-The [`BCOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`experimental.bco.BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
+The [`experimental.bco.BCOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Expected model format
 
@@ -22,6 +22,8 @@ For a detailed example have a look at the `examples/scripts/bco.py` script. At a
 The `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
 
 ```python
+from trl.experimental.bco import BCOConfig, BCOTrainer
+
 training_args = BCOConfig(
     beta=0.1,
 )
@@ -93,11 +95,11 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 ## BCOTrainer
 
-[[autodoc]] BCOTrainer
+[[autodoc]] experimental.bco.BCOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## BCOConfig
 
-[[autodoc]] BCOConfig
+[[autodoc]] experimental.bco.BCOConfig

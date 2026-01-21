@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
 from huggingface_hub import ModelCard
@@ -42,7 +41,7 @@ class ScriptArguments:
         default="trl-lib/prm800k",
         metadata={"help": "Hugging Face repository ID to push the dataset to."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of workers to use for dataset processing."},
     )
@@ -69,7 +68,7 @@ def process_example(example):
                 labels = previous_labels[:] + [label]
                 outputs.append({"prompt": prompt, "completions": completions, "labels": labels})
 
-        # Now, exapand the previous completions and labels
+        # Now, expand the previous completions and labels
         if step["chosen_completion"] is not None:
             chosen_completion = step["completions"][step["chosen_completion"]]
             label = chosen_completion["rating"] == 1

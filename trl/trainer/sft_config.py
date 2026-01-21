@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,8 +13,10 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -37,7 +39,7 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
-            include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            include the load balancing/auxiliary loss as a part of the final loss, remember to set
             `output_router_logits=True` in this dictionary.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
@@ -64,6 +66,8 @@ class SFTConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
+        shuffle_dataset (`bool`, *optional*, defaults to `False`):
+            Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
@@ -119,7 +123,7 @@ class SFTConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -127,18 +131,28 @@ class SFTConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
     # Parameters that control the model
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
-            "load balancing/auxilliary loss as a part of the final loss, remember to set `output_router_logits=True` "
+            "load balancing/auxiliary loss as a part of the final loss, remember to set `output_router_logits=True` "
             "in this dictionary."
         },
     )
-    chat_template_path: Optional[str] = field(
+    chat_template_path: str | None = field(
         default=None,
         metadata={
             "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
@@ -153,7 +167,7 @@ class SFTConfig(TrainingArguments):
         default="text",
         metadata={"help": "Name of the column that contains text data in the dataset."},
     )
-    dataset_kwargs: Optional[dict[str, Any]] = field(
+    dataset_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
@@ -162,30 +176,34 @@ class SFTConfig(TrainingArguments):
             "since preprocessing is done on the fly."
         },
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    eos_token: Optional[str] = field(
+    eos_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
         },
     )
-    pad_token: Optional[str] = field(
+    pad_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
             "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
             "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
             "sequence length."
         },
+    )
+    shuffle_dataset: bool = field(
+        default=False,
+        metadata={"help": "Whether to shuffle the dataset."},
     )
     packing: bool = field(
         default=False,
@@ -211,17 +229,17 @@ class SFTConfig(TrainingArguments):
             "value of this parameter."
         },
     )
-    pad_to_multiple_of: Optional[int] = field(
+    pad_to_multiple_of: int | None = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
-    eval_packing: Optional[bool] = field(
+    eval_packing: bool | None = field(
         default=None,
         metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
     )
 
     # Parameters that control the training
-    completion_only_loss: Optional[bool] = field(
+    completion_only_loss: bool | None = field(
         default=None,
         metadata={
             "help": (
@@ -259,4 +277,13 @@ class SFTConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__post_init__()

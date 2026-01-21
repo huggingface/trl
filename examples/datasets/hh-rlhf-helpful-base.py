@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
 from huggingface_hub import ModelCard
@@ -42,7 +41,7 @@ class ScriptArguments:
     repo_id: str = field(
         default="trl-lib/hh-rlhf-helpful-base", metadata={"help": "Hugging Face repository ID to push the dataset to."}
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None, metadata={"help": "Number of workers to use for dataset processing."}
     )
 
@@ -50,7 +49,7 @@ class ScriptArguments:
 def common_start(str1: str, str2: str) -> str:
     # Zip the two strings and iterate over them together
     common_chars = []
-    for c1, c2 in zip(str1, str2):
+    for c1, c2 in zip(str1, str2, strict=True):
         if c1 == c2:
             common_chars.append(c1)
         else:

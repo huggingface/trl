@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,33 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
+import warnings
 
-from trl.trainer.online_dpo_config import OnlineDPOConfig
+from ..import_utils import suppress_experimental_warning
 
 
-@dataclass
-class XPOConfig(OnlineDPOConfig):
-    r"""
-    Configuration class for the [`XPOTrainer`].
+with suppress_experimental_warning():
+    from ..experimental.xpo import XPOConfig as _XPOConfig
 
-    Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
-    Parameters:
-        alpha (`float` or `list[float]`, *optional*, defaults to `1e-5`):
-            Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch
-            and the last alpha is used for the rest of the epochs.
-    """
-
-    alpha: list[float] = field(
-        default_factory=lambda: [1e-5],
-        metadata={
-            "help": "Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each "
-            "new epoch and the last alpha is used for the rest of the epochs."
-        },
-    )
-
+class XPOConfig(_XPOConfig):
     def __post_init__(self):
+        warnings.warn(
+            "The `XPOConfig` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.xco import XPOConfig`. The current import path will be removed and no longer "
+            "supported in TRL 0.29. For more information, see https://github.com/huggingface/trl/issues/4223.",
+            FutureWarning,
+            stacklevel=2,
+        )
         super().__post_init__()
-        if hasattr(self.alpha, "__len__") and len(self.alpha) == 1:
-            self.alpha = self.alpha[0]

@@ -24,15 +24,12 @@ trainer.train()
 ```python
 from trl import GRPOTrainer
 from datasets import load_dataset
-
-# Define a simple reward function (count unique chars as example)
-def reward_function(completions, **kwargs):
-    return [len(set(completion.lower())) for completion in completions]
+from trl.rewards import accuracy_reward
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",  # Start from SFT model
-    train_dataset=load_dataset("trl-lib/tldr", split="train"),
-    reward_funcs=reward_function,
+    train_dataset=load_dataset("trl-lib/DeepMath-103K", split="train"),
+    reward_funcs=accuracy_reward,
 )
 trainer.train()
 ```
@@ -91,7 +88,6 @@ trl reward --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
 - [SFT Trainer](sft_trainer) - Complete SFT guide
 - [DPO Trainer](dpo_trainer) - Preference alignment
 - [GRPO Trainer](grpo_trainer) - Group relative policy optimization
-- [Training FAQ](how_to_train) - Common questions
 
 ### 🚀 Scale Up
 
@@ -141,4 +137,4 @@ Try adjusting the learning rate:
 training_args = SFTConfig(learning_rate=2e-5)  # Good starting point
 ```
 
-For more help, see our [Training FAQ](how_to_train) or open an [issue on GitHub](https://github.com/huggingface/trl/issues).
+For more help, open an [issue on GitHub](https://github.com/huggingface/trl/issues).

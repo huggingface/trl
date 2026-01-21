@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
 
-from trl.rewards import get_soft_overlong_punishment, think_format_reward
-
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_math_latex
 
 
 class TestThinkFormatReward(TrlTestCase):
@@ -85,3 +84,109 @@ class TestSoftOverlongPunishmentReward:
         completion_ids = [[1] * 90]  # 90 is between 80 and 100
         rewards = reward_fn(completion_ids)
         assert round(abs(rewards[0] - -0.5), 4) == 0
+
+
+class TestAccuracyReward:
+    @require_math_latex
+    def test_accuracy_reward_correct_answer(self):
+        """Test accuracy_reward with a correct answer."""
+        completion = [[{"content": r"\boxed{\frac{63}{400}}"}], [{"content": r"\boxed{\frac{63}{400}}"}]]
+        solution = [r"\frac{63}{400}", "63/400"]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 1.0
+        assert rewards[1] == 1.0
+
+    @require_math_latex
+    def test_accuracy_reward_wrong_answer(self):
+        """Test accuracy_reward with an incorrect answer."""
+        completion = [[{"content": r"\boxed{\frac{64}{400}}"}]]
+        solution = [r"\frac{63}{400}"]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 0.0
+
+    @require_math_latex
+    def test_accuracy_reward_wrong_answer_no_latex(self):
+        """Test accuracy_reward with an incorrect answer and gold solution with no latex."""
+        completion = [[{"content": r"\boxed{3}"}]]
+        solution = ["6"]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 0.0
+
+    @require_math_latex
+    def test_accuracy_reward_unparsable_gold(self):
+        """Test accuracy_reward with an unparsable gold solution."""
+        completion = [
+            [{"content": "Answer is forty two."}],
+            [{"content": r"Some other content. \boxed{43}."}],
+        ]
+        solution = [
+            "Answer is forty two.",
+            "Answer is forty three.",
+        ]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] is None
+        assert rewards[1] is None
+
+
+class TestReasoningAccuracyReward:
+    @require_math_latex
+    def test_correct_answer_yields_unit_reward(self):
+        completions = [
+            [{"content": r"<think> Reasoning content </think> \boxed{\frac{63}{400}}"}],
+            [{"content": r"Reasoning content </think> \boxed{\frac{63}{400}}"}],
+        ]
+        solutions = [r"\frac{63}{400}", r"\frac{63}{400}"]
+        rewards = reasoning_accuracy_reward(completions, solutions)
+        assert rewards[0] == 1.0
+        assert rewards[1] == 1.0
+
+    @require_math_latex
+    def test_correct_answer_with_custom_tags_yields_unit_reward(self):
+        completions = [
+            [{"content": r"<REASONING_START> Reasoning content </REASONING_END> \boxed{\frac{63}{400}}"}],
+        ]
+        solutions = [
+            r"\frac{63}{400}",
+        ]
+        rewards = reasoning_accuracy_reward(completions, solutions, reasoning_delimiters=["</REASONING_END>"])
+        assert rewards[0] == 1.0
+
+    @require_math_latex
+    def test_incorrect_answer_yields_zero_reward(self):
+        completion = [[{"content": r"<think> Reasoning content </think> \boxed{\frac{64}{400}}"}]]
+        solution = [r"\frac{63}{400}"]
+        rewards = reasoning_accuracy_reward(completion, solution)
+        assert rewards[0] == 0.0
+
+    @require_math_latex
+    def test_correct_answer_in_reasoning_yields_zero_reward(self):
+        completions = [
+            [{"content": r"<think> My answer is \boxed{42} </think> Some other text."}],
+            [{"content": r"<think> The answer is \boxed{42} </think> Here's a wrong answer: \boxed{43}."}],
+        ]
+        solutions = [r"\boxed{42}", r"\boxed{42}"]
+        rewards = reasoning_accuracy_reward(completions, solutions)
+        assert rewards[0] == 0.0
+        assert rewards[1] == 0.0
+
+    @require_math_latex
+    def test_incomplete_reasoning_yields_zero_reward(self):
+        completions = [
+            [{"content": r"<think> Incomplete reasoning without closing tag"}],
+            [{"content": r"Correct answer \frac{63}{400} but completely missing reasoning content"}],
+        ]
+        solutions = [r"\frac{63}{400}", r"\frac{63}{400}"]
+        rewards = reasoning_accuracy_reward(completions, solutions)
+        assert rewards[0] == 0.0
+        assert rewards[1] == 0.0
+
+    @require_math_latex
+    def test_unparsable_gold_solution_yields_none_reward(self):
+        completions = [
+            [{"content": r"<think> Reasoning content </think> \boxed{42}"}],
+        ]
+        solutions = [
+            "forty two",
+        ]
+        rewards = reasoning_accuracy_reward(completions, solutions)
+        assert rewards[0] is None

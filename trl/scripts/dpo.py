@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -62,7 +62,6 @@ python trl/scripts/dpo.py \
 
 import argparse
 import os
-from typing import Optional
 
 import torch
 from accelerate import logging
@@ -167,7 +166,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None):
     dataclass_types = (ScriptArguments, DPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)

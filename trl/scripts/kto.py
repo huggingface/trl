@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -66,7 +66,6 @@ python trl/scripts/kto.py \
 
 import argparse
 import os
-from typing import Optional
 
 from accelerate import logging
 from datasets import load_dataset
@@ -74,14 +73,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     DatasetMixtureConfig,
-    KTOConfig,
-    KTOTrainer,
     ModelConfig,
     ScriptArguments,
     TrlParser,
     get_dataset,
     get_peft_config,
 )
+from trl.experimental.kto import KTOConfig, KTOTrainer
 
 
 logger = logging.get_logger(__name__)
@@ -147,7 +145,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None):
     dataclass_types = (ScriptArguments, KTOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("kto", help="Run the KTO training script", dataclass_types=dataclass_types)

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,13 +19,12 @@
 # ///
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
 from transformers import HfArgumentParser
 from vllm import LLM, SamplingParams
 
-from trl import HfPairwiseJudge, OpenAIPairwiseJudge
+from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge
 
 
 """
@@ -74,7 +73,7 @@ class ScriptArguments:
             "'meta-llama/Meta-Llama-3-70B-Instruct'."
         },
     )
-    num_examples: Optional[int] = field(default=None, metadata={"help": "Number of examples to evaluate."})
+    num_examples: int | None = field(default=None, metadata={"help": "Number of examples to evaluate."})
 
 
 if __name__ == "__main__":
@@ -103,7 +102,7 @@ if __name__ == "__main__":
     else:
         judge = HfPairwiseJudge(script_args.judge_model)
 
-    completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions)]
+    completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions, strict=True)]
     best_idxs = judge.judge(prompts, completions)
     model_win_rate = best_idxs.count(1) / len(best_idxs)
     print(f"Model win rate: {model_win_rate * 100:.2f}%")

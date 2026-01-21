@@ -21,18 +21,17 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13"
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
-    "transformers>=4.56.1",
-    "transformers!=4.57.0; python_version == '3.9'"
+    "packaging>20.0",
+    "transformers>=4.56.2",
 ]
 dynamic = ["version"]
 
@@ -54,8 +53,11 @@ judges = [
     "openai>=1.23.2",
     "llm-blender>=0.0.2"
 ]
+kernels = [
+    "kernels"
+]
 liger = [
-    "liger-kernel>=0.6.2"
+    "liger-kernel>=0.6.4"
 ]
 peft = [
     "peft>=0.8.0"
@@ -71,14 +73,14 @@ scikit = [
     "scikit-learn"
 ]
 test = [
-    "parameterized",
     "pytest-cov",
+    "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest"
 ]
 vllm = [
-    "vllm==0.10.2",
+    "vllm>=0.10.2,<0.13.0",
     "fastapi",
     "pydantic",
     "requests",
@@ -89,6 +91,9 @@ vlm = [
     "torchvision",
     "num2words==0.5.14"
 ]
+math_verify = [
+    "math-verify>=0.5.2",
+]
 dev = [
     # bco
     "scikit-learn",
@@ -98,8 +103,10 @@ dev = [
     # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
+    # kernels
+    "kernels",
     # liger
-    "liger-kernel>=0.6.2",
+    "liger-kernel>=0.6.4",
     # peft
     "peft>=0.8.0",
     # quality
@@ -109,8 +116,8 @@ dev = [
     "bitsandbytes",
     # scikit: included in bco
     # test
-    "parameterized",
     "pytest-cov",
+    "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
@@ -118,7 +125,9 @@ dev = [
     # vlm
     "Pillow",
     "torchvision",
-    "num2words==0.5.14"
+    "num2words==0.5.14",
+    # for response parsing (required for training with tools)
+    "jmespath",
 ]
 
 [tool.setuptools]
@@ -131,7 +140,7 @@ version = { file = "VERSION" }
 branch = true
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 119
 src = ["trl"]
 
