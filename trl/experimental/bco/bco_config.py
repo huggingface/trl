@@ -45,8 +45,6 @@ class BCOConfig(TrainingArguments):
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
-        label_pad_token_id (`int`,  *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
@@ -138,12 +136,6 @@ class BCOConfig(TrainingArguments):
         metadata={
             "help": "Parameter controlling the deviation from the reference model. "
             "Higher β means less deviation from the reference model."
-        },
-    )
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={
-            "help": "Label pad token id. This argument is required if you want to use the default data collator."
         },
     )
     truncation_mode: str = field(

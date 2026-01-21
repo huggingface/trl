@@ -48,8 +48,6 @@ class ORPOConfig(TrainingArguments):
             [code](https://github.com/xfactlab/orpo), it is denoted by `alpha`.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
-        label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int`, *optional*):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
@@ -134,12 +132,6 @@ class ORPOConfig(TrainingArguments):
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model."},
-    )
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={
-            "help": "Label pad token id. This argument is required if you want to use the default data collator."
-        },
     )
     padding_value: int | None = field(
         default=None,
