@@ -17,18 +17,25 @@
 import json
 import os
 from contextlib import nullcontext
+from typing import TYPE_CHECKING
 
 import torch
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from packaging.version import Version
+from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import is_bitsandbytes_available
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages_vllm
-from ..extras.profiling import profiling_decorator
+from ..extras.profiling import ProfilingContext, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
+
+
+if TYPE_CHECKING:
+    from accelerate import Accelerator
+    from peft import PeftModel
 
 
 if is_vllm_available():
@@ -89,10 +96,10 @@ class VLLMGeneration:
 
     def __init__(
         self,
-        model,
-        accelerator,
-        is_fsdp_enabled,
-        processing_class,
+        model: "PreTrainedModel | PeftModel",
+        accelerator: "Accelerator",
+        is_fsdp_enabled: bool,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         # vLLM configuration
         mode: str,
         tensor_parallel_size: int,
@@ -247,7 +254,7 @@ class VLLMGeneration:
         # synchronize all processes after vLLM has been fully initialized.
         accelerator.wait_for_everyone()
 
-    def _fix_param_name_to_vllm(self, name, extra_prefixes=None):
+    def _fix_param_name_to_vllm(self, name: str, extra_prefixes: list[str] | None = None) -> str:
         """Fix parameter name for vLLM compatibility."""
         extra_prefixes = extra_prefixes or []
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
@@ -255,7 +262,7 @@ class VLLMGeneration:
             name = name.replace(prefix, "")
         return name
 
-    def _sync_fsdp1_params_to_vllm(self, module, prefix="", visited=None):
+    def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
         accelerator = self.accelerator
@@ -284,7 +291,7 @@ class VLLMGeneration:
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
 
-    def _sync_fsdp2_params_to_vllm(self, module):
+    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
         """FSDP2-specific parameter synchronization."""
         accelerator = self.accelerator
 
@@ -393,7 +400,7 @@ class VLLMGeneration:
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
 
-    def generate(self, prompts, num_generations, profiler=None):
+    def generate(self, prompts: list, num_generations: int, profiler: ProfilingContext | None = None) -> tuple:
         """Generate completions using vLLM.
 
         Args:
