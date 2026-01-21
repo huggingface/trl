@@ -806,7 +806,6 @@ class GRPOTrainer(BaseTrainer):
             self.commit_scheduler = CommitScheduler(
                 repo_id=self.args.log_completions_hub_repo,
                 repo_type="dataset",
-                path_in_repo=".",
                 folder_path=f"{self.args.output_dir}/completions",
                 every=2,  # minutes
                 allow_patterns=["*.parquet"],
