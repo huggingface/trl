@@ -20,8 +20,8 @@ NeMo-Gym was designed to support large-scale, production-grade reinforcement lea
 - **Production-Ready**: Tested for frontier model training at large scale. The infrastructure is designed for the scale and reliability required for production LLM training.
 - **Multi-Verifier RL Training**: Built for training with multiple verification methods simultaneously. Supports algorithmic verification (code execution, math verification), LLM-as-a-judge, and custom verification logic across different environments in a single training run.
 - **Decoupled Architecture**: Enables building agents and environments independently from the training loop. Environments can be developed, tested, and deployed without requiring expertise in the RL training framework.
-- **OpenAI-Compatible API**: All environments are compatble with standardized OpenAI Responses API, allowing seamless integration with any inference server (vLLM, SGLang, etc.) and enabling environment reuse across different training frameworks.
-- **Container-Ready**: Designed for containerized deployment with REST APIs, supporting complex multi-agent systems and environments like SWE-Bench that require isolated Docker containers.
+- **OpenAI-Compatible API**: All environments are compatble with standardized OpenAI Responses API, allowing seamless integration with compatible inference endpoint (local vLLM, OpenAI models, etc.) and enabling environment reuse across different training frameworks.
+- **Flexible Environment Isolation**: Environments can manage packages via lightweight python environments or using containers.
 
 ## Installation
 
@@ -163,7 +163,7 @@ Update `env.yaml` to include model information:
 ```
 policy_base_url: http://127.0.0.1:8000/v1
 policy_api_key: EMPTY
-policy_model_name: Qwen/Qwen3-30B-A3B-Instruct-2507
+policy_model_name: Qwen/Qwen2.5-1.5B-Instruct
 hf_token: ...
 ```
 
@@ -265,7 +265,7 @@ python scripts/create_dataset.py \
     --output data/reasoning_gym/val_mini_sudoku.jsonl
 ```
 
-### Step 2: Create Blended Dataset
+### Step 2: Create Combined Dataset
 
 Create a single dataset with tasks from both environments mixed together. This can be done with a simple bash command, such as the following: 
 ```bash
@@ -276,7 +276,7 @@ Note you may want to ensure that the datasets are the same size before shuffling
 
 ### Step 3: Update Training Config
 
-Create `config_multi_env.yaml` pointing to the blended dataset:
+Create `config_multi_env.yaml` pointing to the combined dataset:
 
 ```yaml
 model_name: "Qwen/Qwen3-4B-Instruct-2507"
@@ -290,9 +290,9 @@ output_dir: "outputs/nemo_gym_multi_env"
 # ... rest of config same
 ```
 
-### Step 4: Launch Resources Servers
+### Step 4: Update ng_run
 
-Start NeMo-Gym with both resources servers in the config:
+Whether training interactively or via slurm, update the ng_run command to use the config file from each resources server used in training. 
 
 ```bash
 cd Gym
@@ -309,9 +309,9 @@ This starts servers for both environments. The training script will automaticall
 
 ### Step 5: Run Training
 
-Just update the slurm submission script to use the new config, then submit the job as before!
+Just update the slurm submission script to use the new train config and both ng_run resources server configs, then submit the job as before!
 
-The training script reads `agent_ref` from each example's metadata, routes requests to the correct NeMo-Gym agent server, and handles different environments in the same batch
+The training script reads `agent_ref` from each example's metadata, routes requests to the correct NeMo-Gym agent server, and handles different agents and environments in the same batch
 
 ## Resources
 
