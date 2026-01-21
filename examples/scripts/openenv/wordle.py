@@ -16,9 +16,10 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio",
+#     "trackio>=0.13.0",
 #     "kernels",
-#     "openenv-textarena @ git+https://huggingface.co/spaces/burtenshaw/wordle",
+#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
+#     "openenv_core",
 # ]
 # ///
 
@@ -26,46 +27,20 @@
 """
 Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
-Setup:
-
-```sh
-uv pip install git+https://huggingface.co/spaces/burtenshaw/wordle
-```
-
-# Option 1: HF Spaces + Colocated vLLM (1 GPU required)
-```sh
-python examples/scripts/openenv/wordle.py --vllm-mode colocate
-```
-
-# Option 2: HF Spaces + Separate vLLM server (2 GPUs required)
-
-# Spin up vLLM server (Terminal 1)
-```sh
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000
-```
-
-# Run training (Terminal 2)
-```sh
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
-```
-
-# Option 3: Local + Colocated vLLM (1 GPU required)
-
 Usage:
-
-# Start the environment only if using --env-mode docker-local; In other modes, the env is automatically managed by the script.
-```sh
-docker run -d -p 8001:8001 registry.hf.space/burtenshaw-wordle:latest
-```
-
-```sh
-python examples/scripts/openenv/wordle.py --vllm-mode colocate
-```
+    CUDA_DEVICE_ORDER="PCI_BUS_ID" CUDA_VISIBLE_DEVICES=4 python examples/scripts/openenv/wordle_kashif_updated.py \
+        --env-url https://sergiopaniego-wordle.hf.space \
+        --gradient-accumulation-steps 64 \
+        --learning-rate 1e-6 \
+        --warmup-steps 10 \
+        --max-new-tokens 16
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
 from collections import defaultdict
 from collections.abc import Iterable
@@ -84,7 +59,70 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from textarena_env import TextArenaAction, TextArenaEnv
 from textarena_env.models import TextArenaMessage
-from textarena_env.rewards import extract_feedback_counts, extract_guess, extract_wordle_feedback
+
+
+# ---------------------------------------------------------------------------
+# Wordle-specific helpers
+# ---------------------------------------------------------------------------
+
+_WORDLE_GUESS_PATTERN = re.compile(r"\[[A-Za-z]{5}\]")
+
+
+def extract_guess(text: str) -> str:
+    """Normalize a Wordle guess string from arbitrary text."""
+    match = _WORDLE_GUESS_PATTERN.search(text)
+    if match:
+        return match.group(0).lower()
+
+    cleaned = re.sub(r"[^a-z]", "", text.lower())
+    if len(cleaned) >= 5:
+        return f"[{cleaned[:5]}]"
+    return "[dunno]"
+
+
+def extract_wordle_feedback(observation) -> str:
+    """Pull the latest feedback text from a Wordle observation."""
+    for message in reversed(observation.messages):
+        content = message.content.strip()
+        if "Feedback:" in content:
+            return content.split("Feedback:", 1)[-1].strip()
+    return ""
+
+
+def extract_feedback_counts(feedback: str) -> tuple[int, int]:
+    """Return counts of green (G) and yellow (Y) markers from feedback."""
+
+    if not feedback:
+        return (0, 0)
+
+    lines = [line.strip() for line in feedback.split("\n") if line.strip()]
+    if len(lines) < 2:
+        return (0, 0)
+
+    for line in reversed(lines):
+        normalized = line.replace(" ", "")
+        if normalized and all(c in "GYX" for c in normalized):
+            green = normalized.count("G")
+            yellow = normalized.count("Y")
+            return (green, yellow)
+
+    return (0, 0)
+
+
+def scale_repetition_score(previous_occurrences: int, max_turns: int) -> float:
+    """Scale the repetition score based on the number of previous occurrences from 0 to 1.
+
+    A guess that hasn't been used before gets score 1.0.
+    A repeated guess gets progressively lower scores.
+    """
+    if max_turns == 0:
+        return 0.0
+    return max(0.0, 1.0 - previous_occurrences / max_turns)
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
 
 
 def parse_args() -> argparse.Namespace:
@@ -183,7 +221,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-generations",
         type=int,
-        default=2,
+        default=4,
         help="Number of rollout generations per dataset prompt.",
     )
     parser.add_argument(
@@ -201,7 +239,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-total-limit",
         type=int,
-        default=None,
+        default=1,
         help="Maximum number of checkpoints to keep.",
     )
     parser.add_argument(
@@ -278,31 +316,24 @@ def format_history(messages: Iterable[TextArenaMessage]) -> str:
     return "\n".join(lines)
 
 
-def make_user_prompt(prompt_text: str, messages: Iterable[TextArenaMessage]) -> str:
+def make_user_prompt(messages: Iterable[TextArenaMessage]) -> str:
     history = format_history(messages)
-    prompt_section = prompt_text.strip() if prompt_text.strip() else "Wordle-v0"
     history_section = history if history else "[PROMPT] Awaiting first feedback."
-    return (
-        f"Game prompt:\n{prompt_section}\n\n"
-        f"Conversation so far:\n{history_section}\n\n"
-        "Reply with your next guess enclosed in square brackets."
-    )
+    return f"Conversation so far:\n{history_section}\n\nReply with your next guess enclosed in square brackets."
 
 
-def scale_repetition_score(previous_occurrences: int, max_occurrences: int) -> float:
-    """Scale the repetition score based on the number of previous occurrences from 0 to 1"""
-    if max_occurrences == 0:
-        return 0.0
-    return (max_occurrences - previous_occurrences) / max_occurrences
+# ---------------------------------------------------------------------------
+# Rollout with proper logprobs/completion_ids alignment
+# ---------------------------------------------------------------------------
 
 
 def rollout_once(
     trainer: GRPOTrainer,
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
-    dataset_prompt: str,
     system_prompt: str,
     max_turns: int,
+    max_new_tokens: int = 16,
 ) -> dict[str, list]:
     result = env.reset()
     observation = result.observation
@@ -311,24 +342,33 @@ def rollout_once(
     completion_ids: list[int] = []
     logprobs: list[float] = []
     raw_rewards: list[float] = []
-    green_scores: list[float] = []
-    yellow_scores: list[float] = []
-    repetition_scores: list[float] = []
+    position_scores: list[float] = []
     correct_scores: list[float] = []
     guess_counts: defaultdict[str, int] = defaultdict(int)
+    prev_env_output_len: int = 0
+
+    accumulated_messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+
+    # Build initial prompt
+    initial_user_prompt = make_user_prompt(observation.messages)
+    initial_env_output = format_history(observation.messages) if observation.messages else ""
+    prev_env_output_len = len(initial_env_output)
+    initial_messages = accumulated_messages + [{"role": "user", "content": initial_user_prompt}]
+    initial_prompt_text = tokenizer.apply_chat_template(
+        initial_messages,
+        add_generation_prompt=True,
+        tokenize=False,
+        enable_thinking=False,
+    )
+    initial_prompt_ids = tokenizer.encode(initial_prompt_text, add_special_tokens=False)
+    prompt_ids.extend(initial_prompt_ids)
 
     for _turn in range(max_turns):
-        # when the game is over the environment will return a done=True
         if result.done:
             break
 
-        # set up the prompt for the model
-        base_prompt = observation.prompt or dataset_prompt
-        user_prompt = make_user_prompt(base_prompt, observation.messages)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+        user_prompt = make_user_prompt(observation.messages)
+        messages = accumulated_messages + [{"role": "user", "content": user_prompt}]
         prompt_text = tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
@@ -336,43 +376,60 @@ def rollout_once(
             enable_thinking=False,
         )
 
-        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
-        prompt_ids.extend(rollout_outputs["prompt_ids"])
-        completion_ids.extend(rollout_outputs["completion_ids"])
-        logprobs.extend(rollout_outputs["logprobs"])
+        rollout_outputs = generate_rollout_completions(
+            trainer,
+            [prompt_text],
+            generation_overrides={
+                "max_tokens": max_new_tokens,
+            },
+        )[0]
+
         completion_text = rollout_outputs.get("text") or tokenizer.decode(
             rollout_outputs["completion_ids"], skip_special_tokens=True
         )
-        # extract the guess from the completion
         guess = extract_guess(completion_text)
 
-        # step the environment with the guess
+        # Add model completion tokens and logprobs (only model-generated tokens)
+        completion_ids.extend(rollout_outputs["completion_ids"])
+        logprobs.extend(rollout_outputs["logprobs"])
+
+        # Add newline token after each guess for readability in logs
+        newline_ids = tokenizer.encode("\n", add_special_tokens=False)
+        completion_ids.extend(newline_ids)
+        logprobs.extend([0.0] * len(newline_ids))  # Neutral logprob for added newline
+
         result = env.step(TextArenaAction(message=guess))
         raw_rewards.append(float(result.reward or 0.0))
         observation = result.observation
         correct_score = float(result.reward or 0.0)
         feedback = extract_wordle_feedback(observation)
 
-        # Update guess counts
-        previous_occurrences = guess_counts[guess]
-        repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
+        # Add env output to completion text for history/context
+        full_env_output = format_history(observation.messages) if observation.messages else ""
+        new_env_output = full_env_output[prev_env_output_len:].lstrip("\n")
+        prev_env_output_len = len(full_env_output)
+        completion_with_env = completion_text + "\n" + new_env_output
+
+        accumulated_messages.append({"role": "user", "content": user_prompt})
+        accumulated_messages.append({"role": "assistant", "content": completion_with_env})
+
         guess_counts[guess] += 1
 
-        # calculate custom reward signals from the feedback
         if not feedback:
-            green_score = 0.0
-            yellow_score = 0.0
+            position_score = 0.0
         else:
             green_count, yellow_count = extract_feedback_counts(feedback)
-            green_score = green_count / 5.0
-            yellow_score = yellow_count / 5.0
+            position_score = (green_count + 0.5 * yellow_count) / 5.0
 
-        repetition_scores.append(repetition_score)
-        green_scores.append(green_score)
-        yellow_scores.append(yellow_score)
+        position_scores.append(position_score)
         correct_scores.append(correct_score)
 
     correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
+
+    if correct_reward_value >= 1.0:
+        final_position_reward = 1.0
+    else:
+        final_position_reward = position_scores[-1] if position_scores else 0.0
 
     return {
         "prompt_ids": prompt_ids,
@@ -380,43 +437,49 @@ def rollout_once(
         "logprobs": logprobs,
         "raw_rewards": raw_rewards,
         "correct_reward": correct_reward_value,
-        "green_reward": green_scores[-1] if green_scores else 0.0,
-        "yellow_reward": yellow_scores[-1] if yellow_scores else 0.0,
-        "repetition_reward": repetition_scores[-1] if repetition_scores else 0.0,
+        "position_reward": final_position_reward,
     }
 
 
 # ---------------------------------------------------------------------------
-# Rewards
+# Reward functions
 # ---------------------------------------------------------------------------
 
 
 def reward_correct(completions: list[str], **kwargs) -> list[float]:
+    """Reward from environment (correct answer)."""
     rewards = kwargs.get("correct_reward") if kwargs else None
     if rewards is None:
         return [0.0 for _ in completions]
     return [float(r) for r in rewards]
 
 
-def reward_greens(completions: list[str], **kwargs) -> list[float]:
-    rewards = kwargs.get("green_reward") if kwargs else None
+def reward_position(completions: list[str], **kwargs) -> list[float]:
+    """Position reward: green worth 1.0, yellow worth 0.5, normalized by 5."""
+    rewards = kwargs.get("position_reward") if kwargs else None
     if rewards is None:
         return [0.0 for _ in completions]
     return [float(r) for r in rewards]
 
 
-def reward_yellows(completions: list[str], **kwargs) -> list[float]:
-    rewards = kwargs.get("yellow_reward") if kwargs else None
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+def reward_format_strict(completions: list[str], **kwargs) -> list[float]:
+    """Reward for clean format - only [guess] patterns allowed.
 
+    Expected format: [crane][spare][stare]... (only 5-letter guesses in brackets)
+    Whitespace between guesses is allowed, but any other text = 0.0 reward.
+    """
+    strict_pattern = re.compile(r"^(\[[A-Za-z]{5}\])+$")
 
-def reward_repetition(completions: list[str], **kwargs) -> list[float]:
-    rewards = kwargs.get("repetition_reward") if kwargs else None
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+    rewards = []
+    for completion in completions:
+        text = re.sub(r"\s+", "", completion)
+
+        if strict_pattern.match(text):
+            rewards.append(1.0)
+        else:
+            rewards.append(0.0)
+
+    return rewards
 
 
 # ---------------------------------------------------------------------------
@@ -452,9 +515,10 @@ def main() -> None:
         per_device_train_batch_size=args.per_device_batch_size,
         warmup_steps=args.warmup_steps,
         num_generations=args.num_generations,
-        max_completion_length=args.max_new_tokens,
+        max_completion_length=1024,
         logging_steps=args.logging_steps,
-        report_to="trackio",
+        log_completions=True,
+        report_to="wandb",
         trackio_space_id=f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
         save_steps=args.save_interval,
@@ -462,46 +526,50 @@ def main() -> None:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
+        vllm_gpu_memory_utilization=0.25,
+        vllm_max_model_length=8192,
+        vllm_importance_sampling_correction=False,
+        gradient_checkpointing=True,
+        bf16=True,
+        optim="adamw_torch",
+        max_grad_norm=1.0,
     )
 
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
-    grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
+    grpo_config.project = args.project or f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}"
     grpo_config.trackio_space_id = args.trackio_space_id
+
+    os.environ["WANDB_PROJECT"] = f"wordle-grpo-{sanitize_name(args.model_id)}"
+    os.environ["WANDB_RUN_ID"] = f"{timestamp}"
 
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
         correctness_rewards: list[float] = []
-        green_rewards: list[float] = []
-        yellow_rewards: list[float] = []
-        repetition_rewards: list[float] = []
+        position_rewards: list[float] = []
 
-        for prompt_text in prompts:
+        for _ in prompts:
             episode = rollout_once(
                 trainer=trainer,
                 env=client,
                 tokenizer=tokenizer,
-                dataset_prompt=prompt_text,
                 system_prompt=system_prompt,
                 max_turns=args.max_turns,
+                max_new_tokens=args.max_new_tokens,
             )
             episode_prompt_ids.append(episode["prompt_ids"])
             episode_completion_ids.append(episode["completion_ids"])
             episode_logprobs.append(episode["logprobs"])
             correctness_rewards.append(episode["correct_reward"])
-            green_rewards.append(episode["green_reward"])
-            yellow_rewards.append(episode["yellow_reward"])
-            repetition_rewards.append(episode["repetition_reward"])
+            position_rewards.append(episode["position_reward"])
 
         return {
             "prompt_ids": episode_prompt_ids,
             "completion_ids": episode_completion_ids,
             "logprobs": episode_logprobs,
             "correct_reward": correctness_rewards,
-            "green_reward": green_rewards,
-            "yellow_reward": yellow_rewards,
-            "repetition_reward": repetition_rewards,
+            "position_reward": position_rewards,
         }
 
     trainer = GRPOTrainer(
@@ -509,9 +577,8 @@ def main() -> None:
         processing_class=tokenizer,
         reward_funcs=[
             reward_correct,
-            reward_greens,
-            reward_yellows,
-            reward_repetition,
+            reward_position,
+            reward_format_strict,
         ],
         train_dataset=dataset,
         args=grpo_config,
