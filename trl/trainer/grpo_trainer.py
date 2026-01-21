@@ -229,9 +229,9 @@ class GRPOTrainer(BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         tools (list of `Callable`, *optional*):
-            A list of callable tool functions that the model can invoke during generation. Each tool should be a
-            standard Python function with properly type-hinted arguments and return values, and a Google-style
-            docstring describing its purpose, arguments, and return value. For more details, see:
+            A list of callable tool functions (sync or async) that the model can invoke during generation. Each tool
+            should be a standard Python function with properly type-hinted arguments and return values, and a
+            Google-style docstring describing its purpose, arguments, and return value. For more details, see:
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
@@ -377,15 +377,6 @@ class GRPOTrainer(BaseTrainer):
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
 
-        self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
-        if self._has_async_reward_funcs:
-            self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
-                start_event_loop_in_daemon(name="GRPOTrainer-AsyncRewardLoop")
-            )
-            # wait until the event loop is running in the daemon thread
-            self.async_reward_loop_ready_event.wait()
-            atexit.register(shutdown_event_loop_in_daemon, self.async_reward_loop_thread, self.async_reward_loop)
-
         # Reward weights
         if args.reward_weights is not None:
             if len(args.reward_weights) != len(reward_funcs):
@@ -446,9 +437,27 @@ class GRPOTrainer(BaseTrainer):
                     "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
                     "it with `pip install jmespath` to use this feature."
                 )
-        self.tools = tools
+        self.tools = tools or []
+        self._sync_tool_dict = {}
+        self._async_tool_dict = {}
         if self.tools:
-            self._tool_dict = {tool.__name__: tool for tool in self.tools}
+            for tool in self.tools:
+                if asyncio.iscoroutinefunction(tool):
+                    self._async_tool_dict[tool.__name__] = tool
+                else:
+                    self._sync_tool_dict[tool.__name__] = tool
+
+        # Check for async functions to start an event loop on a daemon thread
+        self._has_async_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
+
+        if self._has_async_funcs:
+            self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
+                name="GRPOTrainer-AsyncLoop"
+            )
+            # wait until the event loop is running in the daemon thread
+            self.async_loop_ready_event.wait()
+            atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
+
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
@@ -1254,7 +1263,7 @@ class GRPOTrainer(BaseTrainer):
         # Execute async custom functions in parallel using asyncio.gather
         if async_funcs_info:
 
-            async def _invoke_async_reward(index, func, func_name):
+            async def _invoke_async(index, func, func_name):
                 with profiling_context(self, func_name):
                     output = await func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
@@ -1263,10 +1272,10 @@ class GRPOTrainer(BaseTrainer):
                     return index, output
 
             async def _run_async_funcs():
-                coros = [_invoke_async_reward(i, func, func_name) for (i, func, func_name) in async_funcs_info]
+                coros = [_invoke_async(i, func, func_name) for (i, func, func_name) in async_funcs_info]
                 return await asyncio.gather(*coros)
 
-            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_reward_loop).result()
+            async_results = asyncio.run_coroutine_threadsafe(_run_async_funcs(), self.async_loop).result()
             for idx, output_reward_func in async_results:
                 rewards_per_func[:, idx] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
@@ -1606,20 +1615,46 @@ class GRPOTrainer(BaseTrainer):
                 prompt_completion_tool = prompt_completion_tools[idx]
                 # Append the last assistant message (which triggered tool_calls) to the prompt
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
+                async_coros = []
+                tool_call_results = []
                 for tool_call in tool_call_list:
                     tool_call_count += 1
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
                         name = function["name"]
                         try:
-                            result = self._tool_dict[name](**function["arguments"])
+                            if name in self._sync_tool_dict:
+                                tool_call_results.append((name, self._sync_tool_dict[name](**function["arguments"])))
+                            elif name in self._async_tool_dict:
+                                async_coros.append((name, self._async_tool_dict[name](**function["arguments"])))
                         except Exception as e:
                             tool_failure_count += 1
                             result = {"error": str(e)}
+                            tool_call_results.append((name, result))
                     else:
                         tool_failure_count += 1
                         name = tool_call.get("name", "unknown")
-                        result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
+                        tool_call_results.append((name, {"error": f"Unsupported tool call type: {tool_call['type']}"}))
+
+                if async_coros:
+
+                    async def _run_async_tools(async_coros):
+                        coros = [coro for _, coro in async_coros]
+                        results = await asyncio.gather(*coros, return_exceptions=True)
+                        return [(name, result) for (name, _), result in zip(async_coros, results, strict=False)]
+
+                    async_results = asyncio.run_coroutine_threadsafe(
+                        _run_async_tools(async_coros), self.async_loop
+                    ).result()
+
+                    for name, result in async_results:
+                        if isinstance(result, Exception):
+                            tool_failure_count += 1
+                            tool_call_results.append((name, {"error": str(result)}))
+                        else:
+                            tool_call_results.append((name, result))
+
+                for name, result in tool_call_results:
                     tool_message = {"role": "tool", "name": name, "content": str(result)}
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
@@ -1632,8 +1667,11 @@ class GRPOTrainer(BaseTrainer):
                 tokenize=True,
                 add_generation_prompt=True,
                 chat_template=self.chat_template,
+                return_dict=True,
                 **self.chat_template_kwargs,
-            )["input_ids"]
+            )
+            pct_ids = pct_ids["input_ids"]
+
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
