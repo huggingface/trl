@@ -144,7 +144,7 @@ class OnlineDPOConfig(TrainingArguments):
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
+            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and be awoken
             for weight sync and generation.
 
         > Other parameters
@@ -363,7 +363,7 @@ class OnlineDPOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
-                    "and woken for weight sync and generation."
+                    "and be awoken for weight sync and generation."
         },
     )
     ds3_gather_for_generation: bool = field(
