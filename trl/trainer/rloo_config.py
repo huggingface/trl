@@ -215,15 +215,6 @@ class RLOOConfig(TrainingArguments):
             filter your dataset before training to ensure that prompts do not exceed your desired length.
 
             </Deprecated>
-
-        vllm_guided_decoding_regex:
-
-            <Deprecated version="0.27.0">
-
-            Parameter `vllm_guided_decoding_regex` is deprecated and will be removed in version 0.28.0. You should
-            instead use `vllm_structured_outputs_regex`.
-
-            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -255,8 +246,8 @@ class RLOOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -591,10 +582,6 @@ class RLOOConfig(TrainingArguments):
             "desired length."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `vllm_structured_outputs_regex` instead."},
-    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -606,15 +593,6 @@ class RLOOConfig(TrainingArguments):
         if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
             self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
-
-        if self.top_k is None:
-            self.top_k = 0
-            warnings.warn(
-                "The value `None` for `top_k` is deprecated and will raise an error in TRL 0.28. "
-                "Use `top_k=0` to disable top-k filtering instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
 
         super().__post_init__()
 
@@ -673,11 +651,3 @@ class RLOOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
-        if self.vllm_guided_decoding_regex is not None:
-            warnings.warn(
-                "The `vllm_guided_decoding_regex` argument is deprecated and will be removed in version 0.28.0. You "
-                "should instead use `vllm_structured_outputs_regex`.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.vllm_structured_outputs_regex = self.vllm_guided_decoding_regex

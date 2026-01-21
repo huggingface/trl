@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -158,17 +157,6 @@ class DPOConfig(TrainingArguments):
             Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair", "sft"]` for
             [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
             corresponding weights for each loss type.
-
-        use_liger_loss (`bool`, *optional*):
-            Whether to use Liger loss.
-
-            <Deprecated version="0.25.0">
-
-            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel`
-            instead.
-
-            </Deprecated>
-
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
@@ -255,8 +243,8 @@ class DPOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -388,10 +376,6 @@ class DPOConfig(TrainingArguments):
             "(e.g., `['sigmoid', 'bco_pair', 'sft']` for MPO). The `loss_weights` parameter can be used to specify "
             "corresponding weights for each loss type."
         },
-    )
-    use_liger_loss: bool = field(
-        default=None,
-        metadata={"help": "Whether to use Liger loss."},
     )
     base_model_attribute_name: str = field(
         default="model",
@@ -526,12 +510,4 @@ class DPOConfig(TrainingArguments):
                     f"({loss_types})."
                 )
 
-        if self.use_liger_loss is not None:
-            warnings.warn(
-                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
-                "`use_liger_kernel` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.use_liger_kernel = self.use_liger_loss
         super().__post_init__()
