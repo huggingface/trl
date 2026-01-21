@@ -62,7 +62,8 @@ from ..data_utils import (
     prepare_multimodal_messages,
 )
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
+from ..generation.vllm_generation import VLLMGeneration
+from ..import_utils import is_jmespath_available, is_liger_kernel_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
@@ -97,8 +98,6 @@ if is_peft_available():
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-if is_vllm_available():
-    from ..generation.vllm_generation import VLLMGeneration
 
 if is_wandb_available():
     import wandb

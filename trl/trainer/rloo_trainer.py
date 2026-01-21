@@ -56,7 +56,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
 )
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..import_utils import is_vllm_available
+from ..generation.vllm_generation import VLLMGeneration
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
@@ -88,8 +88,6 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
 
-if is_vllm_available():
-    from ..generation.vllm_generation import VLLMGeneration
 
 if is_wandb_available():
     import wandb
