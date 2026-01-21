@@ -119,11 +119,11 @@ class TestDistributed(TrlTestCase):
         # fmt: on
 
     @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
-    def test_reward(self, config):
+    def test_reward(self, config, get_config_path):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/reward.py",
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/reward.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -142,11 +142,11 @@ class TestDistributed(TrlTestCase):
             pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 RLOO is currently failing, see #4854")),
         ],
     )
-    def test_rloo(self, config):
+    def test_rloo(self, config, get_config_path):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/rloo.py",
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/rloo.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -158,11 +158,11 @@ class TestDistributed(TrlTestCase):
         # fmt: on
 
     @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
-    def test_grpo(self, config):
+    def test_grpo(self, config, get_config_path):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", CONFIG_PATHS[config], "trl/scripts/grpo.py",
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/grpo.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
