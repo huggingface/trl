@@ -52,7 +52,7 @@ srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     source .venv/bin/activate && \
     uv sync && \
     ray stop --force && \
-    ng_run +config_paths=[responses_api_models/vllm_model/configs/vllm_model.yaml,resources_servers/workplace_assistant/configs/workplace_assistant.yaml] +head_server.host=0.0.0.0) > \${LOG_DIR}/ng_run.log 2>&1 &
+    ng_run +config_paths=[responses_api_models/vllm_model/configs/vllm_model.yaml,resources_servers/workplace_assistant/configs/workplace_assistant.yaml] +head_server.host=0.0.0.0 +head_server.port=11000) > \${LOG_DIR}/ng_run.log 2>&1 &
 
     sleep 10
 
@@ -61,7 +61,7 @@ srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     export HOME=/path/to/user && \
     export HF_HOME=/path/to/user/hf_home && \
     cd /path/to/user/trl && \
-    source .venv/bin/activate && \
+    rm -rf .venv && uv venv && source .venv/bin/activate && uv sync && uv pip install -e .[vllm] && uv pip install fastapi uvicorn && \
     python -m trl.scripts.vllm_serve \
     --model Qwen/Qwen3-4B-Instruct-2507 \
     --host 0.0.0.0 \
@@ -90,8 +90,9 @@ srun --nodes=4 --ntasks=4 --nodelist="${TRAIN_NODES_LIST}" \
     export HOME=/path/to/user && \
     export HF_HOME=/path/to/user/hf_home && \
     cd /path/to/user/trl && \
-    source .venv/bin/activate && \
+    source .venv/bin/activate && uv pip install accelerate deepseed wandb omegaconf && \
     cd examples/scripts/nemo_gym && \
+    export WANDB_API_KEY=<your wandb api key> && \
     accelerate launch \
     --config_file deepspeed_zero3.yaml \
     --num_processes 32 \

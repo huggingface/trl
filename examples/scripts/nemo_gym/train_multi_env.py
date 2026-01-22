@@ -394,7 +394,7 @@ def main():
         log_completions=config.log_completions,
         num_completions_to_print=config.num_completions_to_print,
 
-        max_prompt_length=config.max_prompt_length,
+        # max_prompt_length=config.max_prompt_length,
         max_completion_length=config.max_seq_length - config.max_prompt_length if config.max_prompt_length else config.max_seq_length,
         shuffle_dataset=False,
 
