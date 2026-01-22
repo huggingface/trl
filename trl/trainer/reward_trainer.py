@@ -36,6 +36,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
@@ -286,6 +287,8 @@ class RewardTrainer(BaseTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = RewardConfig(f"{model_name}-Reward")
+
+        set_seed(args.seed)
 
         # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
         # batches from multiple processes, leading to mismatch errors.
