@@ -51,8 +51,6 @@ class KTOConfig(TrainingArguments):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
             during evaluation.
@@ -66,10 +64,6 @@ class KTOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
-        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
-            Name of the attribute in the model that contains the base model. This is used to get the base model from
-            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
-            `True`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -101,8 +95,8 @@ class KTOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -143,12 +137,6 @@ class KTOConfig(TrainingArguments):
             "undesirable pairs.",
         },
     )
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={
-            "help": "Label pad token id. This argument is required if you want to use the default data collator."
-        },
-    )
     generate_during_eval: bool = field(
         default=False,
         metadata={
@@ -177,14 +165,6 @@ class KTOConfig(TrainingArguments):
     dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    base_model_attribute_name: str = field(
-        default="model",
-        metadata={
-            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
-            "model from the model when the model does not have a `get_decoder` method in the case when "
-            "`use_liger_kernel` is `True`."
-        },
     )
 
     def __post_init__(self):
