@@ -822,7 +822,7 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Hugging Face Hub repository to save the completions. Should be a complete repository name like "
-            "`'username/reponame'` or `'orgname/reponame' `, or just `'reponame'` in which case the repository will "
+            "`'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will "
             "be created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be "
             "public unless you set `hub_private_repo=True` or your organization's default is to create private "
             "repositories."

@@ -792,7 +792,7 @@ class GRPOTrainer(BaseTrainer):
                         reward_func, evaluation_mode=True, device_placement=True
                     )
 
-        if self.is_world_process_zero() and self.args.log_completions_hub_repo is not None:
+        if self.accelerator.is_main_process and self.args.log_completions_hub_repo is not None:
             create_repo(
                 self.args.log_completions_hub_repo,
                 private=self.args.hub_private_repo,
@@ -811,7 +811,7 @@ class GRPOTrainer(BaseTrainer):
                 hub_model_id=self.args.hub_model_id,
             )
             card.push_to_hub(self.args.log_completions_hub_repo)
-            os.makedirs(f"{self.args.output_dir}/completions", exist_ok=True)
+            os.makedirs(os.path.join(self.args.output_dir, "completions"), exist_ok=True)
             self.commit_scheduler = CommitScheduler(
                 repo_id=self.args.log_completions_hub_repo,
                 repo_type="dataset",

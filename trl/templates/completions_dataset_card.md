@@ -37,5 +37,5 @@ You can also load the dataset using Polars:
 import polars as pl
 
 # Login using e.g. `huggingface-cli login` to access this dataset if it's private
-df = pl.read_parquet(f"hf://datasets/{{ log_completions_hub_repo }}/**/*.parquet")
+df = pl.read_parquet(f"hf://datasets/{{ log_completions_hub_repo }}/*.parquet")
 ```
