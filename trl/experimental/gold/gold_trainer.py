@@ -236,6 +236,7 @@ class ULDLoss(nn.Module):
 
     def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None):
         super().__init__()
+        self.config = config
         self.crossentropy_weight = config.uld_crossentropy_weight
         self.distillation_weight = config.uld_distillation_weight
         self.student_temperature = config.uld_student_temperature
@@ -320,6 +321,12 @@ class ULDLoss(nn.Module):
         self._vocab_mapping = vocab_mapping
         self._teacher_matched_ids = teacher_matched_ids
         self._student_matched_ids = student_matched_ids
+
+        max_matched_teacher_id = max(self._vocab_mapping.keys())
+        self.mapping_tensor = torch.full((max_matched_teacher_id + 1,), -1, dtype=torch.long)  # -1 for unmapped ids
+        for k, v in self._vocab_mapping.items():
+            self.mapping_tensor[k] = v
+        self.mapping_tensor = self.mapping_tensor.to(self.config.device)
 
     def _compute_distillation_loss(
         self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
@@ -616,9 +623,7 @@ class ULDLoss(nn.Module):
         # Convert sets to sorted tensors for indexing
         if self._teacher_matched_ids:
             teacher_matched_indices = torch.tensor(sorted(self._teacher_matched_ids), dtype=torch.long, device=device)
-            student_matched_indices = torch.tensor(
-                [self._vocab_mapping[tid.item()] for tid in teacher_matched_indices], dtype=torch.long, device=device
-            )
+            student_matched_indices = self.mapping_tensor[teacher_matched_indices]
         else:
             teacher_matched_indices = torch.tensor([], dtype=torch.long, device=device)
             student_matched_indices = torch.tensor([], dtype=torch.long, device=device)
