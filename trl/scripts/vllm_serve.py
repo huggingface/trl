@@ -644,6 +644,7 @@ def main(script_args: ScriptArguments):
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
+        tools: list | None = None
 
     class ChatResponse(BaseModel):
         prompt_ids: list[list[int]]
@@ -756,6 +757,7 @@ def main(script_args: ScriptArguments):
                 "messages": messages,
                 "sampling_params": sampling_params,
                 "chat_template_kwargs": request.chat_template_kwargs,
+                "tools": request.tools,
             }
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 

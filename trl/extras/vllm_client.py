@@ -352,8 +352,6 @@ class VLLMClient:
                 - `logprobs` (`list[list[float]]`):
                     List of lists of log probabilities for each generated token.
         """
-        if tools is not None:
-            raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
         if chat_template is not None:
             raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
 
@@ -383,6 +381,7 @@ class VLLMClient:
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
                 "chat_template_kwargs": chat_template_kwargs or {},
+                "tools": tools,
             },
         )
         if response.status_code == 200:
