@@ -31,6 +31,8 @@ mkdir -p ${LOG_DIR}
 echo "Starting ng_run and vLLM on ${VLLM_NODE}..."
 echo "Logs will be saved to: ${LOG_DIR}"
 
+# NOTE: If you have already set up your TRL venv, you can remove all of the pip installs and uv venv related commands below! 
+
 srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     --container-image="${CONTAINER_IMAGE}" \
     --container-mounts="${MOUNTS}" \
