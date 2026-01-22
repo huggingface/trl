@@ -1,6 +1,6 @@
 # NeMo-Gym Integration
 
-NVIDIA NeMo-Gym is a library for building reinforcement learning environments for large language models. This integration enables training models in NeMo-Gym environments using TRL's [`GRPOTrainer`].
+NVIDIA NeMo-Gym is a library for building reinforcement learning environments for large language models. This integration enables training models in NeMo-Gym environments using TRL's GRPOTrainer.
 
 NeMo-Gym orchestrates multi-step and multi-turn rollouts, providing token IDs and log probabilities to TRL through a custom rollout function. This integration currently requires TRL's vLLM server mode.
 
@@ -14,9 +14,9 @@ The integration supports:
 
 ## Why NeMo Gym
 
-NeMo-Gym was designed to support large-scale, production-grade reinforcement learning training:
+NeMo-Gym was designed to support large-scale agentic RL:
 
-- **Scale and Coverage**: NeMo-Gym supports diverse environments running in parallel, with many examples across domains (math, coding, tool use, knowledge, reasoning, search, ...). 
+- **Scale and Coverage**: NeMo-Gym supports diverse environments running in parallel, with examples across various domains (math, coding, tool use, knowledge, reasoning, search, ...). 
 - **Production-Ready**: Tested for frontier model training at large scale. The infrastructure is designed for the scale and reliability required for production LLM training.
 - **Multi-Verifier RL Training**: Built for training with multiple verification methods simultaneously. Supports algorithmic verification (code execution, math verification), LLM-as-a-judge, and custom verification logic across different environments in a single training run.
 - **Decoupled Architecture**: Enables building agents and environments independently from the training loop. Environments can be developed, tested, and deployed without requiring expertise in the RL training framework.
@@ -69,7 +69,7 @@ Use `ng_prepare_data` to download and prepare the dataset. This command:
 - Validates the data format
 - Adds an `agent_ref` field to each example that tells NeMo-Gym which agent server should handle that example
 
-Note that `train_multi_env.py` adds `agent_ref` field when loading datasets in case that datasets are created some other way.
+Note that `run_grpo_nemo_gym.py` adds `agent_ref` field when loading datasets in case that datasets are created some other way.
 
 First, set `env.yaml` in `Gym/` to contain your Hugging Face token: 
 ```
@@ -105,7 +105,7 @@ In NeMo Gym, datasets are stored as JSONL. Each line contains a task with input 
       {"role": "system", "content": "..."},
       {"role": "user", "content": "Move any of jinsoo's tasks that are in review to completed"}
     ],
-    "tools": [...],  // Full tool definitions
+    "tools": [...],
     "parallel_tool_calls": false,
     "temperature": 1
   },
@@ -214,9 +214,9 @@ cd examples/scripts/nemo_gym
 
 # if using wandb
 export WANDB_API_KEY=...
-uv pip install wandb       # TODO: double check its missing from trl 
+uv pip install wandb
 
-CUDA_VISIBLE_DEVICES=1 python train_multi_env.py --config config_workplace.yaml
+CUDA_VISIBLE_DEVICES=1 python run_grpo_nemo_gym.py --config config_workplace.yaml
 ```
 
 Note that these separate terminals can also be tmux sessions or processes ran in the background.
@@ -317,5 +317,5 @@ The training script reads `agent_ref` from each example's metadata, routes reque
 
 - [NeMo-Gym GitHub](https://github.com/NVIDIA-NeMo/Gym)
 - [NeMo-Gym Documentation](https://docs.nvidia.com/nemo/gym/latest/)
-- [Training Script](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/train_multi_env.py)
+- [Training Script](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/run_grpo_nemo_gym.py)
 - [TRL GRPO Trainer](grpo_trainer)
