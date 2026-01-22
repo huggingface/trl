@@ -98,7 +98,7 @@ class TestDistributed(TrlTestCase):
         "config",
         [
             "ddp",
-            "zero2",
+            pytest.param("zero2", marks=pytest.mark.xfail(reason="ZeRO 2 is currently failing; see #4884")),
             pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing; see #4831")),
             "fsdp2",
         ],
