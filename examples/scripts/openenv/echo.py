@@ -77,6 +77,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import requests
 from datasets import load_dataset
@@ -208,7 +209,8 @@ def main():
         gradient_accumulation_steps=4,
     )
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
+        prompts = [inp["prompt"] for inp in inputs]
         outputs = generate_rollout_completions(trainer, prompts)
         tokenizer = trainer.processing_class
 

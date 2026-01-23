@@ -91,6 +91,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from datasets import Dataset
 from transformers import AutoTokenizer
@@ -768,7 +769,11 @@ def main() -> None:
     grpo_config.trackio_space_id = args.trackio_space_id
     grpo_config.gradient_checkpointing = args.gradient_checkpointing
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    # In server mode, rollout_func receives deduplicated inputs and must generate num_generations per input
+    # In colocate mode, the dataloader handles duplication, so we generate 1 per input
+    num_gens = args.num_generations if args.vllm_mode == "server" else 1
+
+    def rollout_func(inputs: list[dict[str, Any]], trainer: GRPOTrainer) -> dict[str, list]:
         all_prompt_ids = []
         all_completion_ids = []
         all_logprobs = []
@@ -778,25 +783,27 @@ def main() -> None:
         all_repetition = []
         all_progress = []
 
-        for _ in prompts:
-            episode = rollout_once(
-                trainer=trainer,
-                env=client,
-                tokenizer=trainer.processing_class,
-                system_prompt=system_prompt,
-                max_turns=args.max_turns,
-                debug=args.debug,
-                difficulty=args.difficulty,
-                api_delay=args.api_delay,
-            )
-            all_prompt_ids.append(episode["prompt_ids"])
-            all_completion_ids.append(episode["completion_ids"])
-            all_logprobs.append(episode["logprobs"])
-            all_correct.append(episode["correct_reward"])
-            all_valid.append(episode["valid_move_reward"])
-            all_empty_cell.append(episode["empty_cell_reward"])
-            all_repetition.append(episode["repetition_reward"])
-            all_progress.append(episode["progress_reward"])
+        for _ in inputs:
+            # Generate num_gens rollouts per input (needed for server mode; colocate uses num_gens=1)
+            for _ in range(num_gens):
+                episode = rollout_once(
+                    trainer=trainer,
+                    env=client,
+                    tokenizer=trainer.processing_class,
+                    system_prompt=system_prompt,
+                    max_turns=args.max_turns,
+                    debug=args.debug,
+                    difficulty=args.difficulty,
+                    api_delay=args.api_delay,
+                )
+                all_prompt_ids.append(episode["prompt_ids"])
+                all_completion_ids.append(episode["completion_ids"])
+                all_logprobs.append(episode["logprobs"])
+                all_correct.append(episode["correct_reward"])
+                all_valid.append(episode["valid_move_reward"])
+                all_empty_cell.append(episode["empty_cell_reward"])
+                all_repetition.append(episode["repetition_reward"])
+                all_progress.append(episode["progress_reward"])
 
         return {
             "prompt_ids": all_prompt_ids,

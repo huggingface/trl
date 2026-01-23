@@ -126,10 +126,11 @@ logger = get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 
-# What we call a rollout function is a callable that takes prompts (list) and the trainer instance as parameters and
-# returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
-# fields. Any extra fields (per-completion) are forwarded to the reward functions.
-RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
+# What we call a rollout function is a callable that takes the full inputs (list of dicts, each containing at minimum
+# a "prompt" key plus any extra dataset columns) and the trainer instance as parameters and returns a dict of
+# generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs" fields. Any extra
+# fields (per-completion) are forwarded to the reward functions.
+RolloutFunc = Callable[[list[dict[str, Any]], "GRPOTrainer"], dict[str, Any]]
 
 
 class GRPOTrainer(BaseTrainer):
@@ -236,10 +237,11 @@ class GRPOTrainer(BaseTrainer):
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
         rollout_func (`RolloutFunc`, *optional*):
-            Function to use for generating completions. It receives the list of prompts allocated to the current
-            process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
-            `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
-            and may change or be removed at any time without prior notice.
+            Function to use for generating completions. It receives the full inputs (a list of dicts, each containing
+            at minimum a `"prompt"` key plus any extra dataset columns like `"env"`) allocated to the current process
+            and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and `"logprobs"`
+            fields. Any other fields are forwarded to the reward functions. This feature is experimental and may change
+            or be removed at any time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -1297,7 +1299,7 @@ class GRPOTrainer(BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _generate_single_turn(self, prompts: list):
+    def _generate_single_turn(self, prompts: list, inputs: list[dict[str, Any]]):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1352,15 +1354,19 @@ class GRPOTrainer(BaseTrainer):
                     }
                     with profiling_context(self, "vLLM.generate"):
                         if self.rollout_func is not None:
-                            rollout_prompts = ordered_set_of_prompts
-                            if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
-                                rollout_prompts = [
-                                    apply_chat_template(
-                                        {"prompt": p}, self.processing_class, **self.chat_template_kwargs
-                                    )["prompt"]
-                                    for p in rollout_prompts
-                                ]
-                            output = self.rollout_func(rollout_prompts, self)
+                            # Build rollout_inputs from unique prompts (every num_generations-th input)
+                            all_inputs = gather_object(inputs) if inputs is not None else None
+                            rollout_inputs = all_inputs[::num_generations] if all_inputs is not None else None
+                            if rollout_inputs is not None:
+                                # Apply chat template to prompts within inputs if conversational
+                                if is_conversational({"prompt": rollout_inputs[0]["prompt"]}):
+                                    for inp in rollout_inputs:
+                                        inp["prompt"] = apply_chat_template(
+                                            {"prompt": inp["prompt"]},
+                                            self.processing_class,
+                                            **self.chat_template_kwargs,
+                                        )["prompt"]
+                            output = self.rollout_func(rollout_inputs, self)
                         else:
                             if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                                 output = self.vllm_client.chat(
@@ -1406,15 +1412,14 @@ class GRPOTrainer(BaseTrainer):
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.rollout_func is not None:
-                    rollout_prompts = prompts
-                    if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
-                        rollout_prompts = [
-                            apply_chat_template(
-                                {"prompt": prompt}, self.processing_class, **self.chat_template_kwargs
+                    # Build rollout_inputs with chat-templated prompts if conversational
+                    rollout_inputs = copy.deepcopy(inputs) if inputs is not None else None
+                    if rollout_inputs is not None and is_conversational({"prompt": rollout_inputs[0]["prompt"]}):
+                        for inp in rollout_inputs:
+                            inp["prompt"] = apply_chat_template(
+                                {"prompt": inp["prompt"]}, self.processing_class, **self.chat_template_kwargs
                             )["prompt"]
-                            for prompt in rollout_prompts
-                        ]
-                    output = self.rollout_func(rollout_prompts, self)
+                    output = self.rollout_func(rollout_inputs, self)
                     required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                     extra_fields = {k: v for k, v in output.items() if k not in required_keys}
                     prompt_ids = output["prompt_ids"]
@@ -1762,14 +1767,14 @@ class GRPOTrainer(BaseTrainer):
             iteration_num += 1
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
-    def _generate(self, prompts: list):
+    def _generate(self, prompts: list, inputs: list[dict[str, Any]]):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
         # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts, inputs)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
@@ -1887,7 +1892,8 @@ class GRPOTrainer(BaseTrainer):
             num_items_in_batch,
             sampling_per_token_logps_list,
             extra_fields,
-        ) = self._generate(prompts)
+        # inputs are forwarded to rollout_func if provided; standard generation uses prompts only
+        ) = self._generate(prompts, inputs)
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
