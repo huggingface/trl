@@ -880,7 +880,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
 
         advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
-        old_per_token_logps = torch.zeros((3, 4))
+        sampling_per_token_logps = torch.zeros((3, 4))
         per_token_logps = torch.zeros((3, 4))
 
         per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
@@ -892,7 +892,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -902,7 +902,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # 2 valid tokens
         advantages = torch.tensor([[-1.0]])  # Negative advantage
 
-        old_per_token_logps = torch.zeros((1, 4))
+        sampling_per_token_logps = torch.zeros((1, 4))
         per_token_logps = torch.zeros((1, 4))
 
         # Valid tokens have High KL (2.0)
@@ -919,7 +919,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -931,7 +931,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask_keep = torch.tensor([[1.0]])
 
         off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
@@ -2374,7 +2374,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
         if Version(transformers.__version__) < Version("4.57.0"):
-            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.57.0")
+            pytest.xfail("Bug in transformers solved in GH#40692, released in 4.57.0.")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates

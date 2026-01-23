@@ -1112,11 +1112,7 @@ class KTOTrainer(BaseTrainer):
             model_kwargs["output_router_logits"] = True
 
         # skip the lm head and get the last hidden state
-        if hasattr(model, "get_decoder") and model.get_decoder() is not None:
-            base_model = model.get_decoder()
-        else:
-            base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
-            base_model = getattr(model, base_attr, model)
+        base_model = model.get_decoder()
         outputs = base_model(
             batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],
@@ -1125,11 +1121,7 @@ class KTOTrainer(BaseTrainer):
         )
 
         # reference model
-        if hasattr(self.ref_model, "get_decoder") and self.ref_model.get_decoder() is not None:
-            ref_base_model = self.ref_model.get_decoder()
-        else:
-            ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
-            ref_base_model = getattr(self.ref_model, ref_attr, self.ref_model)
+        ref_base_model = self.ref_model.get_decoder()
         ref_outputs = ref_base_model(
             batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],
