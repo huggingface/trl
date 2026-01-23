@@ -66,7 +66,11 @@ if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
-    from vllm.utils import get_open_port
+
+    if Version(vllm.__version__) <= Version("0.11.0"):
+        from vllm.utils import get_open_port
+    else:
+        from vllm.utils.network_utils import get_open_port
 
     if Version(vllm.__version__) <= Version("0.10.2"):
         from vllm.sampling_params import GuidedDecodingParams
@@ -365,6 +369,8 @@ def llm_worker(
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
         model_impl=script_args.vllm_model_impl,
+        # Important so temperature scaling/logit tweaking affects the TIS log probs
+        logprobs_mode="processed_logprobs",
     )
 
     # Send ready signal to parent process
