@@ -288,8 +288,6 @@ class RewardTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = RewardConfig(f"{model_name}-Reward")
 
-        set_seed(args.seed)
-
         # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
         # batches from multiple processes, leading to mismatch errors.
         if isinstance(train_dataset, IterableDataset):
@@ -302,6 +300,9 @@ class RewardTrainer(BaseTrainer):
             args.accelerator_config.dispatch_batches = False
 
         # Model
+        # As AutoModelForSequenceClassification.from_pretrained() will add a random head for the model, set_seed must
+        # be done before loading the model to ensure reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
