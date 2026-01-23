@@ -36,6 +36,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
@@ -299,6 +300,9 @@ class RewardTrainer(BaseTrainer):
             args.accelerator_config.dispatch_batches = False
 
         # Model
+        # As AutoModelForSequenceClassification.from_pretrained() will add a random head for the model, set_seed must
+        # be done before loading the model to ensure reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
