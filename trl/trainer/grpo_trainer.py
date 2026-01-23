@@ -2145,7 +2145,6 @@ class GRPOTrainer(BaseTrainer):
             self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
                 self.accelerator.gather(max_delta).max().item()
             )
-            
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:
