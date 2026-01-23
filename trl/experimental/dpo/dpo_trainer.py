@@ -13,19 +13,22 @@
 # limitations under the License.
 
 import contextlib
+import os
 import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
-from datasets import Dataset, IterableDataset
+from accelerate.utils import is_peft_model, tqdm
+from datasets import Dataset, IterableDataset, IterableDatasetDict
 from datasets.fingerprint import Hasher
+from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,
     DataCollator,
@@ -293,7 +296,7 @@ class DPOTrainer(BaseTrainer):
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if args.distributed_state.distributed_type == "DEEPSPEED":
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
@@ -469,7 +472,7 @@ class DPOTrainer(BaseTrainer):
                 # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
                 model_init_kwargs = args.ref_model_init_kwargs or args.ref_model_init_kwargs or {}
                 # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-                if self.args.distributed_state.distributed_type == "DEEPSPEED":
+                if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
                 self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         else:
@@ -516,19 +519,25 @@ class DPOTrainer(BaseTrainer):
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         if args.precompute_ref_log_probs:
-            self.train_dataset = self._precompute_ref_logps(
-                ref_model, self.train_dataset, self.args.per_device_train_batch_size, "train"
-            )
+            if isinstance(self.train_dataset, IterableDataset) or isinstance(
+                self.eval_dataset, (IterableDataset, IterableDatasetDict)
+            ):
+                raise ValueError(
+                    "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
+                    "Dataset or set `precompute_ref_log_probs=False`."
+                )
+
+            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size
+            self.train_dataset = self._precompute_ref_logps(self.train_dataset, "train", batch_size)
             if self.eval_dataset is not None:
+                batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
                 if isinstance(self.eval_dataset, dict):
                     self.eval_dataset = {
-                        key: self._precompute_ref_logps(ref_model, dataset, self.args.per_device_eval_batch_size, key)
-                        for key, dataset in self.eval_dataset.items()
+                        name: self._precompute_ref_logps(dataset, name, batch_size)
+                        for name, dataset in self.eval_dataset.items()
                     }
                 else:
-                    self.eval_dataset = self._precompute_ref_logps(
-                        ref_model, self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
-                    )
+                    self.eval_dataset = self._precompute_ref_logps(self.eval_dataset, "eval", batch_size)
 
     def _prepare_dataset(
         self,
@@ -657,65 +666,102 @@ class DPOTrainer(BaseTrainer):
                     "ref_rejected_logps",
                 ]
 
-    def _precompute_ref_logps(
-        self, model, dataset: Dataset | IterableDataset, batch_size: int, dataset_name: str
-    ) -> None:
-        def compute_ref_logps(examples, collator, max_length, truncation_mode):
-            examples = [
-                dict(zip(examples.keys(), v, strict=False)) for v in zip(*examples.values(), strict=False)
-            ]  # dict[list] to list[dict]
-            inputs = collator(examples)
-            input_ids = inputs["input_ids"].to(model.device)
-            attention_mask = inputs["attention_mask"].to(model.device)
-            completion_mask = inputs["completion_mask"].to(model.device)
+    def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
+        model_hash = hash_module(self.ref_model or self.model)
+        fingerprint = Hasher.hash((dataset._fingerprint, model_hash))
+        cache_file = dataset._get_cache_file_path(fingerprint).removesuffix(".arrow") + ".npz"
+        if os.path.exists(cache_file):
+            loaded = np.load(cache_file)
+            ref_chosen_logps = loaded["ref_chosen_logps"]
+            ref_rejected_logps = loaded["ref_rejected_logps"]
+        else:
+            dataloader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                collate_fn=self.data_collator,
+                num_workers=self.args.dataloader_num_workers,
+                pin_memory=self.args.dataloader_pin_memory,
+                shuffle=False,
+            )
+            data_loader = self.accelerator.prepare(dataloader)
+            ref_chosen_logps = []
+            ref_rejected_logps = []
+            for padded_batch in tqdm(iterable=data_loader, desc=f"Computing reference log probs for {name} dataset"):
+                ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
+                ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
+                    (ref_chosen_logp, ref_rejected_logp)
+                )
+                ref_chosen_logps.append(ref_chosen_logp.cpu())
+                ref_rejected_logps.append(ref_rejected_logp.cpu())
 
-            # Truncate inputs
-            if max_length is not None:
-                if truncation_mode == "keep_start":
-                    input_ids = input_ids[:, :max_length]
-                    attention_mask = attention_mask[:, :max_length]
-                    completion_mask = completion_mask[:, :max_length]
-                elif truncation_mode == "keep_end":
-                    attention_mask, input_ids, completion_mask = flush_right(
-                        attention_mask, input_ids, completion_mask
-                    )
-                    input_ids = input_ids[:, -max_length:]
-                    attention_mask = attention_mask[:, -max_length:]
-                    completion_mask = completion_mask[:, -max_length:]
-                    attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
-                else:
-                    raise ValueError(
-                        f"Unsupported truncation mode: {truncation_mode}, expected 'keep_start' or 'keep_end'"
-                    )
+            ref_chosen_logps = torch.cat(ref_chosen_logps).numpy()
+            ref_rejected_logps = torch.cat(ref_rejected_logps).numpy()
+            if self.accelerator.is_main_process:
+                np.savez_compressed(
+                    cache_file,
+                    ref_chosen_logps=ref_chosen_logps,
+                    ref_rejected_logps=ref_rejected_logps,
+                )
 
-            outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
-            shift_logits = outputs.logits[..., :-1, :].contiguous()
-            shift_labels = input_ids[..., 1:].contiguous()
-            shift_completion_mask = completion_mask[..., 1:].contiguous()
-            per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-            per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
-            logps = per_token_logps.sum(dim=1)  # sum over sequence length
-            chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
-            return {"ref_chosen_logps": chosen_logps.tolist(), "ref_rejected_logps": rejected_logps.tolist()}
+        dataset = dataset.add_column(name="ref_chosen_logps", column=ref_chosen_logps)
+        dataset = dataset.add_column(name="ref_rejected_logps", column=ref_rejected_logps, new_fingerprint=fingerprint)
 
-        # Normally, `map` creates a fingerprint based on the transform function and its arguments. However, the model’s
-        # produces a different fingerprint on each run, which prevents the cache from being used. To fix this, we
-        # manually compute a stable fingerprint for the model instead.
-        fn_kwargs = {
-            "collator": self.data_collator,
-            "max_length": self.args.max_length,
-            "truncation_mode": self.args.truncation_mode,
-        }
-        model_hash = hash_module(model)
-        dataset = dataset.map(
-            compute_ref_logps,
-            batched=True,
-            batch_size=batch_size,
-            fn_kwargs=fn_kwargs,
-            desc=f"Computing reference logps for {dataset_name} dataset",
-            new_fingerprint=Hasher.hash((dataset._fingerprint, fn_kwargs, model_hash)),
-        )
         return dataset
+
+    def compute_ref_log_probs(self, inputs):
+        """Computes reference log probabilities for a single padded batch."""
+        device = self.accelerator.device
+
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        completion_mask = inputs["completion_mask"]
+
+        if self.args.max_length is not None:
+            if self.args.truncation_mode == "keep_start":
+                input_ids = input_ids[:, : self.args.max_length]
+                attention_mask = attention_mask[:, : self.args.max_length]
+                completion_mask = completion_mask[:, : self.args.max_length]
+            elif self.args.truncation_mode == "keep_end":
+                attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
+                input_ids = input_ids[:, -self.args.max_length :]
+                attention_mask = attention_mask[:, -self.args.max_length :]
+                completion_mask = completion_mask[:, -self.args.max_length :]
+                attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
+
+        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
+            if is_peft_model(self.model) and self.ref_model is None:
+                with use_adapter(self.model, adapter_name="ref" if "ref" in self.model.peft_config else None):
+                    ref_outputs = self.model(input_ids, attention_mask=attention_mask, use_cache=False)
+            else:
+                ref_outputs = self.ref_model(input_ids, attention_mask=attention_mask, use_cache=False)
+
+        ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
+        ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
+        ref_per_token_logps[shift_completion_mask == 0] = 0.0
+
+        if self.ld_alpha is None:
+            ref_logps = ref_per_token_logps.sum(dim=1)
+        else:
+            comp_pos = shift_completion_mask.cumsum(dim=1)
+            comp_lens = shift_completion_mask.sum(dim=1).long()
+            chosen_lens, rejected_lens = comp_lens.chunk(2, dim=0)
+            shared_lens = torch.minimum(chosen_lens, rejected_lens)
+            shared_lens_2b = torch.cat([shared_lens, shared_lens], dim=0).to(device)
+            shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens_2b.unsqueeze(1))
+            tail_mask = comp_pos > shared_lens_2b.unsqueeze(1)
+            shared_logps = (ref_per_token_logps * shared_mask).sum(dim=1)
+            tail_logps = (ref_per_token_logps * tail_mask).sum(dim=1)
+            ref_logps = shared_logps + self.ld_alpha * tail_logps
+
+        ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)
+        return ref_chosen_logps, ref_rejected_logps
 
     def _compute_loss_liger(self, model, inputs, return_outputs):
         if self.precompute_ref_logps:
@@ -873,7 +919,13 @@ class DPOTrainer(BaseTrainer):
             ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
             ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
-            ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
+            if self.ld_alpha is None:
+                ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
+            else:
+                # reuse comp_pos/shared_mask/tail_mask computed above (they depend only on completion_mask)
+                ref_shared_logps = (ref_per_token_logps * shared_mask).sum(dim=1)
+                ref_tail_logps = (ref_per_token_logps * tail_mask).sum(dim=1)
+                ref_logps = ref_shared_logps + self.ld_alpha * ref_tail_logps
             ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)  # batch is [chosen, rejected]
 
         # Get the log ratios for the chosen and rejected responses
@@ -1054,9 +1106,9 @@ class DPOTrainer(BaseTrainer):
         # Average logits for chosen and rejected completions
         chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
         chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
-        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1)
+        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
         total_chosen_tokens = chosen_mask.sum()
-        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1)
+        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
         total_rejected_tokens = rejected_mask.sum()
         total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
         total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
