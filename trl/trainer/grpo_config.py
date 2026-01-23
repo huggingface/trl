@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 
 import transformers
@@ -280,6 +281,9 @@ class GRPOConfig(TrainingArguments):
                 [C_min, C_max] and applied to all tokens in the sequence.
                 - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios outside [C_min, C_max] are masked
                 out.
+                - "sequence_geometric_mean_mask": Sequence-level geometric mean masked IS. Sequences with geometric mean
+                of ratios outside [C_min, C_max] are masked out.
+
         vllm_importance_sampling_max (`float`, *optional*, defaults to `3.0`):
             Importance sampling upper bound C_max used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
             importance ratios are clipped from above at C_max. For `*_mask` modes, ratios larger than C_max are set to
@@ -771,8 +775,8 @@ class GRPOConfig(TrainingArguments):
             "[C_min, C_max]—either truncation (clip to range, ρ ← clamp(ρ, C_min, C_max)) or "
             "masking (set ratios above C_max or below C_min to zero); and (2) granularity, which determines whether "
             "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
-            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
-            "'sequence_mask'."
+            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask',"
+            "and 'sequence_geometric_mean_mask'."
         },
     )
 
