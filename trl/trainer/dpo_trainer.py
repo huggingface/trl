@@ -760,6 +760,7 @@ class DPOTrainer(BaseTrainer):
         max_prompt_length: int | None = None,
         max_completion_length: int | None = None,
         add_special_tokens: bool = True,
+        is_chat: bool = False,
     ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
@@ -778,8 +779,9 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        if not is_chat:
+            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
