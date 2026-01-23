@@ -18,6 +18,7 @@ import torch
 #callbacks
 from trl import LogCompletionsCallback
 from transformers import GenerationConfig
+from peft import PeftModel
 
 
 @dataclass
@@ -37,10 +38,11 @@ class ScriptArguments:
     # model selection (similar to ppo.py)
     exp_type: str = field(default="assistant", metadata={"help": "assistant or summary"})
     sft_model_path: Optional[str] = field(default=None, metadata={"help": "Override policy model path"})
+    model_path: Optional[str] = field(default="/mnt/shared-scratch/Shakkottai_S/debajoym98/trl/MOODPO/moodpo/checkpoints/iter1/moodpo_help_harm_humor/checkpoint-4500", metadata={"help": "Override model path"})
 
     # reward models (names mapped to HF ids below)
     reward_models: List[str] = field(
-        default_factory=lambda: ["helpful","harmless"],
+        default_factory=lambda: ["helpful","harmless","humor"],
         metadata={"help": "Reward model names to use (e.g., helpful, harmless, humor, summary, faithful, deberta)"},
     )
 
@@ -101,6 +103,9 @@ if __name__ == "__main__":
         if training_args.bf16
         else None,
     )
+
+    if script_args.model_path is not None:
+        model = PeftModel.from_pretrained(model, script_args.model_path,is_trainable=True)
     
     model.generation_config.max_new_tokens = 128 if script_args.exp_type == "assistant" else 48
     model.generation_config.temperature = 1.0
@@ -141,12 +146,6 @@ if __name__ == "__main__":
     if len(eval_dataset) == 0:
         raise ValueError("eval_dataset is empty after filtering; cannot log completions.")
 
-    # Debug: print eval dataset info
-    if accelerator.is_main_process:
-        print(f"DEBUG: eval_dataset length = {len(eval_dataset)}")
-        print(f"DEBUG: eval_dataset columns = {eval_dataset.column_names}")
-        if len(eval_dataset) > 0:
-            print(f"DEBUG: first eval prompt sample = {eval_dataset[0]}")
 
     # LoRA (passed to trainer, not to from_pretrained)
     peft_config = None
@@ -159,9 +158,50 @@ if __name__ == "__main__":
             task_type="CAUSAL_LM",
         )
 
-    reward_funcs = [AutoModelForSequenceClassification.from_pretrained(path, num_labels=1, torch_dtype=torch.bfloat16) for path in reward_model_paths]
-    reward_processing_classes = [AutoTokenizer.from_pretrained(path) for path in reward_model_paths]
+    # reward_funcs = [AutoModelForSequenceClassification.from_pretrained(path, num_labels=1, torch_dtype=torch.bfloat16) for path in reward_model_paths]
+    # reward_processing_classes = [AutoTokenizer.from_pretrained(path) for path in reward_model_paths]
     
+    # trainer = OnlineDPOTrainer(
+    #     model=model,
+    #     ref_model=None,
+    #     reward_funcs=reward_funcs,
+    #     judge=None,
+    #     args=training_args,
+    #     train_dataset=ds,
+    #     eval_dataset=eval_dataset,
+    #     processing_class=tokenizer,
+    #     reward_processing_classes = reward_processing_classes,
+    #     peft_config=peft_config,
+    # )
+
+    rm_bundle = RewardModels(
+    reward_model_path_list=reward_model_paths,
+    rm_tokenizer_path_list=reward_model_paths,  # same as PPO code
+    gpu_id_list=int(os.environ.get("LOCAL_RANK", "0")),
+    reward_stats_path=None,
+)
+
+    def make_rm_func(i: int):
+        def _rm(prompts, completions, completion_ids=None, **kwargs):
+            # OnlineDPO passes string prompts/completions; RewardModels expects list[(q,r)]
+            queries_responses = list(zip(prompts, completions))
+            rewards_per_model = rm_bundle.get_reward_model_scores(queries_responses)  # list[num_models][batch]
+            return rewards_per_model[i]  # list[float] length=batch
+        _rm.__name__ = f"rm_{i}"
+        return _rm
+
+    reward_funcs = [make_rm_func(i) for i in range(len(reward_model_paths))]
+
+
+    if (not script_args.disable_wandb) and accelerator.is_main_process:
+        wandb.init(project="moodpo", name=script_args.wandb_name)
+
+    generation_config = GenerationConfig(
+        max_new_tokens=training_args.max_new_tokens,
+        do_sample=True,
+        temperature=training_args.temperature
+    )
+
     trainer = OnlineDPOTrainer(
         model=model,
         ref_model=None,
@@ -171,17 +211,8 @@ if __name__ == "__main__":
         train_dataset=ds,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        reward_processing_classes = reward_processing_classes,
+        reward_processing_classes=[None] * len(reward_funcs),
         peft_config=peft_config,
-    )
-
-    if (not script_args.disable_wandb) and accelerator.is_main_process:
-        wandb.init(project="moodpo", name=script_args.wandb_name)
-
-    generation_config = GenerationConfig(
-        max_new_tokens=training_args.max_new_tokens,
-        do_sample=True,
-        temperature=training_args.temperature
     )
 
     # Ensure report_to includes wandb for callback to work

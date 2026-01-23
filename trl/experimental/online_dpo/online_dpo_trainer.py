@@ -340,6 +340,12 @@ class OnlineDPOTrainer(BaseTrainer):
                     reward_func.eval()
 
         self.max_length = args.max_length
+        self.NAME_MAP = {
+            "rm_0": "helpful",
+            "rm_1": "safe",
+            "rm_2": "funny",
+        }
+        self.reward_names = [self.NAME_MAP.get(name, name) for name in self.reward_func_names]
 
         self.stats = {
             "objective/kl": [],
@@ -354,8 +360,12 @@ class OnlineDPOTrainer(BaseTrainer):
             "val/contain_eos_token": [],
             "beta": [],
         }
-        self.weights_count = defaultdict(int)
-        self.weight_reward_sum = defaultdict(lambda: torch.zeros(len(self.reward_func_names)))  # key -> sum rewards per model
+        self.help_count = defaultdict(int)
+        self.safe_count = defaultdict(int)
+        self.funny_count = defaultdict(int)
+        self.help_reward_sum = defaultdict(lambda: torch.zeros(1))
+        self.safe_reward_sum = defaultdict(lambda: torch.zeros(1))
+        self.funny_reward_sum = defaultdict(lambda: torch.zeros(1))
         if self.reward_funcs is not None:
             self.stats["objective/rlhf_reward"] = []
             self.stats["objective/scores_margin"] = []
@@ -1173,8 +1183,8 @@ class OnlineDPOTrainer(BaseTrainer):
             return prompts
         
         # Build system instruction
-        weight_str = ", ".join(f"{name}: {w:.1f}" for name, w in weights.items())
-        system_instruction = f"[Begin System Instruction]\nYou are an assistant. Prioritize these objectives with the given weights: {weight_str}\n[End System Instruction]"
+        weight_str = " and ".join(f"{w*100:.1f}% {name}" for name, w in weights.items())
+        system_instruction = f"[Begin System Instruction]\nYou are an assistant. For every user query, respond in a way that your answers are {weight_str}.\n[End System Instruction]"
         
         annotated_prompts = []
         for prompt in prompts:
@@ -1188,8 +1198,9 @@ class OnlineDPOTrainer(BaseTrainer):
                 annotated_prompts.append(prompt)
             else:  # String format
                 annotated_prompts.append(system_instruction + "\n" + prompt)
-        print(f"DEBUG: annotated_prompts[0] = {annotated_prompts[0]}")
-        exit()
+            
+        # print(f"DEBUG: annotated_prompts[0] = {annotated_prompts[0]}")
+        # exit()
         return annotated_prompts
 
 
@@ -1240,37 +1251,21 @@ class OnlineDPOTrainer(BaseTrainer):
 
         return total_rewards, rewards_per_func
 
-    def _sample_uniform_discrete_weights(self, step=0.1, batch_size=1, device=None, K=None):
-        """
-        Uniformly sample discrete weight vectors on grid of multiples of `step`
-        summing exactly to 1.
-
-        Returns:
-        - (K,) if batch_size==1
-        - (B, K) otherwise
-        """
+    def _sample_uniform_discrete_weights(self, step=0.1, batch_size=1, device=None, K=None, generator=None):
         if K is None:
             K = len(self.reward_func_names)
-        assert K >= 2
-
         N = int(round(1.0 / step))
-        assert abs(N * step - 1.0) < 1e-6
 
-        # Sample integer counts uniformly among all compositions of N into K parts.
-        # Simple way: generate all compositions if K small and N small (e.g. K=2, N=10).
-        # For K=2 this is trivial and fast:
         if K == 2:
-            a = torch.randint(0, N + 1, (batch_size,), device=device)
+            a = torch.randint(0, N + 1, (batch_size,), device=device, generator=generator)
             counts = torch.stack([a, N - a], dim=1)
         else:
-            # For K>2, use a random "stars and bars" construction
-            # Pick K-1 cut points uniformly from {0..N} with replacement, sort them
-            cuts = torch.randint(0, N + 1, (batch_size, K - 1), device=device)
+            cuts = torch.randint(0, N + 1, (batch_size, K - 1), device=device, generator=generator)
             cuts, _ = torch.sort(cuts, dim=1)
             zeros = torch.zeros((batch_size, 1), device=device, dtype=cuts.dtype)
             Ns = torch.full((batch_size, 1), N, device=device, dtype=cuts.dtype)
-            pts = torch.cat([zeros, cuts, Ns], dim=1)  # (B, K+1)
-            counts = pts[:, 1:] - pts[:, :-1]          # (B, K)
+            pts = torch.cat([zeros, cuts, Ns], dim=1)
+            counts = pts[:, 1:] - pts[:, :-1]
 
         w = counts.to(torch.float32) / float(N)
         return w.squeeze(0)
@@ -1317,25 +1312,30 @@ class OnlineDPOTrainer(BaseTrainer):
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
     ) -> torch.Tensor:
         model.train()
+        gen = torch.Generator(device=self.accelerator.device)
+        gen.manual_seed(self.args.seed + self.state.global_step + 100000 * self.accelerator.process_index)
         #sample the weights from a dritchlet distribution with alpha = 0.7
         # reward_weights = self._sample_discrete_dirichlet_weights([0.8]*len(self.reward_func_names), 0.1, 1)
-        reward_weights = self._sample_uniform_discrete_weights(0.1, 1,None,len(self.reward_func_names))
+        reward_weights = self._sample_uniform_discrete_weights(0.2, 1,self.accelerator.device,len(self.reward_func_names),gen)
         prompts = inputs["prompt"]
         batch_size = len(prompts)
         # ToDo: Annotate the prompts with reward weights
         # ToDo: need to get the reward model names
-
+        #use the self.NAME_MAP to not use self.reward_func_names
         self.weights = {}
         if reward_weights is not None:
-            for weight,name in zip(reward_weights, self.reward_func_names):
+            for weight,name in zip(reward_weights, self.reward_names):
                 self.weights[name] = weight
             # print(self.weights) # ToDo: remove this
         
         #store the no of times a reward weight is chosen. Just focus on one reward weight, the other is 1-w
-        self.weights_count[int((self.weights[self.reward_func_names[0]] * 100).item())] += 1
+        # self.weights_count[int((self.weights[self.reward_func_names[0]] * 100).item())] += 1
+        self.help_count[int((self.weights["helpful"] * 100).item())] += 1
+        self.safe_count[int((self.weights["safe"] * 100).item())] += 1
+        self.funny_count[int((self.weights["funny"] * 100).item())] += 1
+        weights_for_prompt = {self.NAME_MAP.get(k, k): v for k, v in self.weights.items()}
+        prompts_dashed = self._annotate_prompts_with_weights(prompts, weights_for_prompt)
 
-        prompts_dashed = self._annotate_prompts_with_weights(prompts, self.weights)
-        
 
 
         # Handle images for VLM support
@@ -1477,10 +1477,17 @@ class OnlineDPOTrainer(BaseTrainer):
         chosen_rewards_per_func = rewards_per_func[chosen_indices]  # (B, n_funcs)
         #ToDo
         g = self.accelerator.gather_for_metrics(chosen_rewards_per_func.detach())  # gather across GPUs
-        w_key = int((reward_weights[0] * 100).item())  # bucket by first weight
-        self.weight_reward_sum[w_key] += torch.nan_to_num(chosen_rewards_per_func.detach(), nan=0.0).sum(dim=0).cpu()
+        # w_key = int((reward_weights[0] * 100).item())  # bucket by first weight
+        w_help_key = int((self.weights["helpful"] * 100).item())
+        w_safe_key = int((self.weights["safe"] * 100).item())
+        w_funny_key = int((self.weights["funny"] * 100).item())
+        self.help_reward_sum[w_help_key] += torch.nan_to_num(chosen_rewards_per_func.detach(), nan=0.0).sum(dim=0).cpu()[0]
+        self.safe_reward_sum[w_safe_key] += torch.nan_to_num(chosen_rewards_per_func.detach(), nan=0.0).sum(dim=0).cpu()[1]
+        self.funny_reward_sum[w_funny_key] += torch.nan_to_num(chosen_rewards_per_func.detach(), nan=0.0).sum(dim=0).cpu()[2]
         # count chosen samples for that weight bucket
-        self.weights_count[w_key] += int(chosen_rewards_per_func.size(0))
+        self.help_count[w_help_key] += int(chosen_rewards_per_func.size(0))
+        self.safe_count[w_safe_key] += int(chosen_rewards_per_func.size(0))
+        self.funny_count[w_funny_key] += int(chosen_rewards_per_func.size(0))
         if not hasattr(self, "_chosen_reward_func_sum"):
             self._chosen_reward_func_sum = torch.zeros(g.size(1), device=g.device)
             self._chosen_reward_func_cnt = torch.zeros(g.size(1), device=g.device)
@@ -1491,7 +1498,7 @@ class OnlineDPOTrainer(BaseTrainer):
         running_mean = self._chosen_reward_func_sum / self._chosen_reward_func_cnt.clamp(min=1)
 
         # log as "current running mean so far" (overwrite so it doesn't get averaged)
-        for i, name in enumerate(self.reward_func_names):
+        for i, name in enumerate(self.reward_names):
             self.stats[f"rewards/chosen_running/{name}"] = [running_mean[i].item()]
         # Build tensor so that the first half is the chosen examples and the second half the rejected examples
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
@@ -1611,14 +1618,21 @@ class OnlineDPOTrainer(BaseTrainer):
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
             # weights histogram + mean rewards per weight bucket
-            if hasattr(self, "weights_count") and hasattr(self, "weight_reward_sum"):
-                for key, cnt in self.weights_count.items():
-                    logs[f"weights/count/{key/100.0}"] = float(cnt)
-
-                    mean_vec = self.weight_reward_sum[key] / max(1, cnt)
-                    for i, name in enumerate(self.reward_func_names):
-                        logs[f"weights/mean_reward/{name}/{key/100.0}"] = float(mean_vec[i].item())
-
+            if hasattr(self, "help_count") and hasattr(self, "safe_count") and hasattr(self, "funny_count") and hasattr(self, "help_reward_sum") and hasattr(self, "safe_reward_sum") and hasattr(self, "funny_reward_sum") and hasattr(self, "weights"):
+                # for key, cnt in self.help_count.items():
+                #     logs[f"weights/count/{key/100.0}"] = float(cnt)
+                for key in self.help_count.keys():
+                    logs[f"weights/help_count/{key/100.0}"] = float(self.help_count[key])
+                for key in self.safe_count.keys():
+                    logs[f"weights/safe_count/{key/100.0}"] = float(self.safe_count[key])
+                for key in self.funny_count.keys():
+                    logs[f"weights/funny_count/{key/100.0}"] = float(self.funny_count[key])
+                for key in self.help_reward_sum.keys():
+                    logs[f"weights/help_reward_sum/{key/100.0}"] = float(self.help_reward_sum[key] / max(1, self.help_count[key]))
+                for key in self.safe_reward_sum.keys():
+                    logs[f"weights/safe_reward_sum/{key/100.0}"] = float(self.safe_reward_sum[key] / max(1, self.safe_count[key]))
+                for key in self.funny_reward_sum.keys():
+                    logs[f"weights/funny_reward_sum/{key/100.0}"] = float(self.funny_reward_sum[key] / max(1, self.funny_count[key]))
             self.log(logs, start_time)
         metrics = None
         if self.control.should_evaluate:
