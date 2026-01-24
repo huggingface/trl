@@ -234,9 +234,9 @@ class ULDLoss(nn.Module):
     Universal Logit Distillation Loss.
     """
 
-    def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None):
+    def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None, device=None):
         super().__init__()
-        self.config = config
+        self.device = device
         self.crossentropy_weight = config.uld_crossentropy_weight
         self.distillation_weight = config.uld_distillation_weight
         self.student_temperature = config.uld_student_temperature
@@ -326,7 +326,8 @@ class ULDLoss(nn.Module):
         self.mapping_tensor = torch.full((max_matched_teacher_id + 1,), -1, dtype=torch.long)  # -1 for unmapped ids
         for k, v in self._vocab_mapping.items():
             self.mapping_tensor[k] = v
-        self.mapping_tensor = self.mapping_tensor.to(self.config.device)
+        if self.device is not None:
+            self.mapping_tensor = self.mapping_tensor.to(self.device)
 
     def _compute_distillation_loss(
         self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
@@ -907,6 +908,7 @@ class GOLDTrainer(SFTTrainer):
                 config=args,
                 student_tokenizer=processing_class,
                 teacher_tokenizer=self.teacher_tokenizer,
+                device=self.accelerator.device,
             )
 
         generation_kwargs = {
