@@ -2474,6 +2474,8 @@ class GRPOTrainer(BaseTrainer):
 
         return loss
 
+    # During evaluation, Trainer calls prediction_step, which computes loss only when labels are present;
+    # otherwise it runs a forward pass and returns logits. We override it to always call compute_loss.
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():

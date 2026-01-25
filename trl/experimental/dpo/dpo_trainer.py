@@ -1180,6 +1180,16 @@ class DPOTrainer(BaseTrainer):
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
+    # During evaluation, Trainer calls prediction_step, which computes loss only when labels are present;
+    # otherwise it runs a forward pass and returns logits. We override it to always call compute_loss.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
+
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
         if self.args.hub_model_id is None:
