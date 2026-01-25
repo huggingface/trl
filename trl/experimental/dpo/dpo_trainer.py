@@ -185,6 +185,174 @@ class DataCollatorForPreference(DataCollatorMixin):
         return output
 
 
+@dataclass
+class DataCollatorForVisionLanguagePreference(DataCollatorMixin):
+    """
+    Data collator for vision-language preference data.
+
+    This collator performs tokenization and image processing on-the-fly, similar to
+    `DataCollatorForVisionLanguageModeling` in SFT, and prepares inputs for DPO by concatenating prompt+chosen and
+    prompt+rejected sequences with appropriate completion masks.
+
+    Each input example should contain:
+    - `"images"`: list of images
+    - `"prompt"`, `"chosen"`, `"rejected"`: either strings or conversational messages
+    - Optional `"tools"` and `"chat_template_kwargs"` for chat templating
+    """
+
+    processor: ProcessorMixin
+    pad_to_multiple_of: int | None = None
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
+
+        prompts = []
+        prompt_chosen = []
+        prompt_rejected = []
+
+        if is_conversational(examples[0]):
+            for example in examples:
+                prompt_messages = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                chosen_messages = prepare_multimodal_messages(example["chosen"], images=[])
+                rejected_messages = prepare_multimodal_messages(example["rejected"], images=[])
+                tools = example.get("tools")
+                chat_template_kwargs = example.get("chat_template_kwargs", {})
+
+                prompts.append(
+                    self.processor.apply_chat_template(
+                        prompt_messages,
+                        tools=tools,
+                        add_generation_prompt=True,
+                        tokenize=False,
+                        **chat_template_kwargs,
+                    )
+                )
+                prompt_chosen.append(
+                    self.processor.apply_chat_template(
+                        prompt_messages + chosen_messages,
+                        tools=tools,
+                        tokenize=False,
+                        **chat_template_kwargs,
+                    )
+                )
+                prompt_rejected.append(
+                    self.processor.apply_chat_template(
+                        prompt_messages + rejected_messages,
+                        tools=tools,
+                        tokenize=False,
+                        **chat_template_kwargs,
+                    )
+                )
+        else:
+            prompts = [example["prompt"] for example in examples]
+            prompt_chosen = [example["prompt"] + example["chosen"] for example in examples]
+            prompt_rejected = [example["prompt"] + example["rejected"] for example in examples]
+
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS twice
+        )
+        processed_prompt_chosen = self.processor(
+            images=images,
+            text=prompt_chosen,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,
+        )
+        processed_prompt_rejected = self.processor(
+            images=images,
+            text=prompt_rejected,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,
+        )
+
+        prompt_ids_list = []
+        chosen_ids_list = []
+        rejected_ids_list = []
+
+        prompt_attn = processed_prompts["attention_mask"]
+        chosen_attn = processed_prompt_chosen["attention_mask"]
+        rejected_attn = processed_prompt_rejected["attention_mask"]
+        prompt_input_ids = processed_prompts["input_ids"]
+        chosen_input_ids = processed_prompt_chosen["input_ids"]
+        rejected_input_ids = processed_prompt_rejected["input_ids"]
+
+        for i in range(len(examples)):
+            prompt_len = int(prompt_attn[i].sum().item())
+            chosen_len = int(chosen_attn[i].sum().item())
+            rejected_len = int(rejected_attn[i].sum().item())
+
+            prompt_ids = prompt_input_ids[i, -prompt_len:].tolist()
+            prompt_chosen_ids = chosen_input_ids[i, -chosen_len:].tolist()
+            prompt_rejected_ids = rejected_input_ids[i, -rejected_len:].tolist()
+
+            if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
+                logger.warning(
+                    "Mismatch between tokenized prompt and the start of tokenized prompt+chosen. "
+                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                    "token handling. Verify that the tokenizer is processing text consistently."
+                )
+            if not prompt_rejected_ids[: len(prompt_ids)] == prompt_ids:
+                logger.warning(
+                    "Mismatch between tokenized prompt and the start of tokenized prompt+rejected. "
+                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                    "token handling. Verify that the tokenizer is processing text consistently."
+                )
+
+            prompt_ids_list.append(prompt_ids)
+            chosen_ids_list.append(prompt_chosen_ids[len(prompt_ids) :])
+            rejected_ids_list.append(prompt_rejected_ids[len(prompt_ids) :])
+
+        prompt_chosen_ids = [p + c for p, c in zip(prompt_ids_list, chosen_ids_list, strict=True)]
+        prompt_rejected_ids = [p + r for p, r in zip(prompt_ids_list, rejected_ids_list, strict=True)]
+        chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
+        rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
+        chosen_mask = [[0] * len(p) + [1] * len(c) for p, c in zip(prompt_ids_list, chosen_ids_list, strict=True)]
+        rejected_mask = [[0] * len(p) + [1] * len(r) for p, r in zip(prompt_ids_list, rejected_ids_list, strict=True)]
+
+        input_ids = [torch.tensor(ids) for ids in (prompt_chosen_ids + prompt_rejected_ids)]
+        attention_mask = [torch.tensor(m, dtype=torch.long) for m in (chosen_attention_mask + rejected_attention_mask)]
+        completion_mask = [torch.tensor(m, dtype=torch.long) for m in (chosen_mask + rejected_mask)]
+
+        output = {}
+        output["input_ids"] = pad(
+            input_ids,
+            padding_value=self.processor.tokenizer.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        output["attention_mask"] = pad(
+            attention_mask,
+            padding_value=0,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        output["completion_mask"] = pad(
+            completion_mask,
+            padding_value=0,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
+            if key in processed_prompts:
+                value = processed_prompts[key]
+                output[key] = torch.cat([value, value], dim=0)
+
+        return output
+
+
 class DPOTrainer(BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method. This algorithm was initially proposed in the paper [Direct
@@ -228,7 +396,7 @@ class DPOTrainer(BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
-            [`~trainer.dpo_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
+            [`~trainer.dpo_trainer.DataCollatorForVisionLanguagePreference`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -386,7 +554,10 @@ class DPOTrainer(BaseTrainer):
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
-            raise NotImplementedError("VLM training is not yet implemented.")
+            data_collator = DataCollatorForVisionLanguagePreference(
+                processor=processing_class,
+                pad_to_multiple_of=args.pad_to_multiple_of,
+            )
 
         # Training arguments
         self.beta = args.beta
@@ -577,7 +748,8 @@ class DPOTrainer(BaseTrainer):
                         example["rejected"] = example["rejected"] + eos_token
                     return example
 
-                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": processing_class.eos_token}, **map_kwargs)
+                eos_token = processing_class.tokenizer.eos_token if self._is_vlm else processing_class.eos_token
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": eos_token}, **map_kwargs)
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -587,10 +759,15 @@ class DPOTrainer(BaseTrainer):
                 output = {}
                 if is_conversational(example):
                     if self._is_vlm:
-                        prepare_multimodal_messages(example["prompt"], num_images=0)
-                        prepare_multimodal_messages(example["completion"], num_images=0)
+                        prompt = prepare_multimodal_messages(example["prompt"], images=[])
+                        chosen = prepare_multimodal_messages(example["chosen"], images=[])
+                        rejected = prepare_multimodal_messages(example["rejected"], images=[])
+                    else:
+                        prompt = example["prompt"]
+                        chosen = example["chosen"]
+                        rejected = example["rejected"]
                     prompt_ids = processing_class.apply_chat_template(
-                        example["prompt"],
+                        prompt,
                         tools=example.get("tools"),
                         add_generation_prompt=True,
                         tokenize=True,
@@ -598,14 +775,14 @@ class DPOTrainer(BaseTrainer):
                         **example.get("chat_template_kwargs", {}),
                     )
                     prompt_chosen_processed = processing_class.apply_chat_template(
-                        example["prompt"] + example["chosen"],
+                        prompt + chosen,
                         tools=example.get("tools"),
                         tokenize=True,
                         return_dict=True,
                         **example.get("chat_template_kwargs", {}),
                     )
                     prompt_rejected_processed = processing_class.apply_chat_template(
-                        example["prompt"] + example["rejected"],
+                        prompt + rejected,
                         tools=example.get("tools"),
                         tokenize=True,
                         return_dict=True,
@@ -656,7 +833,7 @@ class DPOTrainer(BaseTrainer):
         # and "attention_mask").
         if self._signature_columns is None:
             if self._is_vision_dataset:
-                self._signature_columns = ["prompt", "chosen", "rejected"]
+                self._signature_columns = ["prompt", "chosen", "rejected", "images", "tools", "chat_template_kwargs"]
             else:
                 self._signature_columns = [
                     "prompt_ids",
@@ -735,12 +912,17 @@ class DPOTrainer(BaseTrainer):
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
 
+        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
+            if key in inputs:
+                model_kwargs[key] = inputs[key]
+
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if is_peft_model(self.model) and self.ref_model is None:
                 with use_adapter(self.model, adapter_name="ref" if "ref" in self.model.peft_config else None):
-                    ref_outputs = self.model(input_ids, attention_mask=attention_mask, use_cache=False)
+                    ref_outputs = self.model(**model_kwargs)
             else:
-                ref_outputs = self.ref_model(input_ids, attention_mask=attention_mask, use_cache=False)
+                ref_outputs = self.ref_model(**model_kwargs)
 
         ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
@@ -879,7 +1061,12 @@ class DPOTrainer(BaseTrainer):
                     f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
                 )
 
-        outputs = model(input_ids, attention_mask=attention_mask, use_cache=False)
+        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
+            if key in inputs:
+                model_kwargs[key] = inputs[key]
+
+        outputs = model(**model_kwargs)
         shift_logits = outputs.logits[..., :-1, :].contiguous()
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
@@ -912,9 +1099,9 @@ class DPOTrainer(BaseTrainer):
                     # - New adapter: disabling adapters yields the base model.
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = model(input_ids, attention_mask=attention_mask, use_cache=False)
+                        ref_outputs = model(**model_kwargs)
                 else:
-                    ref_outputs = self.ref_model(input_ids, attention_mask=attention_mask, use_cache=False)
+                    ref_outputs = self.ref_model(**model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
