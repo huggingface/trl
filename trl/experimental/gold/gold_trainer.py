@@ -1145,10 +1145,12 @@ class GOLDTrainer(SFTTrainer):
 
                     if is_conversational(example):
                         prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"], **example.get("chat_template_kwargs", {})
+                            example["prompt"], return_dict=False, **example.get("chat_template_kwargs", {})
                         )
                         prompt_completion_ids = processing_class.apply_chat_template(
-                            example["prompt"] + example["completion"], **example.get("chat_template_kwargs", {})
+                            example["prompt"] + example["completion"],
+                            return_dict=False,
+                            **example.get("chat_template_kwargs", {}),
                         )
                     else:
                         prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -1188,16 +1190,16 @@ class GOLDTrainer(SFTTrainer):
                             # Apply chat template to get the prompt (everything up to assistant)
                             prompt_text = processing_class.apply_chat_template(
                                 user_messages,
+                                add_generation_prompt=True,  # add assistant prompt
                                 tokenize=False,
-                                add_generation_prompt=True,  # Add assistant prompt
                                 **example.get("chat_template_kwargs", {}),
                             )
 
                             # Get the full conversation with assistant response
                             full_text = processing_class.apply_chat_template(
                                 messages,
-                                tokenize=False,
                                 add_generation_prompt=False,
+                                tokenize=False,
                                 **example.get("chat_template_kwargs", {}),
                             )
 
