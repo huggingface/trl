@@ -415,7 +415,7 @@ class TestDPOTrainer(TrlTestCase):
         # When specifying a ref model, it's usually because we want it to be a different checkpoint, but for testing
         # purposes we will just just use the same checkpoint
         ref_model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="auto"
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
         )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
