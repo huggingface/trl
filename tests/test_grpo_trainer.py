@@ -84,6 +84,36 @@ async def async_multiply_tool(a: int, b: int) -> int:
     return a * b
 
 
+def multiply_tool_with_idx(a: int, b: int, _completion_idx: int = -1) -> dict:
+    """
+    Multiplies two integers and returns the completion index for attribution testing.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+        _completion_idx: The completion index, automatically injected by GRPOTrainer.
+
+    Returns:
+        A dict containing the product and the completion index.
+    """
+    return {"result": a * b, "completion_idx": _completion_idx}
+
+
+async def async_multiply_tool_with_idx(a: int, b: int, _completion_idx: int = -1) -> dict:
+    """
+    Asynchronously multiplies two integers and returns the completion index for attribution testing.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+        _completion_idx: The completion index, automatically injected by GRPOTrainer.
+
+    Returns:
+        A dict containing the product and the completion index.
+    """
+    return {"result": a * b, "completion_idx": _completion_idx}
+
+
 class TestGetHighEntropyMask(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
         """Helper method to test the get_high_entropy_mask functionality."""
@@ -2142,6 +2172,49 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @pytest.mark.parametrize(
+        "tools",
+        [[multiply_tool_with_idx], [async_multiply_tool_with_idx]],
+    )
+    def test_tool_completion_idx_injection(self, tools: list[Callable]):
+        """Test that _completion_idx is correctly injected into tools that accept it."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=tools,
+        )
+
+        # Verify that the signature caching correctly identified the _completion_idx parameter
+        tool_name = tools[0].__name__
+        assert trainer._tools_accept_completion_idx.get(tool_name, False) is True
+
+        # Also verify that the original tools without _completion_idx are correctly identified
+        trainer_with_original = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+        assert trainer_with_original._tools_accept_completion_idx.get("multiply_tool", False) is False
 
     def test_mismatched_reward_processing_classes_length(self):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""

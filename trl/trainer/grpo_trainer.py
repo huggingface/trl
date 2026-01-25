@@ -447,6 +447,15 @@ class GRPOTrainer(BaseTrainer):
                 else:
                     self._sync_tool_dict[tool.__name__] = tool
 
+        # Cache which tools accept _completion_idx parameter for per-completion attribution
+        self._tools_accept_completion_idx = {}
+        for name, tool in self._sync_tool_dict.items():
+            sig = inspect.signature(tool)
+            self._tools_accept_completion_idx[name] = "_completion_idx" in sig.parameters
+        for name, tool in self._async_tool_dict.items():
+            sig = inspect.signature(tool)
+            self._tools_accept_completion_idx[name] = "_completion_idx" in sig.parameters
+
         # Check for async functions to start an event loop on a daemon thread
         self._has_async_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
 
@@ -1624,9 +1633,19 @@ class GRPOTrainer(BaseTrainer):
                         name = function["name"]
                         try:
                             if name in self._sync_tool_dict:
-                                tool_call_results.append((name, self._sync_tool_dict[name](**function["arguments"])))
+                                if self._tools_accept_completion_idx.get(name, False):
+                                    tool_call_results.append(
+                                        (name, self._sync_tool_dict[name](**function["arguments"], _completion_idx=idx_with_tool))
+                                    )
+                                else:
+                                    tool_call_results.append((name, self._sync_tool_dict[name](**function["arguments"])))
                             elif name in self._async_tool_dict:
-                                async_coros.append((name, self._async_tool_dict[name](**function["arguments"])))
+                                if self._tools_accept_completion_idx.get(name, False):
+                                    async_coros.append(
+                                        (name, self._async_tool_dict[name](**function["arguments"], _completion_idx=idx_with_tool))
+                                    )
+                                else:
+                                    async_coros.append((name, self._async_tool_dict[name](**function["arguments"])))
                         except Exception as e:
                             tool_failure_count += 1
                             result = {"error": str(e)}

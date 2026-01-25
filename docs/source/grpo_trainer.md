@@ -644,6 +644,43 @@ trainer = GRPOTrainer(
 )
 ```
 
+### Completion Index in Tools
+
+When using `num_generations > 1`, multiple completions are generated per prompt. Tools can optionally receive the completion index to enable per-completion attribution (e.g., for reward functions that need to track which completion triggered specific tool behavior).
+
+To receive the completion index, add a `_completion_idx` parameter with a default value to your tool function:
+
+```python
+def read_file(path: str, _completion_idx: int = -1) -> str:
+    """
+    Reads a file and tracks which completion triggered this tool call.
+
+    Args:
+        path: The file path to read.
+        _completion_idx: The completion index (0 to num_generations-1).
+                        Automatically injected by GRPOTrainer.
+
+    Returns:
+        The file contents.
+    """
+    # Use _completion_idx for per-completion attribution/tracking
+    tracker.record(completion_idx=_completion_idx, action="read_file", path=path)
+    return open(path).read()
+```
+
+For async tools:
+
+```python
+async def async_search(query: str, _completion_idx: int = -1) -> list[str]:
+    """Async search tool with completion index support."""
+    # _completion_idx works the same way for async tools
+    return await search_api(query)
+```
+
+> [!NOTE]
+> Tools that do not declare `_completion_idx` will continue to work unchanged.
+> The parameter is only injected when the tool's signature includes it.
+
 ### Supported Models
 
 Tested with:
