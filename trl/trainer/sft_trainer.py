@@ -1155,7 +1155,8 @@ class SFTTrainer(BaseTrainer):
 
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
-            # Avoid materializing full logits during eval unless explicitly needed
+            # Avoid materializing full logits during eval unless explicitly needed.
+            # This prevents large VRAM spikes when only loss or metrics are required.
             inputs["skip_logits"] = (
                 self.model.training
                 or self.args.prediction_loss_only
@@ -1216,9 +1217,7 @@ class SFTTrainer(BaseTrainer):
             else:
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. "
-                    "The mean_token_accuracy metric will not be logged. "
-                    "This may indicate an outdated liger-kernel version. "
-                    "Consider upgrading.",
+                    "This may indicate an outdated liger-kernel version.",
                     stacklevel=2,
                 )
         else:
