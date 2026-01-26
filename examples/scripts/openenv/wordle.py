@@ -95,7 +95,7 @@ python examples/scripts/openenv/wordle.py --vllm-mode colocate --env-url http://
 ```
 """
 
-#from __future__ import annotations
+# from __future__ import annotations
 
 import argparse
 import re
@@ -104,7 +104,6 @@ from collections import defaultdict
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from datasets import Dataset
 from transformers import AutoTokenizer
@@ -316,15 +315,12 @@ def make_user_prompt(prompt_text: str, messages: Iterable[TextArenaMessage]) -> 
     history = format_history(messages)
     # Only use messages for conversation history - the prompt is already included as the first message
     history_section = history if history else "[PROMPT] Awaiting first feedback."
-    return (
-        f"Conversation so far:\n{history_section}\n\n"
-        "Reply with your next guess enclosed in square brackets."
-    )
+    return f"Conversation so far:\n{history_section}\n\nReply with your next guess enclosed in square brackets."
 
 
 def scale_repetition_score(previous_occurrences: int, max_turns: int) -> float:
     """Scale the repetition score based on the number of previous occurrences from 0 to 1.
-    
+
     A guess that hasn't been used before gets score 1.0.
     A guess repeated multiple times gets progressively lower scores.
     """
@@ -359,9 +355,7 @@ def rollout_once(
     guess_counts: defaultdict[str, int] = defaultdict(int)
     prev_env_output_len: int = 0  # Track length to only add NEW portion each turn
 
-    accumulated_messages: list[dict[str, str]] = [
-        {"role": "system", "content": system_prompt}
-    ]
+    accumulated_messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
     # Build initial prompt (only once, at the start)
     # The initial env messages are included in the prompt, not completion
@@ -401,20 +395,18 @@ def rollout_once(
         )
 
         rollout_outputs = generate_rollout_completions(
-            trainer, 
-            [prompt_text],
-            generation_overrides={"max_tokens": max_new_tokens}
+            trainer, [prompt_text], generation_overrides={"max_tokens": max_new_tokens}
         )[0]
         # Add model-generated completion tokens and logprobs with newlines for readability
         newline_tokens = tokenizer.encode("\n", add_special_tokens=False)
         completion_ids.extend(newline_tokens)  # newline before guess
         logprobs.extend([0.0] * len(newline_tokens))
         env_mask.extend([1] * len(newline_tokens))  # newlines are part of model output format
-        
+
         completion_ids.extend(rollout_outputs["completion_ids"])
         logprobs.extend(rollout_outputs["logprobs"])
         env_mask.extend([1] * len(rollout_outputs["completion_ids"]))  # model-generated tokens
-        
+
         completion_ids.extend(newline_tokens)  # newline after guess
         logprobs.extend([0.0] * len(newline_tokens))
         env_mask.extend([1] * len(newline_tokens))  # newlines are part of model output format
@@ -426,7 +418,6 @@ def rollout_once(
 
         result = env.step(TextArenaAction(message=guess))
 
-        
         raw_rewards.append(float(result.reward or 0.0))
         observation = result.observation
         correct_score = float(result.reward or 0.0)
@@ -465,7 +456,7 @@ def rollout_once(
 
     # Use the final correct reward (win/lose is binary at end)
     correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
-    
+
     # Position reward as shaping signal:
     # - If model WINS: position_reward = 1.0 (no penalty for winning fast)
     # - If model LOSES: position_reward = last attempt (where it ended up)
@@ -473,7 +464,7 @@ def rollout_once(
         final_position_reward = 1.0
     else:
         final_position_reward = position_scores[-1] if position_scores else 0.0
-    
+
     avg_repetition_reward = sum(repetition_scores) / len(repetition_scores) if repetition_scores else 0.0
 
     return {
@@ -512,16 +503,16 @@ def reward_position(completions: list[str], **kwargs) -> list[float]:
 
 def compute_format_reward(model_outputs: list[str]) -> float:
     """Compute format reward from a list of model outputs (one per turn).
-    
+
     Each output should be exactly [5 letters] with optional whitespace.
     Returns proportion of correctly formatted outputs.
     """
     if not model_outputs:
         return 0.0
-    
+
     exact_pattern = re.compile(r"^\s*\[[A-Za-z]{5}\]\s*$")
     correct_count = sum(1 for output in model_outputs if exact_pattern.match(output))
-    
+
     return correct_count / len(model_outputs)
 
 
@@ -551,14 +542,14 @@ def main() -> None:
     dataset = Dataset.from_dict({"prompt": [args.dataset_prompt] * args.dataset_size})
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    default_output_dir = Path("outputs") / f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}"
-    output_dir = Path(args.output_dir or default_output_dir)
+    # default_output_dir = Path("outputs") / f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}"
+    # output_dir = Path(args.output_dir or default_output_dir)
 
     grpo_config = GRPOConfig(
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
-        #output_dir=str(output_dir),
+        # output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
@@ -568,7 +559,7 @@ def main() -> None:
         num_generations=args.num_generations,
         max_completion_length=1024,  # Full episode length, not per-turn
         logging_steps=args.logging_steps,
-        log_completions = True,
+        log_completions=True,
         report_to="wandb",
         trackio_space_id=f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
@@ -580,7 +571,7 @@ def main() -> None:
         vllm_gpu_memory_utilization=0.25,
         vllm_max_model_length=8192,
         vllm_importance_sampling_correction=False,  # Disable for custom rollouts
-        #vllm_importance_sampling_correction=True,
+        # vllm_importance_sampling_correction=True,
         gradient_checkpointing=True,
         bf16=True,
         optim="adamw_torch",
@@ -592,6 +583,7 @@ def main() -> None:
     grpo_config.trackio_space_id = args.trackio_space_id
 
     import os
+
     os.environ["WANDB_PROJECT"] = f"wordle-grpo-{sanitize_name(args.model_id)}"
     os.environ["WANDB_RUN_ID"] = f"{timestamp}"
 

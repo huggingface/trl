@@ -1808,7 +1808,9 @@ class GRPOTrainer(BaseTrainer):
         if tool_mask is not None or env_mask is not None:
             # Count only model-generated tokens (mask=1)
             if tool_mask is not None and env_mask is not None:
-                combined_mask = [[t * e for t, e in zip(tm, em)] for tm, em in zip(tool_mask, env_mask)]
+                combined_mask = [
+                    [t * e for t, e in zip(tm, em, strict=False)] for tm, em in zip(tool_mask, env_mask, strict=False)
+                ]
             elif tool_mask is not None:
                 combined_mask = tool_mask
             else:
