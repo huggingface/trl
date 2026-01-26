@@ -1244,6 +1244,7 @@ def main(script_args: ScriptArguments):
             "model": request.model or script_args.model
         }
 
+    # Start the server
     uvicorn.run(
         app,
         host=script_args.host,
