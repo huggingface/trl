@@ -40,7 +40,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages
+from ...data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ...models.utils import disable_gradient_checkpointing
 from ...trainer.base_trainer import BaseTrainer
@@ -186,18 +186,60 @@ class DataCollatorForPreference(DataCollatorMixin):
 
 
 @dataclass
-class DataCollatorForVisionLanguagePreference(DataCollatorMixin):
+class DataCollatorForVisionPreference(DataCollatorMixin):
     """
-    Data collator for vision-language preference data.
+    Data collator for vision-preference tasks.
 
-    This collator performs tokenization and image processing on-the-fly, similar to
-    `DataCollatorForVisionLanguageModeling` in SFT, and prepares inputs for DPO by concatenating prompt+chosen and
-    prompt+rejected sequences with appropriate completion masks.
+    Unlike text-only datasets—where the collator typically receives pre-tokenized inputs ready for batching,
+    vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
+    making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
+    image processing on-the-fly to efficiently prepare batches.
 
-    Each input example should contain:
-    - `"images"`: list of images
-    - `"prompt"`, `"chosen"`, `"rejected"`: either strings or conversational messages
-    - Optional `"tools"` and `"chat_template_kwargs"` for chat templating
+    Each input example should be a dictionary containing at least:
+    - An `"images"` key holding the image data.
+    - Keys `"prompt"` `"chosen"` and `"rejected"` for the prompt and preference responses.
+
+    The collator outputs a dictionary including:
+    - `"input_ids"`: Tensor of token IDs.
+    - `"attention_mask"`: Tensor indicating attention mask.
+    - `"completion_mask"`: Tensor indicating which tokens correspond to completions.
+    - `"pixel_values"`: Tensor representing image pixel values.
+
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+
+    Args:
+        processor ([`~transformers.ProcessorMixin`]):
+            The processor used to tokenize text and process images. It must be a subclass of
+            [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
+        pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
+            If set, the sequences will be padded to a multiple of this value.
+        return_tensors (`str`, optional, defaults to `"pt"`):
+            The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
+
+    Example:
+    ```python
+    >>> from trl.trainer.dpo_trainer import DataCollatorForVisionPreference
+    >>> from transformers import AutoProcessor
+
+    >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+    >>> collator = DataCollatorForVisionPreference(processor)
+    >>> examples = [
+    ...     {
+    ...         "images": [Image.open("image_0.png")],
+    ...         "prompt": [{"role": "user", "content": "What is this?"}]},
+    ...         "chosen": [{"role": "assistant", "content": "This is a cat."}],
+    ...         "rejected": [{"role": "assistant", "content": "This is a dog."}],
+    ...     },
+    ...     {
+    ...          "images": [Image.open("image_1.png")],
+    ...          "prompt": [{"role": "user", "content": "Describe this image."}]},
+    ...          "chosen": [{"role": "assistant", "content": "A beautiful landscape."}],
+    ...          "rejected": [{"role": "assistant", "content": "An urban cityscape."}],
+    ...     },
+    ... ]
+    >>> collator(examples)
+    TODO
+    ```
     """
 
     processor: ProcessorMixin
@@ -205,52 +247,25 @@ class DataCollatorForVisionLanguagePreference(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        images = [example["images"] for example in examples]
+        if self.pad_to_multiple_of is not None:
+            raise NotImplementedError(
+                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "prompt-completion data yet."
+            )
+        images = [example["images"] for example in examples] * 2  # repeat for chosen and rejected
         # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):
             images = None
-
-        prompts = []
-        prompt_chosen = []
-        prompt_rejected = []
-
-        if is_conversational(examples[0]):
+        if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                prompt_messages = prepare_multimodal_messages(example["prompt"], images=example["images"])
-                chosen_messages = prepare_multimodal_messages(example["chosen"], images=[])
-                rejected_messages = prepare_multimodal_messages(example["rejected"], images=[])
-                tools = example.get("tools")
-                chat_template_kwargs = example.get("chat_template_kwargs", {})
+                example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
+                example["chosen"] = prepare_multimodal_messages(example["chosen"], images=[])
+                example["rejected"] = prepare_multimodal_messages(example["rejected"], images=[])
+            examples = [apply_chat_template(example, self.processor) for example in examples]
 
-                prompts.append(
-                    self.processor.apply_chat_template(
-                        prompt_messages,
-                        tools=tools,
-                        add_generation_prompt=True,
-                        tokenize=False,
-                        **chat_template_kwargs,
-                    )
-                )
-                prompt_chosen.append(
-                    self.processor.apply_chat_template(
-                        prompt_messages + chosen_messages,
-                        tools=tools,
-                        tokenize=False,
-                        **chat_template_kwargs,
-                    )
-                )
-                prompt_rejected.append(
-                    self.processor.apply_chat_template(
-                        prompt_messages + rejected_messages,
-                        tools=tools,
-                        tokenize=False,
-                        **chat_template_kwargs,
-                    )
-                )
-        else:
-            prompts = [example["prompt"] for example in examples]
-            prompt_chosen = [example["prompt"] + example["chosen"] for example in examples]
-            prompt_rejected = [example["prompt"] + example["rejected"] for example in examples]
+        prompts = [example["prompt"] for example in examples] * 2  # repeat for chosen and rejected
+        chosens = [example["chosen"] for example in examples]
+        rejecteds = [example["rejected"] for example in examples]
 
         processed_prompts = self.processor(
             images=images,
@@ -258,98 +273,55 @@ class DataCollatorForVisionLanguagePreference(DataCollatorMixin):
             padding=True,
             padding_side="left",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS twice
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
-        processed_prompt_chosen = self.processor(
-            images=images,
-            text=prompt_chosen,
+        processed_chosens = self.processor(
+            text=chosens,
             padding=True,
-            padding_side="left",
+            padding_side="right",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
-        processed_prompt_rejected = self.processor(
-            images=images,
-            text=prompt_rejected,
+        processed_rejecteds = self.processor(
+            text=rejecteds,
             padding=True,
-            padding_side="left",
+            padding_side="right",
             return_tensors=self.return_tensors,
-            add_special_tokens=False,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
 
-        prompt_ids_list = []
-        chosen_ids_list = []
-        rejected_ids_list = []
+        # Concatenate prompts and completions
+        prompt_ids, prompt_mask = processed_prompts["input_ids"], processed_prompts["attention_mask"]
+        chosen_ids, chosen_mask = processed_chosens["input_ids"], processed_chosens["attention_mask"]
+        rejected_ids, rejected_mask = processed_rejecteds["input_ids"], processed_rejecteds["attention_mask"]
+        pad_token_id = self.processor.tokenizer.pad_token_id or self.processor.tokenizer.eos_token_id
+        completion_ids = torch.cat(tuple(pad([chosen_ids, rejected_ids], padding_value=pad_token_id)))
+        completion_mask = torch.cat(tuple(pad([chosen_mask, rejected_mask], padding_value=0)))
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+        if "token_type_ids" in processed_prompts:  # special case for Gemma
+            prompt_token_type_ids = processed_prompts["token_type_ids"]
+            chosen_type_ids = processed_chosens["token_type_ids"]
+            rejected_type_ids = processed_rejecteds["token_type_ids"]
+            completion_token_type_ids = torch.cat(tuple(pad([chosen_type_ids, rejected_type_ids], padding_value=0)))
+            token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
 
-        prompt_attn = processed_prompts["attention_mask"]
-        chosen_attn = processed_prompt_chosen["attention_mask"]
-        rejected_attn = processed_prompt_rejected["attention_mask"]
-        prompt_input_ids = processed_prompts["input_ids"]
-        chosen_input_ids = processed_prompt_chosen["input_ids"]
-        rejected_input_ids = processed_prompt_rejected["input_ids"]
+        # Flush left to reduce padding
+        if "token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids
+            )
+        else:
+            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
-        for i in range(len(examples)):
-            prompt_len = int(prompt_attn[i].sum().item())
-            chosen_len = int(chosen_attn[i].sum().item())
-            rejected_len = int(rejected_attn[i].sum().item())
-
-            prompt_ids = prompt_input_ids[i, -prompt_len:].tolist()
-            prompt_chosen_ids = chosen_input_ids[i, -chosen_len:].tolist()
-            prompt_rejected_ids = rejected_input_ids[i, -rejected_len:].tolist()
-
-            if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
-                logger.warning(
-                    "Mismatch between tokenized prompt and the start of tokenized prompt+chosen. "
-                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                    "token handling. Verify that the tokenizer is processing text consistently."
-                )
-            if not prompt_rejected_ids[: len(prompt_ids)] == prompt_ids:
-                logger.warning(
-                    "Mismatch between tokenized prompt and the start of tokenized prompt+rejected. "
-                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                    "token handling. Verify that the tokenizer is processing text consistently."
-                )
-
-            prompt_ids_list.append(prompt_ids)
-            chosen_ids_list.append(prompt_chosen_ids[len(prompt_ids) :])
-            rejected_ids_list.append(prompt_rejected_ids[len(prompt_ids) :])
-
-        prompt_chosen_ids = [p + c for p, c in zip(prompt_ids_list, chosen_ids_list, strict=True)]
-        prompt_rejected_ids = [p + r for p, r in zip(prompt_ids_list, rejected_ids_list, strict=True)]
-        chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
-        rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
-        chosen_mask = [[0] * len(p) + [1] * len(c) for p, c in zip(prompt_ids_list, chosen_ids_list, strict=True)]
-        rejected_mask = [[0] * len(p) + [1] * len(r) for p, r in zip(prompt_ids_list, rejected_ids_list, strict=True)]
-
-        input_ids = [torch.tensor(ids) for ids in (prompt_chosen_ids + prompt_rejected_ids)]
-        attention_mask = [torch.tensor(m, dtype=torch.long) for m in (chosen_attention_mask + rejected_attention_mask)]
-        completion_mask = [torch.tensor(m, dtype=torch.long) for m in (chosen_mask + rejected_mask)]
-
-        output = {}
-        output["input_ids"] = pad(
-            input_ids,
-            padding_value=self.processor.tokenizer.pad_token_id,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-        )
-        output["attention_mask"] = pad(
-            attention_mask,
-            padding_value=0,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-        )
-        output["completion_mask"] = pad(
-            completion_mask,
-            padding_value=0,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-        )
-
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
-            if key in processed_prompts:
-                value = processed_prompts[key]
-                output[key] = torch.cat([value, value], dim=0)
-
+        # Build the output dictionary
+        output = processed_prompts  # we take processed_prompts because it contains the images
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
+        output["completion_mask"] = completion_mask
+        if "token_type_ids" in processed_prompts:
+            output["token_type_ids"] = token_type_ids
         return output
 
 
@@ -396,7 +368,7 @@ class DPOTrainer(BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
-            [`~trainer.dpo_trainer.DataCollatorForVisionLanguagePreference`] if the model is a vision-language model.
+            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -554,7 +526,7 @@ class DPOTrainer(BaseTrainer):
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
-            data_collator = DataCollatorForVisionLanguagePreference(
+            data_collator = DataCollatorForVisionPreference(
                 processor=processing_class,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )

@@ -424,8 +424,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         )
 
         # Concatenate prompts and completions
-        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
-        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
+        prompt_ids, prompt_mask = processed_prompts["input_ids"], processed_prompts["attention_mask"]
+        completion_ids, completion_mask = processed_completions["input_ids"], processed_completions["attention_mask"]
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
