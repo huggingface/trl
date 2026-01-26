@@ -36,14 +36,19 @@ class ScriptArguments:
     prompt_column: str = field(default="prompt", metadata={"help": "CSV column name for prompt"})
 
     # model selection (similar to ppo.py)
-    exp_type: str = field(default="assistant", metadata={"help": "assistant or summary"})
+    exp_type: str = field(default="summary", metadata={"help": "assistant or summary"})
     sft_model_path: Optional[str] = field(default=None, metadata={"help": "Override policy model path"})
-    model_path: Optional[str] = field(default="/mnt/shared-scratch/Shakkottai_S/debajoym98/trl/MOODPO/moodpo/checkpoints/iter1/moodpo_help_harm_humor/checkpoint-4500", metadata={"help": "Override model path"})
+    model_path: Optional[str] = field(default="/mnt/shared-scratch/Shakkottai_S/debajoym98/trl/MOODPO/tldr/final/MOODPO_tldr/checkpoint-826", metadata={"help": "Override model path"})
 
     # reward models (names mapped to HF ids below)
     reward_models: List[str] = field(
-        default_factory=lambda: ["helpful","harmless","humor"],
+        default_factory=lambda: ["summary","faithful"],
         metadata={"help": "Reward model names to use (e.g., helpful, harmless, humor, summary, faithful, deberta)"},
+    )
+
+    reward_stats_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to .npy file containing reward normalization stats (interleaved: [mu0, std0, mu1, std1, ...])"},
     )
 
     # optional LoRA (handled by trainer via peft_config)
@@ -104,12 +109,12 @@ if __name__ == "__main__":
         else None,
     )
 
-    if script_args.model_path is not None:
+    if script_args.model_path != "None":
         model = PeftModel.from_pretrained(model, script_args.model_path,is_trainable=True)
     
     model.generation_config.max_new_tokens = 128 if script_args.exp_type == "assistant" else 48
     model.generation_config.temperature = 1.0
-    model.generation_config.top_k = 15
+    model.generation_config.top_k = 40
     model.generation_config.top_p = 1.0
     model.generation_config.do_sample = True
     model.generation_config.begin_suppress_tokens = [tokenizer.eos_token_id]
@@ -134,9 +139,6 @@ if __name__ == "__main__":
     ds = ds.map(lambda x: {"prompt": str(x["prompt"]).strip()})
     ds = ds.filter(lambda x: x["prompt"] is not None and x["prompt"] != "")
     # filter out prompts that are too long
-    ds = ds.filter(lambda x: len(x["prompt"]) <= 512)
-    # filter out prompts that are too short
-    ds = ds.filter(lambda x: len(x["prompt"]) >= 8)
     ds = ds.remove_columns([c for c in ds.column_names if c != "prompt"])
 
     # Eval dataset (optional)
@@ -178,7 +180,7 @@ if __name__ == "__main__":
     reward_model_path_list=reward_model_paths,
     rm_tokenizer_path_list=reward_model_paths,  # same as PPO code
     gpu_id_list=int(os.environ.get("LOCAL_RANK", "0")),
-    reward_stats_path=None,
+    reward_stats_path=script_args.reward_stats_path,
 )
 
     def make_rm_func(i: int):

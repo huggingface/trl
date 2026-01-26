@@ -28,6 +28,7 @@ class RewardModels():
 
     def get_reward_model_scores(self, queries_responses, summary_fun=None):
         texts_for_rewards = []
+        summary_fun = lambda q: "### Response:".join(q.split("### Response:")[:-1]).rstrip().split("### Input:")[1].strip()
         for i in range(self.num_rewards):
             if i >= 1 and self.rm_tokenizer_path_list[i] == self.rm_tokenizer_path_list[i-1]:
                 texts_for_rewards.append(texts_for_rewards[-1])
