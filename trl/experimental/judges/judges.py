@@ -59,7 +59,7 @@ def _ensure_llm_blender_importable() -> None:
     Pre-import shim to work around a known `llm-blender` issue.
 
     As of `llm-blender` v0.0.2 (see upstream issue: https://github.com/yuchenlin/LLM-Blender/issues/33), importing
-    `llm_blender` may fail on `transformers` >= 5.0.0.dev0 because it unconditionally accesses
+    `llm_blender` may fail on `transformers` >= 5.0.0 because it unconditionally accesses
     `transformers.utils.hub.TRANSFORMERS_CACHE`.
 
     We set this attribute to a dummy value before importing `llm_blender` so that the import succeeds. This helper is
@@ -70,7 +70,7 @@ def _ensure_llm_blender_importable() -> None:
     """
     import transformers.utils.hub
 
-    if Version(transformers.__version__) >= Version("5.0.0.dev0"):
+    if Version(transformers.__version__) >= Version("5.0.0"):
         transformers.utils.hub.TRANSFORMERS_CACHE = None  # unused; just needs to exist
 
 

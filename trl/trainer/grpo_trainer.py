@@ -427,7 +427,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Tools
         if tools:
-            if not Version(transformers.__version__) >= Version("5.0.0.dev0"):
+            if not Version(transformers.__version__) >= Version("5.0.0"):
                 raise ImportError(
                     "Using tools with GRPOTrainer requires transformers version 5.0.0 or higher. Please use "
                     "transformers with `pip install --pre transformers` to use this feature."
@@ -1774,7 +1774,7 @@ class GRPOTrainer(BaseTrainer):
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
             if (
-                Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
+                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
                 and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
                 and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
                 and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
