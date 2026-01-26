@@ -226,15 +226,15 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     >>> examples = [
     ...     {
     ...         "images": [Image.open("image_0.png")],
-    ...         "prompt": [{"role": "user", "content": "What is this?"}]},
+    ...         "prompt": [{"role": "user", "content": "What is this?"}],
     ...         "chosen": [{"role": "assistant", "content": "This is a cat."}],
     ...         "rejected": [{"role": "assistant", "content": "This is a dog."}],
     ...     },
     ...     {
-    ...          "images": [Image.open("image_1.png")],
-    ...          "prompt": [{"role": "user", "content": "Describe this image."}]},
-    ...          "chosen": [{"role": "assistant", "content": "A beautiful landscape."}],
-    ...          "rejected": [{"role": "assistant", "content": "An urban cityscape."}],
+    ...         "images": [Image.open("image_1.png")],
+    ...         "prompt": [{"role": "user", "content": "Describe this image."}],
+    ...         "chosen": [{"role": "assistant", "content": "A beautiful landscape."}],
+    ...         "rejected": [{"role": "assistant", "content": "An urban cityscape."}],
     ...     },
     ... ]
     >>> collator(examples)
