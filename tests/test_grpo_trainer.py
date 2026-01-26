@@ -37,12 +37,14 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
     require_ampere_or_newer,
     require_bitsandbytes,
+    require_jmespath,
     require_kernels,
     require_liger_kernel,
     require_peft,
@@ -880,7 +882,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
 
         advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
-        old_per_token_logps = torch.zeros((3, 4))
+        sampling_per_token_logps = torch.zeros((3, 4))
         per_token_logps = torch.zeros((3, 4))
 
         per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
@@ -892,7 +894,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -902,7 +904,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # 2 valid tokens
         advantages = torch.tensor([[-1.0]])  # Negative advantage
 
-        old_per_token_logps = torch.zeros((1, 4))
+        sampling_per_token_logps = torch.zeros((1, 4))
         per_token_logps = torch.zeros((1, 4))
 
         # Valid tokens have High KL (2.0)
@@ -919,7 +921,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -931,7 +933,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask_keep = torch.tensor([[1.0]])
 
         off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
@@ -1856,7 +1858,7 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        Version(transformers.__version__).is_devrelease,  # Tests with dev dependencies
+        Version(transformers.__version__) >= Version("5.0.0") and not is_liger_kernel_available(min_version="0.6.5"),
         reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
         "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
         strict=True,
@@ -2056,10 +2058,11 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        condition=Version(transformers.__version__) < Version("5.0.0"),
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
+    @require_jmespath
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
     def test_training_with_tools(self, tools: list[Callable]):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
@@ -2363,7 +2366,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
         if Version(transformers.__version__) < Version("4.57.0"):
-            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.57.0")
+            pytest.xfail("Bug in transformers solved in GH#40692, released in 4.57.0.")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
