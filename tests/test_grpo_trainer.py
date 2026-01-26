@@ -44,6 +44,7 @@ from .testing_utils import (
     TrlTestCase,
     require_ampere_or_newer,
     require_bitsandbytes,
+    require_jmespath,
     require_kernels,
     require_liger_kernel,
     require_peft,
@@ -2061,6 +2062,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
+    @require_jmespath
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
     def test_training_with_tools(self, tools: list[Callable]):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
