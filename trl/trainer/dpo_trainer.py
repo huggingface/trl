@@ -51,7 +51,7 @@ from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
+from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
 from ..models.utils import peft_module_casting_to_bf16, prepare_fsdp
 from .base_trainer import BaseTrainer
@@ -653,6 +653,8 @@ class DPOTrainer(BaseTrainer):
                 map_kwargs["desc"] = f"Extracting prompt in {dataset_name} dataset"
             dataset = dataset.map(maybe_extract_prompt, **map_kwargs)
 
+            is_chat = is_conversational(next(iter(dataset)))
+
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
@@ -673,6 +675,7 @@ class DPOTrainer(BaseTrainer):
                     "max_completion_length": args.max_completion_length,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens": False,
+                    "is_chat": is_chat,
                 },
                 **map_kwargs,
             )
@@ -686,6 +689,7 @@ class DPOTrainer(BaseTrainer):
         max_prompt_length: int | None = None,
         max_completion_length: int | None = None,
         add_special_tokens: bool = True,
+        is_chat: bool = False,
     ) -> dict[str, list[int]]:
         """
         Tokenize a row of the dataset.
@@ -732,8 +736,9 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        if not is_chat:
+            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
@@ -755,6 +760,7 @@ class DPOTrainer(BaseTrainer):
         max_prompt_length: int | None = None,
         max_completion_length: int | None = None,
         add_special_tokens: bool = True,
+        is_chat: bool = False,
     ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
@@ -773,8 +779,9 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        if not is_chat:
+            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
