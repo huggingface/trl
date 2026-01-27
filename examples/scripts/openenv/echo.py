@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-echo-env @ git+https://huggingface.co/spaces/openenv/echo_env",
 # ]
 # ///
 
@@ -31,7 +30,7 @@ longer completions.
 Setup (Option A - Install from HF Space):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/openenv/echo-env
+uv pip install git+https://huggingface.co/spaces/openenv/echo_env
 ```
 
 Setup (Option B - Clone OpenEnv repo):

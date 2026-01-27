@@ -237,7 +237,7 @@ print(
         messages,
         tokenize=False,
         reasoning_effort="low",
-        model_identity="You are HuggingGPT, a large language model trained by Hugging Face."
+        model_identity="You are HuggingGPT, a large language model trained by Hugging Face.",
     )
 )
 ```
