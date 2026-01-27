@@ -606,7 +606,7 @@ class SFTTrainer(BaseTrainer):
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            if not Version(transformers.__version__) < Version("5.0.0.dev0"):
+            if not Version(transformers.__version__) < Version("5.0.0"):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
@@ -1001,9 +1001,10 @@ class SFTTrainer(BaseTrainer):
                                 completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
                                 prompt,
-                                tokenize=True,
-                                add_generation_prompt=True,
                                 tools=example.get("tools"),
+                                add_generation_prompt=True,
+                                tokenize=True,
+                                return_dict=False,
                                 **example.get("chat_template_kwargs", {}),
                             )
                             # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
@@ -1011,10 +1012,10 @@ class SFTTrainer(BaseTrainer):
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
                                 prompt + completion,
-                                return_dict=True,
-                                tokenize=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
+                                tokenize=True,
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
                                 **example.get("chat_template_kwargs", {}),
                             )
                             # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
@@ -1061,10 +1062,10 @@ class SFTTrainer(BaseTrainer):
                                 messages = example["messages"]
                             processed = processing_class.apply_chat_template(
                                 messages,
-                                return_dict=True,
-                                tokenize=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
+                                tokenize=True,
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
                                 **example.get("chat_template_kwargs", {}),
                             )
                             # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
