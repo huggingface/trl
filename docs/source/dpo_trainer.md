@@ -69,7 +69,6 @@ def preprocess_function(example):
 
 
 dataset = dataset.map(preprocess_function, remove_columns=["instruction", "input", "accepted", "ID"])
-
 print(next(iter(dataset["train"])))
 ```
 
@@ -103,7 +102,26 @@ $$
   
 where  \\( x \\)  is the prompt,  \\( y^+ \\) is the preferred completion and  \\( y^- \\)  is the dispreferred completion.  \\( \pi_{\theta} \\)  is the policy model being trained,  \\( \pi_{\mathrm{ref}} \\)  is the reference model,  \\( \sigma \\)  is the sigmoid function, and  \\( \beta > 0 \\)  is a hyperparameter that controls the strength of the preference signal.
 
-## Logged metrics - HERE
+#### Loss Types
+
+Several formulations of the objective have been proposed in the literature. Initially, the objective of DPO was defined as presented above.
+
+| `loss_type=` | Description |
+| --- | --- |
+| `"sigmoid"` (default) | Given the preference data, we can fit a binary classifier according to the Bradley-Terry model and in fact the [DPO](https://huggingface.co/papers/2305.18290) authors propose the sigmoid loss on the normalized likelihood via the `logsigmoid` to fit a logistic regression. |
+| `"hinge"` | The [RSO](https://huggingface.co/papers/2309.06657) authors propose to use a hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper. In this case, the `beta` is the reciprocal of the margin. |
+| `"ipo"` | The [IPO](https://huggingface.co/papers/2310.12036) authors argue the logit transform can overfit and propose the identity transform to optimize preferences directly; TRL exposes this as `loss_type="ipo"`. |
+| `"exo_pair"` | The [EXO](https://huggingface.co/papers/2402.00856) authors propose reverse-KL preference optimization. Setting non-zero `label_smoothing` (default `1e-3`) gives a simplified pairwise EXO (see Eq. 16). The full method uses `K>2` SFT completions and approaches PPO as `K` grows. |
+| `"nca_pair"` | The [NCA](https://huggingface.co/papers/2402.05369) authors shows that NCA optimizes the absolute likelihood for each response rather than the relative likelihood. |
+| `"robust"` | The [Robust DPO](https://huggingface.co/papers/2403.00409) authors propose an unbiased DPO loss under noisy preferences. Use `label_smoothing` in [`DPOConfig`] to model label-flip probability; set it above 0.0 (up to 0.5). |
+| `"bco_pair"` | The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0. For unpaired data, we recommend the dedicated [`BCOTrainer`]. |
+| `"sppo_hard"` | The [SPPO](https://huggingface.co/papers/2405.00675) authors claim that SPPO is capable of solving the Nash equilibrium iteratively by pushing the chosen rewards to be as large as 1/2 and the rejected rewards to be as small as -1/2 and can alleviate data sparsity issues. The implementation approximates this algorithm by employing hard label probabilities, assigning 1 to the winner and 0 to the loser. |
+| `"aot"`  or `loss_type="aot_unpaired"` | The [AOT](https://huggingface.co/papers/2406.05882) authors propose Distributional Preference Alignment via Optimal Transport. `loss_type="aot"` is for paired data; `loss_type="aot_unpaired"` is for unpaired data. Both enforce stochastic dominance via sorted quantiles; larger per-GPU batch sizes help. |
+| `"apo_zero"` or `loss_type="apo_down"` | The [APO](https://huggingface.co/papers/2408.06266) method introduces an anchored objective. `apo_zero` boosts winners and downweights losers (useful when the model underperforms the winners). `apo_down` downweights both, with stronger pressure on losers (useful when the model already outperforms winners). |
+| `"discopop"` | The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0). |
+| `"sft"` | SFT (Supervised Fine-Tuning) loss is the negative log likelihood loss, used to train the model to generate preferred responses. |
+
+## Logged metrics
 
 While training and evaluating we record the following reward metrics:
 
@@ -112,11 +130,33 @@ While training and evaluating we record the following reward metrics:
 * `num_tokens`: The total number of tokens processed so far.
 * `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
 * `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
-* `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
+* `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 * `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+* `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion.
+* `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
+* `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
+* `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
+* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{{\pi_{\theta}(y^{+}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{+}\!\mid x)}} \\).
+* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{{\pi_{\theta}(y^{-}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{-}\!\mid x)}} \\).
+* `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
+* `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
 
 ## Customization
+
+### Multi-loss combinations
+
+The DPO trainer supports combining multiple loss functions with different weights, enabling more sophisticated optimization strategies. This is particularly useful for implementing algorithms like MPO (Mixed Preference Optimization). MPO is a training approach that combines multiple optimization objectives, as described in the paper [Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization](https://huggingface.co/papers/2411.10442).
+
+To combine multiple losses, specify the loss types and corresponding weights as lists:
+
+```python
+# MPO: Combines DPO (sigmoid) for preference and BCO (bco_pair) for quality
+training_args = DPOConfig(
+    loss_type=["sigmoid", "bco_pair", "sft"],  # loss types to combine
+    loss_weights=[0.8, 0.2, 1.0]  # corresponding weights, as used in the MPO paper
+)
+```
 
 ### Model initialization
 
@@ -138,38 +178,6 @@ training_args = DPOConfig(
 
 Note that all keyword arguments of [`~transformers.AutoModelForCausalLM.from_pretrained()`] are supported.
 
-### Packing
-
-[`DPOTrainer`] supports _example packing_, where multiple examples are packed in the same input sequence to increase training efficiency. To enable packing, simply pass `packing=True` to the [`DPOConfig`] constructor.
-
-```python
-training_args = DPOConfig(packing=True)
-```
-
-For more details on packing, see [Packing](reducing_memory_usage#packing).
-
-### Train on assistant messages only
-
-To train on assistant messages only, use a [conversational](dataset_formats#conversational) dataset and set `assistant_only_loss=True` in the [`DPOConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user or system messages.
-
-```python
-training_args = DPOConfig(assistant_only_loss=True)
-```
-
-![train_on_assistant](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
-
-> [!WARNING]
-> This functionality is only available for chat templates that support returning the assistant tokens mask via the `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For an example of such a template, see [HugggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82).
-
-### Train on completion only
-
-To train on completion only, use a [prompt-completion](dataset_formats#prompt-completion) dataset. By default, the trainer computes the loss on the completion tokens only, ignoring the prompt tokens. If you want to train on the full sequence, set `completion_only_loss=False` in the [`DPOConfig`].
-
-![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
-
-> [!TIP]
-> Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`DPOConfig`].
-
 ### Train adapters with PEFT
 
 We support tight integration with 🤗 PEFT library, allowing any user to conveniently train adapters and share them on the Hub, rather than training the entire model.
@@ -179,7 +187,7 @@ from datasets import load_dataset
 from trl import DPOTrainer
 from peft import LoraConfig
 
-dataset = load_dataset("trl-lib/Capybara", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 trainer = DPOTrainer(
     "Qwen/Qwen3-0.6B",
@@ -198,7 +206,7 @@ from trl import DPOTrainer
 from peft import AutoPeftModelForCausalLM
 
 model = AutoPeftModelForCausalLM.from_pretrained("trl-lib/Qwen3-4B-LoRA", is_trainable=True)
-dataset = load_dataset("trl-lib/Capybara", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 trainer = DPOTrainer(
     model=model,
@@ -209,10 +217,10 @@ trainer.train()
 ```
 
 > [!TIP]
-> When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
+> When training adapters, you typically use a higher learning rate (≈1e‑5) since only new parameters are being learned.
 >
 > ```python
-> DPOConfig(learning_rate=1e-4, ...)
+> DPOConfig(learning_rate=1e-5, ...)
 > ```
 
 ### Train with Liger Kernel
@@ -227,58 +235,11 @@ RapidFire AI is an open-source experimentation engine that sits on top of TRL an
 
 Unsloth is an open‑source framework for fine‑tuning and reinforcement learning that trains LLMs (like Llama, Mistral, Gemma, DeepSeek, and more) up to 2× faster with up to 70% less VRAM, while providing a streamlined, Hugging Face–compatible workflow for training, evaluation, and deployment. For more information, see [Unsloth Integration](unsloth_integration).
 
-## Instruction tuning example
-
-**Instruction tuning** teaches a base language model to follow user instructions and engage in conversations. This requires:
-
-1. **Chat template**: Defines how to structure conversations into text sequences, including role markers (user/assistant), special tokens, and turn boundaries. Read more about chat templates in [Chat templates](https://huggingface.co/docs/transformers/chat_templating#templates).
-2. **Conversational dataset**: Contains instruction-response pairs
-
-This example shows how to transform the [Qwen 3 0.6B Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) model into an instruction-following model using the [Capybara dataset](https://huggingface.co/datasets/trl-lib/Capybara) and a chat template from [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B). The DPO Trainer automatically handles tokenizer updates and special token configuration.
-
-```python
-from trl import DPOConfig, DPOTrainer
-from datasets import load_dataset
-
-trainer = DPOTrainer(
-    model="Qwen/Qwen3-0.6B-Base",
-    args=DPOConfig(
-        output_dir="Qwen3-0.6B-Instruct",
-        chat_template_path="HuggingFaceTB/SmolLM3-3B",
-    ),
-    train_dataset=load_dataset("trl-lib/Capybara", split="train"),
-)
-trainer.train()
-```
-
-> [!WARNING]
-> Some base models, like those from Qwen, have a predefined chat template in the model's tokenizer. In these cases, it is not necessary to apply [`clone_chat_template()`], as the tokenizer already handles the formatting. However, it is necessary to align the EOS token with the chat template to ensure the model's responses terminate correctly. In these cases, specify `eos_token` in [`DPOConfig`]; for example, for `Qwen/Qwen2.5-1.5B`, one should set `eos_token="<|im_end|>"`.
-
-Once trained, your model can now follow instructions and engage in conversations using its new chat template.
-
-```python
->>> from transformers import pipeline
->>> pipe = pipeline("text-generation", model="Qwen3-0.6B-Instruct/checkpoint-5000")
->>> prompt = "<|im_start|>user\nWhat is the capital of France? Answer in one word.<|im_end|>\n<|im_start|>assistant\n"
->>> response = pipe(prompt)
->>> response[0]["generated_text"]
-'<|im_start|>user\nWhat is the capital of France? Answer in one word.<|im_end|>\n<|im_start|>assistant\nThe capital of France is Paris.'
-```
-
-Alternatively, use the structured conversation format (recommended):
-
-```python
->>> prompt = [{"role": "user", "content": "What is the capital of France? Answer in one word."}]
->>> response = pipe(prompt)
->>> response[0]["generated_text"]
-[{'role': 'user', 'content': 'What is the capital of France? Answer in one word.'}, {'role': 'assistant', 'content': 'The capital of France is Paris.'}]
-```
-
 ## Tool Calling with DPO
 
 The [`DPOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
-* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+* The conversation messages (prompt, chosen and rejected), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
 * The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
@@ -295,7 +256,7 @@ from datasets import load_dataset
 trainer = DPOTrainer(
     model="Qwen/Qwen2.5-VL-3B-Instruct",
     args=DPOConfig(max_length=None),
-    train_dataset=load_dataset("trl-lib/llava-instruct-mix", split="train"),
+    train_dataset=load_dataset("HuggingFaceH4/rlaif-v_formatted", split="train"),
 )
 trainer.train()
 ```
@@ -319,3 +280,11 @@ trainer.train()
 ## DPOConfig
 
 [[autodoc]] experimental.dpo.DPOConfig
+
+## DataCollatorForPreference
+
+[[autodoc]] experimental.dpo.dpo_trainer.DataCollatorForPreference
+
+## DataCollatorForVisionPreference
+
+[[autodoc]] experimental.dpo.dpo_trainer.DataCollatorForVisionPreference
