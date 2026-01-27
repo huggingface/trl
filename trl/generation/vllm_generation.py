@@ -16,6 +16,7 @@
 
 import json
 import os
+from collections.abc import Callable
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
@@ -58,35 +59,105 @@ class VLLMGeneration:
     class.
 
     Args:
-        model: The model to use for generation
-        accelerator: Accelerator instance for distributed training
-        is_fsdp_enabled: Whether FSDP is enabled
-        processing_class: Tokenizer or processor for the model
-        mode: vLLM mode ('server' or 'colocate')
-        tensor_parallel_size: Tensor parallel size for vLLM
-        gpu_memory_utilization: GPU memory utilization (0.0-1.0)
-        enable_sleep_mode: Whether to enable sleep mode
-        max_num_seqs: Maximum number of sequences to process in parallel.
-            If None, calculated as per_device_train_batch_size * tensor_parallel_size * steps_per_generation
-        max_model_length: Maximum model length
-        model_impl: Model implementation
-        structured_outputs_regex: Regex for structured outputs
-        server_base_url: Base URL for vLLM server (server mode)
-        server_host: Host for vLLM server (server mode)
-        server_port: Port for vLLM server (server mode)
-        group_port: Group port for vLLM communicator (server mode)
-        server_timeout: Connection timeout for vLLM server (server mode)
-        generation_kwargs: Additional generation kwargs to pass to vLLM
-        temperature: Sampling temperature
-        top_p: Top-p sampling parameter
-        top_k: Top-k sampling parameter
-        min_p: Min-p sampling parameter
-        repetition_penalty: Repetition penalty
-        max_completion_length: Maximum completion length
-        chat_template_kwargs: Chat template kwargs
-        tools: Optional tools for function calling
-        chat_template: Optional chat template
-        rollout_func: Optional custom rollout function that accepts prompts and returns
+        model ([`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
+            Model to use for generation.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator for distributed training.
+        is_fsdp_enabled (`bool`):
+            Whether FSDP is enabled.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+            Tokenizer or processor for the model.
+
+        > Parameters for vLLM:
+
+        mode (`str`, *optional*, defaults to `"server"`): vLLM mode. Must be one of `"server"` or
+            `"colocate"`.
+
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+              server is running (start with `trl vllm-serve`).
+            - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
+              separate server but may cause resource contention with training.
+        structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
+
+        > Parameters for "server" vLLM mode:
+
+        server_base_url (`str`, *optional*):
+            Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `server_host` and
+            `server_port` are ignored.
+        server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server to connect to. Ignored if `server_base_url` is provided.
+        server_port (`int`, *optional*, defaults to `8000`):
+            Port of the vLLM server to connect to. Ignored if `server_base_url` is provided.
+        server_timeout (`float`, *optional*, defaults to `240.0`):
+            Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
+            timeout, a `ConnectionError` is raised.
+        group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
+
+        > Parameters for "colocate" vLLM mode:
+
+        tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            The number of GPUs to use for distributed execution with tensor parallelism. This setting only applies when
+            `mode` is set to `"colocate"`. If you are using `mode="server"`, this parameter must be passed separately
+            when launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
+            Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV cache. Higher
+            values will increase the KV cache size and thus improve the model's throughput. However, if the value is
+            too high, it may cause out-of- memory (OOM) errors. This setting only applies when `mode` is set to
+            `"colocate"`. If you are using `mode="server"`, this parameter must be passed separately when launching the
+            vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        max_model_length (`int`, *optional*):
+            Model context length (prompt and completion). Set it to at least the maximum prompt length in the dataset
+            plus `max_completion_length`; if omitted, it is inferred from the model config.
+        max_num_seqs (`int`, *optional*):
+            Maximum number of sequences to process in parallel, effectively capping the batch size.
+        enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for the engine to offload weights/cache during the optimizer step. Keeps GPU
+            memory usage low, but waking the engine adds host–device transfer latency.
+        model_impl (`str`, *optional*, defaults to `"auto"`):
+            Model implementation to use for vLLM.
+            - "auto" will try to use the vLLM implementation, if it exists, and fall back to the Transformers
+              implementation if no vLLM implementation is available.
+            - "vllm" will use the vLLM model implementation.
+            - "transformers" will use the Transformers model implementation.
+            - "terratorch" will use the TerraTorch model implementation.
+
+        > Parameters for generation:
+
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Parameter for repetition penalty. It penalizes new tokens based on whether they appear in the prompt and
+            the generated text so far. Values > 1 encourage the model to use new tokens, while values < 1 encourage the
+            model to repeat tokens. Default `1.0` means no penalty.
+        temperature(`float`, *optional*, defaults to `1.0`):
+            Sampling temperature. It controls the randomness of the sampling. Lower values make the model more
+            deterministic, while higher values make the model more random and increase diversity.
+        top_p: (`float`, *optional*, defaults to `1.0`):
+            Top-p sampling parameter. It controls the cumulative probability of the top tokens to consider. Defaults to
+            `1.0` to consider all tokens.
+        top_k (`int`, *optional*, defaults to `0`):
+            Top-k sampling parameter. It controls the number of top tokens to consider. Defaults to `0` to consider all
+            tokens.
+        min_p (`float`, *optional*, defaults to `0.0`):
+            Min-p sampling parameter. It represents the minimum probability for a token to be considered, relative to
+            the probability of the most likely token. Default `0.0` means min-p is disabled.
+        max_completion_length (`int`, *optional*, defaults to `16`):
+            Maximum number of tokens to generate for each prompt.
+        generation_kwargs (`dict`, *optional*):
+            Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+            `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
+            override them.
+
+        > Parameters for chat/tools:
+
+        chat_template (`str`, *optional*):
+            Template to use for structuring the chat. If not provided, the model's default chat template will be used.
+        chat_template_kwargs (`dict`, *optional*):
+            Additional keyword arguments to customize the chat template used by the model.
+        tools (`list`, *optional*):
+            Tools available for tool calling during chat generation.
+        rollout_func (`Callable`, *optional*): Optional custom rollout function that accepts prompts and returns
             a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields. Should be a
             single-argument callable: rollout_func(prompts) -> dict. To pass additional context (e.g., trainer), use a
             closure or functools.partial:
