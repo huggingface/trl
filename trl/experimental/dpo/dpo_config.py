@@ -66,7 +66,111 @@ class DPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        TODO
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`DPOTrainer`] is provided as a string.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model and reference model.
+
+        > Parameters that control the data preprocessing
+
+        dataset_num_proc (`int`, *optional*):
+            Number of processes to use for processing the dataset.
+        pad_token (`str`, *optional*):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
+        max_length (`int`, *optional*, defaults to `1024`):
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
+            right depending on the `truncation_mode`. If `None`, no truncation is applied.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
+            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the sequences will be padded to a multiple of this value.
+
+        > Parameters that control the training
+
+        loss_type (`list[str]`, *optional*, defaults to `["sigmoid"]`):
+            Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, `'nca_pair'`,
+            `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, `'apo_down'`,
+            `'discopop'`, `'sft'`. If multiple loss types are provided, they will be combined using the weights
+            specified in `loss_weights`.
+        loss_weights (`list[float]`, *optional*)::
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
+            0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss types.
+        ld_alpha (`float`, *optional*):
+            α parameter from the LD-DPO paper, which controls the weighting of the verbose token log-probabilities in
+            responses. If `None`, no weighting is applied to the verbose part, and the loss is equivalent to the
+            standard DPO loss. Must be in [0.0, 1.0]: `ld_alpha=1.0` applies no weighting, and `ld_alpha=0.0` masks
+            tokens beyond shared lengths.
+        f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
+            f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: `reverse_kl`
+            (default), `forward_kl`, `js_divergence`, `alpha_divergence`.
+        f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
+            α coefficient for the α-divergence u^-α regularizer, used only when `f_divergence_type='alpha_divergence'`.
+        label_smoothing (`float`, *optional*, defaults to `0.0`):
+            Label smoothing parameter used in Robust DPO and EXO. In Robust DPO, it is interpreted as the probability
+            that a preference label is flipped and must lie in [0.0, 0.5); a typical value recommended by the Robust
+            DPO paper is 0.1. In EXO, it corresponds to the ε label smoothing parameter, for which the paper recommends
+            a typical value of 1e-3.
+        beta (`float`, *optional*, defaults to `0.1`):
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
+            by τ in the [paper](https://huggingface.co/papers/2310.12036).
+        use_weighting (`bool`, *optional*, defaults to `False`):
+            Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference pairs using
+            the policy's length-normalized sequence probabilities.
+        discopop_tau (`float`, *optional*, defaults to `0.05`):
+            τ/temperature parameter from the DiscoPOP paper, which controls the shape of the log-ratio modulated loss
+            when using `loss_type='discopop'`. The paper recommends the default value `discopop_tau=0.05`.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+        sync_ref_model (`bool`, *optional*, defaults to `False`):
+            Whether to synchronize the reference model with the main model at each training step. This is useful when
+            training with PEFT methods, where the main model's weights change during training.
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
+            α parameter from the TR-DPO paper, which controls the mix between the current policy and the previous
+            reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
+            π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`.
+        ref_model_sync_steps (`int`, *optional*, defaults to `512`):
+            τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
+            the reference policy. To use this parameter, you must set `sync_ref_model=True`.
+
+        > Deprecated parameters
+
+        max_prompt_length (`int`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer used. We
+            recommend filtering out samples that exceed your desired prompt length during dataset preprocessing.
+        max_completion_length (`int`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer used. We
+            recommend using the `max_length` parameter to control the total sequence length.
+        ref_model_init_kwargs (`dict[str, Any]`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. The reference model is instantiated
+            with the same keyword arguments as the main model. If you need to customize the reference model
+            initialization, we recommend instantiating the reference model yourself and passing it to the `DPOTrainer`.
+        generate_during_eval (`bool`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. Please use a dedicated callback, like
+            `LogCompletionsCallback`.
+        force_use_ref_model (`bool`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. If you provide a PEFT model along with
+            a `ref_model`, the `ref_model` will be automatically used as the reference model. If you used this
+            parameter to train a pretrained PEFT adapter, you can now safely just pass the PEFT model as the `model`
+            argument and leave `ref_model` as `None`, the trainer will automatically make a copy of the adapter to use
+            as the reference model.
+        use_logits_to_keep (`bool`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. The trainer now automatically uses a
+            more efficient method than using `use_logits_to_keep`. You can safely ignore this parameter.
+        model_adapter_name (`str`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a pretrained
+            PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave `ref_model` as
+            `None`, the trainer will automatically make a copy of the adapter to use as the reference model. For
+            training, load a single adapter only, and it must be named `'default'`; do not load it under a custom name.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -304,7 +408,7 @@ class DPOConfig(TrainingArguments):
             "adapter to use as the reference model."
         },
     )
-    use_logits_to_keep: bool = field(
+    use_logits_to_keep: bool | None = field(
         default=False,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.29.0. The trainer now "
@@ -460,7 +564,7 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=2,
             )
-        if self.use_logits_to_keep:
+        if self.use_logits_to_keep is not None:
             warnings.warn(
                 "The `use_logits_to_keep` argument is deprecated and will be removed in version 0.29.0. The trainer "
                 "now automatically uses a more efficient method than using `use_logits_to_keep`. You can safely "
