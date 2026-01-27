@@ -319,11 +319,3 @@ trainer.train()
 ## DPOConfig
 
 [[autodoc]] experimental.dpo.DPOConfig
-
-## DataCollatorForLanguageModeling
-
-[[autodoc]] experimental.dpo.dpo_trainer.DataCollatorForPreference
-
-## DataCollatorForVisionLanguageModeling
-
-[[autodoc]] experimental.dpo.dpo_trainer.DataCollatorForVisionLanguageModeling
