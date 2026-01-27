@@ -1352,7 +1352,8 @@ class GRPOTrainer(BaseTrainer):
                     }
                     with profiling_context(self, "vLLM.generate"):
                         if self.rollout_func is not None:
-                            rollout_prompts = ordered_set_of_prompts
+                            # Pass all prompts (with duplicates) to rollout_func for consistency with colocate mode
+                            rollout_prompts = all_prompts
                             if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
                                 rollout_prompts = [
                                     apply_chat_template(
@@ -1384,8 +1385,12 @@ class GRPOTrainer(BaseTrainer):
                 broadcast_object_list(obj_list, from_process=0)
                 all_prompt_ids, all_completion_ids, all_logprobs, all_extra_fields = obj_list[0]
 
-                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
+                # When using rollout_func, it handles its own generation logic and returns one result per prompt.
+                # When NOT using rollout_func, vllm_client.generate(n=num_generations) returns num_generations
+                # completions per prompt, so we need to duplicate prompt_ids to match.
+                if self.rollout_func is None:
+                    # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
+                    all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
@@ -1799,23 +1804,15 @@ class GRPOTrainer(BaseTrainer):
                 tool_failure_count,
             ) = self._tool_call_loop(prompts, prompt_ids, completion_ids, completions, logprobs)
         else:
-            tool_mask = None
-
-        env_mask = extra_fields.pop("env_mask", None)
+            # Support custom env_mask from rollout_func (e.g., for environment feedback masking)
+            # Internally treated as tool_mask - marks model tokens (1) vs external tokens (0)
+            tool_mask = extra_fields.pop("env_mask", None)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
-        if tool_mask is not None or env_mask is not None:
+        if tool_mask is not None:
             # Count only model-generated tokens (mask=1)
-            if tool_mask is not None and env_mask is not None:
-                combined_mask = [
-                    [t * e for t, e in zip(tm, em, strict=False)] for tm, em in zip(tool_mask, env_mask, strict=False)
-                ]
-            elif tool_mask is not None:
-                combined_mask = tool_mask
-            else:
-                combined_mask = env_mask
-            completion_lengths = torch.tensor([sum(mask) for mask in combined_mask], device=device)
+            completion_lengths = torch.tensor([sum(mask) for mask in tool_mask], device=device)
         else:
             completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
@@ -1859,7 +1856,6 @@ class GRPOTrainer(BaseTrainer):
             prompt_ids,
             completion_ids,
             tool_mask,
-            env_mask,
             completions,
             total_completion_tokens,
             logprobs,
@@ -1897,7 +1893,6 @@ class GRPOTrainer(BaseTrainer):
             prompt_ids_list,
             completion_ids_list,
             tool_mask_list,
-            env_mask_list,
             completions,
             num_items_in_batch,
             sampling_per_token_logps_list,
@@ -1918,16 +1913,13 @@ class GRPOTrainer(BaseTrainer):
             sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
         else:
             sampling_per_token_logps = None
-        if self.tools:
+        # Process tool_mask (from tools or from rollout_func)
+        # Marks model-generated tokens with 1, external tokens (tool results or env feedback) with 0
+        if tool_mask_list is not None:
             tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
-            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")  # 0 for tool result tokens, 1 elsewhere
-
-        # Process env_mask from rollout_func (marks model-generated tokens with 1, environment tokens with 0)
-        if env_mask_list is not None:
-            env_mask = [torch.tensor(mask, device=device) for mask in env_mask_list]
-            env_mask = pad(env_mask, padding_value=1, padding_side="right")  # 1 for model tokens, 0 for env tokens
+            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")
         else:
-            env_mask = None
+            tool_mask = None
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1995,10 +1987,8 @@ class GRPOTrainer(BaseTrainer):
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 mask = completion_mask
-                if self.tools:
+                if tool_mask is not None:
                     mask = mask * tool_mask
-                if env_mask is not None:
-                    mask = mask * env_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
@@ -2153,10 +2143,8 @@ class GRPOTrainer(BaseTrainer):
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             mask = completion_mask
-            if self.tools:
+            if tool_mask is not None:
                 mask = mask * tool_mask
-            if env_mask is not None:
-                mask = mask * env_mask
             mask = mask.bool()
             delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
@@ -2220,10 +2208,8 @@ class GRPOTrainer(BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
-        if self.tools:
+        if tool_mask is not None:
             output["tool_mask"] = tool_mask
-        if env_mask is not None:
-            output["env_mask"] = env_mask
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -2317,10 +2303,8 @@ class GRPOTrainer(BaseTrainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         mask = completion_mask
-        if self.tools:
+        if "tool_mask" in inputs:
             mask = mask * inputs["tool_mask"]
-        if "env_mask" in inputs:
-            mask = mask * inputs["env_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
