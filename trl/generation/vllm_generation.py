@@ -226,24 +226,23 @@ class VLLMGeneration:
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
             # Build LLM initialization kwargs
-            llm_kwargs = {
-                "model": model.name_or_path,
-                "tensor_parallel_size": self.tensor_parallel_size,
-                "gpu_memory_utilization": self.gpu_memory_utilization,
-                "max_num_seqs": self.max_num_seqs,
-                "max_model_len": self.max_model_length,
-                "distributed_executor_backend": "external_launcher",
+            self.llm = LLM(
+                model=model.name_or_path,
+                tensor_parallel_size=self.tensor_parallel_size,
+                gpu_memory_utilization=self.gpu_memory_utilization,
+                max_num_seqs=self.max_num_seqs,
+                max_model_len=self.max_model_length,
+                distributed_executor_backend="external_launcher",
                 # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                "seed": accelerator.process_index // self.tensor_parallel_size,
+                seed=accelerator.process_index // self.tensor_parallel_size,
                 # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
-                "max_num_batched_tokens": 4096,
-                "model_impl": self.model_impl,
-                "enable_sleep_mode": self.enable_sleep_mode,
+                max_num_batched_tokens=4096,
+                model_impl=self.model_impl,
+                enable_sleep_mode=self.enable_sleep_mode,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
-                "logprobs_mode": "processed_logprobs",
-                "quantization": quantization,
-            }
-            self.llm = LLM(**llm_kwargs)
+                logprobs_mode="processed_logprobs",
+                quantization=quantization,
+            )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
         else:
