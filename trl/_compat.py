@@ -111,11 +111,11 @@ def _patch_vllm_cached_tokenizer() -> None:
     Fix get_cached_tokenizer for transformers v5 compatibility.
 
     - Issue: vLLM's get_cached_tokenizer accesses all_special_tokens_extended
-    - Removed in transformers: https://github.com/huggingface/transformers/pull/40936 (transformers>=5.0.0.dev0)
+    - Removed in transformers: https://github.com/huggingface/transformers/pull/40936 (transformers>=5.0.0)
     - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
     - This can be removed when TRL requires vLLM>=0.12.0
     """
-    if _is_package_version_at_least("transformers", "5.0.0.dev0") and _is_package_version_below("vllm", "0.12.0"):
+    if _is_package_version_at_least("transformers", "5.0.0") and _is_package_version_below("vllm", "0.12.0"):
         try:
             import contextlib
             import copy
@@ -171,12 +171,12 @@ def _patch_transformers_hybrid_cache() -> None:
     Fix HybridCache import for transformers v5 compatibility.
 
     - Issue: liger_kernel and peft import HybridCache from transformers.cache_utils
-    - HybridCache removed in https://github.com/huggingface/transformers/pull/43168 (transformers>=5.0.0.dev0)
+    - HybridCache removed in https://github.com/huggingface/transformers/pull/43168 (transformers>=5.0.0)
     - Fixed in liger_kernel: https://github.com/linkedin/Liger-Kernel/pull/1002 (released in v0.6.5)
     - Fixed in peft: https://github.com/huggingface/peft/pull/2735 (released in v0.18.0)
     - This can be removed when TRL requires liger_kernel>=0.6.5 and peft>=0.18.0
     """
-    if _is_package_version_at_least("transformers", "5.0.0.dev0") and (
+    if _is_package_version_at_least("transformers", "5.0.0") and (
         _is_package_version_below("liger_kernel", "0.6.5") or _is_package_version_below("peft", "0.18.0")
     ):
         try:
