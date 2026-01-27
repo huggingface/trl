@@ -1848,7 +1848,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_length=self.max_length,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1892,7 +1892,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
