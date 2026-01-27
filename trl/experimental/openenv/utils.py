@@ -66,6 +66,37 @@ def _build_colocate_sampling_params(
     return sampling_params
 
 
+def _build_server_generation_kwargs(
+    trainer,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build generation kwargs for server mode."""
+    generation_kwargs: dict[str, Any] = {
+        "n": 1,
+        "temperature": trainer.temperature,
+        "top_k": trainer.top_k if trainer.top_k is not None else -1,
+        "min_p": 0.0 if trainer.min_p is None else trainer.min_p,
+        "max_tokens": trainer.max_completion_length,
+    }
+    if trainer.repetition_penalty is not None:
+        generation_kwargs["repetition_penalty"] = trainer.repetition_penalty
+    if trainer.top_p is not None:
+        generation_kwargs["top_p"] = trainer.top_p
+
+    if trainer.args.generation_kwargs is not None:
+        generation_kwargs.update(trainer.args.generation_kwargs)
+
+    if overrides is not None:
+        generation_kwargs.update(overrides)
+
+    generation_kwargs = {key: value for key, value in generation_kwargs.items() if value is not None}
+
+    if generation_kwargs.get("n", 1) != 1:
+        raise ValueError("generate_rollout_completions expects n=1 when using vLLM server mode.")
+
+    return generation_kwargs
+
+
 def generate_rollout_completions(
     trainer,
     prompts: list[str],
@@ -74,7 +105,7 @@ def generate_rollout_completions(
     as_chat: bool | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Generate completions for custom rollouts when vLLM is running in colocate mode.
+    Generate completions for custom rollouts when vLLM is running in colocate or server mode.
 
     Returns one result per prompt, containing prompt and completion token ids along with per-token log probabilities
     and the generated text.
@@ -83,9 +114,59 @@ def generate_rollout_completions(
     if not prompts:
         return []
 
-    if not trainer.use_vllm or trainer.vllm_mode != "colocate":
-        raise RuntimeError("Custom rollouts require vLLM in colocate mode to call generate_rollout_completions.")
+    if not trainer.use_vllm:
+        raise RuntimeError("Custom rollouts require vLLM to call generate_rollout_completions.")
 
+    if trainer.vllm_mode == "server":
+        return _generate_rollout_completions_server(trainer, prompts, generation_overrides, as_chat)
+    elif trainer.vllm_mode == "colocate":
+        return _generate_rollout_completions_colocate(trainer, prompts, generation_overrides, as_chat)
+    else:
+        raise ValueError(f"vllm_mode must be 'server' or 'colocate', got '{trainer.vllm_mode}'")
+
+
+def _generate_rollout_completions_server(
+    trainer,
+    prompts: list[str],
+    generation_overrides: dict[str, Any] | None = None,
+    as_chat: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Generate completions using vLLM server mode."""
+    generation_kwargs = _build_server_generation_kwargs(trainer, generation_overrides)
+
+    if as_chat is None:
+        as_chat = prompts and is_conversational({"prompt": prompts[0]})
+
+    with profiling_context(trainer, "vLLM.generate_rollout_server"):
+        if as_chat:
+            # For chat mode, we need to pass messages format
+            # Since prompts are already formatted strings, we use generate instead
+            output = trainer.vllm_client.generate(prompts=prompts, **generation_kwargs)
+        else:
+            output = trainer.vllm_client.generate(prompts=prompts, **generation_kwargs)
+
+    # Format results to match colocate output format
+    results: list[dict[str, Any]] = []
+    for i in range(len(prompts)):
+        results.append(
+            {
+                "prompt_ids": output["prompt_ids"][i],
+                "completion_ids": list(output["completion_ids"][i]),
+                "logprobs": list(output["logprobs"][i]),
+                "text": trainer.processing_class.decode(output["completion_ids"][i], skip_special_tokens=True),
+            }
+        )
+
+    return results
+
+
+def _generate_rollout_completions_colocate(
+    trainer,
+    prompts: list[str],
+    generation_overrides: dict[str, Any] | None = None,
+    as_chat: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Generate completions using vLLM colocate mode."""
     sampling_params = _build_colocate_sampling_params(trainer, generation_overrides)
     prompts_for_generation = prompts
     original_size = len(prompts)
