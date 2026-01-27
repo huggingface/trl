@@ -664,7 +664,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
         trainer = SFTTrainer(
             model=model_id,
@@ -701,7 +701,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
         trainer = SFTTrainer(
             model=model_id,
@@ -739,7 +739,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
@@ -1297,7 +1297,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -1510,7 +1510,6 @@ class TestSFTTrainer(TrlTestCase):
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,
             per_device_train_batch_size=1,
-            gradient_checkpointing=True,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )
@@ -1888,7 +1887,6 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
@@ -1933,7 +1931,6 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
@@ -1984,7 +1981,6 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
@@ -2029,7 +2025,6 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_steps=10,
             packing=packing,
             max_length=self.max_length,
-            gradient_checkpointing=True,
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
