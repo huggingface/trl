@@ -118,14 +118,6 @@ if __name__ == "__main__":
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, do_image_splitting=False
     )
 
-    # Set up the chat template
-    if model.config.model_type == "idefics2":
-        pass  # the processor already has a valid chat template
-    elif model.config.model_type == "paligemma":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}<|im_start|>{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] if item['type'] == 'text' %}{{ item['text'] }}<|im_end|>{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-    elif model.config.model_type == "llava":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-
     if script_args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
