@@ -35,7 +35,6 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
     --dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules all-linear
 ```
@@ -53,7 +52,6 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
     --dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules all-linear
 ```

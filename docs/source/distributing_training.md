@@ -345,7 +345,6 @@ accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.ya
     --packing \
     --packing_strategy wrapped \
     --torch_dtype bfloat16 \
-    --gradient_checkpointing \
     --attn_implementation flash_attention_2 \
     --output_dir output-alst-4gpu \
     --logging_steps 10 \
