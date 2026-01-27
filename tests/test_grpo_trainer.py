@@ -37,12 +37,14 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
     require_ampere_or_newer,
     require_bitsandbytes,
+    require_jmespath,
     require_kernels,
     require_liger_kernel,
     require_peft,
@@ -1856,7 +1858,7 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        Version(transformers.__version__).is_devrelease,  # Tests with dev dependencies
+        Version(transformers.__version__) >= Version("5.0.0") and not is_liger_kernel_available(min_version="0.6.5"),
         reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
         "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
         strict=True,
@@ -2056,10 +2058,11 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        condition=Version(transformers.__version__) < Version("5.0.0"),
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
+    @require_jmespath
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
     def test_training_with_tools(self, tools: list[Callable]):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
