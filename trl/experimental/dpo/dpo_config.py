@@ -93,6 +93,14 @@ class DPOConfig(TrainingArguments):
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
+        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
+            Whether to precompute the reference model log probabilities for the entire training dataset before
+            training. This allows to save memory during training, as the reference model does not need to be kept in
+            memory.
+        precompute_ref_batch_size (`int`, *optional*):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
 
         > Parameters that control the training
 
@@ -264,6 +272,22 @@ class DPOConfig(TrainingArguments):
     pad_to_multiple_of: int | None = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
+    precompute_ref_log_probs: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
+            "before training. This allows to save memory during training, as the reference model does not need to be "
+            "kept in memory."
+        },
+    )
+    precompute_ref_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
+        },
     )
 
     # Parameters that control the training
@@ -480,24 +504,6 @@ class DPOConfig(TrainingArguments):
                 "in DPO, this is now equivalent to including 'sft' in `loss_type` with weight `rpo_alpha`. To "
                 "migrate, add 'sft' to `loss_type` and set its weight in `loss_weights` to `rpo_alpha`."
             )
-        },
-    )
-
-    # Parameters that need to be implemented
-    precompute_ref_log_probs: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
-            "before training. This allows to save memory during training, as the reference model does not need to be "
-            "kept in memory."
-        },
-    )
-    precompute_ref_batch_size: int | None = field(
-        default=None,
-        metadata={
-            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
-            "than the training batch size to speed up preprocessing. If `None`, defaults to "
-            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
 
