@@ -27,7 +27,7 @@ trainer = DPOTrainer(
 trainer.train()
 ```
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&runs=dpo_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&sidebar=hidden&runs=dpo_qwen3-0.6B_ultrafeedback" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
 
 ## Expected dataset type and format
 
