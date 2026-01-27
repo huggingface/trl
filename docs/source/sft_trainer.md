@@ -194,7 +194,7 @@ dataset = load_dataset("trl-lib/Capybara", split="train")
 trainer = SFTTrainer(
     "Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    peft_config=LoraConfig()
+    peft_config=LoraConfig(),
 )
 
 trainer.train()

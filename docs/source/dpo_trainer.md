@@ -192,7 +192,7 @@ dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 trainer = DPOTrainer(
     "Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    peft_config=LoraConfig()
+    peft_config=LoraConfig(),
 )
 
 trainer.train()
