@@ -497,14 +497,6 @@ class RLOOTrainer(BaseTrainer):
                 processing_class=self.processing_class,
                 # vLLM configuration
                 mode=args.vllm_mode,
-                tensor_parallel_size=args.vllm_tensor_parallel_size,
-                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
-                enable_sleep_mode=args.vllm_enable_sleep_mode,
-                max_num_seqs=args.per_device_train_batch_size
-                * args.vllm_tensor_parallel_size
-                * args.steps_per_generation,
-                max_model_length=args.vllm_max_model_length,
-                model_impl=args.vllm_model_impl,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
                 # Server mode configuration
                 server_base_url=args.vllm_server_base_url,
@@ -512,14 +504,23 @@ class RLOOTrainer(BaseTrainer):
                 server_port=args.vllm_server_port,
                 group_port=args.vllm_group_port,
                 server_timeout=args.vllm_server_timeout,
+                # Colocate mode configuration
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length,
+                max_num_seqs=args.per_device_train_batch_size
+                * args.vllm_tensor_parallel_size
+                * args.steps_per_generation,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
                 # Generation configuration
-                generation_kwargs=args.generation_kwargs,
+                repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
                 top_p=self.top_p,
                 top_k=self.top_k,
                 min_p=self.min_p,
-                repetition_penalty=self.repetition_penalty,
                 max_completion_length=self.max_completion_length,
+                generation_kwargs=args.generation_kwargs,
                 # Chat/tool configuration
                 chat_template_kwargs=self.chat_template_kwargs,
             )

@@ -208,12 +208,6 @@ class VLLMGeneration:
 
         # vLLM configuration
         self.mode = mode
-        self.tensor_parallel_size = tensor_parallel_size
-        self.gpu_memory_utilization = gpu_memory_utilization
-        self.enable_sleep_mode = enable_sleep_mode
-        self.max_num_seqs = max_num_seqs
-        self.max_model_length = max_model_length
-        self.model_impl = model_impl
         self.structured_outputs_regex = structured_outputs_regex
 
         # Server mode configuration
@@ -223,14 +217,22 @@ class VLLMGeneration:
         self.group_port = group_port
         self.server_timeout = server_timeout
 
+        # Colocate mode configuration
+        self.tensor_parallel_size = tensor_parallel_size
+        self.gpu_memory_utilization = gpu_memory_utilization
+        self.max_model_length = max_model_length
+        self.max_num_seqs = max_num_seqs
+        self.enable_sleep_mode = enable_sleep_mode
+        self.model_impl = model_impl
+
         # Generation configuration
-        self.generation_kwargs = generation_kwargs
+        self.repetition_penalty = repetition_penalty
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
         self.min_p = min_p
-        self.repetition_penalty = repetition_penalty
         self.max_completion_length = max_completion_length
+        self.generation_kwargs = generation_kwargs or {}
 
         # Chat/tool configuration
         self.chat_template = chat_template
@@ -302,15 +304,15 @@ class VLLMGeneration:
                 model=model.name_or_path,
                 tensor_parallel_size=self.tensor_parallel_size,
                 gpu_memory_utilization=self.gpu_memory_utilization,
-                max_num_seqs=self.max_num_seqs,
                 max_model_len=self.max_model_length,
+                max_num_seqs=self.max_num_seqs,
+                enable_sleep_mode=self.enable_sleep_mode,
+                model_impl=self.model_impl,
                 distributed_executor_backend="external_launcher",
                 # Feed identical seed for tp groups to ensure sampling results are the same across workers
                 seed=accelerator.process_index // self.tensor_parallel_size,
                 # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                 max_num_batched_tokens=4096,
-                model_impl=self.model_impl,
-                enable_sleep_mode=self.enable_sleep_mode,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
@@ -628,8 +630,7 @@ class VLLMGeneration:
                     "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                 }
                 generation_kwargs[structured_outputs_key] = structured_outputs
-                if self.generation_kwargs is not None:
-                    generation_kwargs.update(self.generation_kwargs)
+                generation_kwargs.update(self.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
 
                 if self.tensor_parallel_size > 1:
