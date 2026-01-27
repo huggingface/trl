@@ -49,8 +49,6 @@ from PIL import Image
 from transformers import AutoModelForImageTextToText
 
 from trl import (
-    DPOConfig,
-    DPOTrainer,
     ModelConfig,
     ScriptArguments,
     TrlParser,
@@ -58,6 +56,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.dpo import DPOConfig, DPOTrainer
 
 
 # Enable logging in a Hugging Face Space
@@ -90,13 +89,6 @@ if __name__ == "__main__":
         **model_kwargs,
     )
     peft_config = get_peft_config(model_args)
-    if peft_config is None:
-        ref_model = AutoModelForImageTextToText.from_pretrained(
-            model_args.model_name_or_path,
-            **model_kwargs,
-        )
-    else:
-        ref_model = None
 
     ################
     # Dataset
@@ -128,7 +120,6 @@ if __name__ == "__main__":
     ################
     trainer = DPOTrainer(
         model=model,
-        ref_model=ref_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,

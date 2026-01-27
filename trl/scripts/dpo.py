@@ -70,8 +70,6 @@ from transformers import AutoModelForCausalLM
 
 from trl import (
     DatasetMixtureConfig,
-    DPOConfig,
-    DPOTrainer,
     ModelConfig,
     ScriptArguments,
     TrlParser,
@@ -80,6 +78,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.dpo import DPOConfig, DPOTrainer
 
 
 logger = logging.get_logger(__name__)

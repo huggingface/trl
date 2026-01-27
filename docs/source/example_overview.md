@@ -43,7 +43,7 @@ These notebooks are easier to run and are designed for quick experimentation wit
 
 ## Scripts
 
-Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl/blob/main/trl/scripts) and [`examples/scripts`](https://github.com/huggingface/trl/blob/main/examples/scripts) directories. They show how to use different trainers such as `SFTTrainer`, `PPOTrainer`, `DPOTrainer`, `GRPOTrainer`, and more.
+Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl/blob/main/trl/scripts) and [`examples/scripts`](https://github.com/huggingface/trl/blob/main/examples/scripts) directories. They show how to use different trainers such as [`SFTTrainer`], [`PPOTrainer`], [`DPOTrainer`], [`GRPOTrainer`], and more.
 
 | File | Description |
 | --- | --- |

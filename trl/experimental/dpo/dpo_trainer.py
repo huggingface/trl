@@ -913,7 +913,8 @@ class DPOTrainer(BaseTrainer):
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if is_peft_model(self.model) and self.ref_model is None:
-                with use_adapter(self.model, adapter_name="ref" if "ref" in self.model.peft_config else None):
+                model = self.accelerator.unwrap_model(self.model)
+                with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
                     ref_outputs = self.model(**model_kwargs)
             else:
                 ref_outputs = self.ref_model(**model_kwargs)
@@ -1092,8 +1093,9 @@ class DPOTrainer(BaseTrainer):
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
                     # - New adapter: disabling adapters yields the base model.
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
+                    model = self.accelerator.unwrap_model(model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = model(**model_kwargs)
+                        ref_outputs = self.model(**model_kwargs)
                 else:
                     ref_outputs = self.ref_model(**model_kwargs)
 

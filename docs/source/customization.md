@@ -1,13 +1,13 @@
 # Training customization
 
-TRL is designed with modularity in mind so that users are able to efficiently customize the training loop for their needs. Below are examples on how you can apply and test different techniques. 
+TRL is designed with modularity in mind so that users are able to efficiently customize the training loop for their needs. Below are examples on how you can apply and test different techniques.
 
 > [!NOTE]
 > Although these examples use the [`DPOTrainer`], these customization methods apply to most (if not all) trainers in TRL.
 
 ## Use different optimizers and schedulers
 
-By default, the `DPOTrainer` creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to `DPOTrainer` as follows:
+By default, the [`DPOTrainer`] creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to [`DPOTrainer`] as follows:
 
 ```python
 from datasets import load_dataset
