@@ -66,7 +66,7 @@ from ..data_utils import (
 )
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available
+from ..import_utils import is_jmespath_available, is_liger_kernel_available, is_vllm_available, is_swanlab_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
@@ -116,6 +116,10 @@ if is_wandb_available():
 
 if is_trackio_available():
     import trackio
+
+if is_swanlab_available():
+    import swanlab
+
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
@@ -2495,6 +2499,8 @@ class GRPOTrainer(BaseTrainer):
                 logging_backends.append(wandb)
             if self.args.report_to and "trackio" in self.args.report_to:
                 logging_backends.append(trackio)
+            if self.args.report_to and "swanlab" in self.args.report_to:
+                logging_backends.append(swanlab)
 
             table = {
                 "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
@@ -2506,24 +2512,31 @@ class GRPOTrainer(BaseTrainer):
 
             df_base = pd.DataFrame(table)
             images_raw = self._logs["images"] or []
+            # Prepare df without images first (swanlab doesn't support images)
+            if self.log_unique_prompts:
+                df_dedup = df_base.drop_duplicates(subset=["prompt"])
+            else:
+                df_dedup = df_base
 
             for logging_backend in logging_backends:
-                if images_raw:
-                    images = []
-                    for image_list in self._logs["images"]:
-                        images.append([logging_backend.Image(image) for image in image_list])
-                    df = pd.concat(
-                        [df_base, pd.Series(images, name="image")],
-                        axis=1,
-                        copy=False,
-                    )
+                # swanlab: use echarts Table without support images
+                # TODO: add image support for swanlab
+                if logging_backend is swanlab:
+                    headers = list(df_dedup.columns)
+                    rows = df_dedup.values.tolist()
+                    table = logging_backend.echarts.Table()
+                    table.add(headers, rows)
+                    logging_backend.log({mode: {"completions": table}})
                 else:
-                    df = df_base
-
-                if self.log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-
-                logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
+                    # wandb/trackio: support images
+                    if images_raw:
+                        images = []
+                        for image_list in self._logs["images"]:
+                            images.append([logging_backend.Image(image) for image in image_list])
+                        df = pd.concat([df_dedup, pd.Series(images, name="image")], axis=1, copy=False)
+                    else:
+                        df = df_dedup
+                    logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
