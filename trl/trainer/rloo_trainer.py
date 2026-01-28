@@ -562,6 +562,21 @@ class RLOOTrainer(BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
+            if self.beta == 0.0:
+                raise ValueError(
+                    "You passed `sync_ref_model=True` while `beta=0.0`, which means the reference model is not used "
+                    "during training. Consequently, RLOOTrainer does not create a `ref_model` instance, and there is "
+                    "nothing to synchronize. Please set `sync_ref_model=False`, or set `beta` to a non-zero value."
+                )
+            if is_peft_model(model):
+                raise NotImplementedError(
+                    "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
+                    "With PEFT, RLOOTrainer does not keep a separate reference model in memory; instead, it recovers "
+                    "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
+                    "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
+                    "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
+                    "feature request at https://github.com/huggingface/trl/issues."
+                )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
