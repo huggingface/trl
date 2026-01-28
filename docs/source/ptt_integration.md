@@ -130,6 +130,7 @@ trainer.train()
 </hfoptions>
 
 ## What You Get
+
 **Example output:**
 ```
 [HIGH] DPO loss stuck at ~0.693 (random chance). Model may not be learning preferences.
