@@ -144,6 +144,7 @@ See a full working example with auto-stop in action:
 
 📂 **[demo/scripts/custom_heuristic.py](https://github.com/microsoft/post-training-toolkit/blob/main/demo/scripts/custom_heuristic_demo.py)**
 
+
 ### 1. Auto-Metrics
 The callback automatically captures algorithm-specific metrics, backed by the latest research and industry push:
 
