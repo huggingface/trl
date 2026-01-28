@@ -881,7 +881,6 @@ trainer = SFTTrainer(
 )
 ```
 
-
 ### DoRA: Weight-Decomposed Low-Rank Adaptation
 
 **📜 Paper**: https://huggingface.co/papers/2402.09353
