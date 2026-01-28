@@ -6,6 +6,9 @@ on:
       # Run only when relevant files are modified
       - "trl/experimental/**"
       - "tests/experimental/**"
+  push:
+    branches:
+      - ci-*
 
 env:
   TQDM_DISABLE: 1
