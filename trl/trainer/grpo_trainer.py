@@ -474,7 +474,8 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
-        self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
+        self.vllm_importance_sampling_max = args.vllm_importance_sampling_max
+        self.vllm_importance_sampling_min = args.vllm_importance_sampling_min
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
@@ -1617,6 +1618,10 @@ class GRPOTrainer(BaseTrainer):
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
                     per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                    if self.vllm_importance_sampling_mode == "sequence_geometric_mean_mask":
+                        per_sequence_logps_diff = per_sequence_logps_diff / mask.sum(dim=-1, keepdim=True).clamp(
+                            min=1.0
+                        )
                     logps_diff = per_sequence_logps_diff
                 else:
                     logps_diff = per_token_logps_diff
@@ -1629,11 +1634,16 @@ class GRPOTrainer(BaseTrainer):
 
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                        vllm_importance_sampling_ratio,
+                        min=self.vllm_importance_sampling_min,
+                        max=self.vllm_importance_sampling_max,
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
+                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_max
+                    )
                     vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                        invalid_mis_mask, value=0.0
                     )
                 else:
                     raise ValueError(
@@ -1812,6 +1822,8 @@ class GRPOTrainer(BaseTrainer):
             output["old_per_token_logps"] = old_per_token_logps
         if self.use_vllm and self.vllm_importance_sampling_correction:
             output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
+            if self.off_policy_mask_threshold is not None:
+                output["raw_importance_sampling_ratio"] = logps_diff
         if sampling_per_token_logps is not None:
             output["sampling_per_token_logps"] = sampling_per_token_logps
         if ref_per_token_logps is not None:
@@ -1897,7 +1909,8 @@ class GRPOTrainer(BaseTrainer):
     def get_off_policy_mask(
         advantages: torch.Tensor,
         per_token_logps: torch.Tensor,
-        sampling_per_token_logps: torch.Tensor,
+        old_per_token_logps: torch.Tensor,
+        raw_importance_sampling_ratio: torch.Tensor | None,
         mask: torch.Tensor,
         off_policy_threshold: float,
     ) -> torch.Tensor:
@@ -1906,13 +1919,17 @@ class GRPOTrainer(BaseTrainer):
         "Keep" and 0.0 indicates "Drop".
         """
         # forward KL div: log(pi_old) - log(pi_theta)
-        kl_div = sampling_per_token_logps - per_token_logps.detach()
+        kl_div = per_token_logps - old_per_token_logps
         # Sequence-level Mean KL (ignoring prompt+padding)
         seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
         avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+
+        if raw_importance_sampling_ratio is not None:
+            avg_seq_kl = avg_seq_kl + raw_importance_sampling_ratio
+
         # Keep if (Advantage >= 0) OR (KL <= delta)
         is_pos_adv = advantages >= 0
-        is_low_kl = avg_seq_kl <= off_policy_threshold
+        is_low_kl = -avg_seq_kl <= off_policy_threshold
         return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
 
     def _compute_loss(self, model, inputs):
@@ -1963,12 +1980,13 @@ class GRPOTrainer(BaseTrainer):
             # 1. Drift from gradient updates (always present)
             # 2. Drift from training-inference mismatch (when using vLLM)
             # When using vLLM, prioritize sampling_per_token_logps, otherwise use old_per_token_logps
-            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+            raw_importance_sampling_ratio = inputs.get("raw_importance_sampling_ratio", None)
 
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
                 per_token_logps=per_token_logps,
-                sampling_per_token_logps=sampling_per_token_logps,
+                old_per_token_logps=old_per_token_logps,
+                raw_importance_sampling_ratio=raw_importance_sampling_ratio,
                 mask=mask,
                 off_policy_threshold=self.off_policy_mask_threshold,
             )
