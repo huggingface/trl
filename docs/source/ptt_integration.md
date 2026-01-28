@@ -158,6 +158,7 @@ The callback automatically captures algorithm-specific metrics, backed by the la
 | **ORPO** | sft_loss, odds_ratio_loss, log_odds_ratio |
 | **KTO** | kl, logps for desirable/undesirable |
 
+
 ### 2. Crash Postmortems
 If training crashes or gets interrupted, you get a `postmortem.json` with full context:
 
