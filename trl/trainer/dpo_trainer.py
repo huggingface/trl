@@ -707,6 +707,9 @@ class DPOTrainer(BaseTrainer):
                 Whether to add special tokens to the sequences. Typically used for encoder-decoder models. If `True`,
                 the prompt sequence will have a bos token prepended and an eos token appended. In any case, the
                 completion sequences will have an eos token appended.
+            is_chat (`bool`):
+                Whether the data is conversational. If `True`, the completion sequences will not have an eos token
+                appended.
 
         Returns:
             `dict[str, list[int]]`:
