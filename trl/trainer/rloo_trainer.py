@@ -323,7 +323,7 @@ class RLOOTrainer(BaseTrainer):
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 model_init_kwargs = args.model_init_kwargs or {}
-                # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+                # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
@@ -456,7 +456,7 @@ class RLOOTrainer(BaseTrainer):
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
             model_init_kwargs = args.model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
+            # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
@@ -1313,8 +1313,8 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 
-    # During evaluation, Trainer calls prediction_step, which computes loss only when labels are present;
-    # otherwise it runs a forward pass and returns logits. We override it to always call compute_loss.
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():

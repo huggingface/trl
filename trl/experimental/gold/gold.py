@@ -32,8 +32,7 @@ python trl/experimental/gold/gold.py \
     --gradient_accumulation_steps 8 \
     --output_dir gold-model \
     --num_train_epochs 1 \
-    --push_to_hub \
-    --gradient_checkpointing
+    --push_to_hub
 
 # LoRA:
 python trl/experimental/gold/gold.py \
@@ -46,7 +45,6 @@ python trl/experimental/gold/gold.py \
     --output_dir gold-model \
     --num_train_epochs 1 \
     --push_to_hub \
-    --gradient_checkpointing \
     --use_peft \
     --lora_r 64 \
     --lora_alpha 16

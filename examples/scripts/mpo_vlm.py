@@ -34,7 +34,6 @@ python examples/scripts/mpo_vlm.py \
     --dataset_num_proc 1 \
     --output_dir dpo_idefics_rlaif-v \
     --dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj \
     --loss_type sigmoid bco_pair sft \

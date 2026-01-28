@@ -55,6 +55,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             num_return_sequences=1,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
+            do_sample=False,
             temperature=0.0,
         )
 

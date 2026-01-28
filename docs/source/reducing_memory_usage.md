@@ -329,4 +329,7 @@ from trl import SFTConfig
 training_args = SFTConfig(..., gradient_checkpointing=True)
 ```
 
-Gradient checkpointing is available and activated by default across all TRL trainers. For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
+> [!NOTE]
+> Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+
+For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
