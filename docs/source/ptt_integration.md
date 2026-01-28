@@ -187,7 +187,7 @@ callback = DiagnosticsCallback(stop_on_critical=True)
 Works automatically with multi-GPU setups. Zero configuration needed:
 
 ```bash
-torchrun --nproc_per_node=8 train.py
+accelerate launch --num_processes 8 train.py
 ```
 
 Automatically detects stragglers, aggregates metrics across ranks, and tracks memory balance.
