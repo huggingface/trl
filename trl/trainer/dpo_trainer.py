@@ -739,7 +739,6 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-
         # For conversational data, the chat template already includes proper EOS tokens
         if not is_chat:
             chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
