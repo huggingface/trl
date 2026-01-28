@@ -45,6 +45,7 @@ from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
+from .dpo_config import DPOConfig
 from .utils import (
     create_model_from_path,
     disable_dropout_in_model,
@@ -58,7 +59,6 @@ from .utils import (
     selective_log_softmax,
     use_adapter,
 )
-from .dpo_config import DPOConfig
 
 
 if is_peft_available():
