@@ -793,6 +793,39 @@ class GRPOConfig(TrainingArguments):
             "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
         },
     )
+    use_hadw: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use History-Aware Adaptive Difficulty Weighting (HA-DW) to mitigate biased advantage "
+            "estimation in group-relative RL. This method was introduced in the paper [Your Group-Relative Advantage "
+            "Is Biased](https://huggingface.co/papers/2601.08521). When enabled, the trainer dynamically adjusts "
+            "advantage weights based on prompt difficulty and the model's evolving capability across batches."
+        },
+    )
+    hadw_eta: float = field(
+        default=0.1,
+        metadata={
+            "help": "Base forgetting factor (η) for HA-DW's evolving difficulty anchor. Controls the influence of "
+            "historical information when updating the model's capability belief. The adaptive forgetting factor "
+            "is computed as η_t = η * σ_t, where σ_t measures training stability. Only used when `use_hadw=True`."
+        },
+    )
+    hadw_lambda_scale: float = field(
+        default=1.0,
+        metadata={
+            "help": "Scaling factor (λ_scale) for HA-DW's reweighting function. Controls the magnitude of the "
+            "exponential adjustment applied to advantages. Higher values lead to stronger reweighting. "
+            "Only used when `use_hadw=True`."
+        },
+    )
+    hadw_history_window: int = field(
+        default=10,
+        metadata={
+            "help": "Number of recent batches (m) used to compute the standard deviation for HA-DW's adaptive "
+            "forgetting factor. Larger values provide more stable estimates but are less responsive to rapid "
+            "capability changes. Only used when `use_hadw=True`."
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
