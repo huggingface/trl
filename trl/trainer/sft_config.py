@@ -196,7 +196,7 @@ class SFTConfig(TrainingArguments):
     max_length: int | None = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
             "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
             "sequence length."
         },
