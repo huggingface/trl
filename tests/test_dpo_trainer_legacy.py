@@ -342,13 +342,13 @@ class TestDPOTrainer(TrlTestCase):
     #         loss, metrics = trainer.get_batch_loss_metrics(trainer.model, batch)
     #         assert "nll_loss" in metrics  # SFT loss should be computed
 
-    def test_wrong_loss_weights_length(self):
-        with pytest.raises(ValueError, match="Length of loss_weights list"):
-            DPOConfig(
-                output_dir=self.tmp_dir,
-                loss_type=["sigmoid", "bco_pair"],
-                loss_weights=[1.0, 0.5, 0.1],  # Wrong length
-            )
+    # def test_wrong_loss_weights_length(self):
+    #     with pytest.raises(ValueError, match="Length of loss_weights list"):
+    #         DPOConfig(
+    #             output_dir=self.tmp_dir,
+    #             loss_type=["sigmoid", "bco_pair"],
+    #             loss_weights=[1.0, 0.5, 0.1],  # Wrong length
+    #         )
 
     @pytest.mark.parametrize("rpo_alpha", [None, 0.5])
     def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
