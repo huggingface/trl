@@ -627,6 +627,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
+            beta=0.1,  # ensure ref model is created so sync can update it
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
