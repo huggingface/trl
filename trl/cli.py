@@ -23,6 +23,7 @@ from .scripts.dpo import make_parser as make_dpo_parser
 from .scripts.env import print_env
 from .scripts.grpo import make_parser as make_grpo_parser
 from .scripts.kto import make_parser as make_kto_parser
+from .scripts.orpo import make_parser as make_orpo_parser
 from .scripts.reward import make_parser as make_reward_parser
 from .scripts.rloo import make_parser as make_rloo_parser
 from .scripts.sft import make_parser as make_sft_parser
@@ -45,6 +46,7 @@ def main():
     subparsers.add_parser("env", help="Print the environment information")
     make_grpo_parser(subparsers)
     make_kto_parser(subparsers)
+    make_orpo_parser(subparsers)
     make_reward_parser(subparsers)
     make_rloo_parser(subparsers)
     make_sft_parser(subparsers)
@@ -110,6 +112,15 @@ def main():
 
         # Feed the args to the launch command
         args.training_script_args = sys.argv[2:]  # remove "trl" and "kto"
+        launch_command(args)  # launch training
+
+    elif args.command == "orpo":
+        # Get the default args for the launch command
+        orpo_training_script = resources.files("trl.scripts").joinpath("orpo.py")
+        args = launch_command_parser().parse_args([str(orpo_training_script)])
+
+        # Feed the args to the launch command
+        args.training_script_args = sys.argv[2:]  # remove "trl" and "orpo"
         launch_command(args)  # launch training
 
     elif args.command == "reward":
