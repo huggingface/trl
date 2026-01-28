@@ -139,6 +139,7 @@ trainer.train()
 ```
 
 ## Example Demo
+
 See a full working example with auto-stop in action:
 
 📂 **[demo/live_demo.ipynb](https://github.com/microsoft/post-training-toolkit/blob/main/demo/notebooks/demo_live_output.ipynb)**
