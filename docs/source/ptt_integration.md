@@ -1,5 +1,6 @@
 # Post-Training Toolkit Integration
-[Post-Training Toolkit](https://github.com/your-org/post-training-toolkit) is a diagnostic and observability layer for RLHF training runs. Add one callback to any TRL trainer and get **auto-metrics**, **crash postmortems**, and **literature-backed heuristics**—without writing glue code.
+
+[Post-Training Toolkit](https://github.com/microsoft/post-training-toolkit) is a diagnostic and observability layer for RLHF training runs. Add one callback to any TRL trainer and get **auto-metrics**, **crash postmortems**, and **literature-backed heuristics**—without writing glue code.
 
 It was built to operationalize the debugging patterns we found most useful when running post-training at scale.
 
