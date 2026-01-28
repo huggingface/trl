@@ -34,8 +34,7 @@ from transformers import (
 from transformers.testing_utils import backend_empty_cache, get_device_properties, torch_device
 from transformers.utils import is_peft_available
 
-from trl import FDivergenceType
-from trl.experimental.dpo import DPOConfig, DPOTrainer
+from trl import DPOConfig, DPOTrainer, FDivergenceType
 
 from .testing_utils import (
     TrlTestCase,
