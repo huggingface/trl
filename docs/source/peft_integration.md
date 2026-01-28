@@ -583,7 +583,7 @@ trainer = SFTTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
 
 trainer.train()
