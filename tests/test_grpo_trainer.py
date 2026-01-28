@@ -414,6 +414,46 @@ class TestGRPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
+    # In practice, this test is the same as `test_training_peft_config`, since gradient checkpointing is enabled by
+    # default in `GRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test
+    # PEFT + gradient checkpointing, which has caused issues in the past.
+    @require_peft
+    def test_training_peft_with_gradient_checkpointing(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            gradient_checkpointing=True,  # enable gradient checkpointing
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
+
     def test_training_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
