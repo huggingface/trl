@@ -653,8 +653,11 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
+    # enabled by default in `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still
+    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
     @require_peft
-    def test_train_dense_with_peft_config_and_gradient_checkpointing(self):
+    def test_train_with_peft_config_and_gradient_checkpointing(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -672,79 +675,6 @@ class TestSFTTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=LoraConfig(),
         )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-
-    @require_peft
-    def test_train_moe_with_peft_config_and_gradient_checkpointing(self):
-        # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
-
-        trainer = SFTTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-            peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
-        )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-
-    @require_peft
-    def test_train_with_peft_model_and_gradient_checkpointing(self):
-        # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        model = get_peft_model(model, LoraConfig())
-
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
-
-        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
-
-        # Verify model is a PeftModel
-        assert isinstance(trainer.model, PeftModel)
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1292,6 +1222,9 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+    # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
+    # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
+    # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1510,7 +1443,6 @@ class TestSFTTrainer(TrlTestCase):
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,
             per_device_train_batch_size=1,
-            gradient_checkpointing=True,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )
@@ -1888,7 +1820,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
@@ -1933,7 +1865,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
@@ -1984,7 +1916,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
@@ -2029,7 +1961,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_steps=10,
             packing=packing,
             max_length=self.max_length,
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 

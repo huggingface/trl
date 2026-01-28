@@ -35,7 +35,6 @@ accelerate launch \
     --reward_model_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir online-dpo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
-    --gradient_checkpointing \
     --dtype bfloat16 \
     --max_length 1536 \
     --max_new_tokens 1024 \
