@@ -472,6 +472,16 @@ class DPOTrainer(BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+        ref_model_id = None
+        if isinstance(ref_model, str):
+            logger.warning(
+                "Passing `ref_model` as a string is deprecated and will be removed in version 0.29.0. Usually, you "
+                "can just omit `ref_model` and we'll initialize it to a copy of `model` for you. If you really need "
+                "to load the reference model from a different path, you can still do so by passing `ref_model` as a "
+                "model instance."
+            )
+            ref_model_id = ref_model
+            ref_model = None
 
         # Processing class
         if processing_class is None:
@@ -644,7 +654,8 @@ class DPOTrainer(BaseTrainer):
                 # Distributed training requires device_map=None ("auto" fails)
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
-                self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
+                ref_model_path = ref_model_id or get_config_model_id(self.model.config)
+                self.ref_model = create_model_from_path(ref_model_path, **model_init_kwargs)
         else:
             self.ref_model = ref_model
 
