@@ -1279,6 +1279,7 @@ def use_adapter(model: "PeftModel", adapter_name: str | None):
     ...     outputs = model(input_ids)
     ```
     """
+
     if not is_peft_available():
         raise ImportError(
             "You're trying to use a PEFT adapter but PEFT is not installed. Please install it with `pip install peft`."
