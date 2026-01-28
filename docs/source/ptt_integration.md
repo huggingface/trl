@@ -132,7 +132,7 @@ trainer.train()
 ## What You Get
 
 **Example output:**
-```
+```text
 [HIGH] DPO loss stuck at ~0.693 (random chance). Model may not be learning preferences.
        Ref: Rafailov et al. (2023) 'DPO', Section 4.2
 
@@ -191,15 +191,3 @@ accelerate launch --num_processes 8 train.py
 ```
 
 Automatically detects stragglers, aggregates metrics across ranks, and tracks memory balance.
-
-## Advanced Usage
-
-For full documentation, CLI tools, and agent trace analysis, visit the [official repository](https://github.com/your-org/post-training-toolkit).
-
-```bash
-# CLI for post-hoc diagnostics
-ptt-diagnose --input ./my_run --make-plots
-
-# Agent traces → DPO pairs
-ptt-agent-diagnose --input agent_runs.jsonl --export-dpo pairs.parquet
-```
