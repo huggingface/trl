@@ -33,7 +33,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
-    --output_dir dpo_idefics_rlaif-v \
+    --output_dir dpo_qwen_2_5_rlaif-v \
     --dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
@@ -51,7 +51,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --max_steps 100 \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
-    --output_dir dpo_idefics_rlaif-v \
+    --output_dir dpo_qwen_2_5_rlaif-v \
     --dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
