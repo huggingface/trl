@@ -47,8 +47,7 @@ accelerate launch \
     --warmup_ratio 0.1 \
     --lr_scheduler_type cosine \
     --push_to_hub False \
-    --dtype bfloat16 \
-    --gradient_checkpointing True
+    --dtype bfloat16
 """
 
 import json

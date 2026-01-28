@@ -104,7 +104,6 @@ uv run "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.p
     --packing \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 16 \
-    --gradient_checkpointing \
     --eval_strategy no \
     --use_peft \
     --lora_r 256 \
