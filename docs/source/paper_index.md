@@ -881,6 +881,18 @@ trainer = SFTTrainer(
 )
 ```
 
+### DoRA: Weight-Decomposed Low-Rank Adaptation
+
+**📜 Paper**: https://huggingface.co/papers/2402.09353
+
+Weight-Decomposed Low-Rank Adaptation (DoRA) can improve the performance of LoRA, especially at low ranks. DoRA decomposes pre-trained weight into two component: magnitude and direction. Direction is handled by normal LoRA, and magnitude is learnable parameters. TRL integrate DoRA via the [PEFT library](https://huggingface.co/docs/peft/index) and can be easily enable through setting `use_dora=True` to the [`~peft.LoraConfig`].
+
+``` python
+from peft import LoraConfig
+
+config = LoraConfig(use_dora=True, ...)
+```
+
 ## Reinforce Leave-One-Out
 
 Papers relating to the [`RLOOTrainer`]

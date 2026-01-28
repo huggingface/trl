@@ -1515,7 +1515,7 @@ class TestDPOTrainerSlow(TrlTestCase):
             fp16=True,
             logging_strategy="no",
             report_to="none",
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             generate_during_eval=False,
             loss_type=loss_type,
@@ -1581,7 +1581,7 @@ class TestDPOTrainerSlow(TrlTestCase):
             fp16=True,
             logging_strategy="no",
             report_to="none",
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             beta=0.1,
             generate_during_eval=False,
