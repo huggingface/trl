@@ -14,32 +14,57 @@
 
 import textwrap
 
+import os
+import time
 import torch
 import torch.nn as nn
+from accelerate import PartialState, logging
 import torch.nn.functional as F
+from collections.abc import Callable
 from datasets import Dataset, IterableDataset
 from transformers import (
+    AutoProcessor,
     AutoModelForCausalLM,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    BaseImageProcessor,
+    FeatureExtractionMixin,
 )
+from transformers.trainer_callback import TrainerCallback
 from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
+from ...chat_template_utils import clone_chat_template
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from ...trainer.utils import (
+    disable_dropout_in_model, 
+    empty_cache, 
+    get_config_model_id,
+    remove_none_values
+)
 from .minillm_config import MiniLLMConfig
+from ...data_utils import (
+    is_conversational,
+    is_conversational_from_value,
+    maybe_convert_to_chatml,
+)
+from ...extras.profiling import profiling_decorator
 
 
 if is_peft_available():
     from peft import PeftConfig
 
+logger = logging.get_logger(__name__)
 
 def dummy_reward_func(completions: list, **kwargs):
     # placeholder reward function when no reward function is provided
     return [1.0 for _ in completions]
+
+
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 class MiniLLMTrainer(GRPOTrainer):
@@ -174,6 +199,7 @@ class MiniLLMTrainer(GRPOTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
         rollout_func: RolloutFunc | None = None,
+        formatting_func: Callable[[dict], str] | None = None,
     ):
         if reward_funcs is None:
             reward_funcs = [dummy_reward_func]
@@ -183,6 +209,62 @@ class MiniLLMTrainer(GRPOTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = MiniLLMConfig(f"{model_name}-MiniLLM")
+        
+        # We need old logprobs to compute the RKL
+        args.always_track_old_logps = True
+
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if args.eos_token is not None:
+            eos_token = args.eos_token
+            eos_token_id = tokenizer.convert_tokens_to_ids(eos_token)
+            if eos_token_id is None:
+                raise ValueError(
+                    f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
+                    "in the vocabulary before using it as an EOS token."
+                )
+            tokenizer.eos_token_id = eos_token_id
+
+        if args.chat_template_path is not None:
+            if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
+                with open(args.chat_template_path, encoding="utf-8") as chat_template_file:
+                    processing_class.chat_template = chat_template_file.read()
+            else:
+                model, processing_class, _ = clone_chat_template(
+                    model, processing_class, args.chat_template_path
+                )
+
+        skip_prepare_dataset = (
+            args.dataset_kwargs is not None
+            and args.dataset_kwargs.get("skip_prepare_dataset", False)
+        )
+        if not skip_prepare_dataset:
+            train_dataset = self._prepare_dataset(
+                train_dataset, processing_class, args, formatting_func, "train"
+            )
+            if eval_dataset is not None:
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self._prepare_dataset(dataset, processing_class, args, formatting_func, key)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._prepare_dataset(
+                        eval_dataset, processing_class, args, formatting_func, "eval"
+                    )
 
         super().__init__(
             model,
@@ -231,6 +313,102 @@ class MiniLLMTrainer(GRPOTrainer):
         self.gamma = args.gamma
         self.length_normalization = args.length_normalization
 
+        self._current_rkl_advantange_time = 0.0
+        self._current_single_step_loss_time = 0.0
+        self._current_rl_loss_time = 0.0
+
+    def _prepare_dataset(
+        self,
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
+        args: MiniLLMConfig,
+        formatting_func: Callable[[dict], str] | None,
+        dataset_name: str,
+    ) -> Dataset | IterableDataset:
+        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
+            dataset = dataset.with_transform(remove_none_values)
+
+        # If the dataset is already preprocessed (tokenized), skip the processing steps.
+        column_names = get_dataset_column_names(dataset)
+        is_processed = "prompt" in column_names
+
+        # Build the kwargs for the `map` function
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+
+        with PartialState().main_process_first():
+            # Apply the formatting function if any
+            if formatting_func is not None and is_processed:
+                logger.warning(
+                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
+                    "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
+                    "`formatting_func` or pass a dataset that is not already processed.",
+                )
+
+            if formatting_func is not None and not is_processed:
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
+
+                def _func(example):
+                    return {"prompt": formatting_func(example)}
+
+                dataset = dataset.map(_func, batched=False, **map_kwargs)
+
+            if not is_processed:
+                first_example = next(iter(dataset))
+                if is_conversational_from_value(first_example):
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+                    column_names = get_dataset_column_names(dataset)
+                    dataset = dataset.map(
+                        maybe_convert_to_chatml,
+                        remove_columns="conversations" if "conversations" in column_names else None,
+                        **map_kwargs,
+                    )
+
+                first_example = next(iter(dataset))
+                if is_conversational(first_example):
+                    def convert_conversation_to_prompt(
+                            example: dict[str, list[dict[str, str]]],
+                        ) -> dict[str, str]:
+                        last_role = example["messages"][-1]["role"]
+                        if last_role == "assistant":
+                            messages = example["messages"][:-1]
+                            completion = example["messages"][-1]["content"]
+                        else:
+                            messages = example["messages"]
+                            completion = ""
+                        prompt = processing_class.apply_chat_template(
+                            messages,
+                            continue_final_message=False,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                            **example.get("chat_template_kwargs", {}),
+                        )
+
+                        output = {
+                            "prompt": prompt,
+                            "completion": completion,
+                        }
+                        return output
+
+                    dataset = dataset.map(
+                        convert_conversation_to_prompt,
+                        remove_columns=["messages"],
+                        **map_kwargs,
+                    )
+            
+            if PartialState().is_main_process:
+                # print data example
+                first_example = dataset[0]
+                print("\n\n########## First example in dataset: ##########")
+                print("Inputs:", first_example["prompt"])
+                print("#" * 50 + "\n\n")
+        
+        return dataset
+
+
     def _single_step_decomposition_loss(
         self,
         student_log_probs: torch.Tensor,
@@ -278,6 +456,7 @@ class MiniLLMTrainer(GRPOTrainer):
         else:
             return reg_loss
 
+    @torch.no_grad()
     def _compute_advantage(
         self,
         student_log_probs_on_labels: torch.Tensor,
@@ -295,11 +474,11 @@ class MiniLLMTrainer(GRPOTrainer):
 
         $$ \text{lengths}_t = \sum_{i=t}^{T} \gamma^{i-t} $$
 
-        $$ \text{advantages}_t = \frac{\sum_{i=t}^{T} \gamma^{i-t} R_i}{\text{lengths}_t} $$
+        $$ \text{advantages}_t = \frac{\sum_{i=t}^{T} \gamma^{i-t} \text{rewards}_i}{\text{lengths}_t} $$
 
         Otherwise:
 
-        $$ \text{advantages}_t = \sum_{i=t}^{T} \gamma^{i-t} R_i $$
+        $$ \text{advantages}_t = \sum_{i=t}^{T} \gamma^{i-t} \text{rewards}_i $$
 
         Args:
             student_log_probs_on_labels: Log probabilities of the student model on the labels.
@@ -322,24 +501,45 @@ class MiniLLMTrainer(GRPOTrainer):
         if self.gamma > 0.0:
             gamma_pow = torch.pow(self.gamma, torch.arange(response_length, device=rewards.device))
 
-            advantages = rewards * gamma_pow
-            advantages = advantages.flip(1).cumsum(dim=1).flip(1)
+            rewards = rewards * gamma_pow
+            rewards = rewards.flip(1).cumsum(dim=1).flip(1)
 
             if self.length_normalization:
                 mask = torch.where(mask < 0.5, 1e-4, mask)
                 lengths = mask * gamma_pow
                 lengths = lengths.flip(1).cumsum(dim=1).flip(1)
-                advantages = advantages / lengths
-        else:
-            advantages = rewards
+                rewards = rewards / lengths
+
+        # if self.args.minillm_grpo:
+        #     mean_grouped_rewards = rewards.view(-1, self.num_generations, response_length).mean(dim=1)
+        #     mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        #     advantages = rewards - mean_grouped_rewards
+        #     if self.args.minillm_scale_rewards in ["group", "none"]:
+        #         # If self.scale_rewards = "none", we'll still log group level std
+        #         std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        #         std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
+        #     elif self.args.minillm_scale_rewards == "batch":
+        #         # Compute global std
+        #         std_rewards = rewards.std().expand_as(rewards)
+        #     else:
+        #         raise ValueError(
+        #             f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+        #         )
+        #     raise NotImplementedError("MiniLLM GRPO is not implemented yet.")
+        # else:
+        advantages = rewards
 
         return advantages
 
+    def get_rev_kl(self, log_p: torch.Tensor, log_q: torch.Tensor, mask: torch.Tensor):
+        log_ratio = (log_p - log_q) * mask
+        kl = log_ratio.float().exp() - 1 - log_ratio
+        return kl
+
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
         attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
 
         # Compute student output
         student_outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
@@ -363,16 +563,25 @@ class MiniLLMTrainer(GRPOTrainer):
         student_log_probs = F.log_softmax(student_logits, dim=-1)
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
-        student_log_probs_on_labels = torch.gather(
-            student_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
-        ).squeeze(-1)
+        if self.args.on_policy_logq:
+            student_log_probs_on_labels = torch.gather(
+                student_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
+            ).squeeze(-1)
+        else:
+            student_log_probs_on_labels = inputs["old_per_token_logps"]
+
         teacher_log_probs_on_labels = torch.gather(
             teacher_log_probs, dim=-1, index=shifted_labels.unsqueeze(-1)
         ).squeeze(-1)
 
-        mask = shifted_labels != -100
+        mask = attention_mask[:, prompt_lengths:].bool()
 
+        # Logging Meitrcs
+        mode = "train" if self.model.training else "eval"
+
+        # Compute advantage for Reverse KL
         if self.rkl_advantage:
+            rkl_advantage_time = time.perf_counter()
             reverse_kl_advantage = self._compute_advantage(
                 student_log_probs_on_labels=student_log_probs_on_labels,
                 teacher_log_probs_on_labels=teacher_log_probs_on_labels,
@@ -380,19 +589,58 @@ class MiniLLMTrainer(GRPOTrainer):
             )
 
             inputs["advantages"] = inputs["advantages"].unsqueeze(1) + reverse_kl_advantage
+            mean_advantage = (inputs["advantages"] * mask).sum() / mask.sum()
+            self._metrics[mode]["minillm/mean_advantage"].append(self.accelerator.gather(mean_advantage).mean().item())
+            rkl_advantage_time_after = time.perf_counter()
+            self._current_rkl_advantange_time += rkl_advantage_time_after - rkl_advantage_time
+            if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
+                self._metrics[mode]["rkl_advantage_time"].append(self._current_rkl_advantange_time)
+                self._current_rkl_advantange_time = 0.0
 
         # Compute GRPO loss on verifiable reward
+        rl_loss_time = time.perf_counter()
         loss = self._compute_loss(model, inputs)
+        self._metrics[mode]["rl_loss"].append(self.accelerator.gather(loss).mean().item())
+        rl_loss_time_after = time.perf_counter()
+        self._current_rl_loss_time += rl_loss_time_after - rl_loss_time
+        if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
+            self._metrics[mode]["rl_loss_time"].append(self._current_rl_loss_time)
+            self._current_rl_loss_time = 0.0
 
         # Compute loss
         if self.single_step_decomposition:
+            single_step_loss_time = time.perf_counter()
             single_step_decomposition_loss = self._single_step_decomposition_loss(
                 student_log_probs=student_log_probs,
                 teacher_log_probs=teacher_log_probs,
                 mask=mask,
             )
 
-            loss += single_step_decomposition_loss
+            self._metrics[mode]["minillm/single_step_decomposition_loss"].append(self.accelerator.gather(single_step_decomposition_loss).mean().item())
+            loss += (single_step_decomposition_loss / self.current_gradient_accumulation_steps)
+            single_step_loss_time_after = time.perf_counter()
+            self._current_single_step_loss_time += single_step_loss_time_after - single_step_loss_time
+            if (self._step + 1) % self.current_gradient_accumulation_steps == 0:
+                self._metrics[mode]["single_step_loss_time"].append(self._current_single_step_loss_time)
+                self._current_single_step_loss_time = 0.0
+
+        # Compute Reverse KL for logging
+        with torch.no_grad():
+            reverse_kl = self.get_rev_kl(
+                log_p=teacher_log_probs_on_labels,
+                log_q=inputs["old_per_token_logps"],
+                mask=mask,
+            )
+            reverse_kl = reverse_kl.sum() / mask.sum()
+
+            if self.args.log_large_reverse_kl and reverse_kl.item() > 5.0:
+                save_path = f"{self.args.output_dir}/large_reverse_kl_logs/rank_{self.accelerator.process_index}/gs{self.state.global_step}_s{self._step}_rkl_{reverse_kl.item():.2f}/"
+                os.makedirs(save_path, exist_ok=True)
+                torch.save(inputs, f"{save_path}/inputs.pt")
+                torch.save(student_log_probs, f"{save_path}/student_log_probs.pt")
+                torch.save(teacher_log_probs, f"{save_path}/teacher_log_probs.pt")
+
+            self._metrics[mode]["minillm/reverse_kl"].append(self.accelerator.gather(reverse_kl).mean().item())
 
         # Empty cache
         empty_cache()
