@@ -467,6 +467,11 @@ class DPOTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+        if ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
+                "we'll initialize it to a copy of `model` for you."
+            )
 
         # Processing class
         if processing_class is None:
@@ -865,8 +870,9 @@ class DPOTrainer(BaseTrainer):
                 ref_chosen_logps.append(ref_chosen_logp.cpu())
                 ref_rejected_logps.append(ref_rejected_logp.cpu())
 
-            ref_chosen_logps = torch.cat(ref_chosen_logps).numpy()
-            ref_rejected_logps = torch.cat(ref_rejected_logps).numpy()
+            # Save the reference log probabilities to cache. We need .float() because bf16 is not supported by numpy
+            ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
+            ref_rejected_logps = torch.cat(ref_rejected_logps).float().numpy()
             if self.accelerator.is_main_process:
                 np.savez_compressed(
                     cache_file,
