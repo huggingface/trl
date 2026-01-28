@@ -75,9 +75,10 @@ class TestJudges(TrlTestCase):
     @pytest.mark.skipif(
         sys.version_info[:3] == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
     )
-    @pytest.mark.skipif(
+    @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.0.0"),
-        reason="llm-blender is not compatible with transformers >= 5.0.0 (GH-4918)",
+        reason="Known incompatibility between llm-blender and transformers >= 5.0.0 (GH-4918)",
+        strict=True,
     )
     def test_pair_rm_judge(self):
         judge = self.load_pair_rm_judge()
@@ -91,9 +92,10 @@ class TestJudges(TrlTestCase):
     @pytest.mark.skipif(
         sys.version_info[:3] == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
     )
-    @pytest.mark.skipif(
+    @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.0.0"),
-        reason="llm-blender is not compatible with transformers >= 5.0.0 (GH-4918)",
+        reason="Known incompatibility between llm-blender and transformers >= 5.0.0 (GH-4918)",
+        strict=True,
     )
     def test_pair_rm_judge_return_scores(self):
         judge = self.load_pair_rm_judge()
