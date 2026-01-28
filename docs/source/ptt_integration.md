@@ -176,6 +176,7 @@ If training crashes or gets interrupted, you get a `postmortem.json` with full c
 No more "what step did it die on?"
 
 ### 3. Auto-Stop on Critical Issues
+
 Enable automatic training termination when critical issues are detected:
 
 ```python
