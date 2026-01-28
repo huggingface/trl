@@ -27,7 +27,7 @@ from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, get_peft_model
 
 
 class TestDataCollatorForPreference(TrlTestCase):
