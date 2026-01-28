@@ -435,7 +435,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     use_logits_to_keep: bool | None = field(
-        default=False,
+        default=None,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.29.0. The trainer now "
             "automatically uses a more efficient method than using `use_logits_to_keep`. You can safely ignore this "
