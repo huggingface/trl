@@ -308,33 +308,33 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-    # def test_train_with_multiple_loss_types(self):
-    #     """
-    #     Tests multi-loss combinations, loss type inference, and weight configuration. MPO combines DPO (sigmoid), BCO
-    #     (bco_pair), and SFT (sft) losses.
-    #     """
-    #     model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-    #     dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-    #     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    def test_train_with_multiple_loss_types(self):
+        """
+        Tests multi-loss combinations, loss type inference, and weight configuration. MPO combines DPO (sigmoid), BCO
+        (bco_pair), and SFT (sft) losses.
+        """
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    #     training_args = DPOConfig(
-    #         output_dir=self.tmp_dir,
-    #         per_device_train_batch_size=2,
-    #         learning_rate=9e-1,
-    #         loss_type=["sigmoid", "bco_pair", "sft"],
-    #         loss_weights=[0.8, 0.2, 1.0],
-    #         report_to="none",
-    #     )
-    #     trainer = DPOTrainer(
-    #         model=model_id,
-    #         args=training_args,
-    #         processing_class=tokenizer,
-    #         train_dataset=dataset,
-    #     )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            loss_type=["sigmoid", "bco_pair", "sft"],
+            loss_weights=[0.8, 0.2, 1.0],
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
 
-    #     # Test that training works
-    #     trainer.train()
-    #     assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Test that training works
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     #     # Verify SFT loss is computed in the first test too
     #     with torch.no_grad():
