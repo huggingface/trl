@@ -193,6 +193,7 @@ accelerate launch --num_processes 8 train.py
 Automatically detects stragglers, aggregates metrics across ranks, and tracks memory balance.
 
 ## Advanced Usage
+
 For full documentation, CLI tools, and agent trace analysis, visit the [official repository](https://github.com/your-org/post-training-toolkit).
 
 ```bash
