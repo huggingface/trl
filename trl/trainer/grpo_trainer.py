@@ -725,7 +725,13 @@ class GRPOTrainer(BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            if is_peft_model(model) and self.beta != 0.0:
+            if self.beta == 0.0:
+                raise ValueError(
+                    "You passed `sync_ref_model=True` while `beta=0.0`, which means the reference model is not used "
+                    "during training. Consequently, GRPOTrainer does not create a `ref_model` instance, and there is "
+                    "nothing to synchronize. Please set `sync_ref_model=False`, or set `beta` to a non-zero value."
+                )
+            if is_peft_model(model):
                 raise NotImplementedError(
                     "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
                     "With PEFT, GRPOTrainer does not keep a separate reference model in memory; instead, it recovers "
@@ -734,14 +740,7 @@ class GRPOTrainer(BaseTrainer):
                     "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
                     "feature request at https://github.com/huggingface/trl/issues."
                 )
-            if self.beta == 0.0:
-                raise ValueError(
-                    "You passed `sync_ref_model=True` while `beta=0.0`, which means the reference model is not used "
-                    "during training. Consequently, GRPOTrainer does not create a `ref_model` instance, and there is "
-                    "nothing to synchronize. Please set `sync_ref_model=False`, or set `beta` to a non-zero value."
-                )
-            else:
-                self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
