@@ -272,19 +272,19 @@ trainer.train()
 
 ## DPOTrainer
 
-[[autodoc]] experimental.dpo.DPOTrainer
+[[autodoc]] DPOTrainer
     - train
     - save_model
     - push_to_hub
 
 ## DPOConfig
 
-[[autodoc]] experimental.dpo.DPOConfig
+[[autodoc]] DPOConfig
 
 ## DataCollatorForPreference
 
-[[autodoc]] experimental.dpo.dpo_trainer.DataCollatorForPreference
+[[autodoc]] dpo_trainer.DataCollatorForPreference
 
 ## DataCollatorForVisionPreference
 
-[[autodoc]] experimental.dpo.dpo_trainer.DataCollatorForVisionPreference
+[[autodoc]] dpo_trainer.DataCollatorForVisionPreference

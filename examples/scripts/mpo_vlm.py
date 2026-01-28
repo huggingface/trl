@@ -48,6 +48,8 @@ from PIL import Image
 from transformers import AutoModelForImageTextToText
 
 from trl import (
+    DPOConfig,
+    DPOTrainer,
     ModelConfig,
     ScriptArguments,
     TrlParser,
@@ -55,7 +57,6 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.experimental.dpo import DPOConfig, DPOTrainer
 
 
 # Enable logging in a Hugging Face Space

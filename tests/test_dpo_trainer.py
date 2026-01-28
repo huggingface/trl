@@ -21,10 +21,10 @@ from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
-from trl.experimental.dpo import DPOConfig, DPOTrainer
-from trl.experimental.dpo.dpo_trainer import DataCollatorForPreference
+from trl import DPOConfig, DPOTrainer
+from trl.trainer.dpo_trainer import DataCollatorForPreference
 
-from ..testing_utils import (
+from .testing_utils import (
     TrlTestCase,
     require_ampere_or_newer,
     require_bitsandbytes,
