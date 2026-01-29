@@ -19,7 +19,7 @@ import pytest
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 
-from trl.extras.vllm_client import VLLMClient
+from trl.generation.vllm_client import VLLMClient
 from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
