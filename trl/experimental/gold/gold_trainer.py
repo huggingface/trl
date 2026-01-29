@@ -48,7 +48,7 @@ from transformers.utils import (
 
 from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
 from ...extras.profiling import profiling_decorator
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation

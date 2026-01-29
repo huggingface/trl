@@ -346,7 +346,7 @@ class TestIsConversational(TrlTestCase):
                         "parameters": {"properties": {"what": {"description": "What to get the color of.", "type": "string"}}, "required": ["what"], "type": "object"},
                         "return": {"description": "The color.", "type": "string"},
                     },
-                }
+                },
             ],
         },
         {  # Unpaired preference

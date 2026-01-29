@@ -29,9 +29,9 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixi
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages_vllm
 from ..extras.profiling import ProfilingContext, profiling_decorator
-from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
+from .vllm_client import VLLMClient
 
 
 if TYPE_CHECKING:
