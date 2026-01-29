@@ -911,6 +911,37 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+    def test_train_with_compute_metrics(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        def dummy_compute_metrics(eval_pred):
+            return {"my_metric": 0.123}
+
+        # Initialize the trainer
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            eval_strategy="steps",
+            eval_steps=3,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=dummy_compute_metrics,
+        )
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
+
+    # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
+    # `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
+    # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
