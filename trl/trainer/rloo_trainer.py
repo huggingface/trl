@@ -887,7 +887,8 @@ class RLOOTrainer(BaseTrainer):
         if self.use_vllm:
             # Sync weights if training step changed
             if self.state.global_step != self._last_loaded_step:
-                self.vllm_generation.sync_weights()
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
