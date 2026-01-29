@@ -457,6 +457,37 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
         )
 
 
+def _sanitize_tool_call(tool_call: dict) -> dict:
+    """
+    Sanitize a tool call dictionary to ensure it has required fields.
+
+    When models generate malformed tool calls (e.g., missing `name` or `arguments`), this function
+    ensures the tool call has all required fields to prevent errors when applying chat templates.
+
+    Args:
+        tool_call (`dict`):
+            A tool call dictionary that may be missing required fields.
+
+    Returns:
+        `dict`:
+            A sanitized tool call dictionary with `name` and `arguments` fields guaranteed to exist.
+    """
+    # Handle nested function structure: {'type': 'function', 'function': {...}}
+    if "function" in tool_call:
+        function_data = tool_call["function"]
+        sanitized_function = {
+            "name": function_data.get("name", "unknown"),
+            "arguments": function_data.get("arguments", {}),
+        }
+        return {"type": tool_call.get("type", "function"), "function": sanitized_function}
+
+    # Handle flat structure: {'name': '...', 'arguments': {...}}
+    return {
+        "name": tool_call.get("name", "unknown"),
+        "arguments": tool_call.get("arguments", {}),
+    }
+
+
 def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
@@ -464,7 +495,8 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     Attempts to parse the sequence using `tokenizer.parse_response()`. If parsing fails (e.g., due to malformed tool
     calls like `<tool_call>{"type":"function"</tool_call>`), falls back to decoding as plain text.
 
-    Also removes incorrectly appended EOS tokens from tool call content when present.
+    Also removes incorrectly appended EOS tokens from tool call content when present, and sanitizes
+    tool calls to ensure they have required `name` and `arguments` fields.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -494,6 +526,11 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
         # Hotfix: remove incorrectly appended EOS token from tool calls
         # See https://github.com/huggingface/transformers/issues/42249
         parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
+        # Sanitize tool calls to ensure they have required fields (name, arguments)
+        # This prevents TypeError when applying chat templates with malformed tool calls
+        # See https://github.com/huggingface/trl/issues/4881
+        if "tool_calls" in parsed and parsed["tool_calls"]:
+            parsed["tool_calls"] = [_sanitize_tool_call(tc) for tc in parsed["tool_calls"]]
     except ValueError:
         # Fallback: decode as plain text if parsing fails. This happens if the model outputs malformed tool calls.
         content = tokenizer.decode(ids, skip_special_tokens=True)

@@ -21,6 +21,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import clone_chat_template
 from trl.chat_template_utils import (
+    _sanitize_tool_call,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
@@ -281,3 +282,117 @@ class TestParseResponse:
         }
 
         assert parsed == expected
+
+    def test_parse_response_tool_call_missing_arguments(self):
+        """Test that tool calls with missing arguments get sanitized."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Tool call with name but missing arguments
+        text = '<tool_call>\n{"name": "multiply"}\n</tool_call><|im_end|>'
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # Should have sanitized tool call with empty arguments
+        assert "tool_calls" in parsed
+        assert len(parsed["tool_calls"]) == 1
+        assert parsed["tool_calls"][0]["function"]["name"] == "multiply"
+        assert parsed["tool_calls"][0]["function"]["arguments"] == {}
+
+    def test_parse_response_tool_call_missing_name(self):
+        """Test that tool calls with missing name get sanitized."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Tool call with arguments but missing name
+        text = '<tool_call>\n{"arguments": {"a": 3}}\n</tool_call><|im_end|>'
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # Should have sanitized tool call with "unknown" name
+        assert "tool_calls" in parsed
+        assert len(parsed["tool_calls"]) == 1
+        assert parsed["tool_calls"][0]["function"]["name"] == "unknown"
+        assert parsed["tool_calls"][0]["function"]["arguments"] == {"a": 3}
+
+    def test_parse_response_empty_tool_call(self):
+        """Test that empty tool calls get sanitized."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Completely empty tool call
+        text = "<tool_call>\n{}\n</tool_call><|im_end|>"
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # Should have sanitized tool call with defaults
+        assert "tool_calls" in parsed
+        assert len(parsed["tool_calls"]) == 1
+        assert parsed["tool_calls"][0]["function"]["name"] == "unknown"
+        assert parsed["tool_calls"][0]["function"]["arguments"] == {}
+
+    def test_parse_response_sanitized_can_be_applied_to_chat_template(self):
+        """Test that sanitized tool calls can be applied to chat template without errors."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Empty tool call that would previously cause TypeError
+        text = "<tool_call>\n{}\n</tool_call><|im_end|>"
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # This should not raise TypeError: Object of type Undefined is not JSON serializable
+        result = tokenizer.apply_chat_template(
+            [parsed],
+            tokenize=True,
+            add_generation_prompt=True,
+            chat_template=tokenizer.chat_template,
+        )
+        # Result can be a list of ids or a dict-like object (e.g., BatchEncoding) with input_ids
+        assert result is not None
+        # Check for dict-like objects (including BatchEncoding) or list
+        if hasattr(result, "keys") or isinstance(result, dict):
+            assert "input_ids" in result
+        else:
+            assert isinstance(result, list)
+
+
+class TestSanitizeToolCall:
+    """Tests for the _sanitize_tool_call helper function."""
+
+    def test_sanitize_complete_tool_call(self):
+        """Test that complete tool calls are preserved."""
+        tool_call = {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized == tool_call
+
+    def test_sanitize_missing_name(self):
+        """Test that missing name defaults to 'unknown'."""
+        tool_call = {"type": "function", "function": {"arguments": {"a": 3}}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["function"]["name"] == "unknown"
+        assert sanitized["function"]["arguments"] == {"a": 3}
+
+    def test_sanitize_missing_arguments(self):
+        """Test that missing arguments defaults to empty dict."""
+        tool_call = {"type": "function", "function": {"name": "multiply"}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["function"]["name"] == "multiply"
+        assert sanitized["function"]["arguments"] == {}
+
+    def test_sanitize_empty_function(self):
+        """Test that empty function gets defaults."""
+        tool_call = {"type": "function", "function": {}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["function"]["name"] == "unknown"
+        assert sanitized["function"]["arguments"] == {}
+
+    def test_sanitize_flat_structure(self):
+        """Test sanitization of flat tool call structure."""
+        tool_call = {"name": "multiply", "arguments": {"a": 3}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["name"] == "multiply"
+        assert sanitized["arguments"] == {"a": 3}
+
+    def test_sanitize_flat_structure_missing_fields(self):
+        """Test sanitization of flat structure with missing fields."""
+        tool_call = {}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["name"] == "unknown"
+        assert sanitized["arguments"] == {}
