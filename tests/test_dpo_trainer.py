@@ -854,7 +854,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
