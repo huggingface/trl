@@ -76,7 +76,7 @@ class TestBatchGeneration(TrlTestCase):
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id).to(self.device)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32").to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
         self.generation_config = GenerationConfig(
@@ -688,7 +688,7 @@ class TestPPOTrainer(TrlTestCase):
     def setup_method(self):
         # Set up the models and tokenizer using the test model
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
