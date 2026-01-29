@@ -480,7 +480,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_dense_with_peft_config_lora(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -525,7 +525,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_with_peft_config_prompt_tuning(self, peft_type):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -583,7 +583,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_moe_with_peft_config(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -620,7 +620,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_peft_model(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -660,7 +660,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -1596,7 +1596,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_peft
     def test_prompt_tuning_peft_model(self):
         """Test that SFT works with Prompt Tuning and a pre-converted PeftModel"""
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         model = get_peft_model(model, PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8))
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1698,7 +1698,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_length=self.max_length,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1738,7 +1738,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_length=self.max_length,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1869,7 +1869,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1920,7 +1920,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32", device_map=device_map)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
