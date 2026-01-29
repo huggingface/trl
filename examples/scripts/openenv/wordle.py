@@ -539,7 +539,6 @@ def main() -> None:
         vllm_gpu_memory_utilization=0.25,
         vllm_max_model_length=8192,
         vllm_importance_sampling_correction=False,
-        gradient_checkpointing=True,
         bf16=True,
         optim="adamw_torch",
         max_grad_norm=1.0,  # Clip gradients to prevent explosion
