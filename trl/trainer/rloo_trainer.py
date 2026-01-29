@@ -323,8 +323,8 @@ class RLOOTrainer(BaseTrainer):
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 model_init_kwargs = args.model_init_kwargs or {}
-                # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-                if args.distributed_state.distributed_type == "DEEPSPEED":
+                # Distributed training requires device_map=None ("auto" fails)
+                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
@@ -456,8 +456,8 @@ class RLOOTrainer(BaseTrainer):
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
             model_init_kwargs = args.model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if self.args.distributed_state.distributed_type == "DEEPSPEED":
+            # Distributed training requires device_map=None ("auto" fails)
+            if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
@@ -562,6 +562,21 @@ class RLOOTrainer(BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
+            if self.beta == 0.0:
+                raise ValueError(
+                    "You passed `sync_ref_model=True` while `beta=0.0`, which means the reference model is not used "
+                    "during training. Consequently, RLOOTrainer does not create a `ref_model` instance, and there is "
+                    "nothing to synchronize. Please set `sync_ref_model=False`, or set `beta` to a non-zero value."
+                )
+            if is_peft_model(model):
+                raise NotImplementedError(
+                    "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
+                    "With PEFT, RLOOTrainer does not keep a separate reference model in memory; instead, it recovers "
+                    "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
+                    "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
+                    "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
+                    "feature request at https://github.com/huggingface/trl/issues."
+                )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
@@ -872,7 +887,8 @@ class RLOOTrainer(BaseTrainer):
         if self.use_vllm:
             # Sync weights if training step changed
             if self.state.global_step != self._last_loaded_step:
-                self.vllm_generation.sync_weights()
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
@@ -1297,6 +1313,8 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():

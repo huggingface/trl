@@ -277,7 +277,6 @@ def main():
         output_dir="Qwen2.5-72B-RLOO",
         per_device_train_batch_size=4,
         bf16=True,
-        gradient_checkpointing=True,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
@@ -539,7 +538,6 @@ accelerate launch \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir rloo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
-  --gradient_checkpointing \
   --dtype bfloat16 \
   --max_completion_length 1024 \
   --use_vllm \

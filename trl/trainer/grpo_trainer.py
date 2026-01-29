@@ -15,6 +15,7 @@
 import asyncio
 import atexit
 import copy
+import importlib.resources as pkg_resources
 import inspect
 import os
 import sys
@@ -36,6 +37,7 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -350,8 +352,8 @@ class GRPOTrainer(BaseTrainer):
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 model_init_kwargs = args.model_init_kwargs or {}
-                # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-                if args.distributed_state.distributed_type == "DEEPSPEED":
+                # Distributed training requires device_map=None ("auto" fails)
+                if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
@@ -562,8 +564,8 @@ class GRPOTrainer(BaseTrainer):
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
             model_init_kwargs = args.model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if self.args.distributed_state.distributed_type == "DEEPSPEED":
+            # Distributed training requires device_map=None ("auto" fails)
+            if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
@@ -725,6 +727,21 @@ class GRPOTrainer(BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
+            if self.beta == 0.0:
+                raise ValueError(
+                    "You passed `sync_ref_model=True` while `beta=0.0`, which means the reference model is not used "
+                    "during training. Consequently, GRPOTrainer does not create a `ref_model` instance, and there is "
+                    "nothing to synchronize. Please set `sync_ref_model=False`, or set `beta` to a non-zero value."
+                )
+            if is_peft_model(model):
+                raise NotImplementedError(
+                    "You passed `sync_ref_model=True` while using a PEFT model, which is currently not supported. "
+                    "With PEFT, GRPOTrainer does not keep a separate reference model in memory; instead, it recovers "
+                    "reference behavior by temporarily disabling the adapter. As a result, there is no standalone "
+                    "`ref_model` instance to synchronize. Use `sync_ref_model=False`, or opt for full fine-tuning if "
+                    "you need a synced reference model. If you need `sync_ref_model` to work with PEFT, please open a "
+                    "feature request at https://github.com/huggingface/trl/issues."
+                )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
@@ -736,6 +753,31 @@ class GRPOTrainer(BaseTrainer):
                     self.reward_funcs[i] = self.accelerator.prepare_model(
                         reward_func, evaluation_mode=True, device_placement=True
                     )
+
+        if self.accelerator.is_main_process and self.log_completions:
+            os.makedirs(os.path.join(self.args.output_dir, "completions"), exist_ok=True)
+            if self.args.log_completions_hub_repo is not None:
+                repo_id = self.args.log_completions_hub_repo
+                create_repo(repo_id, private=self.args.hub_private_repo, repo_type="dataset", exist_ok=True)
+                template_path = pkg_resources.files("trl").joinpath("templates/completions_dataset_card.md")
+                card_data = DatasetCardData(
+                    pretty_name="TRL Completion logs",
+                    tags=["trl", "trl-logs", "completions"],
+                )
+                card = DatasetCard.from_template(
+                    card_data=card_data,
+                    template_path=str(template_path),
+                    repo_id=repo_id,
+                    hub_model_id=self.args.hub_model_id,
+                )
+                card.push_to_hub(repo_id)
+                self.commit_scheduler = CommitScheduler(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    folder_path=f"{self.args.output_dir}/completions",
+                    every=2,  # minutes
+                    allow_patterns=["*.parquet"],
+                )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -1118,7 +1160,8 @@ class GRPOTrainer(BaseTrainer):
         if self.use_vllm:
             # Sync weights if training step changed
             if self.state.global_step != self._last_loaded_step:
-                self.vllm_generation.sync_weights()
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
             # Generate using vLLM
@@ -2090,6 +2133,8 @@ class GRPOTrainer(BaseTrainer):
 
         return loss
 
+    # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
+    # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
@@ -2129,7 +2174,7 @@ class GRPOTrainer(BaseTrainer):
                 logging_backends.append(trackio)
 
             table = {
-                "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                "step": [self.state.global_step] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
                 "completion": self._logs["completion"],
                 **self._logs["rewards"],
@@ -2137,6 +2182,14 @@ class GRPOTrainer(BaseTrainer):
             }
 
             df_base = pd.DataFrame(table)
+            df_base.to_parquet(
+                os.path.join(
+                    self.args.output_dir,
+                    "completions",
+                    f"completions_{self.state.global_step:05d}.parquet",
+                )
+            )
+
             images_raw = self._logs["images"] or []
 
             for logging_backend in logging_backends:
