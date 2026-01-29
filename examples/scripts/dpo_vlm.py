@@ -33,9 +33,8 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
-    --output_dir dpo_idefics_rlaif-v \
+    --output_dir dpo_qwen_2_5_rlaif-v \
     --dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules all-linear
 ```
@@ -51,9 +50,8 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --max_steps 100 \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
-    --output_dir dpo_idefics_rlaif-v \
+    --output_dir dpo_qwen_2_5_rlaif-v \
     --dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules all-linear
 ```
@@ -117,14 +115,6 @@ if __name__ == "__main__":
     processor = AutoProcessor.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, do_image_splitting=False
     )
-
-    # Set up the chat template
-    if model.config.model_type == "idefics2":
-        pass  # the processor already has a valid chat template
-    elif model.config.model_type == "paligemma":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}<|im_start|>{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] if item['type'] == 'text' %}{{ item['text'] }}<|im_end|>{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-    elif model.config.model_type == "llava":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
