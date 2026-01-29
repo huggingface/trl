@@ -227,6 +227,12 @@ class PairRMJudge(BasePairwiseJudge):
     def __init__(self):
         if not is_llm_blender_available():
             raise ValueError("llm-blender is not installed. Please install it with `pip install llm-blender`.")
+        import transformers
+
+        if Version(transformers.__version__) >= Version("5.0.0"):
+            raise RuntimeError(
+                "llm-blender currently supports transformers < 5.0.0. Please install a compatible version: `pip install 'transformers<5.0.0'`. Check the issue tracker for updates: https://github.com/huggingface/trl/issues/4918"
+            )
         _ensure_llm_blender_importable()
         import llm_blender
 
