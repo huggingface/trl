@@ -21,10 +21,12 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import clone_chat_template
 from trl.chat_template_utils import (
+    _sanitize_tool_call,
     add_response_schema,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
+    qwen3_schema,
 )
 
 from .testing_utils import TrlTestCase, require_jmespath
@@ -281,3 +283,211 @@ class TestParseResponse:
         }
 
         assert parsed == expected
+
+    def test_parse_response_tool_call_missing_arguments(self):
+        """Test that tool calls with missing arguments get sanitized."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Tool call with name but missing arguments
+        text = '<tool_call>\n{"name": "multiply"}\n</tool_call><|im_end|>'
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # Should have sanitized tool call with empty arguments
+        assert "tool_calls" in parsed
+        assert len(parsed["tool_calls"]) == 1
+        assert parsed["tool_calls"][0]["function"]["name"] == "multiply"
+        assert parsed["tool_calls"][0]["function"]["arguments"] == {}
+
+    def test_parse_response_tool_call_missing_name(self):
+        """Test that tool calls with missing name get sanitized."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Tool call with arguments but missing name
+        text = '<tool_call>\n{"arguments": {"a": 3}}\n</tool_call><|im_end|>'
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # Should have sanitized tool call with "unknown" name
+        assert "tool_calls" in parsed
+        assert len(parsed["tool_calls"]) == 1
+        assert parsed["tool_calls"][0]["function"]["name"] == "unknown"
+        assert parsed["tool_calls"][0]["function"]["arguments"] == {"a": 3}
+
+    def test_parse_response_empty_tool_call(self):
+        """Test that empty tool calls get sanitized."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Completely empty tool call
+        text = "<tool_call>\n{}\n</tool_call><|im_end|>"
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # Should have sanitized tool call with defaults
+        assert "tool_calls" in parsed
+        assert len(parsed["tool_calls"]) == 1
+        assert parsed["tool_calls"][0]["function"]["name"] == "unknown"
+        assert parsed["tool_calls"][0]["function"]["arguments"] == {}
+
+    def test_parse_response_sanitized_can_be_applied_to_chat_template(self):
+        """Test that sanitized tool calls can be applied to chat template without errors."""
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer = add_response_schema(tokenizer)
+        # Empty tool call that would previously cause TypeError
+        text = "<tool_call>\n{}\n</tool_call><|im_end|>"
+        assistant_text = tokenizer(text)["input_ids"]
+        parsed = parse_response(tokenizer, assistant_text)
+
+        # This should not raise TypeError: Object of type Undefined is not JSON serializable
+        result = tokenizer.apply_chat_template(
+            [parsed],
+            tokenize=True,
+            add_generation_prompt=True,
+            chat_template=tokenizer.chat_template,
+        )
+        # Result can be a list of ids or a dict-like object (e.g., BatchEncoding) with input_ids
+        assert result is not None
+        # Check for dict-like objects (including BatchEncoding) or list
+        if hasattr(result, "keys") or isinstance(result, dict):
+            assert "input_ids" in result
+        else:
+            assert isinstance(result, list)
+
+
+class TestSanitizeToolCall:
+    """Tests for the _sanitize_tool_call helper function."""
+
+    def test_sanitize_complete_tool_call(self):
+        """Test that complete tool calls are preserved."""
+        tool_call = {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized == tool_call
+
+    def test_sanitize_missing_name(self):
+        """Test that missing name defaults to 'unknown'."""
+        tool_call = {"type": "function", "function": {"arguments": {"a": 3}}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["function"]["name"] == "unknown"
+        assert sanitized["function"]["arguments"] == {"a": 3}
+
+    def test_sanitize_missing_arguments(self):
+        """Test that missing arguments defaults to empty dict."""
+        tool_call = {"type": "function", "function": {"name": "multiply"}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["function"]["name"] == "multiply"
+        assert sanitized["function"]["arguments"] == {}
+
+    def test_sanitize_empty_function(self):
+        """Test that empty function gets defaults."""
+        tool_call = {"type": "function", "function": {}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["function"]["name"] == "unknown"
+        assert sanitized["function"]["arguments"] == {}
+
+    def test_sanitize_flat_structure(self):
+        """Test sanitization of flat tool call structure."""
+        tool_call = {"name": "multiply", "arguments": {"a": 3}}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["name"] == "multiply"
+        assert sanitized["arguments"] == {"a": 3}
+
+    def test_sanitize_flat_structure_missing_fields(self):
+        """Test sanitization of flat structure with missing fields."""
+        tool_call = {}
+        sanitized = _sanitize_tool_call(tool_call)
+        assert sanitized["name"] == "unknown"
+        assert sanitized["arguments"] == {}
+
+
+class TestQwen3SchemaRegex:
+    """Tests for qwen3_schema regex patterns to prevent catastrophic backtracking."""
+
+    def test_regex_no_catastrophic_backtracking(self):
+        """Test that the qwen3_schema regex doesn't hang on malformed input.
+
+        Regression test for https://github.com/huggingface/trl/issues/4865
+        The original regex with .+? inside tool_call tags caused O(2^n) backtracking.
+        """
+        import re
+        import time
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        # This input previously caused exponential backtracking with n >= 23
+        # With the fix, it should complete in milliseconds even for large n
+        for n in [20, 30, 50]:
+            text = "<tool_call>a</tool_call>" * n + "X"
+            start = time.time()
+            re.match(pattern, text)
+            elapsed = time.time() - start
+
+            # Should complete in well under 1 second (typically < 1ms)
+            assert elapsed < 1.0, f"Regex took {elapsed:.2f}s for n={n}, likely catastrophic backtracking"
+
+    def test_regex_still_matches_valid_tool_calls(self):
+        """Test that the optimized regex still correctly matches valid tool calls."""
+        import re
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        # Single tool call
+        text1 = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3}}\n</tool_call><|im_end|>'
+        m1 = re.match(pattern, text1)
+        assert m1 is not None
+        assert "<tool_call>" in m1.group("tool_calls")
+
+        # Multiple tool calls
+        text2 = '<tool_call>{"name": "add"}</tool_call>\n<tool_call>{"name": "sub"}</tool_call><|im_end|>'
+        m2 = re.match(pattern, text2)
+        assert m2 is not None
+        assert m2.group("tool_calls").count("<tool_call>") == 2
+
+    def test_regex_matches_content_without_tool_calls(self):
+        """Test that the regex matches plain content without tool calls."""
+        import re
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        text = "Here is my response without any tool calls.<|im_end|>"
+        m = re.match(pattern, text)
+        assert m is not None
+        assert m.group("content") == "Here is my response without any tool calls."
+        assert m.group("tool_calls") is None
+
+    def test_regex_matches_thinking_block(self):
+        """Test that the regex correctly extracts thinking/reasoning content."""
+        import re
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        text = "<think>\nLet me reason about this...\n</think>\nHere is my answer.<|im_end|>"
+        m = re.match(pattern, text)
+        assert m is not None
+        assert "Let me reason about this..." in m.group("reasoning_content")
+        assert m.group("content").strip() == "Here is my answer."
+
+    def test_regex_iterator_no_backtracking(self):
+        """Test that the x-regex-iterator pattern doesn't cause backtracking."""
+        import re
+        import time
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["properties"]["tool_calls"]["x-regex-iterator"]
+
+        # Test with malformed content that could cause backtracking
+        for n in [20, 30, 50]:
+            text = "<tool_call>" + "a" * n + "X</tool_call>"
+            start = time.time()
+            re.search(pattern, text)
+            elapsed = time.time() - start
+
+            assert elapsed < 1.0, f"Iterator regex took {elapsed:.2f}s for n={n}"
