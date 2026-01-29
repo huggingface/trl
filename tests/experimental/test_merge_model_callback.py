@@ -28,7 +28,9 @@ from ..testing_utils import TrlTestCase, require_mergekit
 @require_mergekit
 class TestMergeModelCallback(TrlTestCase):
     def setup_method(self):
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        self.model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
+        )
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 

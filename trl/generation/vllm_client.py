@@ -88,7 +88,7 @@ class VLLMClient:
         Use the client to generate completions and update model weights:
 
         ```python
-        >>> from trl.extras.vllm_client import VLLMClient
+        >>> from trl.generation.vllm_client import VLLMClient
 
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
