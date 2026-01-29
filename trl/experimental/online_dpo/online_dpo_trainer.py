@@ -53,7 +53,7 @@ from transformers.utils import is_flash_attn_2_available, is_peft_available, is_
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
