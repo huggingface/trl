@@ -283,8 +283,8 @@ trainer.train()
 
 ## DataCollatorForPreference
 
-[[autodoc]] dpo_trainer.DataCollatorForPreference
+[[autodoc]] trainer.dpo_trainer.DataCollatorForPreference
 
 ## DataCollatorForVisionPreference
 
-[[autodoc]] dpo_trainer.DataCollatorForVisionPreference
+[[autodoc]] trainer.dpo_trainer.DataCollatorForVisionPreference
