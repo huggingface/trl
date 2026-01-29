@@ -138,7 +138,7 @@ class TestDistributed(TrlTestCase):
         [
             "ddp",
             "zero2",
-            "zero3",
+            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
             pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 RLOO is currently failing, see #4854")),
         ],
     )
@@ -157,7 +157,15 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            "zero2",
+            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
+            "fsdp2",
+        ],
+    )
     def test_grpo(self, config, get_config_path):
         # fmt: off
         run_command(

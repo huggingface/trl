@@ -275,7 +275,7 @@ class TestTokenizeRow(TrlTestCase):
 class TestPRMTrainer(TrlTestCase):
     def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForTokenClassification.from_pretrained(model_id)
+        self.model = AutoModelForTokenClassification.from_pretrained(model_id, dtype="float32")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @pytest.mark.parametrize("train_on_last_step_only", [True, False])

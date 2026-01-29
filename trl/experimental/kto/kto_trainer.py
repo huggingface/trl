@@ -339,7 +339,7 @@ class KTOTrainer(BaseTrainer):
         # Model initialization
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
-            # Distributed training requires device_map=None ("auto" fails with DeepSpeed/FSDP)
+            # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
@@ -353,7 +353,7 @@ class KTOTrainer(BaseTrainer):
         # Reference model initialization
         if isinstance(ref_model, str):
             ref_model_init_kwargs = args.model_init_kwargs or {}
-            # Distributed training requires device_map=None
+            # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 ref_model_init_kwargs["device_map"] = None
             ref_model = create_model_from_path(ref_model, **ref_model_init_kwargs)
