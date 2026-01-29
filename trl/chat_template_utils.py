@@ -112,7 +112,9 @@ def clone_chat_template(
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
-    "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
+    # Note: The tool_calls inner pattern uses (?:[^<]|<(?!/tool_call>))* instead of .+? to prevent
+    # catastrophic O(2^n) backtracking on malformed input. See https://github.com/huggingface/trl/issues/4865
+    "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>(?:[^<]|<(?!/tool_call>))*</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
@@ -120,7 +122,8 @@ qwen3_schema = {
         "reasoning_content": {"type": "string"},
         "tool_calls": {
             "type": "array",
-            "x-regex-iterator": r"<tool_call>\s*(.+?)\s*</tool_call>",
+            # Use non-backtracking pattern to prevent O(2^n) catastrophic backtracking
+            "x-regex-iterator": r"<tool_call>\s*((?:[^<]|<(?!/tool_call>))*?)\s*</tool_call>",
             "items": {
                 "x-parser": "json",
                 "x-parser-args": {"transform": "{type: 'function', function: @}"},

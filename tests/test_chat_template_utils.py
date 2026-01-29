@@ -26,6 +26,7 @@ from trl.chat_template_utils import (
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
+    qwen3_schema,
 )
 
 from .testing_utils import TrlTestCase, require_jmespath
@@ -396,3 +397,97 @@ class TestSanitizeToolCall:
         sanitized = _sanitize_tool_call(tool_call)
         assert sanitized["name"] == "unknown"
         assert sanitized["arguments"] == {}
+
+
+class TestQwen3SchemaRegex:
+    """Tests for qwen3_schema regex patterns to prevent catastrophic backtracking."""
+
+    def test_regex_no_catastrophic_backtracking(self):
+        """Test that the qwen3_schema regex doesn't hang on malformed input.
+
+        Regression test for https://github.com/huggingface/trl/issues/4865
+        The original regex with .+? inside tool_call tags caused O(2^n) backtracking.
+        """
+        import re
+        import time
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        # This input previously caused exponential backtracking with n >= 23
+        # With the fix, it should complete in milliseconds even for large n
+        for n in [20, 30, 50]:
+            text = "<tool_call>a</tool_call>" * n + "X"
+            start = time.time()
+            re.match(pattern, text)
+            elapsed = time.time() - start
+
+            # Should complete in well under 1 second (typically < 1ms)
+            assert elapsed < 1.0, f"Regex took {elapsed:.2f}s for n={n}, likely catastrophic backtracking"
+
+    def test_regex_still_matches_valid_tool_calls(self):
+        """Test that the optimized regex still correctly matches valid tool calls."""
+        import re
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        # Single tool call
+        text1 = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3}}\n</tool_call><|im_end|>'
+        m1 = re.match(pattern, text1)
+        assert m1 is not None
+        assert "<tool_call>" in m1.group("tool_calls")
+
+        # Multiple tool calls
+        text2 = '<tool_call>{"name": "add"}</tool_call>\n<tool_call>{"name": "sub"}</tool_call><|im_end|>'
+        m2 = re.match(pattern, text2)
+        assert m2 is not None
+        assert m2.group("tool_calls").count("<tool_call>") == 2
+
+    def test_regex_matches_content_without_tool_calls(self):
+        """Test that the regex matches plain content without tool calls."""
+        import re
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        text = "Here is my response without any tool calls.<|im_end|>"
+        m = re.match(pattern, text)
+        assert m is not None
+        assert m.group("content") == "Here is my response without any tool calls."
+        assert m.group("tool_calls") is None
+
+    def test_regex_matches_thinking_block(self):
+        """Test that the regex correctly extracts thinking/reasoning content."""
+        import re
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["x-regex"]
+
+        text = "<think>\nLet me reason about this...\n</think>\nHere is my answer.<|im_end|>"
+        m = re.match(pattern, text)
+        assert m is not None
+        assert "Let me reason about this..." in m.group("reasoning_content")
+        assert m.group("content").strip() == "Here is my answer."
+
+    def test_regex_iterator_no_backtracking(self):
+        """Test that the x-regex-iterator pattern doesn't cause backtracking."""
+        import re
+        import time
+
+        from trl.chat_template_utils import qwen3_schema
+
+        pattern = qwen3_schema["properties"]["tool_calls"]["x-regex-iterator"]
+
+        # Test with malformed content that could cause backtracking
+        for n in [20, 30, 50]:
+            text = "<tool_call>" + "a" * n + "X</tool_call>"
+            start = time.time()
+            re.search(pattern, text)
+            elapsed = time.time() - start
+
+            assert elapsed < 1.0, f"Iterator regex took {elapsed:.2f}s for n={n}"
