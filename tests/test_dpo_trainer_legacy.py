@@ -1578,7 +1578,7 @@ class TestDPOTrainerSlow(TrlTestCase):
             gradient_accumulation_steps=2,
             learning_rate=9e-1,
             eval_strategy="steps",
-            fp16=True,
+            # fp16=True,
             logging_strategy="no",
             report_to="none",
             gradient_checkpointing=True,  # default, here for clarity
