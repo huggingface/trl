@@ -31,7 +31,7 @@ if is_peft_available():
 class TestXPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
