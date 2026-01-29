@@ -74,7 +74,7 @@ def _build_server_generation_kwargs(
     generation_kwargs: dict[str, Any] = {
         "n": 1,
         "temperature": trainer.temperature,
-        "top_k": trainer.top_k if trainer.top_k is not None else -1,
+        "top_k": trainer.top_k,
         "min_p": 0.0 if trainer.min_p is None else trainer.min_p,
         "max_tokens": trainer.max_completion_length,
     }
