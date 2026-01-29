@@ -610,7 +610,22 @@ class DPOTrainer(BaseTrainer):
                     "You set `use_liger_kernel=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
+            if len(self.loss_types) != 1:
+                raise NotImplementedError(
+                    "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
+                    "please open a feature request at https://github.com/huggingface/trl/issues."
+                )
             self.liger_loss_fn = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            if compute_metrics is not None:
+                raise ValueError(
+                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
+                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                )
+            if self.precompute_ref_logps:
+                raise ValueError(
+                    "Liger DPO loss does not support precomputing reference log probabilities. Either disable "
+                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
+                )
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -969,8 +984,11 @@ class DPOTrainer(BaseTrainer):
         return ref_chosen_logps, ref_rejected_logps
 
     def _compute_loss_liger(self, model, inputs, return_outputs):
-        if self.precompute_ref_logps:
-            raise NotImplementedError("Liger DPO loss does not support precomputed reference log probabilities.")
+        if return_outputs:
+            raise RuntimeError(
+                "return_outputs=True is not supported with the Liger DPO loss. The Liger loss computes the loss "
+                "without materializing logits, so outputs cannot be returned."
+            )
 
         mode = "train" if self.model.training else "eval"
 
@@ -1057,7 +1075,7 @@ class DPOTrainer(BaseTrainer):
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
-        return (loss, None) if return_outputs else loss
+        return loss
 
     def _compute_loss(self, model, inputs, return_outputs):
         mode = "train" if self.model.training else "eval"
@@ -1395,11 +1413,14 @@ class DPOTrainer(BaseTrainer):
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
-        with torch.no_grad():
-            with self.compute_loss_context_manager():
+        with torch.no_grad(), self.compute_loss_context_manager():
+            if prediction_loss_only:
+                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
+                logits, labels = None, None
+            else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-            loss = loss.mean().detach()
-        return loss, outputs.logits, inputs["input_ids"]
+                logits, labels = outputs.logits, inputs["input_ids"]
+        return loss, logits, labels
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
