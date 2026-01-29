@@ -683,7 +683,9 @@ class TestRLOOTrainer(TrlTestCase):
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
-        model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
+        model = AutoModelForCausalLM.from_pretrained(
+            "Qwen/Qwen2.5-0.5B-Instruct", dtype="float32"
+        )  # tiny model is too small for vLLM
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1284,7 +1286,7 @@ class TestRLOOTrainer(TrlTestCase):
     @require_vision
     @require_peft
     def test_training_vlm_peft(self, model_id):
-        model = AutoModelForImageTextToText.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
