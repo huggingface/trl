@@ -15,6 +15,7 @@
 import asyncio
 import atexit
 import copy
+import importlib.resources as pkg_resources
 import inspect
 import os
 import sys
@@ -36,6 +37,7 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -751,6 +753,31 @@ class GRPOTrainer(BaseTrainer):
                     self.reward_funcs[i] = self.accelerator.prepare_model(
                         reward_func, evaluation_mode=True, device_placement=True
                     )
+
+        if self.accelerator.is_main_process and self.log_completions:
+            os.makedirs(os.path.join(self.args.output_dir, "completions"), exist_ok=True)
+            if self.args.log_completions_hub_repo is not None:
+                repo_id = self.args.log_completions_hub_repo
+                create_repo(repo_id, private=self.args.hub_private_repo, repo_type="dataset", exist_ok=True)
+                template_path = pkg_resources.files("trl").joinpath("templates/completions_dataset_card.md")
+                card_data = DatasetCardData(
+                    pretty_name="TRL Completion logs",
+                    tags=["trl", "trl-logs", "completions"],
+                )
+                card = DatasetCard.from_template(
+                    card_data=card_data,
+                    template_path=str(template_path),
+                    repo_id=repo_id,
+                    hub_model_id=self.args.hub_model_id,
+                )
+                card.push_to_hub(repo_id)
+                self.commit_scheduler = CommitScheduler(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    folder_path=f"{self.args.output_dir}/completions",
+                    every=2,  # minutes
+                    allow_patterns=["*.parquet"],
+                )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -2139,7 +2166,7 @@ class GRPOTrainer(BaseTrainer):
                 logging_backends.append(trackio)
 
             table = {
-                "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                "step": [self.state.global_step] * len(self._logs["prompt"]),
                 "prompt": self._logs["prompt"],
                 "completion": self._logs["completion"],
                 **self._logs["rewards"],
@@ -2147,6 +2174,14 @@ class GRPOTrainer(BaseTrainer):
             }
 
             df_base = pd.DataFrame(table)
+            df_base.to_parquet(
+                os.path.join(
+                    self.args.output_dir,
+                    "completions",
+                    f"completions_{self.state.global_step:05d}.parquet",
+                )
+            )
+
             images_raw = self._logs["images"] or []
 
             for logging_backend in logging_backends:
