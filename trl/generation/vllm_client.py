@@ -206,7 +206,7 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
@@ -229,8 +229,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
@@ -294,7 +294,7 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
@@ -319,8 +319,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
