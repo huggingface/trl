@@ -32,7 +32,7 @@
   - local: customization
     title: Customizing the Training
   - local: chat_template_for_training
-    title: Updating Chat Templates for Assistant-Only Loss
+    title: Modifying Chat Templates for Assistant-Only Loss
   - local: reducing_memory_usage
     title: Reducing Memory Usage
   - local: speeding_up_training
