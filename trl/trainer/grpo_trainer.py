@@ -733,9 +733,6 @@ class GRPOTrainer(BaseTrainer):
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
-            if self.off_policy_mask_threshold is not None:
-                self.vllm_importance_sampling_mode = "sequence_geometric_mean_mask"
-
             # vLLM specific sampling arguments
             self.structured_outputs_regex = args.vllm_structured_outputs_regex
 
@@ -1972,50 +1969,49 @@ class GRPOTrainer(BaseTrainer):
             else:
                 old_per_token_logps = None
 
-            # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
+            # Compute sampling mismatch metrics when using vLLM
+            # - sampling_mean_kl_div: sequence-level geometric mean KL, used by OPSM
+            # - vllm_importance_sampling_ratio: only when IS correction is enabled
             if self.use_vllm:
                 mask = completion_mask if not self.tools else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
-                sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
-                if sequence_level_is:
-                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
-                    if self.vllm_importance_sampling_mode == "sequence_geometric_mean_mask":
-                        per_sequence_logps_diff = per_sequence_logps_diff / mask.sum(dim=-1, keepdim=True).clamp(
-                            min=1.0
+                # Sequence-level geometric mean KL (for OPSM)
+                per_seq_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                sampling_mean_kl_div = per_seq_logps_diff / mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
+
+                # Importance sampling ratio - only when correction is enabled
+                if self.vllm_importance_sampling_correction:
+                    sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
+                    if sequence_level_is:
+                        logps_diff = per_seq_logps_diff
+                    else:
+                        logps_diff = per_token_logps_diff
+
+                    vllm_importance_sampling_ratio = torch.exp(logps_diff)
+
+                    # vllm_importance_sampling_ratio.shape:
+                    #   token_* modes:     (B, T)  (per-token ratio)
+                    #   sequence_* modes:  (B, 1)  (per-sequence ratio)
+
+                    if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
+                        vllm_importance_sampling_ratio = torch.clamp(
+                            vllm_importance_sampling_ratio,
+                            min=self.vllm_importance_sampling_min,
+                            max=self.vllm_importance_sampling_max,
                         )
-                    logps_diff = per_sequence_logps_diff
-                else:
-                    logps_diff = per_token_logps_diff
-
-                vllm_importance_sampling_ratio = torch.exp(logps_diff)
-
-                # vllm_importance_sampling_ratio.shape:
-                #   token_* modes:     (B, T)  (per-token ratio)
-                #   sequence_* modes:  (B, 1)  (per-sequence ratio)
-
-                if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
-                    vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio,
-                        min=self.vllm_importance_sampling_min,
-                        max=self.vllm_importance_sampling_max,
-                    )
-                elif self.vllm_importance_sampling_mode in [
-                    "sequence_mask",
-                    "sequence_geometric_mean_mask",
-                    "token_mask",
-                ]:
-                    invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_max
-                    )
-                    vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        invalid_mis_mask, value=0.0
-                    )
-                else:
-                    raise ValueError(
-                        f"Unknown vLLM importance sampling level: {self.vllm_importance_sampling_mode}. "
-                        "Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask', and 'sequence_geometric_mean_mask'."
-                    )
+                    elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                        invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
+                            vllm_importance_sampling_ratio > self.vllm_importance_sampling_max
+                        )
+                        vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
+                            invalid_mis_mask, value=0.0
+                        )
+                    else:
+                        raise ValueError(
+                            f"Unknown vLLM importance sampling mode: {self.vllm_importance_sampling_mode}. "
+                            "Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask'."
+                        )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -2191,7 +2187,7 @@ class GRPOTrainer(BaseTrainer):
             if self.vllm_importance_sampling_correction:
                 output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
             if self.off_policy_mask_threshold is not None:
-                output["sampling_mean_kl_div"] = logps_diff
+                output["sampling_mean_kl_div"] = sampling_mean_kl_div
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in forward_kwargs:
