@@ -23,7 +23,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&runs=sft_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&sidebar=hidden&runs=sft_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
 
 ## Expected dataset type and format
 
@@ -194,7 +194,7 @@ dataset = load_dataset("trl-lib/Capybara", split="train")
 trainer = SFTTrainer(
     "Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    peft_config=LoraConfig()
+    peft_config=LoraConfig(),
 )
 
 trainer.train()
