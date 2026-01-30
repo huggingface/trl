@@ -356,9 +356,9 @@ $$
 \rho(y) = \frac{\pi^{\text{training}}_\theta(y|x)}{\pi^{\text{inference}}_\theta(y|x)} = \prod_{t=0}^{T-1} \underbrace{\frac{\pi^{\text{training}}_\theta(y_t|x, y_{<t})}{\pi^{\text{inference}}_\theta(y_t|x, y_{<t})}}_{\rho_t}
 $$
 
-This product grows exponentially with sequence length \\( T \\). Even with a small per-token mismatch (e.g., 0.1%), the sequence-level ratio explodes for long sequences:
+This product grows exponentially with sequence length  \\( T \\). Even with a small per-token mismatch (e.g., 0.1%), the sequence-level ratio explodes for long sequences:
 
-| Sequence Length \\( T \\) | \\( \rho(y) \approx 1.001^T \\) | Status (\\( C = 5 \\)) |
+| Sequence Length  \\( T \\) | \\( \rho(y) \approx 1.001^T \\) | Status  \\( (C = 5) \\) |
 |---------------------------|--------------------------------|------------------------|
 | 10 | 1.01 | Accepted |
 | 1,000 | 2.72 | Accepted |
@@ -373,7 +373,7 @@ $$
 \rho_{\text{geo}}(y) = \left( \prod_{t=0}^{T-1} \rho_t \right)^{1/T} = \rho(y)^{1/T}
 $$
 
-This quantity is **length-invariant**: if every \\( \rho_t = r \\), then \\( \rho_{\text{geo}} = r \\) regardless of \\( T \\). Taking the logarithm reveals its connection to KL divergence:
+This quantity is **length-invariant**: if every  \\( \rho_t = r \\), then  \\( \rho_{\text{geo}} = r \\) regardless of  \\( T \\). Taking the logarithm reveals its connection to KL divergence:
 
 $$
 \log \rho_{\text{geo}}(y) = \frac{1}{T} \sum_{t=0}^{T-1} \log \frac{\pi(y_t | x, y_{<t})}{\mu(y_t | x, y_{<t})}
