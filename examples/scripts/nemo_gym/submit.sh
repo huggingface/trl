@@ -103,7 +103,7 @@ srun --nodes=4 --ntasks=4 --nodelist="${TRAIN_NODES_LIST}" \
     --main_process_ip ${TRAIN_NODE_0} \
     --main_process_port 29500 \
     --rdzv_backend c10d \
-    run_grpo_nemo_gym.py \
+    train_multi_environment.py \
     --config config.yaml \
     --vllm_server_host ${VLLM_NODE} \
     --head_server_host ${VLLM_NODE}" &

@@ -32,20 +32,25 @@ Complete these one-time setup steps before running training.
 
 ### Install TRL and NeMo Gym
 
-1. **Install TRL with vLLM support**
+1. **Install TRL with vLLM extras**
 
    ```bash
-   pip install trl[vllm]
+   cd trl/
+   uv venv
+   source .venv/bin/activate
+   uv sync --extra vllm
    ```
 
 1. **Install NeMo Gym**
 
    ```bash
+   # deactivate trl venv
+   deactivate
    git clone https://github.com/NVIDIA-NeMo/Gym.git
    cd Gym
    uv venv --python 3.12
    source .venv/bin/activate
-   uv sync --extra dev
+   uv sync
    ```
 
 ### Prepare a Dataset
@@ -60,7 +65,7 @@ Many NeMo Gym datasets used to train Nemotron models are available on Hugging Fa
 
 1. **Set Hugging Face Token**
 
-   Create `env.yaml` in `Gym/` with your token:
+   Create `env.yaml` in `Gym/` with your HF token:
 
    ```yaml
    hf_token: <your_hf_token>
@@ -69,12 +74,15 @@ Many NeMo Gym datasets used to train Nemotron models are available on Hugging Fa
 1. **Prepare Dataset**
 
    ```bash
+   # Enter Gym and activate the venv
    cd Gym
    source .venv/bin/activate
 
+   # Set config paths
    config_paths="responses_api_models/vllm_model/configs/vllm_model.yaml,\
    resources_servers/workplace_assistant/configs/workplace_assistant.yaml"
 
+   # Download data and prep for training
    ng_prepare_data "+config_paths=[${config_paths}]" \
        +output_dirpath=data/workplace_assistant \
        +mode=train_preparation \
@@ -84,7 +92,7 @@ Many NeMo Gym datasets used to train Nemotron models are available on Hugging Fa
 
    This creates `train.jsonl` and `validation.jsonl` files in `data/workplace_assistant/`.
 
-To create a new environment, refer to the [environment creation guide](https://docs.nvidia.com/nemo/gym/latest/contribute/environments/new-environment.html).
+To create a new environment, refer to the [environment creation guide](https://docs.nvidia.com/nemo/gym/latest/contribute/environments/new-environment.html). We suggest running an existing one first!
 
 #### Dataset Format
 
@@ -146,7 +154,7 @@ eval_steps: 10
 
 ## Interactive Training
 
-For development and testing on a single node. The following steps run in three separate terminals concurrently.
+For development and testing on a single node.
 
 ### Set Up
 
@@ -158,7 +166,7 @@ For development and testing on a single node. The following steps run in three s
 
 1. **Update Environment Config**
 
-   Update `env.yaml` to include model information:
+   Update `env.yaml` in `Gym/` to include model information:
 
    ```yaml
    policy_base_url: http://127.0.0.1:8000/v1
@@ -167,7 +175,9 @@ For development and testing on a single node. The following steps run in three s
    hf_token: ...
    ```
 
-### Start Servers and Run
+###  Run Training
+
+The following steps run in 3 terminals. It can also be ran with processes in the background, or using tmux.
 
 1. **Start NeMo Gym Servers** (Terminal 1)
 
@@ -182,12 +192,12 @@ For development and testing on a single node. The following steps run in three s
    ```
 
    This starts:
-   - **Head server**: Manages servers used in training
    - **Agent server**: Orchestrates rollouts using resource servers and model servers
    - **Resources server**: Supports environment logic such as state-management, tool implementations, and task verification
    - **Model server**: Adapts vLLM server requests to support NeMo Gym agents and on-policy RL training while ensuring OpenAI API compatibility
+   - **Head server**: Manages servers used in training enabling their discovery
 
-1. **Start TRL vLLM Server** (Terminal 2)
+1. **Start TRL vLLM Server on GPU 0** (Terminal 2)
 
    ```bash
    cd trl
@@ -199,7 +209,7 @@ For development and testing on a single node. The following steps run in three s
      --port 8000
    ```
 
-1. **Run Training** (Terminal 3)
+1. **Run Training on GPU 1** (Terminal 3)
 
    ```bash
    cd trl/
@@ -214,11 +224,9 @@ For development and testing on a single node. The following steps run in three s
    CUDA_VISIBLE_DEVICES=1 python run_grpo_nemo_gym.py --config config_workplace.yaml
    ```
 
-> **Note**: These separate terminals can also be tmux sessions or background processes.
-
 ## Multi-Node Training with Slurm
 
-An example five-node training script is provided in `submit.sh`. Nodes one through four run the training backend, while node five runs vLLM inference.
+An example five-node training script is provided in `submit.sh`. Nodes one through four run the training algorithm, while node five runs vLLM inference for NeMo Gym agent rollouts.
 
 1. **Configure the Script**
 
@@ -244,7 +252,7 @@ Train on multiple NeMo Gym environments simultaneously. This allows learning div
 
 1. **Prepare Individual Datasets**
 
-   Prepare datasets for each environment. The workplace dataset was prepared above. Now, create a reasoning gym dataset:
+   Prepare datasets for each environment. The workplace assistant dataset was prepared above. Now lets create a dataset for the mini sudoku environment implemented by the reasoning gym resources server in NeMo Gym:
 
    ```bash
    cd Gym
