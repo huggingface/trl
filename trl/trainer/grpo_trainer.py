@@ -1982,9 +1982,10 @@ class GRPOTrainer(BaseTrainer):
 
                 # Importance sampling ratio - only when correction is enabled
                 if self.vllm_importance_sampling_correction:
-                    sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
-                    if sequence_level_is:
+                    if self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]:
                         logps_diff = per_seq_logps_diff
+                    elif self.vllm_importance_sampling_mode == "sequence_geometric_mean_mask":
+                        logps_diff = sampling_mean_kl_div
                     else:
                         logps_diff = per_token_logps_diff
 
@@ -2000,7 +2001,11 @@ class GRPOTrainer(BaseTrainer):
                             min=self.vllm_importance_sampling_min,
                             max=self.vllm_importance_sampling_max,
                         )
-                    elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    elif self.vllm_importance_sampling_mode in [
+                        "sequence_mask",
+                        "sequence_geometric_mean_mask",
+                        "token_mask",
+                    ]:
                         invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
                             vllm_importance_sampling_ratio > self.vllm_importance_sampling_max
                         )
@@ -2010,7 +2015,8 @@ class GRPOTrainer(BaseTrainer):
                     else:
                         raise ValueError(
                             f"Unknown vLLM importance sampling mode: {self.vllm_importance_sampling_mode}. "
-                            "Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask'."
+                            "Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask', "
+                            "'sequence_geometric_mean_mask'."
                         )
 
             # Compute the per-token log probabilities for the reference model
@@ -2149,7 +2155,8 @@ class GRPOTrainer(BaseTrainer):
                 self.accelerator.gather(max_delta).max().item()
             )
 
-            if sequence_level_is:
+            # Sequence-level modes produce (B, 1) ratios; token-level modes produce (B, T) ratios
+            if vllm_importance_sampling_ratio.shape[-1] == 1:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:
                 flat_is_ratio = vllm_importance_sampling_ratio[mask]
