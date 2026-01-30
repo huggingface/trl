@@ -49,6 +49,8 @@
     title: Liger Kernel
   - local: peft_integration
     title: PEFT
+  - local: ptt_integration
+    title: Post Training Toolkit
   - local: rapidfire_integration
     title: RapidFire AI
   - local: trackio_integration
@@ -77,8 +79,6 @@
     - local: script_utils
       title: Script Utilities
     title: Utilities
-  - local: models
-    title: Model Classes
   - local: callbacks
     title: Callbacks
   - local: rewards

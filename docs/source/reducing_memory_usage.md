@@ -77,7 +77,7 @@ To help you choose an appropriate value, we provide a utility to visualize the s
 
 Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
 
-![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png)
+![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_3.png)
 
 Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
 
@@ -329,4 +329,7 @@ from trl import SFTConfig
 training_args = SFTConfig(..., gradient_checkpointing=True)
 ```
 
-Gradient checkpointing is available and activated by default across all TRL trainers. For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
+> [!NOTE]
+> Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+
+For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).

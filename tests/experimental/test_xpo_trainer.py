@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.xpo import XPOConfig, XPOTrainer
 
-from ..testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
+from ..testing_utils import TrlTestCase, require_llm_blender, require_peft
+from .testing_utils import RandomPairwiseJudge
 
 
 if is_peft_available():
@@ -30,7 +31,7 @@ if is_peft_available():
 class TestXPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -115,37 +116,6 @@ class TestXPOTrainer(TrlTestCase):
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             peft_config=lora_config,
-        )
-
-        trainer.train()
-
-        # Check if training loss is available
-        assert "train_loss" in trainer.state.log_history[-1]
-
-    @require_peft
-    def test_training_with_peft_model_and_peft_config(self):
-        model_lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
-        model = get_peft_model(self.model, model_lora_config)
-        # we want only the "train adapter" to be trained
-        lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        training_args = XPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            learning_rate=5.0e-7,
-            eval_strategy="steps",
-            report_to="none",
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-
-        trainer = XPOTrainer(
-            model=model,
-            reward_funcs=self.reward_model,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            peft_config=lora_train_config,
         )
 
         trainer.train()

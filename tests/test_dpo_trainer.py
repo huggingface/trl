@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -162,7 +162,7 @@ class TestTokenizeRow(TrlTestCase):
 class TestDPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -248,7 +248,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_liger_kernel
     def test_train_encoder_decoder_liger(self):
         model_id = "trl-internal-testing/tiny-BartModel"
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -411,6 +411,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_precompute_ref_batch_size(self):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=2,
             precompute_ref_log_probs=True,
             precompute_ref_batch_size=4,
@@ -589,59 +590,6 @@ class TestDPOTrainer(TrlTestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-    @require_peft
-    def test_dpo_lora_save(self):
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        model_peft = get_peft_model(model, lora_config)
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            precompute_ref_log_probs=True,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        # dpo train lora model with a lora config
-        trainer = DPOTrainer(
-            model=model_peft,
-            ref_model=None,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            peft_config=lora_config,
-        )
-
-        # train the model
-        trainer.train()
-
-        # save peft adapter
-        trainer.save_model()
-
-        try:
-            AutoModelForCausalLM.from_pretrained(self.tmp_dir)
-        except OSError:
-            pytest.fail("Loading the saved peft adapter failed")
-
     @require_bitsandbytes
     @require_peft
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
@@ -663,7 +611,7 @@ class TestDPOTrainer(TrlTestCase):
 
         # lora model
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+            model_id, dtype="float32", quantization_config=BitsAndBytesConfig(load_in_4bit=True)
         )
 
         training_args = DPOConfig(
@@ -747,7 +695,7 @@ class TestDPOTrainer(TrlTestCase):
 
         # lora model
         model = AutoModelForCausalLM.from_pretrained(
-            self.model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+            self.model_id, dtype="float32", quantization_config=BitsAndBytesConfig(load_in_4bit=True)
         )
 
         training_args = DPOConfig(
@@ -801,7 +749,7 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -837,7 +785,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -865,77 +813,6 @@ class TestDPOTrainer(TrlTestCase):
 
         for tag in ["dpo", "trl"]:
             assert tag in trainer.model.model_tags
-
-    @require_peft
-    def test_dpo_lora_force_use_ref(self):
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        model_peft = get_peft_model(model, lora_config)
-
-        ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        with pytest.raises(ValueError):
-            # passing a peft_model as model and ref_model should error out,
-            # unless you pass `force_use_ref_model`
-            trainer = DPOTrainer(
-                model=model_peft,
-                ref_model=ref_model,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                peft_config=lora_config,
-            )
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            force_use_ref_model=True,
-            report_to="none",
-        )
-
-        trainer = DPOTrainer(
-            model=model_peft,
-            ref_model=ref_model,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            peft_config=lora_config,
-        )
-
-        # train the model
-        trainer.train()
 
     def test_dpo_trainer_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
@@ -1008,7 +885,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -1049,7 +926,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1091,7 +968,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1170,7 +1047,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         # Define dummy test tools
         def get_current_temperature(location: str):
@@ -1209,7 +1086,7 @@ class TestDPOTrainer(TrlTestCase):
         # Normally, we need `attn_implementation="flash_attention_2"` to that the model returns correct logits.
         # Without it, the logits may be incorrect, but that's fine here. This test focuses only on the inner logic
         # of padding_free.
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1239,7 +1116,7 @@ class TestDPOTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token
@@ -1426,8 +1303,7 @@ class TestDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # "trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
@@ -1470,7 +1346,7 @@ class TestDPOVisionTrainer(TrlTestCase):
         dataset = dataset.cast_column("images", features.Sequence(features.Image()))
 
         # Instantiate the model and processor
-        model = AutoModelForImageTextToText.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         ref_model = AutoModelForImageTextToText.from_pretrained(model_id)
         processor = AutoProcessor.from_pretrained(model_id)
 
@@ -1568,7 +1444,7 @@ class TestDPOTrainerSlow(TrlTestCase):
         """
         A test that tests the simple usage of `DPOTrainer` using a bare model in full precision.
         """
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
@@ -1580,7 +1456,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             gradient_accumulation_steps=2,
             learning_rate=9e-1,
             eval_strategy="steps",
-            fp16=True,
             logging_strategy="no",
             report_to="none",
             beta=0.1,
@@ -1625,7 +1500,7 @@ class TestDPOTrainerSlow(TrlTestCase):
         A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios
         of gradient checkpointing.
         """
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
@@ -1640,7 +1515,7 @@ class TestDPOTrainerSlow(TrlTestCase):
             fp16=True,
             logging_strategy="no",
             report_to="none",
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             generate_during_eval=False,
             loss_type=loss_type,
@@ -1691,7 +1566,9 @@ class TestDPOTrainerSlow(TrlTestCase):
         """
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
-        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, dtype="float32", quantization_config=quantization_config
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
@@ -1706,7 +1583,7 @@ class TestDPOTrainerSlow(TrlTestCase):
             fp16=True,
             logging_strategy="no",
             report_to="none",
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             beta=0.1,
             generate_during_eval=False,

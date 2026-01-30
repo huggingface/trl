@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ import transformers
 from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
-from packaging import version
+from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
@@ -53,27 +53,13 @@ from transformers.utils import is_flash_attn_2_available, is_peft_available, is_
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
-from ...models import (
-    create_reference_model,
-    prepare_deepspeed,
-    prepare_fsdp,
-    prepare_peft_model,
-    unwrap_model_for_generation,
-)
+from ...models.utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    SIMPLE_CHAT_TEMPLATE,
-    DPODataCollatorWithPadding,
-    disable_dropout_in_model,
-    empty_cache,
-    ensure_master_addr_port,
-    get_config_model_id,
-    pad,
-    truncate_right,
-)
+from ...trainer.utils import disable_dropout_in_model, empty_cache, ensure_master_addr_port, get_config_model_id, pad
 from ..judges import BasePairwiseJudge
+from ..utils import SIMPLE_CHAT_TEMPLATE, DPODataCollatorWithPadding, prepare_peft_model, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
 
@@ -84,7 +70,7 @@ if is_peft_available():
 if is_sagemaker_mp_enabled():
     from smdistributed.modelparallel import __version__ as SMP_VERSION
 
-    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+    IS_SAGEMAKER_MP_POST_1_10 = Version(SMP_VERSION) >= Version("1.10")
 
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
@@ -92,7 +78,7 @@ else:
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
@@ -136,8 +122,8 @@ class OnlineDPOTrainer(BaseTrainer):
             The online DPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
@@ -491,6 +477,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
+                    "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     "quantization": vllm_quantization,
                 }
 
@@ -502,10 +489,12 @@ class OnlineDPOTrainer(BaseTrainer):
                 ensure_master_addr_port()
 
                 self.llm = LLM(**vllm_kwargs)
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
             # vLLM specific sampling arguments
-            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.structured_outputs_regex = args.vllm_structured_outputs_regex
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
             # Set up vLLM generation config
@@ -514,15 +503,15 @@ class OnlineDPOTrainer(BaseTrainer):
                 "repetition_penalty": self.repetition_penalty,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
-                "top_k": -1 if self.top_k is None else self.top_k,
+                "top_k": self.top_k,
                 "min_p": 0.0 if self.min_p is None else self.min_p,
                 "max_tokens": args.max_new_tokens,
                 "detokenize": False,  # to avoid vllm to decode (we don't need it)
             }
             if args.generation_kwargs is not None:
                 generation_params.update(args.generation_kwargs)
-            if self.guided_decoding_regex:
-                generation_params["guided_decoding"] = GuidedDecodingParams(regex=self.guided_decoding_regex)
+            if self.structured_outputs_regex:
+                generation_params["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
             self.generation_config = SamplingParams(**generation_params)
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
@@ -551,6 +540,8 @@ class OnlineDPOTrainer(BaseTrainer):
             # Remove None values
             generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
             self.generation_config = GenerationConfig(**generation_kwargs)
+            # Keep training-specific generation kwargs to overwrite model's original generation config
+            self.generation_kwargs = generation_kwargs
 
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
@@ -679,14 +670,7 @@ class OnlineDPOTrainer(BaseTrainer):
         else:
             model.gradient_checkpointing_enable()
 
-        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
-        use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-        )
-
-        if use_reentrant:
-            model.enable_input_require_grads()
-
+        model.enable_input_require_grads()
         return model
 
     def _generate_vllm(self, prompts, images=None):
@@ -760,7 +744,9 @@ class OnlineDPOTrainer(BaseTrainer):
                 top_k=-1 if self.top_k is None else self.top_k,
                 min_p=0.0 if self.min_p is None else self.min_p,
                 max_tokens=self.generation_config.max_tokens,
-                guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
+                structured_outputs_regex=self.structured_outputs_regex
+                if hasattr(self, "structured_outputs_regex")
+                else None,
                 generation_kwargs=self.args.generation_kwargs,
             )["completion_ids"]
             # Flatten: each prompt generates 2 completions
@@ -793,6 +779,11 @@ class OnlineDPOTrainer(BaseTrainer):
 
     def _generate_vllm_colocate(self, prompts, images=None):
         """Generate completions using vLLM colocate mode"""
+        if self.args.vllm_enable_sleep_mode:
+            # wake up colocated vLLM instances if needed
+            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            self.llm.wake_up(tags=["weights"])
+
         # Update model weights if needed - only after gradient accumulation completes
         if self.state.global_step != self._last_loaded_step:
             self._move_model_to_vllm()
@@ -815,10 +806,15 @@ class OnlineDPOTrainer(BaseTrainer):
         else:
             vllm_inputs = prompts_text
 
+        if self.args.vllm_enable_sleep_mode:
+            self.llm.wake_up(tags=["kv_cache"])
+
         outputs = self.llm.generate(vllm_inputs, self.generation_config, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+        if self.args.vllm_enable_sleep_mode:
+            self.llm.sleep(level=2)
 
         return completion_ids, prompt_ids
 
@@ -1070,7 +1066,7 @@ class OnlineDPOTrainer(BaseTrainer):
         if self.use_transformers_paged:
             previous_attn = self.model_wrapped.config._attn_implementation
 
-            if version.parse(transformers.__version__).release >= version.parse("5.0.0").release:
+            if Version(transformers.__version__).release >= Version("5.0.0").release:
                 new_attn = "paged|flash_attention_2" if is_flash_attn_2_available() else "paged|sdpa"
             else:
                 new_attn = "paged_attention" if is_flash_attn_2_available() else "sdpa_paged"
@@ -1113,7 +1109,10 @@ class OnlineDPOTrainer(BaseTrainer):
             with (
                 profiling_context(self, "transformers.generate"),
                 unwrap_model_for_generation(
-                    model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    model,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model,
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),

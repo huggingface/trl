@@ -71,6 +71,7 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 
 > [!TIP]
 > It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
+> Note that turning off std-based scaling also removes variance normalization, so update magnitudes depend directly on the raw reward scale and batch composition.
 
 > [!TIP]
 > As shown in [Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221), calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
@@ -137,6 +138,33 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
+Alternatively, in the [SAPO paper](https://huggingface.co/papers/2511.20347), the Qwen team proposes replacing the "hard" clipping mechanism of GRPO with a smooth, temperature-controlled soft gating mechanism. While GRPO zeroes out gradients when the policy deviates too far from the reference, SAPO uses a soft trust region that smoothly decays the gradient weight. This allows the model to retain useful learning signals from "near-on-policy" tokens while suppressing noise from extreme deviations.
+
+The loss function is defined as:
+
+$$
+\mathcal{L}_{\text{SAPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} f_{i,t} \left( \frac{\pi_\theta(o_{i,t} | q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t} | q, o_{i,<t})} \right) \hat{A}_{i,t}
+$$
+
+The soft-gating function  \\( f_{i,t} \\) is defined using the sigmoid function  \\( \sigma \\) as:
+
+$$
+f_{i,t}(x) = \sigma \left( \tau_{i,t} (x - 1) \right) \cdot \frac{4}{\tau_{i,t}}
+$$
+
+The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
+
+$$
+\tau_{i,t} = \begin{cases} 
+\tau_{\text{pos}}, & \text{if } \hat{A}_{i,t} > 0 \\
+\tau_{\text{neg}}, & \text{otherwise}
+\end{cases}
+$$
+
+They recommends using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
+
+To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
+
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
@@ -152,21 +180,15 @@ While training and evaluating, we record the following reward metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
-- `reward`: The overall average reward after applying reward weights.
-- `reward_std`: The standard deviation of rewards after applying reward weights.  
-  - If `scale_rewards` is `"group"` or `"none"`, this is the average of the per-group standard deviations.
-  - If `scale_rewards` is `"batch"`, this is the standard deviation computed over all rewards in the batch (ignoring groups).
+- `reward`: The overall average reward after summing rewards across functions (unweighted).
+- `reward_std`: The standard deviation of summed rewards across functions (unweighted), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
-- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
-  $$
-  \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
-  $$
-  A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
@@ -346,11 +368,13 @@ if __name__=="__main__":
 
 The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
 
+Reward functions can be either synchronous Python callables or asynchronous `async def` coroutines. When you provide multiple asynchronous reward functions, they are awaited concurrently (run in parallel via `asyncio.gather`) so their latency overlaps.
+
 1. **Input arguments**:
    - The function must accept the following as keyword arguments:
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
-     - `completions_ids` (contains the tokenized completions),
+     - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
@@ -366,9 +390,9 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
 Below is an example of a reward function for a standard format that rewards longer completions:
 
 ```python
-def reward_func(completions_ids, **kwargs):
+def reward_func(completion_ids, **kwargs):
     """Reward function that assigns higher scores to longer completions (in terms of token count)."""
-    return [float(len(ids)) for ids in completions_ids]
+    return [float(len(ids)) for ids in completion_ids]
 ```
 
 You can test it as follows:
@@ -376,8 +400,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
 >>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
->>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
->>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+>>> completion_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completion_ids=completion_ids)
 [2.0, 4.0]
 ```
 
@@ -396,8 +420,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]
 >>> completions = [" blue.", " in the sky."]
->>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
->>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+>>> completion_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
+>>> reward_func(prompts=prompts, completions=completions, completion_ids=completion_ids)
 [6.0, 12.0]
 ```
 
@@ -518,6 +542,22 @@ In this example, the `math_reward_func` and `coding_reward_func` are designed to
 
 Note that the [`GRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
+#### Example 5: Asynchronous reward functions
+
+Custom reward functions can also be defined as `async def` coroutines. This is useful if your reward depends on slow I/O (for example, calling a remote service). When you pass multiple async reward functions, [`GRPOTrainer`] executes them concurrently so their latency overlaps.
+
+Below is a minimal example of an async reward function that simulates an I/O-bound operation:
+
+```python
+import asyncio
+
+async def async_reward_func(prompts, completions, **kwargs):
+    # Simulate an I/O-bound call (e.g., HTTP request, database lookup)
+    await asyncio.sleep(0.01)
+    # Simple toy reward: 1.0 if the completion is non-empty, else 0.0
+    return [1.0 if completion else 0.0 for completion in completions]
+```
+
 #### Passing the reward function to the trainer
 
 To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
@@ -531,13 +571,13 @@ trainer = GRPOTrainer(
 )
 ```
 
-If you have multiple reward functions, you can pass them as a list:
+You can pass several reward functions as a list; this list may include both synchronous and asynchronous functions:
 
 ```python
 from trl import GRPOTrainer
 
 trainer = GRPOTrainer(
-    reward_funcs=[reward_func1, reward_func2],
+    reward_funcs=[reward_func, async_reward_func1, async_reward_func2],
     ...,
 )
 ```
@@ -546,10 +586,14 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+### Rapid Experimentation for GRPO
+
+RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple GRPO configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
+
 ## Agent Training
 
 GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
-This parameter expects a list of Python functions that define the tools available to the agent:
+This parameter expects a list of Python functions (sync or async) that define the tools available to the agent:
 
 ```python
 from trl import GRPOTrainer
@@ -581,8 +625,21 @@ def multiply(a: int, b: int) -> int:
     """
     return a * b
 
+async def async_add(a: int, b: int) -> int:
+    """
+    Asynchronously adds two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The sum of the two integers.
+    """
+    return a + b
+
 trainer = GRPOTrainer(
-    tools=[multiply],
+    tools=[multiply, async_add],
     ...,
 )
 ```
@@ -636,7 +693,6 @@ accelerate launch \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
-  --gradient_checkpointing \
   --dtype bfloat16 \
   --max_completion_length 1024 \
   --use_vllm \

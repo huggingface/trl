@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -321,7 +321,10 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_model(self):
         # Instantiate the model
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            dtype="float32",
+        )
 
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -352,9 +355,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             loss_type="dft",
-            # DFT loss scale is smaller, especially with randomly initialized models, so increase learning rate to
-            # ensure params change
-            learning_rate=1e-3,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
             eval_strategy="steps",
             eval_steps=3,
@@ -448,7 +449,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             model_init_kwargs={"dtype": torch.float16},
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -479,7 +480,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_dense_with_peft_config_lora(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -524,7 +525,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_with_peft_config_prompt_tuning(self, peft_type):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -582,7 +583,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_moe_with_peft_config(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -619,7 +620,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_peft_model(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -652,11 +653,14 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
+    # enabled by default in `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still
+    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
     @require_peft
-    def test_train_dense_with_peft_config_and_gradient_checkpointing(self):
+    def test_train_with_peft_config_and_gradient_checkpointing(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -671,79 +675,6 @@ class TestSFTTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=LoraConfig(),
         )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-
-    @require_peft
-    def test_train_moe_with_peft_config_and_gradient_checkpointing(self):
-        # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
-
-        trainer = SFTTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-            peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
-        )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-
-    @require_peft
-    def test_train_with_peft_model_and_gradient_checkpointing(self):
-        # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        model = get_peft_model(model, LoraConfig())
-
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
-
-        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
-
-        # Verify model is a PeftModel
-        assert isinstance(trainer.model, PeftModel)
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1190,14 +1121,14 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    def test_train_with_set_chat_template_from_path(self):
+    def test_train_with_set_chat_template_from_path(self, lazy_shared_datadir):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
+            chat_template_path=str(lazy_shared_datadir / "template.jinja"),
             report_to="none",
         )
         # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
@@ -1291,6 +1222,9 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+    # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
+    # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
+    # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1347,19 +1281,25 @@ class TestSFTTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
-            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
+            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration",  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("4.57.0"),
-                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__) >= Version("5.0.0"),
+                        reason="Blocked by upstream transformers bug (transformers#43334)",
+                    ),
+                ],
             ),
         ],
     )
@@ -1424,7 +1364,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
@@ -1464,7 +1404,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
@@ -1500,10 +1440,9 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,
             per_device_train_batch_size=1,
-            gradient_checkpointing=True,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )
@@ -1610,7 +1549,11 @@ class TestSFTTrainer(TrlTestCase):
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
         )
-        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype="float32",
+            quantization_config=quantization_config,
+        )
 
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1653,7 +1596,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_peft
     def test_prompt_tuning_peft_model(self):
         """Test that SFT works with Prompt Tuning and a pre-converted PeftModel"""
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         model = get_peft_model(model, PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8))
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1755,7 +1698,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_length=self.max_length,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1795,7 +1738,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_length=self.max_length,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1837,7 +1780,7 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_length=self.max_length,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1877,11 +1820,11 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1922,11 +1865,11 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -1973,11 +1916,11 @@ class TestSFTTrainerSlow(TrlTestCase):
             packing=packing,
             max_length=self.max_length,
             fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32", device_map=device_map)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -2018,14 +1961,15 @@ class TestSFTTrainerSlow(TrlTestCase):
             max_steps=10,
             packing=packing,
             max_length=self.max_length,
-            fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         )
 
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype="float32", quantization_config=quantization_config
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(
@@ -2068,12 +2012,13 @@ class TestSFTTrainerSlow(TrlTestCase):
             report_to="none",
             per_device_train_batch_size=2,
             max_steps=10,
-            fp16=True,
         )
 
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype="float32", quantization_config=quantization_config
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         trainer = SFTTrainer(

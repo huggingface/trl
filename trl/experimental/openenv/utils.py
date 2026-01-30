@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ from ...import_utils import is_vllm_available
 
 if is_vllm_available():
     from vllm import SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 
 def _build_colocate_sampling_params(
@@ -31,19 +31,19 @@ def _build_colocate_sampling_params(
     overrides: dict[str, Any] | None = None,
     *,
     logprobs: bool = True,
-) -> SamplingParams:
-    if trainer.guided_decoding_regex:
-        guided_decoding = GuidedDecodingParams(regex=trainer.guided_decoding_regex)
+) -> "SamplingParams":
+    if trainer.structured_outputs_regex:
+        structured_outputs = StructuredOutputsParams(regex=trainer.structured_outputs_regex)
     else:
-        guided_decoding = None
+        structured_outputs = None
 
     generation_kwargs: dict[str, Any] = {
         "n": 1,
         "temperature": trainer.temperature,
-        "top_k": -1 if trainer.top_k is None else trainer.top_k,
+        "top_k": trainer.top_k,
         "min_p": 0.0 if trainer.min_p is None else trainer.min_p,
         "max_tokens": trainer.max_completion_length,
-        "guided_decoding": guided_decoding,
+        "structured_outputs": structured_outputs,
     }
     if trainer.repetition_penalty is not None:
         generation_kwargs["repetition_penalty"] = trainer.repetition_penalty

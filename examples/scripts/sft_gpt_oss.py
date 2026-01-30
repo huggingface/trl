@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@ accelerate launch \
     --attn_implementation kernels-community/vllm-flash-attn3 \
     --dataset_num_proc 12 \
     --dataset_name HuggingFaceH4/Multilingual-Thinking \
-    --gradient_checkpointing \
     --max_length 4096 \
     --per_device_train_batch_size 2 \
     --num_train_epochs 1 \

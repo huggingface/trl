@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,28 +41,27 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
     TrainingArguments,
     is_comet_available,
     is_sklearn_available,
     is_wandb_available,
 )
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_joblib_available
-from ...models import create_reference_model, prepare_deepspeed
+from ...models.utils import create_reference_model, peft_module_casting_to_bf16, prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    DPODataCollatorWithPadding,
     RunningMoments,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
-    peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from ..utils import DPODataCollatorWithPadding
 from .bco_config import BCOConfig
 
 
@@ -166,7 +165,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     completion.
 
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
-    prompt and the completion response, with label_pad_token_id for the prompt tokens.
+    prompt and the completion response, with `-100` for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -257,7 +256,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
 
         batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
         batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-            kwargs["label_pad_token_id"]
+            -100
         ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
     else:
         completion_tokens = kwargs["tokenizer"](
@@ -287,7 +286,7 @@ class BCOTrainer(BaseTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
-        ref_model ([`PreTrainedModelWrapper`]):
+        ref_model ([`~transformers.PreTrainedModel`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
@@ -303,8 +302,8 @@ class BCOTrainer(BaseTrainer):
             reuse the fine-tuned model.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
@@ -432,9 +431,12 @@ class BCOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_config, we merge and unload it first
             if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
+                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
+                    "model along with the new `peft_config` to the trainer."
+                )
 
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 _support_gc_kwargs = hasattr(
@@ -541,7 +543,6 @@ class BCOTrainer(BaseTrainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
-                label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
 
@@ -565,8 +566,6 @@ class BCOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
@@ -649,7 +648,6 @@ class BCOTrainer(BaseTrainer):
                 "tokenizer": processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
-                "label_pad_token_id": self.label_pad_token_id,
                 "max_prompt_length": self.max_prompt_length,
                 "max_completion_length": self.max_completion_length,
             }
@@ -677,7 +675,6 @@ class BCOTrainer(BaseTrainer):
                     "tokenizer": processing_class,
                     "max_length": self.max_length,
                     "truncation_mode": self.truncation_mode,
-                    "label_pad_token_id": self.label_pad_token_id,
                     "max_prompt_length": self.max_prompt_length,
                     "max_completion_length": self.max_completion_length,
                 }
@@ -1030,7 +1027,6 @@ class BCOTrainer(BaseTrainer):
             padded_batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
         )
 
         return completion_logps
@@ -1040,7 +1036,6 @@ class BCOTrainer(BaseTrainer):
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
-        label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
@@ -1048,13 +1043,11 @@ class BCOTrainer(BaseTrainer):
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
             labels:
-                Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are
-                ignored. Shape: (batch_size, sequence_length)
+                Labels for which to compute the log probabilities. Label tokens with a value of `-100` are ignored.
+                Shape: (batch_size, sequence_length)
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
-            label_pad_token_id:
-                The label value to ignore when computing log probabilities.
             is_encoder_decoder:
                 Whether the model is an encoder-decoder model. If True, the labels are not shifted, and the logits are
                 assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
@@ -1074,10 +1067,10 @@ class BCOTrainer(BaseTrainer):
             # Fixes end-dec RuntimeError
             labels = labels.clone()
 
-        loss_mask = labels != label_pad_token_id
+        loss_mask = labels != -100
 
         # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == label_pad_token_id] = 0
+        labels[labels == -100] = 0
 
         per_token_logps = selective_log_softmax(logits, labels)
 
@@ -1112,7 +1105,6 @@ class BCOTrainer(BaseTrainer):
             batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
         )
 
         if completion_logps.shape[0] != len(batch["label"]):

@@ -1,11 +1,38 @@
 # Paper Index
 
 > [!WARNING]
-> Section under construction. Feel free to contribute!
+> Section under construction. Feel free to contribute! See https://github.com/huggingface/trl/issues/4407.
 
 ## Group Relative Policy Optimization
 
-Papers relating to the [`GRPOTrainer`]
+Papers relating to the [`GRPOTrainer`].
+
+### DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2402.03300
+
+Introduces Group Relative Policy Optimization (GRPO) and shows strong math-reasoning gains from math-centric pretraining plus group-relative PPO-style optimization. Used in TRL via [`GRPOTrainer`].
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+# The paper doesn't specify its hyperparameters, so here we provide hyperparameters from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning" instead.
+training_args = GRPOConfig(
+    loss_type="grpo",
+    beta=0.001,  # "the KL coefficient to 0.001"
+    epsilon=10.0, # "the GRPO clip ratio ϵ to 10"
+    num_generations=16,  # "For each question, we sample 16 outputs..."
+    max_completion_length=32_768,  # "...with a maximum length of 32,768"
+    steps_per_generation=16,  # "To accelerate training, each rollout generates 8,192 outputs, which are randomly split into 16 minibatches"
+    # "resulting in a training batch size of 512". One way to achieve this setting with 1 device is per_device_train_batch_size=4, gradient_accumulation_steps=128
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=128,  
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+)
+```
 
 ### Group Sequence Policy Optimization
 
@@ -86,7 +113,7 @@ training_args = GRPOConfig(
     per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
     num_generations=16, # number of sample responses in the paper, DAPO paper: section 4.1
     max_completion_length=20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
-    beta=0.0 # section 2.3, DAPO paper
+    beta=0.0, # section 2.3, DAPO paper
 
 )
 # Soft Overlong Punishment
@@ -412,7 +439,9 @@ training_args = GRPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2512.02556
 
-DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement the *Unbiased KL Estimate*, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
+DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement:
+
+- The **Unbiased KL Estimate**, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
 ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
 
 $$
@@ -433,16 +462,87 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...,
-    beta=0.001,  # the paper don't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
+    beta=0.001,  # the paper doesn't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
     use_bias_correction_kl=True,
 )
 ```
 
+- The **Off-Policy Masking**, which stabilizes training by ignoring sequences where the policy performs poorly (negative advantage) **and** has drifted significantly from the old policy (high KL divergence).
+
+The off-policy binary mask  \\(\textcolor{red}{M_{i,t}}\\) is defined as:
+
+$$
+\textcolor{red}{M_{i,t}} = \begin{cases}
+0 & \text{if } \hat{A}_{i,t} < 0 \quad \text{and} \quad \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \log \frac{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} > \textcolor{blue}{\delta} \\
+1 & \text{otherwise}
+\end{cases}
+$$
+
+This mask is then applied to the GRPO loss as follows:
+
+$$
+\mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) \textcolor{red}{M_{i,t}} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right]
+$$
+
+To enable this feature, use the `off_policy_mask_threshold` (corresponding to  \\( \textcolor{blue}{\delta} \\)) in the [`GRPOConfig`]:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    off_policy_mask_threshold=0.5, 
+)
+```
+
+While the paper doesn't specify a  \\( \textcolor{blue}{\delta} \\) value used, a good starting point could be  \\( \textcolor{blue}{\delta} = 0.5 \\). If training seems too conservative or too many sequences are masked, you can increase the value.
+For reference,  \\( \textcolor{blue}{\delta} = 1.0 \\) corresponds to an average log-ratio divergence of 1 nat per token, i.e. on sequences where this threshold is exceeded, the old policy was on average  \\( e^1 \approx 2.7 \\) times more likely to generate these tokens than the current policy.
+
+### GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2601.05242
+
+GDPO is a reinforcement learning optimization method designed for multi-reward training. While existing approaches commonly apply Group Relative Policy Optimization (GRPO) in multi-reward settings, the authors show that this leads to reward advantages collapse, reducing training signal resolution and causing unstable or failed convergence. GDPO resolves this issue by decoupling reward normalization across individual rewards, preserving their relative differences and enabling more faithful preference optimization. To enable GDPO for multi-reward RL training, simply set:
+
+For a group of  \\( N \\) rewards and  \\( G \\) samples per group, GDPO normalizes each reward independently:
+
+$$
+A_n^{(i,j)} = \frac{r_n^{(i,j)} - \text{mean}\{r_n^{(i,1)}, \ldots, r_n^{(i,G)}\}}{\text{std}\{r_n^{(i,1)}, \ldots, r_n^{(i,G)}\} + \epsilon}
+$$
+
+The normalized group advantage is then aggregated across rewards:
+
+$$
+A^{(i,j)} = \sum_{n=1}^{N} w_n A_n^{(i,j)}
+$$
+
+The final per-batch normalization produces:
+
+$$
+\hat{A}^{(i,j)} = \frac{A^{(i,j)} - \text{mean}_{i',j'}\{A^{(i',j')}\}}{\text{std}_{i',j'}\{A^{(i',j')}\} + \epsilon}
+$$
+
+Here,  \\( \text{mean}_{i',j'}\{A^{(i',j')}\} \\) and  \\( \text{std}_{i',j'}\{A^{(i',j')}\} \\) denote statistics over all groups in the batch.
+
+```python
+from trl import GRPOConfig
+
+
+training_args = GRPOConfig(
+    ...,
+    multi_objective_aggregation="normalize_then_sum",
+)
+```
+
+Note that this method only has an effect when training involve more than one reward function.
+
+The authors provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
+
 ## Direct Policy Optimization
 
-Papers relating to the [`DPOTrainer`]
+- Papers relating to the [`DPOTrainer`]
 
-### Direct Preference Optimization (DPO): Your Language Model is Secretly a Reward Model
+### Direct Preference Optimization: Your Language Model is Secretly a Reward Model
 
 **📜 Paper**: https://huggingface.co/papers/2305.18290
 
@@ -463,7 +563,7 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2310.12036
 
-A new general objective,  \\( \Psi \\)$PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
+A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
@@ -663,6 +763,46 @@ training_args = DPOConfig(
 
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
+### Statistical Rejection Sampling Improves Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2309.06657
+
+Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC. They also introduce a new loss defined as:
+
+$$
+\mathcal{L}_{\text{hinge-norm}}(\pi_\theta)
+= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+\max\left(0,\; 1 - \left[\gamma \log \frac{\pi_\theta(y_w \mid x)}{\pi_\text{ref}(y_w \mid x)} - \gamma \log \frac{\pi_\theta(y_l \mid x)}{\pi_\text{ref}(y_l \mid x)}\right]\right)
+\right]
+$$
+
+To train with RSO-filtered data and the hinge-norm loss, you can use the following code:
+
+```python
+from trl import DPOConfig, DPOTrainer
+
+dataset = ...
+
+def rso_accept(example):  # replace with your actual filter/score logic
+    return example["rso_keep"]
+
+train_dataset = train_dataset.filter(rso_accept)
+
+training_args = DPOConfig(
+    loss_type="hinge",
+    beta=0.05,  # correspond to gamma in the paper
+)
+
+trainer = DPOTrainer(
+    ...,
+    args=training_args,
+    train_dataset=train_dataset,
+)
+trainer.train()
+
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
@@ -743,6 +883,38 @@ SFTConfig(
 )
 ```
 
+## Parameter-Efficient Fine-Tuning (PEFT)
+
+For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
+
+### LoRA: Low-Rank Adaptation of Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2106.09685
+
+Low-Rank Adaptation (LoRA) reduces the number of trainable parameters and GPU memory usage in large-scale pre-trained models while maintaining or improving performance on downstream tasks. TRL integrates LoRA via the [PEFT library](https://huggingface.co/docs/peft/index) and can be easily enabled in any TRL trainer by passing a [`~peft.LoraConfig`] to the `peft_config` argument. Here is an example of using LoRA with the [`SFTTrainer`]:
+
+```python
+from trl import SFTTrainer
+from peft import LoraConfig
+
+trainer = SFTTrainer(
+    ...,
+    peft_config=LoraConfig(),
+)
+```
+
+### DoRA: Weight-Decomposed Low-Rank Adaptation
+
+**📜 Paper**: https://huggingface.co/papers/2402.09353
+
+Weight-Decomposed Low-Rank Adaptation (DoRA) can improve the performance of LoRA, especially at low ranks. DoRA decomposes pre-trained weight into two component: magnitude and direction. Direction is handled by normal LoRA, and magnitude is learnable parameters. TRL integrate DoRA via the [PEFT library](https://huggingface.co/docs/peft/index) and can be easily enable through setting `use_dora=True` to the [`~peft.LoraConfig`].
+
+``` python
+from peft import LoraConfig
+
+config = LoraConfig(use_dora=True, ...)
+```
+
 ## Reinforce Leave-One-Out
 
 Papers relating to the [`RLOOTrainer`]
@@ -787,6 +959,35 @@ training_args = CPOConfig(
     learning_rate=7e-7,
     ...
 )
+```
+
+## Nash Learning from Human Feedback
+
+Papers relating to the [`experimental.nash_md.NashMDTrainer`]
+
+### Nash Learning from Human Feedback
+
+**📜 Paper**: https://huggingface.co/papers/2312.00886
+
+Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. Used in TRL via [`experimental.nash_md.NashMDTrainer`].
+
+```python
+from trl.experimental.judges import PairRMJudge
+from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+judge = PairRMJudge()
+
+trainer = NashMDTrainer(
+    model=model,
+    judge=judge,
+    args=NashMDConfig(),
+    processing_class=tokenizer,
+    train_dataset=...,
+)
+trainer.train()
 ```
 
 ## Reward Modeling
@@ -840,9 +1041,11 @@ dataset = dataset.map(add_margin)
 ```
 
 ## Distillation
+
 Papers relating to training a student model with the help of a teacher model.
 
 ### On-Policy Distillation
+
 **📰 Blog**: https://thinkingmachines.ai/blog/on-policy-distillation/
 
 On-Policy Distillation involves a student model generating rollouts for each batch of training data. We subsequently obtain the probability distributions for each token of the rollouts from both the student and teacher models. The student model is then optimized to minimize the negative Kullback-Leibler (KL) divergence between its own token distributions and those of the teacher model.

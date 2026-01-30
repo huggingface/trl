@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: 'TRL: Transformer Reinforcement Learning'
+title: 'TRL: Transformers Reinforcement Learning'
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -24,11 +24,18 @@ authors:
   - given-names: Quentin
     family-names: Gallouédec
 repository-code: 'https://github.com/huggingface/trl'
-abstract: "With trl you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the transformers library by \U0001F917 Hugging Face. Therefore, pre-trained language models can be directly loaded via transformers. At this point, most decoder and encoder-decoder architectures are supported."
+abstract: >-
+  TRL (Transformers Reinforcement Learning) is an
+  open-source toolkit for aligning transformer models via
+  post-training. It provides practical, scalable
+  implementations of SFT, reward modeling, DPO, and GRPO
+  within the Hugging Face ecosystem.
 keywords:
-  - rlhf
-  - deep-learning
-  - pytorch
   - transformers
+  - reinforcement learning
+  - preference optimization
+  - language model alignment
+  - post-training
 license: Apache-2.0
-version: "0.26"
+version: '0.27'
+date-released: '2020-03-27'

@@ -374,8 +374,7 @@ After training your reward adapter and pushing it to the Hub:
 
 ```python
 from peft import LoraConfig
-from trl import AutoModelForCausalLMWithValueHead
-from trl.experimental.ppo import PPOTrainer
+from trl.experimental.ppo import PPOTrainer, AutoModelForCausalLMWithValueHead
 
 model_name = "huggyllama/llama-7b"
 rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"

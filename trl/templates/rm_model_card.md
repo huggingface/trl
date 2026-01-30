@@ -44,12 +44,11 @@ This model was trained with {{ trainer_name }}{% if paper_id %}, a method introd
 Cite TRL as:
     
 ```bibtex
-{% raw %}@misc{vonwerra2022trl,
-	title        = {{TRL: Transformer Reinforcement Learning}},
-	author       = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallou{\'e}dec},
-	year         = 2020,
-	journal      = {GitHub repository},
-	publisher    = {GitHub},
-	howpublished = {\url{https://github.com/huggingface/trl}}
+{% raw %}@software{vonwerra2020trl,
+  title   = {{TRL: Transformers Reinforcement Learning}},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  license = {Apache-2.0},
+  url     = {https://github.com/huggingface/trl},
+  year    = {2020}
 }{% endraw %}
 ```

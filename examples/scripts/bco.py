@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@ python examples/scripts/bco.py \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
     --learning_rate 1e-6 \
-    --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \
@@ -57,7 +56,6 @@ python examples/scripts/bco.py \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
     --learning_rate 1e-6 \
-    --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,7 +32,6 @@ python trl/scripts/dpo.py \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
     --gradient_accumulation_steps 8 \
-    --gradient_checkpointing \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
@@ -49,7 +48,6 @@ python trl/scripts/dpo.py \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
     --gradient_accumulation_steps 8 \
-    --gradient_checkpointing \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \

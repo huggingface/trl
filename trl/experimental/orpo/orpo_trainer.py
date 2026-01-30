@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,26 +38,24 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
     is_comet_available,
     is_torch_xla_available,
     is_wandb_available,
 )
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
+from ...models.utils import peft_module_casting_to_bf16
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    DPODataCollatorWithPadding,
-    add_bos_token_if_needed,
-    add_eos_token_if_needed,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
     pad_to_length,
-    peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from ..utils import DPODataCollatorWithPadding, add_bos_token_if_needed, add_eos_token_if_needed
 from .orpo_config import ORPOConfig
 
 
@@ -75,6 +73,13 @@ if is_torch_xla_available():
 logger = logging.get_logger(__name__)
 
 
+def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
+    """Numerically stable computation of log(1-exp(x))."""
+    # branch at -ln 2 ~ -0.693 to avoid cancellation
+    t = -0.6931471805599453
+    return torch.where(x < t, torch.log1p(-torch.exp(x)), torch.log(-torch.expm1(x)))
+
+
 class ORPOTrainer(BaseTrainer):
     r"""
     Initialize ORPOTrainer.
@@ -86,8 +91,8 @@ class ORPOTrainer(BaseTrainer):
             The ORPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            ([`experimental.utils.DPODataCollatorWithPadding`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`]):
@@ -177,9 +182,12 @@ class ORPOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_config, we merge and unload it first
             if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
+                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
+                    "model along with the new `peft_config` to the trainer."
+                )
 
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 _support_gc_kwargs = hasattr(
@@ -274,7 +282,6 @@ class ORPOTrainer(BaseTrainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
-                label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
 
@@ -296,7 +303,6 @@ class ORPOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.label_pad_token_id = args.label_pad_token_id
         self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
@@ -427,7 +433,7 @@ class ORPOTrainer(BaseTrainer):
         we truncate the chosen/rejected.
 
         We also create the labels for the chosen/rejected responses, which are of length equal to the sum of the length
-        of the prompt and the chosen/rejected response, with label_pad_token_id for the prompt tokens.
+        of the prompt and the chosen/rejected response, with `-100` for the prompt tokens.
         """
         batch = {}
         prompt = feature["prompt"]
@@ -521,13 +527,13 @@ class ORPOTrainer(BaseTrainer):
                 k: rejected_tokens[f"prompt_{k}"] + rejected_tokens[k] for k in ["input_ids", "attention_mask"]
             }
             chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
-            chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(chosen_tokens["prompt_input_ids"])
+            chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [-100] * len(
+                chosen_tokens["prompt_input_ids"]
+            )
             rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
-            rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(rejected_tokens["prompt_input_ids"])
+            rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [-100] * len(
+                rejected_tokens["prompt_input_ids"]
+            )
 
             for k, toks in {
                 "chosen_": chosen_sequence_tokens,
@@ -567,7 +573,7 @@ class ORPOTrainer(BaseTrainer):
             # Pad the sequences to global max_length to avoid TorchXLA recompilation
             for k in batch:
                 if "labels" in k or self.is_encoder_decoder:
-                    pad_value = self.label_pad_token_id
+                    pad_value = -100
                 elif k.endswith("_input_ids"):
                     pad_value = self.padding_value
                 elif k.endswith("_attention_mask"):
@@ -579,7 +585,6 @@ class ORPOTrainer(BaseTrainer):
     def concatenated_inputs(
         batch: dict[str, list | torch.LongTensor],
         is_encoder_decoder: bool = False,
-        label_pad_token_id: int = -100,
         padding_value: int = 0,
         device: torch.device | None = None,
     ) -> dict[str, torch.LongTensor]:
@@ -591,8 +596,6 @@ class ORPOTrainer(BaseTrainer):
                 of shape (batch_size, sequence_length).
             is_encoder_decoder:
                 Whether the model is an encoder-decoder model.
-            label_pad_token_id:
-                The label pad token id.
             padding_value:
                 The padding value to use for the concatenated inputs_ids.
             device:
@@ -611,7 +614,7 @@ class ORPOTrainer(BaseTrainer):
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
                 if "labels" in k or is_encoder_decoder:
-                    pad_value = label_pad_token_id
+                    pad_value = -100
                 elif k.endswith("_input_ids"):
                     pad_value = padding_value
                 elif k.endswith("_attention_mask"):
@@ -621,7 +624,7 @@ class ORPOTrainer(BaseTrainer):
         for k in batch:
             if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
                 if "labels" in k or is_encoder_decoder:
-                    pad_value = label_pad_token_id
+                    pad_value = -100
                 elif k.endswith("_input_ids"):
                     pad_value = padding_value
                 elif k.endswith("_attention_mask"):
@@ -664,8 +667,10 @@ class ORPOTrainer(BaseTrainer):
         """
 
         # Derived from Eqs. (4) and (7) from https://huggingface.co/papers/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
+        policy_chosen_logps = policy_chosen_logps.float()
+        policy_rejected_logps = policy_rejected_logps.float()
         log_odds = (policy_chosen_logps - policy_rejected_logps) - (
-            torch.log1p(-torch.exp(policy_chosen_logps)) - torch.log1p(-torch.exp(policy_rejected_logps))
+            log1mexp(policy_chosen_logps) - log1mexp(policy_rejected_logps)
         )
         ratio = F.logsigmoid(log_odds)
         losses = self.beta * ratio
@@ -680,7 +685,6 @@ class ORPOTrainer(BaseTrainer):
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
-        label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
@@ -688,12 +692,11 @@ class ORPOTrainer(BaseTrainer):
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
             labels:
-                Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are
-                ignored. Shape: (batch_size, sequence_length)
+                Labels for which to compute the log probabilities. Label tokens with a value of `-100` are ignored.
+                Shape: (batch_size, sequence_length)
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
-            label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
 
         Returns:
@@ -706,10 +709,10 @@ class ORPOTrainer(BaseTrainer):
         if not is_encoder_decoder:
             labels = labels[:, 1:].clone()
             logits = logits[:, :-1, :]
-        loss_mask = labels != label_pad_token_id
+        loss_mask = labels != -100
 
         # dummy token; we'll ignore the losses on these tokens later
-        labels = torch.where(labels == label_pad_token_id, 0, labels)
+        labels = torch.where(labels == -100, 0, labels)
 
         per_token_logps = selective_log_softmax(logits, labels)
 
@@ -728,7 +731,6 @@ class ORPOTrainer(BaseTrainer):
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
             padding_value=self.padding_value,
             device=self.accelerator.device,
         )
@@ -772,7 +774,7 @@ class ORPOTrainer(BaseTrainer):
         else:
             labels = concatenated_batch["concatenated_input_ids"].clone()
             attention_mask = concatenated_batch["concatenated_attention_mask"]
-            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
+            labels = torch.where(attention_mask == 1, labels, -100)
         # orpo chosen nll loss is computed over the full prompt and response
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
@@ -781,7 +783,6 @@ class ORPOTrainer(BaseTrainer):
             concatenated_batch["concatenated_labels"],
             average_log_prob=True,
             is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
         )
 
         chosen_logps = all_logps[:len_chosen]

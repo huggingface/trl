@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -81,8 +82,8 @@ class GRPOConfig(TrainingArguments):
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
             `1.0` to consider all tokens.
-        top_k (`int`, *optional*):
-            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
+        top_k (`int`, *optional*, defaults to `0`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
             disabled and all tokens are considered.
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
@@ -122,8 +123,8 @@ class GRPOConfig(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-        vllm_guided_decoding_regex (`str`, *optional*):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -147,7 +148,7 @@ class GRPOConfig(TrainingArguments):
             Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
-        vllm_max_model_length (`int`, *optional*, defaults to `None`):
+        vllm_max_model_length (`int`, *optional*):
             Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus
             `max_completion_length`; if omitted, it is inferred from the model config.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
@@ -192,6 +193,16 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
+        multi_objective_aggregation (`str`, *optional*, defaults to `"sum_then_normalize"`):
+            Method to aggregate multiple reward functions. Supported values are:
+
+            - `"sum_then_normalize"` (default): First sums the weighted rewards from each reward function, then applies
+              reward scaling/normalization as specified by `scale_rewards` (see `scale_rewards` for details).
+            - `"normalize_then_sum"`: First normalizes/scales each reward function across generations (within each
+              group), then sums the normalized rewards using the specified weights. The aggregated reward is then
+              normalized at the batch level when forming advantages. This is the suggested approach from the paper
+              [GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL
+              Optimization](https://huggingface.co/papers/2601.05242).
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
             Specifies the scaling strategy for rewards. Supported values are:
 
@@ -249,15 +260,10 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
-        use_liger_loss (`bool`, *optional*):
-            Whether to use Liger loss.
-
-            <Deprecated version="0.25.0">
-
-            Parameter `use_liger_loss` is deprecated and will be removed in version 0.28.0. Use `use_liger_kernel`
-            instead.
-
-            </Deprecated>
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
@@ -275,6 +281,11 @@ class GRPOConfig(TrainingArguments):
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
             Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
             ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+        off_policy_mask_threshold (`float`, *optional*):
+            Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. When set,
+            sequences with negative advantages and high KL divergence are masked out to stabilize training. This
+            parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
         use_bias_correction_kl (`bool`, *optional*, defaults to `False`):
             Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
@@ -291,26 +302,11 @@ class GRPOConfig(TrainingArguments):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
-
-        > Deprecated arguments
-
-        max_prompt_length (`bool`, *optional*):
-
-            <Deprecated version="0.26.0">
-
-            Parameter `max_prompt_length` is deprecated and will be removed in version 0.28.0. You should instead
-            filter your dataset before training to ensure that prompts do not exceed your desired length.
-
-            </Deprecated>
-
-        wandb_log_unique_prompts (`bool`, *optional*):
-
-            <Deprecated version="0.26.0">
-
-            Parameter `wandb_log_unique_prompts` is deprecated and will be removed in version 0.27.0. Use
-            `log_unique_prompts` instead.
-
-            </Deprecated>
+        log_completions_hub_repo (`str`, *optional*):
+            Hugging Face Hub repository to save the completions. Should be a complete repository name like
+            `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
+            created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -342,8 +338,8 @@ class GRPOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -442,10 +438,10 @@ class GRPOConfig(TrainingArguments):
             "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: int | None = field(
-        default=None,
+    top_k: int = field(
+        default=0,
         metadata={
-            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
@@ -526,9 +522,9 @@ class GRPOConfig(TrainingArguments):
             "usage low, but waking the engine adds host–device transfer latency."
         },
     )
-    vllm_guided_decoding_regex: str | None = field(
+    vllm_structured_outputs_regex: str | None = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
@@ -654,6 +650,18 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
+    multi_objective_aggregation: str = field(
+        default="sum_then_normalize",
+        metadata={
+            "help": "Method to aggregate multiple reward functions. Supported values are: "
+            "`'sum_then_normalize'` (default): First sums the weighted rewards from each reward function, then "
+            "applies reward scaling/normalization as specified by `scale_rewards` (see `scale_rewards` for details). "
+            "`'normalize_then_sum'`: First normalizes/scales each reward function across generations (within each "
+            "group), then sums the normalized rewards using the specified weights. The aggregated reward is then "
+            "normalized at the batch level when forming advantages. This is the suggested approach from the paper "
+            "GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization."
+        },
+    )
     scale_rewards: str = field(
         default="group",
         metadata={
@@ -687,7 +695,7 @@ class GRPOConfig(TrainingArguments):
             "The clipped weights are then multiplied with the advantages and policy model's log probs. "
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
-            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
+            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585). "
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
@@ -734,9 +742,13 @@ class GRPOConfig(TrainingArguments):
             "non-truncated completions are considered."
         },
     )
-    use_liger_loss: bool = field(
+    max_tool_calling_iterations: int | None = field(
         default=None,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
+        },
     )
     vllm_importance_sampling_correction: bool = field(
         default=True,
@@ -767,6 +779,15 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
             "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+        },
+    )
+    off_policy_mask_threshold: float | None = field(
+        default=None,
+        metadata={
+            "help": "Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. "
+            "When set, sequences with negative advantages and high KL divergence are masked out to stabilize "
+            "training. This parameter corresponds to the `delta` threshold in Equation 9 of the [DeepSeek-V3.2 "
+            "paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5)."
         },
     )
     use_bias_correction_kl: bool = field(
@@ -817,23 +838,37 @@ class GRPOConfig(TrainingArguments):
 
     # Deprecated arguments
     max_prompt_length: int | None = field(
+    log_completions_hub_repo: str | None = field(
         default=None,
         metadata={
-            "help": "Deprecated, filter your dataset before training to ensure that prompts do not exceed your "
-            "desired length."
+            "help": "Hugging Face Hub repository to save the completions. Should be a complete repository name like "
+            "`'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will "
+            "be created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be "
+            "public unless you set `hub_private_repo=True` or your organization's default is to create private "
+            "repositories."
         },
-    )
-    wandb_log_unique_prompts: bool | None = field(
-        default=None,
-        metadata={"help": "Deprecated, use `log_unique_prompts` instead."},
     )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__post_init__()
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+
+        if self.log_completions_hub_repo is not None and not self.log_completions:
+            raise ValueError(
+                "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
+                "completions to the Hub, or unset log_completions_hub_repo."
+            )
 
         num_processes = self.world_size
         # The current default effective batch size
@@ -858,11 +893,14 @@ class GRPOConfig(TrainingArguments):
             )
 
         if self.do_eval and self.eval_strategy != "no":
+            # Determine the number of generations to use for evaluation
+            num_generations = self.num_generations_eval or self.num_generations
+
             # Just ensure the value is divisible by the global batch size
-            if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
+            if (self.per_device_eval_batch_size * num_processes) % num_generations != 0:
                 raise ValueError(
                     f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
-                    f"divisible by num_generations ({self.num_generations})."
+                    f"divisible by the number of generations used for evaluation ({num_generations})."
                 )
 
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
@@ -878,15 +916,6 @@ class GRPOConfig(TrainingArguments):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
-
-        if self.use_liger_loss is not None:
-            warnings.warn(
-                "The `use_liger_loss` argument is deprecated and will be removed in version 0.28.0. Please use "
-                "`use_liger_kernel` instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            self.use_liger_kernel = self.use_liger_loss
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
