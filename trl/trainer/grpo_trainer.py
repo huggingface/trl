@@ -2277,21 +2277,42 @@ class GRPOTrainer(BaseTrainer):
         off_policy_threshold: float,
     ) -> torch.Tensor:
         """
-        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper. Returns a (B, 1) tensor where 1.0 indicates
-        "Keep" and 0.0 indicates "Drop".
+        Computes the Off-Policy Sequence Mask (OPSM) from the DeepSeek-V3.2 paper.
+
+        OPSM detects and drops sequences that have drifted too far from the current policy,
+        which can destabilize training. Off-policyness arises from two sources:
+
+        1. **Staleness** (always present): Gradient updates between when a sequence was generated
+           and when it is used for training cause the policy to drift. Measured as forward KL divergence
+           between per_token_logps (current policy during loss computation) and
+           old_per_token_logps (policy at start of training step).
+
+        2. **Sampling mismatch**: When using vLLM for generation, the sampling
+           distribution can differ from the training model due to quantization, different
+           attention implementations, etc. Measured as KL divergence between the training model's
+           logprobs and vLLM's sampling logprobs, passed in as sampling_mean_kl_div. When not
+           using vLLM, this is zeros.
+
+        The total off-policy KL is the sum of both sources. A sequence is kept if either:
+        - It has non-negative advantage (we want to reinforce it regardless of drift), OR
+        - Its total KL divergence is within the threshold (it's still on-policy enough)
+
+        Returns:
+            Mask tensor of shape (B, 1) where 1.0 = keep, 0.0 = drop.
         """
-        # forward KL div: log(pi_old) - log(pi_theta)
-        kl_div = per_token_logps - old_per_token_logps
-        # Sequence-level Mean KL (ignoring prompt+padding)
-        seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
-        staleness_mean_kl_div = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        # Staleness KL: how much the policy has drifted due to gradient updates
+        # Forward KL: log(pi_theta) - log(pi_old)
+        staleness_kl = per_token_logps - old_per_token_logps
+        seq_kl_sum = (staleness_kl * mask).sum(dim=1, keepdim=True)
+        staleness_mean_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
 
-        staleness_mean_kl_div = staleness_mean_kl_div + sampling_mean_kl_div
+        # Total off-policy KL combines staleness and sampling mismatch
+        total_mean_kl = staleness_mean_kl + sampling_mean_kl_div
 
-        # Keep if (Advantage >= 0) OR (KL <= delta)
+        # Keep if (Advantage >= 0) OR (KL <= threshold)
         is_pos_adv = advantages >= 0
-        is_low_kl = -staleness_mean_kl_div <= off_policy_threshold
-        return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
+        is_low_kl = -total_mean_kl <= off_policy_threshold
+        return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
@@ -2337,12 +2358,11 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         if self.off_policy_mask_threshold is not None:
-            # OPSM should use inference-time logprobs to detect both sources of off-policyness:
-            # 1. Drift from gradient updates (always present)
-            # 2. Drift from training-inference mismatch (when using vLLM)
-            sampling_mean_kl_div = inputs.get(
-                "sampling_mean_kl_div", torch.zeros_like(per_token_logps, dtype=per_token_logps.dtype)
-            )
+            sampling_mean_kl_div = inputs.get("sampling_mean_kl_div")
+            if sampling_mean_kl_div is None:
+                sampling_mean_kl_div = torch.zeros(
+                    (per_token_logps.size(0), 1), dtype=per_token_logps.dtype, device=per_token_logps.device
+                )
 
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
