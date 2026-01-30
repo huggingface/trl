@@ -733,6 +733,9 @@ class GRPOTrainer(BaseTrainer):
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
+            if self.off_policy_mask_threshold is not None:
+                self.vllm_importance_sampling_mode = "sequence_geometric_mean_mask"
+
             # vLLM specific sampling arguments
             self.structured_outputs_regex = args.vllm_structured_outputs_regex
 
@@ -1956,9 +1959,7 @@ class GRPOTrainer(BaseTrainer):
             # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
             # distribution mismatch between vLLM and the training model can be large and harm the training.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0 or (
-                self.use_vllm and self.vllm_importance_sampling_correction
-            ):
+            if self.args.gradient_accumulation_steps % generate_every != 0 or (self.use_vllm):
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
@@ -1972,7 +1973,7 @@ class GRPOTrainer(BaseTrainer):
                 old_per_token_logps = None
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
-            if self.use_vllm and self.vllm_importance_sampling_correction:
+            if self.use_vllm:
                 mask = completion_mask if not self.tools else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
@@ -1999,7 +2000,11 @@ class GRPOTrainer(BaseTrainer):
                         min=self.vllm_importance_sampling_min,
                         max=self.vllm_importance_sampling_max,
                     )
-                elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                elif self.vllm_importance_sampling_mode in [
+                    "sequence_mask",
+                    "sequence_geometric_mean_mask",
+                    "token_mask",
+                ]:
                     invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
                         vllm_importance_sampling_ratio > self.vllm_importance_sampling_max
                     )
@@ -2008,7 +2013,8 @@ class GRPOTrainer(BaseTrainer):
                     )
                 else:
                     raise ValueError(
-                        f"Unknown vLLM importance sampling level: {self.vllm_importance_sampling_mode}. Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', and 'sequence_mask'."
+                        f"Unknown vLLM importance sampling level: {self.vllm_importance_sampling_mode}. "
+                        "Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask', and 'sequence_geometric_mean_mask'."
                     )
 
             # Compute the per-token log probabilities for the reference model
@@ -2181,12 +2187,11 @@ class GRPOTrainer(BaseTrainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if self.use_vllm and self.vllm_importance_sampling_correction:
-            output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
+        if self.use_vllm:
+            if self.vllm_importance_sampling_correction:
+                output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
             if self.off_policy_mask_threshold is not None:
-                output["raw_importance_sampling_ratio"] = logps_diff
-        if sampling_per_token_logps is not None:
-            output["sampling_per_token_logps"] = sampling_per_token_logps
+                output["sampling_mean_kl_div"] = logps_diff
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in forward_kwargs:
@@ -2271,7 +2276,7 @@ class GRPOTrainer(BaseTrainer):
         advantages: torch.Tensor,
         per_token_logps: torch.Tensor,
         old_per_token_logps: torch.Tensor,
-        raw_importance_sampling_ratio: torch.Tensor | None,
+        sampling_mean_kl_div: torch.Tensor,
         mask: torch.Tensor,
         off_policy_threshold: float,
     ) -> torch.Tensor:
@@ -2283,14 +2288,13 @@ class GRPOTrainer(BaseTrainer):
         kl_div = per_token_logps - old_per_token_logps
         # Sequence-level Mean KL (ignoring prompt+padding)
         seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
-        avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        staleness_mean_kl_div = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
 
-        if raw_importance_sampling_ratio is not None:
-            avg_seq_kl = avg_seq_kl + raw_importance_sampling_ratio
+        staleness_mean_kl_div = staleness_mean_kl_div + sampling_mean_kl_div
 
         # Keep if (Advantage >= 0) OR (KL <= delta)
         is_pos_adv = advantages >= 0
-        is_low_kl = -avg_seq_kl <= off_policy_threshold
+        is_low_kl = -staleness_mean_kl_div <= off_policy_threshold
         return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
 
     def _compute_loss(self, model, inputs):
@@ -2340,14 +2344,15 @@ class GRPOTrainer(BaseTrainer):
             # OPSM should use inference-time logprobs to detect both sources of off-policyness:
             # 1. Drift from gradient updates (always present)
             # 2. Drift from training-inference mismatch (when using vLLM)
-            # When using vLLM, prioritize sampling_per_token_logps, otherwise use old_per_token_logps
-            raw_importance_sampling_ratio = inputs.get("raw_importance_sampling_ratio", None)
+            sampling_mean_kl_div = inputs.get(
+                "sampling_mean_kl_div", torch.zeros_like(per_token_logps, dtype=per_token_logps.dtype)
+            )
 
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
                 per_token_logps=per_token_logps,
                 old_per_token_logps=old_per_token_logps,
-                raw_importance_sampling_ratio=raw_importance_sampling_ratio,
+                sampling_mean_kl_div=sampling_mean_kl_div,
                 mask=mask,
                 off_policy_threshold=self.off_policy_mask_threshold,
             )
