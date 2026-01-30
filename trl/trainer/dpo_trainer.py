@@ -1197,6 +1197,12 @@ class DPOTrainer(BaseTrainer):
             elif loss_type == "ipo":
                 # (Eq. 17) of the paper where beta is the regularization parameter for the IPO loss, denoted by τ.
                 per_sequence_loss = (delta_score - 1 / (2 * self.beta)) ** 2
+                # IPO uses sequence-level log-prob differences; in code these are token-summed over the completion,
+                # which makes the squared loss scale with completion length. We therefore normalize by the number of
+                # completion tokens (average per token) to make β/loss comparable across variable lengths. This length
+                # normalization is not explicitly discussed in the IPO paper; we confirmed this choice with the IPO
+                # authors, and the results reported in the paper correspond to this normalized form.
+                per_sequence_loss = per_sequence_loss / completion_mask.sum(dim=1).clamp(min=1.0)
 
             elif loss_type == "exo_pair":
                 # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
