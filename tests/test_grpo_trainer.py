@@ -880,8 +880,9 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
 
         advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
-        sampling_per_token_logps = torch.zeros((3, 4))
         per_token_logps = torch.zeros((3, 4))
+        old_per_token_logps = torch.zeros((3, 4))
+        sampling_mean_kl_div = torch.zeros((3, 1))
 
         per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
         per_token_logps[1, :] = -0.5  # Neg adv + Low KL (0.5) -> Keep
@@ -892,7 +893,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, old_per_token_logps, sampling_mean_kl_div, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -902,8 +903,9 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # 2 valid tokens
         advantages = torch.tensor([[-1.0]])  # Negative advantage
 
-        sampling_per_token_logps = torch.zeros((1, 4))
         per_token_logps = torch.zeros((1, 4))
+        old_per_token_logps = torch.zeros((1, 4))
+        sampling_mean_kl_div = torch.zeros((1, 1))
 
         # Valid tokens have High KL (2.0)
         per_token_logps[0, 0] = -2.0
@@ -919,7 +921,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, old_per_token_logps, sampling_mean_kl_div, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -931,7 +933,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask_keep = torch.tensor([[1.0]])
 
         off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, old_per_token_logps, sampling_mean_kl_div, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
