@@ -346,6 +346,64 @@ $$
 
 TRL exposes the Importance Sampling granularity level through the `vllm_importance_sampling_mode` configuration parameter where `"sequence_*"` modes implement a sequence-level importance sampling ratio and `"token_*"` a per-token ratio.
 
+### Geometric Sequence Masking
+
+**📰 Blog**: https://richardli.xyz/post/rl-collapse-part3/
+
+While [Sequence-level Importance Sampling](#sequence-level-importance-sampling) provides an unbiased gradient estimator, it suffers from a fundamental problem in practice. For autoregressive models, the sequence-level importance ratio decomposes into a product of per-token ratios:
+
+$$
+\rho(y) = \frac{\pi^{\text{training}}_\theta(y|x)}{\pi^{\text{inference}}_\theta(y|x)} = \prod_{t=0}^{T-1} \underbrace{\frac{\pi^{\text{training}}_\theta(y_t|x, y_{<t})}{\pi^{\text{inference}}_\theta(y_t|x, y_{<t})}}_{\rho_t}
+$$
+
+This product grows exponentially with sequence length \\( T \\). Even with a small per-token mismatch (e.g., 0.1%), the sequence-level ratio explodes for long sequences:
+
+| Sequence Length \\( T \\) | \\( \rho(y) \approx 1.001^T \\) | Status (\\( C = 5 \\)) |
+|---------------------------|--------------------------------|------------------------|
+| 10 | 1.01 | Accepted |
+| 1,000 | 2.72 | Accepted |
+| 2,000 | 7.39 | Rejected |
+| 5,000 | 148.4 | Rejected |
+
+This creates a **systematic length bias**: long reasoning chains are almost always rejected regardless of their quality, while short responses are almost always accepted. Reasoning models frequently generate tokens in the thousands to solve problems, where this bias can severely hamper learning
+
+Geometric Sequence Masking (Geo-Mask) addresses this by using the **geometric mean** of per-token ratios instead of the product:
+
+$$
+\rho_{\text{geo}}(y) = \left( \prod_{t=0}^{T-1} \rho_t \right)^{1/T} = \rho(y)^{1/T}
+$$
+
+This quantity is **length-invariant**: if every \\( \rho_t = r \\), then \\( \rho_{\text{geo}} = r \\) regardless of \\( T \\). Taking the logarithm reveals its connection to KL divergence:
+
+$$
+\log \rho_{\text{geo}}(y) = \frac{1}{T} \sum_{t=0}^{T-1} \log \frac{\pi(y_t | x, y_{<t})}{\mu(y_t | x, y_{<t})}
+$$
+
+This is the **average per-token log-likelihood ratio**—an unbiased single-sample estimate of the negative reverse KL divergence along the trajectory. The Geo-Mask estimator filters sequences based on this intensive (length-normalized) metric:
+
+$$
+\hat{g}_{\text{geo-mask}}(y) = \mathbf{1}\left[ C_{\text{min}} \le \rho_{\text{geo}}(y) \le C_{\text{max}} \right] \cdot f(y)
+$$
+
+
+Note that unlike Sequence-level Importance Sampling, which can be combined with either TIS or MIS. Geometric Sequence Masking is pure filtering operation, used to discard entire trajectories that lie outside of the trust region  \\( [C_{\min}, C_{\max}] \\). 
+
+
+Geometric Sequence Masking is available as the `"sequence_geometric_mean_mask"` importance sampling mode. It is also used internally by the [Off-Policy Masking](#deepseek-v32-pushing-the-frontier-of-open-large-language-models) feature to measure the sampling mismatch component of off-policyness when using vLLM.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...
+    use_vllm=True,
+    vllm_importance_sampling_correction=True,
+    vllm_importance_sampling_mode="sequence_geometric_mean_mask",
+    vllm_importance_sampling_max=2.0,  # hyper-parameter C_max
+    vllm_importance_sampling_min=0.5,  # hyper-parameter C_min
+)
+```
+
 ### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
 
 **📜 Paper**: https://huggingface.co/papers/2508.09726
