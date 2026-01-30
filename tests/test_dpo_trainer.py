@@ -162,7 +162,7 @@ class TestTokenizeRow(TrlTestCase):
 class TestDPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -248,7 +248,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_liger_kernel
     def test_train_encoder_decoder_liger(self):
         model_id = "trl-internal-testing/tiny-BartModel"
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -749,7 +749,7 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -785,7 +785,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -885,7 +885,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -926,7 +926,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -968,7 +968,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1047,7 +1047,7 @@ class TestDPOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         # Define dummy test tools
         def get_current_temperature(location: str):
@@ -1086,7 +1086,7 @@ class TestDPOTrainer(TrlTestCase):
         # Normally, we need `attn_implementation="flash_attention_2"` to that the model returns correct logits.
         # Without it, the logits may be incorrect, but that's fine here. This test focuses only on the inner logic
         # of padding_free.
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1116,7 +1116,7 @@ class TestDPOTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token
@@ -1346,7 +1346,7 @@ class TestDPOVisionTrainer(TrlTestCase):
         dataset = dataset.cast_column("images", features.Sequence(features.Image()))
 
         # Instantiate the model and processor
-        model = AutoModelForImageTextToText.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         ref_model = AutoModelForImageTextToText.from_pretrained(model_id)
         processor = AutoProcessor.from_pretrained(model_id)
 
@@ -1444,7 +1444,7 @@ class TestDPOTrainerSlow(TrlTestCase):
         """
         A test that tests the simple usage of `DPOTrainer` using a bare model in full precision.
         """
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
@@ -1500,7 +1500,7 @@ class TestDPOTrainerSlow(TrlTestCase):
         A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios
         of gradient checkpointing.
         """
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
@@ -1566,7 +1566,9 @@ class TestDPOTrainerSlow(TrlTestCase):
         """
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
-        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, dtype="float32", quantization_config=quantization_config
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
