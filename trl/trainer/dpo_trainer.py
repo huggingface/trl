@@ -1221,9 +1221,9 @@ class DPOTrainer(BaseTrainer):
                 )
 
             elif loss_type == "robust":
-                x1 = -F.logsigmoid(self.beta * delta_score) * (1 - self.label_smoothing)
-                x2 = F.logsigmoid(-self.beta * delta_score) * self.label_smoothing
-                per_sequence_loss = (x1 + x2) / (1 - 2 * self.label_smoothing)
+                clean_loss_term = -(1 - self.label_smoothing) * F.logsigmoid(self.beta * delta_score)
+                flipped_loss_term = -self.label_smoothing * F.logsigmoid(-self.beta * delta_score)
+                per_sequence_loss = (clean_loss_term - flipped_loss_term) / (1 - 2 * self.label_smoothing)
 
             elif loss_type == "bco_pair":
                 chosen_rewards = self.beta * chosen_scores
