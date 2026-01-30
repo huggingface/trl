@@ -23,8 +23,10 @@ from urllib.parse import urlparse
 
 import torch
 import torch.distributed.distributed_c10d as c10d
+from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers import is_torch_xpu_available
+from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -86,7 +88,7 @@ class VLLMClient:
         Use the client to generate completions and update model weights:
 
         ```python
-        >>> from trl.extras.vllm_client import VLLMClient
+        >>> from trl.generation.vllm_client import VLLMClient
 
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
@@ -128,6 +130,24 @@ class VLLMClient:
             raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
+
+        # Configure retries for HTTP requests made through this session.
+        # This is not strictly required for correctness, but it helps make training more robust to rare, transient
+        # failures (network hiccups, temporary 5xx errors, overloaded servers). Without this, such failures could cause
+        # an otherwise healthy training run to fail.
+        retry_strategy = Retry(
+            total=5,  # global cap on the total number of retries across all failure types
+            connect=5,  # retry connection-level failures (DNS issues, refused connections, etc)
+            read=5,  # retry failures while reading the response after the connection was successfully established
+            status=3,  # retry a limited number of times when we receive certain HTTP error responses from the server
+            status_forcelist=[500, 502, 503],  # only retry on server-side errors that are usually temporary
+            backoff_factor=2,  # exponential backoff between retries (2s, 4s, 8s, ...)
+            allowed_methods=["POST", "GET"],  # allow POST as well, even though we're not sure it's safe here
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         if base_url is not None:
             # Parse the base_url to extract host and port
@@ -186,7 +206,7 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
@@ -209,8 +229,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
@@ -274,7 +294,7 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
@@ -299,8 +319,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):

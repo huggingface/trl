@@ -165,7 +165,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     completion.
 
     We also create the labels for the completion responses, which are of length equal to the sum of the length of the
-    prompt and the completion response, with label_pad_token_id for the prompt tokens.
+    prompt and the completion response, with `-100` for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -256,7 +256,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
 
         batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
         batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-            kwargs["label_pad_token_id"]
+            -100
         ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
     else:
         completion_tokens = kwargs["tokenizer"](
@@ -543,7 +543,6 @@ class BCOTrainer(BaseTrainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
-                label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
 
@@ -567,8 +566,6 @@ class BCOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
@@ -651,7 +648,6 @@ class BCOTrainer(BaseTrainer):
                 "tokenizer": processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
-                "label_pad_token_id": self.label_pad_token_id,
                 "max_prompt_length": self.max_prompt_length,
                 "max_completion_length": self.max_completion_length,
             }
@@ -679,7 +675,6 @@ class BCOTrainer(BaseTrainer):
                     "tokenizer": processing_class,
                     "max_length": self.max_length,
                     "truncation_mode": self.truncation_mode,
-                    "label_pad_token_id": self.label_pad_token_id,
                     "max_prompt_length": self.max_prompt_length,
                     "max_completion_length": self.max_completion_length,
                 }
@@ -1032,7 +1027,6 @@ class BCOTrainer(BaseTrainer):
             padded_batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
         )
 
         return completion_logps
@@ -1042,7 +1036,6 @@ class BCOTrainer(BaseTrainer):
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
-        label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
@@ -1050,13 +1043,11 @@ class BCOTrainer(BaseTrainer):
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
             labels:
-                Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are
-                ignored. Shape: (batch_size, sequence_length)
+                Labels for which to compute the log probabilities. Label tokens with a value of `-100` are ignored.
+                Shape: (batch_size, sequence_length)
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
-            label_pad_token_id:
-                The label value to ignore when computing log probabilities.
             is_encoder_decoder:
                 Whether the model is an encoder-decoder model. If True, the labels are not shifted, and the logits are
                 assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
@@ -1076,10 +1067,10 @@ class BCOTrainer(BaseTrainer):
             # Fixes end-dec RuntimeError
             labels = labels.clone()
 
-        loss_mask = labels != label_pad_token_id
+        loss_mask = labels != -100
 
         # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == label_pad_token_id] = 0
+        labels[labels == -100] = 0
 
         per_token_logps = selective_log_softmax(logits, labels)
 
@@ -1114,7 +1105,6 @@ class BCOTrainer(BaseTrainer):
             batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
         )
 
         if completion_logps.shape[0] != len(batch["label"]):

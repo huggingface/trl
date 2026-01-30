@@ -72,7 +72,6 @@ def main():
         learning_rate=1e-5,
         log_completions=True,
         num_completions_to_print=2,
-        max_prompt_length=2048,
         max_completion_length=1024,
         gradient_accumulation_steps=2,
         steps_per_generation=8,

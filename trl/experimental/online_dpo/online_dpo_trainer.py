@@ -53,7 +53,7 @@ from transformers.utils import is_flash_attn_2_available, is_peft_available, is_
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
@@ -477,6 +477,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
+                    "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     "quantization": vllm_quantization,
                 }
 
@@ -488,6 +489,8 @@ class OnlineDPOTrainer(BaseTrainer):
                 ensure_master_addr_port()
 
                 self.llm = LLM(**vllm_kwargs)
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
             # vLLM specific sampling arguments
@@ -776,6 +779,11 @@ class OnlineDPOTrainer(BaseTrainer):
 
     def _generate_vllm_colocate(self, prompts, images=None):
         """Generate completions using vLLM colocate mode"""
+        if self.args.vllm_enable_sleep_mode:
+            # wake up colocated vLLM instances if needed
+            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            self.llm.wake_up(tags=["weights"])
+
         # Update model weights if needed - only after gradient accumulation completes
         if self.state.global_step != self._last_loaded_step:
             self._move_model_to_vllm()
@@ -798,10 +806,15 @@ class OnlineDPOTrainer(BaseTrainer):
         else:
             vllm_inputs = prompts_text
 
+        if self.args.vllm_enable_sleep_mode:
+            self.llm.wake_up(tags=["kv_cache"])
+
         outputs = self.llm.generate(vllm_inputs, self.generation_config, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+        if self.args.vllm_enable_sleep_mode:
+            self.llm.sleep(level=2)
 
         return completion_ids, prompt_ids
 
