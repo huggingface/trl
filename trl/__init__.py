@@ -92,6 +92,8 @@ _import_structure = {
         "RLOOTrainer",
         "SFTConfig",
         "SFTTrainer",
+        "SDPOConfig",
+        "SDPOTrainer",
         "SyncRefModelCallback",
         "WeaveCallback",
         "WinRateCallback",  # deprecated import
@@ -170,6 +172,8 @@ if TYPE_CHECKING:
         RLOOTrainer,
         SFTConfig,
         SFTTrainer,
+        SDPOConfig,
+        SDPOTrainer,
         SyncRefModelCallback,
         WeaveCallback,
         WinRateCallback,  # deprecated import
