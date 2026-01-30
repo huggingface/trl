@@ -540,7 +540,8 @@ class VLLMGeneration:
                 }
                 with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
                     if rollout_func is not None:
-                        rollout_prompts = ordered_set_of_prompts
+                        # Pass all prompts (with duplicates) to rollout_func for consistency with colocate mode
+                        rollout_prompts = all_prompts
                         if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
                             rollout_prompts = [
                                 apply_chat_template({"prompt": p}, processing_class, **chat_template_kwargs)["prompt"]
@@ -570,8 +571,12 @@ class VLLMGeneration:
             broadcast_object_list(obj_list, from_process=0)
             all_prompt_ids, all_completion_ids, all_logprobs, all_extra_fields = obj_list[0]
 
-            # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-            all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
+            # When using rollout_func, it handles its own generation logic and returns one result per prompt.
+            # When NOT using rollout_func, vllm_client.generate(n=num_generations) returns num_generations
+            # completions per prompt, so we need to duplicate prompt_ids to match.
+            if self.rollout_func is None:
+                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
             process_slice = slice(
                 accelerator.process_index * len(prompts),
