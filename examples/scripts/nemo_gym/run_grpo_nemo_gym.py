@@ -1,24 +1,41 @@
-import os
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import asyncio
-import aiohttp
 import json
-import yaml
-import requests
-from omegaconf import OmegaConf
-from typing import Any, Dict, List, Optional
+import os
 from dataclasses import dataclass
-from datasets import Dataset, load_dataset
-from trl import GRPOConfig, GRPOTrainer
-from transformers import AutoTokenizer
+from typing import Any
+
+import aiohttp
+import requests
 import wandb
+import yaml
+from datasets import Dataset, load_dataset
+from omegaconf import OmegaConf
+from transformers import AutoTokenizer
+
+from trl import GRPOConfig, GRPOTrainer
+
 
 @dataclass
 class TrainingConfig:
     model_name: str
     dataset_path: str
 
-    task: Optional[str] = None
+    task: str | None = None
 
     learning_rate: float = 5e-6
     max_steps: int = 100
@@ -44,32 +61,30 @@ class TrainingConfig:
     log_completions: bool = False
     num_completions_to_print: int = None
 
-    eval_dataset_path: Optional[str] = None
+    eval_dataset_path: str | None = None
     eval_strategy: str = "no"
     eval_steps: int = 50
 
     vllm_importance_sampling_correction: bool = False
 
+
 def get_agent_servers(
     head_server_host: str = "127.0.0.1",
     head_server_port: int = 11000,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     try:
-        response = requests.get(
-            f"http://{head_server_host}:{head_server_port}/global_config_dict_yaml",
-            timeout=10
-        )
+        response = requests.get(f"http://{head_server_host}:{head_server_port}/global_config_dict_yaml", timeout=10)
         response.raise_for_status()
         global_config_yaml = response.text
         global_config_dict = OmegaConf.create(yaml.safe_load(global_config_yaml))
 
         agent_servers = {}
         for project_name, project_config in global_config_dict.items():
-            if hasattr(project_config, 'responses_api_agents'):
+            if hasattr(project_config, "responses_api_agents"):
                 agents = project_config.responses_api_agents
                 for agent_key in agents.keys():
                     agent_config = getattr(agents, agent_key)
-                    if hasattr(agent_config, 'host') and hasattr(agent_config, 'port'):
+                    if hasattr(agent_config, "host") and hasattr(agent_config, "port"):
                         agent_host = agent_config.host
                         if agent_host in ("127.0.0.1", "0.0.0.0", "localhost"):
                             agent_host = head_server_host
@@ -81,25 +96,27 @@ def get_agent_servers(
         return agent_servers
 
     except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"Failed to connect to head server at {head_server_host}:{head_server_port}: {e}")
+        raise RuntimeError(f"Failed to connect to head server at {head_server_host}:{head_server_port}: {e}") from e
 
-def reward_fn(completions: List[str], **kwargs) -> List[float]:
+
+def reward_fn(completions: list[str], **kwargs) -> list[float]:
     env_rewards = kwargs.get("env_reward")
     assert env_rewards is not None, "env_reward not found in kwargs"
     return [float(r) for r in env_rewards]
 
+
 async def call_nemo_gym_agents(
-    prompts: List[str],
-    dataset_items: List[Dict[str, Any]],
-    agent_servers: Dict[str, str],
+    prompts: list[str],
+    dataset_items: list[dict[str, Any]],
+    agent_servers: dict[str, str],
     timeout: float,
     max_completion_length: int = 4096,
     temperature: float = 1.0,
     top_p: float = 0.999,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
         tasks = []
-        for prompt, item in zip(prompts, dataset_items):
+        for prompt, item in zip(prompts, dataset_items, strict=False):
             request_body = item.copy()
 
             if "responses_create_params" not in request_body:
@@ -115,7 +132,9 @@ async def call_nemo_gym_agents(
             agent_ref = item.get("agent_ref", {})
             agent_name = agent_ref.get("name") if isinstance(agent_ref, dict) else None
             if not agent_name or agent_name not in agent_servers:
-                raise ValueError(f"Missing or invalid agent_ref. Got: {agent_ref}. Available: {list(agent_servers.keys())}")
+                raise ValueError(
+                    f"Missing or invalid agent_ref. Got: {agent_ref}. Available: {list(agent_servers.keys())}"
+                )
             agent_url = agent_servers[agent_name]
 
             task = session.post(
@@ -143,9 +162,13 @@ async def call_nemo_gym_agents(
         return results
 
 
-def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str, List]:
+def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
     is_eval = not trainer.model.training
-    num_generations = trainer.args.num_generations_eval if is_eval and trainer.args.num_generations_eval else trainer.args.num_generations
+    num_generations = (
+        trainer.args.num_generations_eval
+        if is_eval and trainer.args.num_generations_eval
+        else trainer.args.num_generations
+    )
     dataset = trainer.eval_dataset if is_eval and trainer.eval_dataset is not None else trainer.train_dataset
 
     expanded_prompts = []
@@ -177,14 +200,14 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         loop.close()
 
     tokenizer = trainer.processing_class
-    
-    prompt_ids: List[List[int]] = [] 
-    completion_ids: List[List[int]] = [] # list of rollouts
-    completion_mask: List[List[int]] = [] # only train on assistant turns
-    
-    logprobs: List[List[float]] = []
-    env_rewards: List[float] = []
-    num_turns_list: List[int] = []
+
+    prompt_ids: list[list[int]] = []
+    completion_ids: list[list[int]] = []  # list of rollouts
+    completion_mask: list[list[int]] = []  # only train on assistant turns
+
+    logprobs: list[list[float]] = []
+    env_rewards: list[float] = []
+    num_turns_list: list[int] = []
 
     for i, response in enumerate(responses):
         eos_token_id = tokenizer.eos_token_id or 0
@@ -194,10 +217,12 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         else:
             output_items = response.get("response", {}).get("output", [])
             has_content = output_items and any(
-                item.get("type") == "function_call" or (
-                    item.get("type") == "message" and
-                    any(c.get("type") == "output_text" and c.get("text", "").strip()
-                        for c in item.get("content", []))
+                item.get("type") == "function_call"
+                or (
+                    item.get("type") == "message"
+                    and any(
+                        c.get("type") == "output_text" and c.get("text", "").strip() for c in item.get("content", [])
+                    )
                 )
                 for item in output_items
             )
@@ -215,15 +240,15 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         episode_reward = response.get("reward", 0.0)
         output_items = response.get("response", {}).get("output", [])
 
-        rollout_ids: List[int] = []
-        rollout_mask: List[int] = []
-        rollout_logprobs: List[float] = []
-        
-        seen_token_ids: List[int] = []
+        rollout_ids: list[int] = []
+        rollout_mask: list[int] = []
+        rollout_logprobs: list[float] = []
+
+        seen_token_ids: list[int] = []
         first_prompt = None
         num_turns = 0
 
-        for idx, item in enumerate(output_items):
+        for _idx, item in enumerate(output_items):
             if "prompt_token_ids" not in item or "generation_token_ids" not in item:
                 continue
 
@@ -238,12 +263,12 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
                 seen_token_ids = list(item_prompt_ids)
             else:
                 if len(item_prompt_ids) > len(seen_token_ids):
-                    if item_prompt_ids[:len(seen_token_ids)] != seen_token_ids:
+                    if item_prompt_ids[: len(seen_token_ids)] != seen_token_ids:
                         raise ValueError(
                             f"[Turn {num_turns}] Non-contiguous messages (tokenization issue). "
                             f"Expected prefix len {len(seen_token_ids)}, got prompt len {len(item_prompt_ids)}"
                         )
-                    tool_result_tokens = item_prompt_ids[len(seen_token_ids):]
+                    tool_result_tokens = item_prompt_ids[len(seen_token_ids) :]
 
                 if tool_result_tokens:
                     rollout_ids.extend(tool_result_tokens)
@@ -252,7 +277,9 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
 
             rollout_ids.extend(item_gen_ids)
             rollout_mask.extend([1] * len(item_gen_ids))
-            assert len(item_logprobs) == len(item_gen_ids), f"Logprobs len {len(item_logprobs)} != gen len {len(item_gen_ids)}"
+            assert len(item_logprobs) == len(item_gen_ids), (
+                f"Logprobs len {len(item_logprobs)} != gen len {len(item_gen_ids)}"
+            )
             rollout_logprobs.extend(item_logprobs)
 
             seen_token_ids = list(item_prompt_ids) + list(item_gen_ids)
@@ -260,25 +287,24 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
         if not rollout_ids or first_prompt is None:
             raise ValueError(f"Rollout {i} has no valid turns")
 
-        prompt_ids.append(first_prompt) # list of prompts
-        completion_ids.append(rollout_ids) # list of rollouts
-        completion_mask.append(rollout_mask) 
+        prompt_ids.append(first_prompt)  # list of prompts
+        completion_ids.append(rollout_ids)  # list of rollouts
+        completion_mask.append(rollout_mask)
         logprobs.append(rollout_logprobs)
         env_rewards.append(episode_reward)
         num_turns_list.append(num_turns)
 
     if not prompt_ids:
-        raise RuntimeError(
-            "No valid rollouts. Check Nemo Gym and vLLM logs."
-        )
-
+        raise RuntimeError("No valid rollouts. Check Nemo Gym and vLLM logs.")
 
     if num_turns_list:
-        wandb.log({
-            "train/num_turns_mean": sum(num_turns_list) / len(num_turns_list),
-            "train/num_turns_min": min(num_turns_list),
-            "train/num_turns_max": max(num_turns_list),
-        })
+        wandb.log(
+            {
+                "train/num_turns_mean": sum(num_turns_list) / len(num_turns_list),
+                "train/num_turns_min": min(num_turns_list),
+                "train/num_turns_max": max(num_turns_list),
+            }
+        )
 
     unique_prompt_ids = prompt_ids[::num_generations]
 
@@ -294,25 +320,27 @@ def nemo_gym_rollout_func(prompts: List[str], trainer: GRPOTrainer) -> Dict[str,
 
 def load_dataset_from_jsonl(path: str) -> Dataset:
     data = []
-    with open(path, 'r') as f:
+    with open(path) as f:
         for idx, line in enumerate(f):
             if line.strip():
                 item = json.loads(line)
-                data.append({
-                    "prompt": str(idx), # use index for lookup as not all nemo gym datasets have the same metadata fields. maybe not the most elegant
-                    "metadata": json.dumps(item),
-                })
+                data.append(
+                    {
+                        "prompt": str(
+                            idx
+                        ),  # use index for lookup as not all nemo gym datasets have the same metadata fields. maybe not the most elegant
+                        "metadata": json.dumps(item),
+                    }
+                )
     return Dataset.from_list(data)
+
 
 def main():
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--config", required=True, help="Path to config YAML file")
-    parser.add_argument("--vllm_server_host", type=str, default="127.0.0.1",
-                        help="vLLM server hostname/IP")
-    parser.add_argument("--head_server_host", type=str, default="127.0.0.1",
-                        help="Head server hostname/IP for ng_run")
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
-                        help="Path to checkpoint to resume from")
+    parser.add_argument("--vllm_server_host", type=str, default="127.0.0.1", help="vLLM server hostname/IP")
+    parser.add_argument("--head_server_host", type=str, default="127.0.0.1", help="Head server hostname/IP for ng_run")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to checkpoint to resume from")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -332,7 +360,7 @@ def main():
         os.environ["WANDB_PROJECT"] = config.project_name
 
     if config.run_name is None:
-        task = config.task or os.path.basename(config.dataset_path).replace('.jsonl', '').replace('.json', '')
+        task = config.task or os.path.basename(config.dataset_path).replace(".jsonl", "").replace(".json", "")
         model_short = config.model_name.split("/")[-1]
         config.run_name = (
             f"{task}_{model_short}"
@@ -345,7 +373,7 @@ def main():
             f"_topp{config.top_p}"
         )
 
-    if config.dataset_path.endswith(('.jsonl', '.json')):
+    if config.dataset_path.endswith((".jsonl", ".json")):
         dataset = load_dataset_from_jsonl(config.dataset_path)
     else:
         dataset = load_dataset(config.dataset_path, split="train")
@@ -360,9 +388,7 @@ def main():
         vllm_mode="server",
         vllm_server_host=args.vllm_server_host,
         vllm_server_port=8000,
-
         gradient_checkpointing=True,
-
         temperature=config.temperature,
         learning_rate=config.learning_rate,
         weight_decay=config.weight_decay,
@@ -370,22 +396,18 @@ def main():
         warmup_steps=config.warmup_steps,
         lr_scheduler_type=config.lr_scheduler_type,
         optim=config.optim,
-
         per_device_train_batch_size=config.per_device_train_batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         num_generations=config.num_generations,
         num_generations_eval=1,
-
         max_steps=config.max_steps,
         save_steps=config.save_steps,
         logging_steps=1,
         report_to=config.report_to,
         output_dir=config.output_dir,
         run_name=config.run_name,
-
         eval_strategy=config.eval_strategy,
         eval_steps=config.eval_steps,
-
         vllm_importance_sampling_correction=config.vllm_importance_sampling_correction,
         epsilon=0.2,
         epsilon_high=0.28,
@@ -393,11 +415,11 @@ def main():
         mask_truncated_completions=True,
         log_completions=config.log_completions,
         num_completions_to_print=config.num_completions_to_print,
-
         # max_prompt_length=config.max_prompt_length,
-        max_completion_length=config.max_seq_length - config.max_prompt_length if config.max_prompt_length else config.max_seq_length,
+        max_completion_length=config.max_seq_length - config.max_prompt_length
+        if config.max_prompt_length
+        else config.max_seq_length,
         shuffle_dataset=False,
-
         model_init_kwargs={
             "torch_dtype": "auto",
         },
@@ -419,6 +441,7 @@ def main():
     )
 
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+
 
 if __name__ == "__main__":
     main()

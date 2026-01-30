@@ -1562,7 +1562,7 @@ class GRPOTrainer(BaseTrainer):
         prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
         prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
-        
+
         # Allow custom completion_mask from rollout_func for multi-turn training
         if "completion_mask" in extra_fields:
             completion_mask_list = extra_fields.pop("completion_mask")
@@ -1588,7 +1588,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
-        
+
         # attend to all non-padding tokens, but mask out user/tool result tokens in loss
         completion_attention_mask = (completion_ids != self.pad_token_id).long()
         attention_mask = torch.cat([prompt_mask, completion_attention_mask], dim=1)  # (B, P+C)
