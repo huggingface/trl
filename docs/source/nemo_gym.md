@@ -142,7 +142,7 @@ max_steps: 1000
 num_generations: 8
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 4
-max_seq_length: 16384
+max_completion_length: 16384
 
 temperature: 1.0
 top_p: 0.999
