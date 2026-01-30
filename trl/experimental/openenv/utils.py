@@ -174,7 +174,9 @@ def _generate_rollout_completions_colocate(
 
     with profiling_context(trainer, "vLLM.generate_rollout"):
         if as_chat:
-            vllm_outputs = trainer.vllm_generation.llm.chat(prompts_for_generation, sampling_params=sampling_params, use_tqdm=False)
+            vllm_outputs = trainer.vllm_generation.llm.chat(
+                prompts_for_generation, sampling_params=sampling_params, use_tqdm=False
+            )
         else:
             vllm_outputs = trainer.vllm_generation.llm.generate(
                 prompts_for_generation, sampling_params=sampling_params, use_tqdm=False

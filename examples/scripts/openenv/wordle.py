@@ -96,7 +96,6 @@ python examples/scripts/openenv/wordle.py --vllm-mode colocate --env-url http://
 """
 
 import argparse
-import os
 import re
 import sys
 from collections.abc import Iterable
@@ -133,7 +132,7 @@ def parse_args() -> argparse.Namespace:
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
     parser.add_argument(
-        "--env-url", type=str, default="https://burtenshaw-wordle.hf.space", help="URL for the environment server."
+        "--env-url", type=str, default="https://sergiopaniego-wordle.hf.space", help="URL for the environment server."
     )
     parser.add_argument(
         "--system-prompt-path",
@@ -184,7 +183,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=5e-6,
+        default=1e-6,
         help="Learning rate for GRPO training.",
     )
     parser.add_argument(
@@ -202,7 +201,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--warmup-steps",
         type=int,
-        default=20,
+        default=10,
         help="Warmup steps for the scheduler.",
     )
     parser.add_argument(
@@ -333,7 +332,6 @@ def rollout_once(
     prev_env_output_len: int = 0  # Track length to only add NEW portion each turn
 
     accumulated_messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-
     # Build initial prompt (only once, at the start)
     # The initial env messages are included in the prompt, not completion
     base_prompt = observation.prompt or dataset_prompt
@@ -528,7 +526,7 @@ def main() -> None:
         max_completion_length=1024,  # Full episode length, not per-turn
         logging_steps=args.logging_steps,
         log_completions=True,
-        report_to="wandb",
+        report_to="trackio",
         trackio_space_id=f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}",
         save_strategy="steps",
         save_steps=args.save_interval,
@@ -539,7 +537,6 @@ def main() -> None:
         vllm_gpu_memory_utilization=0.25,
         vllm_max_model_length=8192,
         vllm_importance_sampling_correction=False,
-        bf16=True,
         optim="adamw_torch",
         max_grad_norm=1.0,  # Clip gradients to prevent explosion
     )
@@ -547,9 +544,6 @@ def main() -> None:
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}"
     grpo_config.trackio_space_id = args.trackio_space_id
-
-    os.environ["WANDB_PROJECT"] = f"wordle-grpo-{sanitize_name(args.model_id)}"
-    os.environ["WANDB_RUN_ID"] = f"{timestamp}"
 
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
