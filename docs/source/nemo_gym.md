@@ -13,7 +13,7 @@ The integration supports multi-step and multi-turn rollouts, multi-environment t
 
 ## Available Environments
 
-NeMo Gym provides training-ready environments across multiple domains:
+NeMo Gym provides training-ready environments across multiple domains, including but not limited to:
 
 | Environment | Domain | Description |
 |-------------|--------|-------------|
@@ -116,7 +116,7 @@ NeMo Gym datasets are stored as JSONL. Each line contains a task with input mess
 
 ### Create Training Config
 
-Create a `config_workplace.yaml` file with your training parameters:
+Create a config file, `config_workplace.yaml`:
 
 ```yaml
 model_name: "Qwen/Qwen2.5-1.5B-Instruct"
@@ -184,8 +184,8 @@ For development and testing on a single node. The following steps run in three s
    This starts:
    - **Head server**: Manages servers used in training
    - **Agent server**: Orchestrates rollouts using resource servers and model servers
-   - **Resources server**: Supports environment logic such as state-based feedback, tool implementations, and task verification
-   - **Model server**: Adapts vLLM server requests to support NeMo Gym agents and ensures OpenAI API compatibility
+   - **Resources server**: Supports environment logic such as state-management, tool implementations, and task verification
+   - **Model server**: Adapts vLLM server requests to support NeMo Gym agents and on-policy RL training while ensuring OpenAI API compatibility
 
 1. **Start TRL vLLM Server** (Terminal 2)
 
