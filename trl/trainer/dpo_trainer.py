@@ -1196,10 +1196,7 @@ class DPOTrainer(BaseTrainer):
 
             elif loss_type == "ipo":
                 # (Eq. 17) of the paper where beta is the regularization parameter for the IPO loss, denoted by τ.
-                logratios = chosen_logps - rejected_logps
-                ref_logratios = ref_chosen_logps - ref_rejected_logps
-                logits = logratios - ref_logratios
-                per_sequence_loss = (logits - 1 / (2 * self.beta)) ** 2
+                per_sequence_loss = (delta_score - 1 / (2 * self.beta)) ** 2
 
             elif loss_type == "exo_pair":
                 # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
