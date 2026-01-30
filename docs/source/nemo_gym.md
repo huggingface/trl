@@ -61,7 +61,7 @@ Many NeMo Gym datasets used to train Nemotron models are available on Hugging Fa
 - Validates the data format
 - Adds an `agent_ref` field to each example that tells NeMo Gym which agent server should handle that example
 
-> **Note**: `run_grpo_nemo_gym.py` adds the `agent_ref` field when loading datasets, so this step is optional if datasets are created another way.
+> **Note**: `train_multi_environment.py` adds the `agent_ref` field when loading datasets, so this step is optional if datasets are created another way.
 
 1. **Set Hugging Face Token**
 
@@ -221,7 +221,7 @@ The following steps run in 3 terminals. It can also be ran with processes in the
    export WANDB_API_KEY=...
    uv pip install wandb
 
-   CUDA_VISIBLE_DEVICES=1 python run_grpo_nemo_gym.py --config config_workplace.yaml
+   CUDA_VISIBLE_DEVICES=1 python train_multi_environment.py --config config_workplace.yaml
    ```
 
 ## Multi-Node Training with Slurm
@@ -325,5 +325,5 @@ Train on multiple NeMo Gym environments simultaneously. This allows learning div
 
 - [NeMo Gym GitHub](https://github.com/NVIDIA-NeMo/Gym)
 - [NeMo Gym Documentation](https://docs.nvidia.com/nemo/gym/latest/)
-- [Training Script](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/run_grpo_nemo_gym.py)
+- [Training Script](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/train_multi_environment.py)
 - [TRL GRPO Trainer](grpo_trainer)

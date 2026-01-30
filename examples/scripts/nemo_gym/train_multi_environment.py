@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "nemo_gym @ git+https://github.com/NVIDIA-NeMo/Gym",
+# ]
+# ///
+
 import argparse
 import asyncio
 import json
@@ -21,13 +28,20 @@ from typing import Any
 
 import aiohttp
 import requests
-import wandb
 import yaml
 from datasets import Dataset, load_dataset
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
+
+
+@dataclass
+class NeMoGymGRPOConfig(GRPOConfig):
+    """GRPOConfig subclass with NeMo Gym specific fields."""
+
+    agent_servers: dict[str, str] | None = None
+    request_timeout: float = 10800
 
 
 @dataclass
@@ -43,7 +57,6 @@ class TrainingConfig:
     per_device_train_batch_size: int = 2
     gradient_accumulation_steps: int = 16
     max_seq_length: int = 1024
-    max_prompt_length: int = None
 
     temperature: float = 1.0
     top_p: float = 0.999
@@ -298,11 +311,11 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         raise RuntimeError("No valid rollouts. Check Nemo Gym and vLLM logs.")
 
     if num_turns_list:
-        wandb.log(
+        trainer.log(
             {
-                "train/num_turns_mean": sum(num_turns_list) / len(num_turns_list),
-                "train/num_turns_min": min(num_turns_list),
-                "train/num_turns_max": max(num_turns_list),
+                "num_turns_mean": sum(num_turns_list) / len(num_turns_list),
+                "num_turns_min": min(num_turns_list),
+                "num_turns_max": max(num_turns_list),
             }
         )
 
@@ -383,7 +396,7 @@ def main():
         eval_dataset = load_dataset_from_jsonl(config.eval_dataset_path)
         print(f"Eval dataset has {len(eval_dataset)} examples\n")
 
-    training_args = GRPOConfig(
+    training_args = NeMoGymGRPOConfig(
         use_vllm=True,
         vllm_mode="server",
         vllm_server_host=args.vllm_server_host,
@@ -415,18 +428,14 @@ def main():
         mask_truncated_completions=True,
         log_completions=config.log_completions,
         num_completions_to_print=config.num_completions_to_print,
-        # max_prompt_length=config.max_prompt_length,
-        max_completion_length=config.max_seq_length - config.max_prompt_length
-        if config.max_prompt_length
-        else config.max_seq_length,
+        max_completion_length=config.max_seq_length,
         shuffle_dataset=False,
         model_init_kwargs={
             "torch_dtype": "auto",
         },
+        agent_servers=agent_servers,
+        request_timeout=10800,
     )
-
-    training_args.agent_servers = agent_servers
-    training_args.request_timeout = 10800
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_name, truncation_side="left", padding_side="left")
 
