@@ -1,3 +1,17 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,22 +28,24 @@
 
 import inspect
 import os
-from pprint import pformat
 from collections import defaultdict, deque
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from typing import Any, Optional, Union
+from pprint import pformat
+from typing import Any, Optional
 
 import datasets
 import torch
 import torch.utils.data
 import transformers
 from accelerate import logging
+from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.nn.functional import kl_div, log_softmax
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoConfig,
@@ -47,12 +63,9 @@ from transformers.utils import is_datasets_available, is_flash_attn_2_available,
 from ...data_utils import is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...generation.vllm_client import VLLMClient
-from ...import_utils import is_liger_kernel_available, is_vllm_available
+from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..utils import prepare_peft_model
 from ...trainer.base_trainer import BaseTrainer
-from .sdft_config import SDFTConfig
-from accelerate.state import AcceleratorState
 from ...trainer.utils import (
     RepeatSampler,
     disable_dropout_in_model,
@@ -68,7 +81,8 @@ from ...trainer.utils import (
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
 )
-from torch.nn.functional import log_softmax, kl_div
+from ..utils import prepare_peft_model
+from .sdft_config import SDFTConfig
 
 
 if is_peft_available():
@@ -87,7 +101,7 @@ logger = logging.get_logger(__name__)
 class MemoryEfficientSyncRefModelCallback(TrainerCallback):
     """
     Memory-efficient callback to synchronize the model with a reference model.
-    
+
     Unlike the default SyncRefModelCallback, this version iterates through parameters
     one at a time instead of gathering all parameters at once. This reduces peak memory
     usage from O(full_model_size) to O(single_param_size), making it feasible to sync
@@ -96,8 +110,8 @@ class MemoryEfficientSyncRefModelCallback(TrainerCallback):
 
     def __init__(
         self,
-        ref_model: Union[PreTrainedModel, nn.Module],
-        accelerator: Optional[Any],
+        ref_model: PreTrainedModel | nn.Module,
+        accelerator: Any | None,
     ):
         self.accelerator = accelerator
         self.ref_model = ref_model
@@ -111,30 +125,26 @@ class MemoryEfficientSyncRefModelCallback(TrainerCallback):
     def sync_target_model_memory_efficient(model, target_model, alpha):
         """
         Sync target_model to track model, gathering one parameter at a time.
-        
+
         This is O(1) in memory overhead instead of O(N) where N is model size.
         """
         deepspeed_plugin = AcceleratorState().deepspeed_plugin
         is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        
+
         if is_zero3:
             import deepspeed
-            
+
             # Iterate through parameters one at a time
             for (name, model_param), (_, ref_param) in zip(
-                model.named_parameters(), target_model.named_parameters()
+                model.named_parameters(), target_model.named_parameters(), strict=False
             ):
                 # Gather only this pair of parameters
-                with deepspeed.zero.GatheredParameters(
-                    [model_param, ref_param], modifier_rank=0
-                ):
+                with deepspeed.zero.GatheredParameters([model_param, ref_param], modifier_rank=0):
                     if deepspeed.comm.get_rank() == 0:
-                        MemoryEfficientSyncRefModelCallback._sync_param(
-                            model_param, ref_param, alpha
-                        )
+                        MemoryEfficientSyncRefModelCallback._sync_param(model_param, ref_param, alpha)
         else:
             # Non-ZeRO-3: just iterate normally
-            for model_param, ref_param in zip(model.parameters(), target_model.parameters()):
+            for model_param, ref_param in zip(model.parameters(), target_model.parameters(), strict=False):
                 MemoryEfficientSyncRefModelCallback._sync_param(model_param, ref_param, alpha)
 
     def on_step_end(self, args, state, control, **kwargs):
@@ -144,6 +154,7 @@ class MemoryEfficientSyncRefModelCallback(TrainerCallback):
             if self.accelerator:
                 model = self.accelerator.unwrap_model(model)
             self.sync_target_model_memory_efficient(model, self.ref_model, args.ref_model_mixup_alpha)
+
 
 class SDFTTrainer(BaseTrainer):
     """
@@ -230,14 +241,14 @@ class SDFTTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
-        ref_model: Optional[Union[str, PreTrainedModel]] = None,
-        args: Optional[SDFTConfig] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        model: str | PreTrainedModel,
+        ref_model: str | PreTrainedModel | None = None,
+        args: SDFTConfig | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
     ):
         # Args
@@ -473,9 +484,7 @@ class SDFTTrainer(BaseTrainer):
                 # Use teacher model for vLLM when generate_from_teacher=True
                 if self.generate_from_teacher and self.ref_model is None:
                     raise ValueError("`generate_from_teacher=True` requires a teacher model.")
-                vllm_model_path = (
-                    self.ref_model.name_or_path if self.generate_from_teacher else model.name_or_path
-                )
+                vllm_model_path = self.ref_model.name_or_path if self.generate_from_teacher else model.name_or_path
                 logger.info(
                     f"[DEBUG] Initializing vLLM with model: {vllm_model_path}, "
                     f"generate_from_teacher={self.generate_from_teacher}"
@@ -544,7 +553,9 @@ class SDFTTrainer(BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            self.add_callback(MemoryEfficientSyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            self.add_callback(
+                MemoryEfficientSyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator)
+            )
 
     def _validate_dataset_columns(self, dataset, name: str) -> None:
         if dataset is None:
@@ -614,7 +625,7 @@ class SDFTTrainer(BaseTrainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
-    def _get_train_sampler(self, dataset: Optional[Dataset] = None) -> Sampler:
+    def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
         # Returns a sampler that
         # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
         #    distributed to different GPUs, allowing group-wise statistics to be computed consistently. Using the
@@ -662,9 +673,7 @@ class SDFTTrainer(BaseTrainer):
         if not self.log_completions:
             return
         num_samples = self.num_completions_to_print or len(self._logs["prompt"])
-        for idx, (prompt, completion) in enumerate(
-            zip(self._logs["prompt"], self._logs["completion"], strict=False)
-        ):
+        for idx, (prompt, completion) in enumerate(zip(self._logs["prompt"], self._logs["completion"], strict=False)):
             if idx >= num_samples:
                 break
             prompt_text = pformat(prompt, width=100)
@@ -770,7 +779,7 @@ class SDFTTrainer(BaseTrainer):
         image_sizes=None,
         token_type_ids=None,
         compute_all_logps=True,
-    ) -> dict[str, Optional[torch.Tensor]]:
+    ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_selected_logps = []
@@ -839,7 +848,7 @@ class SDFTTrainer(BaseTrainer):
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return selected_logps, logps, entropies
 
-    def _fix_param_name_to_vllm(self, name, extra_prefixes: Optional[list[str]] = None):
+    def _fix_param_name_to_vllm(self, name, extra_prefixes: list[str] | None = None):
         extra_prefixes = extra_prefixes or []
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
         for prefix in prefixes:
@@ -891,7 +900,7 @@ class SDFTTrainer(BaseTrainer):
         # Select which model to sync to vLLM: teacher (ref_model) or student (model)
         # When generate_from_teacher=True, sync the teacher model since vLLM was initialized with teacher weights
         model_to_sync = self.ref_model if self.generate_from_teacher else self.model
-        
+
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
@@ -904,7 +913,9 @@ class SDFTTrainer(BaseTrainer):
 
         if is_peft_model(self.model):
             if self.generate_from_teacher:
-                raise ValueError("PEFT model handling only applies when syncing student model (teacher is typically not PEFT)")
+                raise ValueError(
+                    "PEFT model handling only applies when syncing student model (teacher is typically not PEFT)"
+                )
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
@@ -949,7 +960,9 @@ class SDFTTrainer(BaseTrainer):
                 fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
                 fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
                 if fsdp_version == 1:
-                    self._sync_fsdp1_params_to_vllm(model_to_sync)  # use memory-efficient post-order traversal for FSDP
+                    self._sync_fsdp1_params_to_vllm(
+                        model_to_sync
+                    )  # use memory-efficient post-order traversal for FSDP
                 elif fsdp_version == 2:
                     self._sync_fsdp2_params_to_vllm(model_to_sync)
             else:
@@ -969,9 +982,7 @@ class SDFTTrainer(BaseTrainer):
             self.llm.reset_prefix_cache()
 
     @profiling_decorator
-    def _prepare_inputs(
-        self, generation_batch: dict[str, Union[torch.Tensor, Any]]
-    ) -> dict[str, Union[torch.Tensor, Any]]:
+    def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
         # During training:
         #   - Receives the local generation batch (Per-GPU batch size × steps per generation)
@@ -1003,7 +1014,7 @@ class SDFTTrainer(BaseTrainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
-    def _generate_single_turn(self, prompts: list[str], images: Optional[list]):
+    def _generate_single_turn(self, prompts: list[str], images: list | None):
         device = self.accelerator.device
 
         # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
@@ -1012,7 +1023,7 @@ class SDFTTrainer(BaseTrainer):
         kwargs = {}
         if images is not None:
             kwargs = {"images": images}
-            for prompt, image_list in zip(prompts, images):
+            for prompt, image_list in zip(prompts, images, strict=False):
                 if isinstance(prompt, list):  # i.e., when using conversational data
                     prepare_multimodal_messages(prompt, num_images=len(image_list))
 
@@ -1133,7 +1144,7 @@ class SDFTTrainer(BaseTrainer):
 
                 if images is not None and all_images:
                     vllm_inputs = []
-                    for prompt, image_list in zip(all_prompts_text, all_images):
+                    for prompt, image_list in zip(all_prompts_text, all_images, strict=False):
                         vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image_list}})
 
                 else:
@@ -1236,13 +1247,13 @@ class SDFTTrainer(BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
+            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=False)]
+            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=False)]
             logprobs = None  # not used in this case
 
         return prompt_ids, completion_ids, logprobs, forward_kwargs
 
-    def _generate(self, prompts: list[str], images: Optional[list]):
+    def _generate(self, prompts: list[str], images: list | None):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1281,8 +1292,8 @@ class SDFTTrainer(BaseTrainer):
         return prompt_ids, completion_ids, total_completion_tokens, logprobs, forward_kwargs
 
     def _generate_and_score_completions(
-        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
-    ) -> dict[str, Union[torch.Tensor, Any]]:
+        self, inputs: list[dict[str, torch.Tensor | Any]]
+    ) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1327,11 +1338,12 @@ class SDFTTrainer(BaseTrainer):
         )
         student_inputs = super()._prepare_inputs(student_inputs)
         student_prompt_ids, student_prompt_mask = student_inputs["input_ids"], student_inputs["attention_mask"]
-        prompt_ids_list = [p[m].tolist() for p, m in zip(student_prompt_ids, student_prompt_mask.bool())]
+        prompt_ids_list = [p[m].tolist() for p, m in zip(student_prompt_ids, student_prompt_mask.bool(), strict=False)]
 
         # Process teacher prompts (always used for teacher, regardless of generation source)
         teacher_prompts_text = [
-            maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in teacher_prompts
+            maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"]
+            for prompt in teacher_prompts
         ]
         teacher_inputs = self.processing_class(
             text=teacher_prompts_text,
@@ -1346,7 +1358,9 @@ class SDFTTrainer(BaseTrainer):
         if self.use_vllm:
             self.processing_class.truncation_side = "right"
         teacher_prompt_ids, teacher_prompt_mask = teacher_inputs["input_ids"], teacher_inputs["attention_mask"]
-        teacher_prompt_ids_list = [p[m].tolist() for p, m in zip(teacher_prompt_ids, teacher_prompt_mask.bool())]
+        teacher_prompt_ids_list = [
+            p[m].tolist() for p, m in zip(teacher_prompt_ids, teacher_prompt_mask.bool(), strict=False)
+        ]
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -1401,8 +1415,9 @@ class SDFTTrainer(BaseTrainer):
             # Skip when generate_from_teacher=True since importance sampling is not used in that case.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
             if not self.generate_from_teacher and (
-                self.args.gradient_accumulation_steps % generate_every != 0 or (
-                self.use_vllm and self.vllm_importance_sampling_correction)):
+                self.args.gradient_accumulation_steps % generate_every != 0
+                or (self.use_vllm and self.vllm_importance_sampling_correction)
+            ):
                 old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
@@ -1450,7 +1465,7 @@ class SDFTTrainer(BaseTrainer):
                             num_images=num_images,
                             compute_all_logps=False,
                             **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask and image_sizes
-                        )   
+                        )
             else:
                 ref_per_token_logps = None
 
@@ -1459,12 +1474,12 @@ class SDFTTrainer(BaseTrainer):
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
-            for prompt, completion in zip(prompts, completions_text):
+            for prompt, completion in zip(prompts, completions_text, strict=False):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
-        
+
         # Log prompt and completion texts
         self._logs["prompt"].extend(gather_object(prompts_text))
         self._logs["completion"].extend(gather_object(completions_text))
@@ -1533,7 +1548,6 @@ class SDFTTrainer(BaseTrainer):
             output["num_images"] = num_images
         return output
 
-
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
@@ -1545,7 +1559,7 @@ class SDFTTrainer(BaseTrainer):
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         teacher_prompt_ids, teacher_prompt_mask = inputs["teacher_prompt_ids"], inputs["teacher_prompt_mask"]
-        
+
         # Create a separate mask for loss computation that skips the first N tokens
         # Note: completion_mask is used for both attention (forward pass) and loss computation
         # We need to keep the original for attention, but create a modified one for loss
@@ -1557,7 +1571,7 @@ class SDFTTrainer(BaseTrainer):
             skip_mask = (token_positions >= self.num_loss_tokens_to_skip).int()
             # Apply the skip mask (only mask tokens that were originally unmasked)
             loss_completion_mask = completion_mask * skip_mask
-        
+
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         teacher_input_ids = torch.cat([teacher_prompt_ids, completion_ids], dim=1)
@@ -1605,12 +1619,12 @@ class SDFTTrainer(BaseTrainer):
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
-        
+
         # Compute KL divergences using F.kl_div
         # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
-        if self.alpha == 0: #Forward KL
+        if self.alpha == 0:  # Forward KL
             kl_loss = kl_div(all_logps, teacher_all_logps, reduction="none", log_target=True)
-        elif self.alpha == 1: #Reverse KL
+        elif self.alpha == 1:  # Reverse KL
             kl_loss = kl_div(teacher_all_logps, all_logps, reduction="none", log_target=True)
         else:
             # Compute the log of the mixture distribution
@@ -1644,10 +1658,12 @@ class SDFTTrainer(BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         with torch.no_grad():
-            kl_approx = (per_token_logps - teacher_per_token_logps) + torch.exp(teacher_per_token_logps - per_token_logps) - 1
+            kl_approx = (
+                (per_token_logps - teacher_per_token_logps) + torch.exp(teacher_per_token_logps - per_token_logps) - 1
+            )
             kl_approx_mean = (kl_approx * loss_completion_mask).sum() / loss_completion_mask.sum()
         self._metrics[mode]["kl_approx"].append(self.accelerator.gather(kl_approx_mean).nanmean().item())
-        
+
         loss_completion_token_count = loss_completion_mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
@@ -1665,7 +1681,7 @@ class SDFTTrainer(BaseTrainer):
 
         return loss
 
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
@@ -1673,7 +1689,7 @@ class SDFTTrainer(BaseTrainer):
             loss = loss.mean().detach()
         return loss, None, None
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
