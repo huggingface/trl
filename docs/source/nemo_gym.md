@@ -182,7 +182,7 @@ The following steps run in 3 terminals. It can also be ran with processes in the
 1. **Start NeMo Gym Servers** (Terminal 1)
 
    ```bash
-   cd Gym
+   cd Gym/
    source .venv/bin/activate
 
    config_paths="resources_servers/workplace_assistant/configs/workplace_assistant.yaml,\
@@ -200,8 +200,8 @@ The following steps run in 3 terminals. It can also be ran with processes in the
 1. **Start TRL vLLM Server on GPU 0** (Terminal 2)
 
    ```bash
-   cd trl
-
+   cd trl/
+   source .venv/bin/activate
    CUDA_VISIBLE_DEVICES=0 trl vllm-serve \
      --model Qwen/Qwen2.5-1.5B-Instruct \
      --max-model-len 16384 \
@@ -212,14 +212,10 @@ The following steps run in 3 terminals. It can also be ran with processes in the
 1. **Run Training on GPU 1** (Terminal 3)
 
    ```bash
-   cd trl/
-   source .venv/bin/activate
-
-   cd examples/scripts/nemo_gym
-
-   # if using wandb
-   export WANDB_API_KEY=...
-   uv pip install wandb
+   source trl/.venv/bin/activate
+   cd trl/examples/scripts/nemo_gym
+   export WANDB_API_KEY=... 
+   uv add omegaconf 
 
    CUDA_VISIBLE_DEVICES=1 python train_multi_environment.py --config config_workplace.yaml
    ```
