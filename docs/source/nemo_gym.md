@@ -122,47 +122,11 @@ NeMo Gym datasets are stored as JSONL. Each line contains a task with input mess
 }
 ```
 
-### Create Training Config
-
-Create a config file, `config_workplace.yaml`:
-
-```yaml
-model_name: "Qwen/Qwen2.5-1.5B-Instruct"
-
-dataset_path: "data/workplace_assistant/train.jsonl"
-eval_dataset_path: "data/workplace_assistant/validation.jsonl"
-
-task: 'workplace'               # used in wandb run name
-output_dir: "outputs/nemo_gym"
-report_to: "wandb"              # set to none if you don't have wandb set up.
-project_name: "trl-nemo-gym"
-
-learning_rate: 1.0e-5
-max_steps: 1000
-num_generations: 8
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 4
-max_completion_length: 16384
-
-temperature: 1.0
-top_p: 0.999
-
-save_steps: 10
-eval_strategy: "steps"
-eval_steps: 10
-```
-
 ## Interactive Training
 
 For development and testing on a single node.
 
 ### Set Up
-
-1. **Verify Prerequisites**
-
-   Confirm you have completed the [Before You Start](#before-you-start) section:
-   - Dataset prepared in `data/workplace_assistant/`
-   - Training config created (`config_workplace.yaml`)
 
 1. **Update Environment Config**
 
@@ -174,6 +138,10 @@ For development and testing on a single node.
    policy_model_name: Qwen/Qwen2.5-1.5B-Instruct
    hf_token: ...
    ```
+
+2. **Update Training Config**
+
+   Update `examples/scripts/nemo_gym/config.yaml` to point to the dataset generated above, and any other optional modifications.
 
 ###  Run Training
 
@@ -226,7 +194,7 @@ An example five-node training script is provided in `submit.sh`. Nodes one throu
 
 1. **Configure the Script**
 
-   Update `submit.sh` with your Slurm account, partition, path to Gym repository, and training config.
+   Update `submit.sh` with your Slurm account, partition, paths to your project directory, and updated training configs.
 
 1. **Submit the Job**
 
