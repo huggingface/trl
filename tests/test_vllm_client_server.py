@@ -197,7 +197,8 @@ class TestVLLMClientServer(TrlTestCase):
 
         assert len(data["choices"]) == 2
 
-        for choice in data["choices"]:
+        for i, choice in enumerate(data["choices"]):
+            assert choice["index"] == i, f"Expected choice at position {i} to have index {i}, got {choice['index']}"
             assert "message" in choice
             assert choice["message"]["role"] == "assistant"
 

@@ -31,7 +31,7 @@ mkdir -p ${LOG_DIR}
 echo "Starting ng_run and vLLM on ${VLLM_NODE}..."
 echo "Logs will be saved to: ${LOG_DIR}"
 
-# NOTE: If you have already set up your TRL venv, you can remove all of the pip installs and uv venv related commands below! 
+# NOTE: If you have already set up your TRL venv, you can remove all of the pip installs and uv venv related commands below!
 
 srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     --container-image="${CONTAINER_IMAGE}" \
@@ -92,7 +92,7 @@ srun --nodes=4 --ntasks=4 --nodelist="${TRAIN_NODES_LIST}" \
     export HOME=/path/to/user && \
     export HF_HOME=/path/to/user/hf_home && \
     cd /path/to/user/trl && \
-    source .venv/bin/activate && uv pip install accelerate deepseed wandb omegaconf && \
+    source .venv/bin/activate && uv pip install accelerate deepspeed wandb omegaconf && \
     cd examples/scripts/nemo_gym && \
     export WANDB_API_KEY=<your wandb api key> && \
     accelerate launch \

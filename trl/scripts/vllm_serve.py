@@ -466,7 +466,7 @@ def _replace_prefix_tokens(
     model output. A concrete example is inconsistent whitespace tokens around tool call special tokens.
 
     Based on NeMo RL's _replace_prefix_tokens:
-    https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
+    https://github.com/NVIDIA-NeMo/RL/blob/748b9caff4e6d672b8a98a10b6e612d028cfc96b/nemo_rl/models/generation/vllm/vllm_worker_async.py#L40
     """
     if not model_prefix_token_ids:
         return template_token_ids
@@ -1088,7 +1088,9 @@ def main(script_args: ScriptArguments):
 
         all_outputs = [connection.recv() for connection in connections]
         if has_prefix_token_ids:
-            all_outputs = [o for o in all_outputs if o]
+            all_outputs = [
+                output for output, prompt_chunk in zip(all_outputs, chunked_prompts, strict=True) if prompt_chunk
+            ]
         else:
             all_outputs = [
                 output for output, msg_chunk in zip(all_outputs, chunked_messages, strict=True) if msg_chunk
@@ -1116,7 +1118,8 @@ def main(script_args: ScriptArguments):
         total_input_tokens = 0
         total_output_tokens = 0
 
-        for idx, output in enumerate(all_outputs):
+        idx = 0
+        for output in all_outputs:
             total_input_tokens += len(output.prompt_token_ids)
 
             for gen_output in output.outputs:
@@ -1180,6 +1183,7 @@ def main(script_args: ScriptArguments):
                         "finish_reason": finish_reason,
                     }
                 )
+                idx += 1
 
         return {
             "id": completion_id,
