@@ -38,8 +38,6 @@ from trl import GRPOConfig, GRPOTrainer
 
 @dataclass
 class NeMoGymGRPOConfig(GRPOConfig):
-    """GRPOConfig subclass with NeMo Gym specific fields."""
-
     agent_servers: dict[str, str] | None = None
     request_timeout: float = 10800
 
