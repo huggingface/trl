@@ -30,12 +30,12 @@ class SDPOConfig(GRPOConfig):
     next-token predictions back into the policy.
 
     Parameters:
-        distillation_alpha (`float`, *optional*, defaults to `1.0`):
+        distillation_alpha (`float`, *optional*, defaults to `0.5`):
             Controls the KL divergence direction in self-distillation loss.
             - 0.0: Forward KL (teacher -> student)
-            - 0.5: Jensen-Shannon divergence
-            - 1.0: Reverse KL (student -> teacher, recommended by SDPO paper)
-        distillation_topk (`int` or `None`, *optional*, defaults to `20`):
+            - 0.5: Jensen-Shannon divergence (recommended by SDPO paper)
+            - 1.0: Reverse KL (student -> teacher)
+        distillation_topk (`int` or `None`, *optional*, defaults to `100`):
             Number of top tokens to consider for top-k distillation. If `None`, all tokens are considered. When
             `full_logit_distillation` is False, this parameter is used to compute top-k log probabilities.
         full_logit_distillation (`bool`, *optional*, defaults to `False`):
@@ -51,7 +51,7 @@ class SDPOConfig(GRPOConfig):
             Whether to skip reprompting when the model generates a correct response on its own. When True, the model
             uses its own successful response as a demonstration without additional prompting. When False, the model is
             always reprompted even on successful attempts.
-        ema_update_rate (`float`, *optional*, defaults to `0.01`):
+        ema_update_rate (`float`, *optional*, defaults to `0.05`):
             EMA update rate for the teacher model. The teacher model is updated as: teacher = ema_update_rate * student
             + (1 - ema_update_rate) * teacher. A higher value makes the teacher follow the student more closely.
         max_reprompt_len (`int`, *optional*, defaults to `10240`):
@@ -68,11 +68,11 @@ class SDPOConfig(GRPOConfig):
 
     # Self-distillation specific parameters
     distillation_alpha: float = field(
-        default=1.0,
-        metadata={"help": "KL divergence direction: 0.0=forward KL, 0.5=JSD, 1.0=reverse KL. Recommended: 1.0."},
+        default=0.5,
+        metadata={"help": "KL divergence direction: 0.0=forward KL, 0.5=JSD, 1.0=reverse KL."},
     )
     distillation_topk: int | None = field(
-        default=20,
+        default=100,
         metadata={"help": "Number of top tokens for top-k distillation. If None, uses all tokens."},
     )
     full_logit_distillation: bool = field(
@@ -92,7 +92,7 @@ class SDPOConfig(GRPOConfig):
         metadata={"help": "Skip reprompting when model generates correct response."},
     )
     ema_update_rate: float = field(
-        default=0.01,
+        default=0.05,
         metadata={"help": "EMA update rate for teacher model."},
     )
     max_reprompt_len: int = field(

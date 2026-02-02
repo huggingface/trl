@@ -15,6 +15,7 @@
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 
 from trl.trainer.grpo_trainer import GRPOTrainer
 
@@ -64,8 +65,8 @@ class SDPOTrainer(GRPOTrainer):
         model="Qwen/Qwen2.5-0.5B-Instruct",
         reward_funcs=accuracy_reward,
         train_dataset=dataset,
-        distillation_alpha=1.0,  # Reverse KL (recommended)
-        distillation_topk=20,
+        distillation_alpha=0.5,  # JSD (recommended)
+        distillation_topk=100,
         use_successful_as_teacher=True,
     )
     trainer.train()
@@ -120,10 +121,9 @@ class SDPOTrainer(GRPOTrainer):
         inputs: dict[str, Any],
     ) -> torch.Tensor:
         """
-        Compute the self-distillation loss.
+        Compute the self-distillation loss via separate forward passes for student and teacher logits.
 
-        This implements the self-distillation loss from the SDPO paper, which distills knowledge from the model's own
-        high-reward trajectories (acting as a teacher) back into the policy.
+        This implements the paper's generalized JSD divergence with optional top-K distillation.
 
         Args:
             model: The student model.
@@ -132,101 +132,173 @@ class SDPOTrainer(GRPOTrainer):
         Returns:
             The self-distillation loss tensor.
         """
-        # Get student log probabilities
-        student_log_probs = inputs.get("per_token_logps")
-        if student_log_probs is None:
-            # Compute student log probs if not provided
-            student_log_probs = self._get_per_token_logps(model, inputs)
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
+        response_mask = completion_mask
 
-        # Get teacher log probabilities
-        teacher_log_probs = inputs.get("teacher_per_token_logps")
-        if teacher_log_probs is None:
-            # Compute teacher log probs (using model conditioned on feedback/teacher demonstrations)
-            teacher_log_probs = self._get_teacher_log_probs(model, inputs)
+        # Build model inputs
+        model_inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "use_cache": False,
+        }
+        if "logits_to_keep" in self.model_kwarg_keys:
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
 
-        # Get response mask (valid tokens for loss computation)
-        response_mask = inputs.get("completion_mask", inputs.get("response_mask"))
-        if response_mask is None:
-            response_mask = torch.ones_like(student_log_probs, dtype=torch.bool)
+        # Student forward pass
+        student_logits = model(**model_inputs).logits
+        student_logits = student_logits[:, :-1, :]
+        student_logits = student_logits[:, -logits_to_keep:, :]
+        student_logits = student_logits / self.temperature
 
-        # Get old log probabilities for importance sampling
-        old_log_probs = inputs.get("old_per_token_logps")
+        # Teacher forward pass (no grad)
+        with torch.no_grad():
+            teacher_logits = model(**model_inputs).logits
+            teacher_logits = teacher_logits[:, :-1, :]
+            teacher_logits = teacher_logits[:, -logits_to_keep:, :]
+            teacher_logits = teacher_logits / self.temperature
 
-        # Get self-distillation mask (optional, for masking certain tokens)
-        self_distillation_mask = inputs.get("self_distillation_mask")
+        if self.args.full_logit_distillation:
+            # Full-vocabulary divergence: need full (B, T, V) log_softmax
+            student_log_probs = F.log_softmax(student_logits, dim=-1)
+            teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+            per_token_loss = self._compute_divergence(
+                student_log_probs, teacher_log_probs, self.args.distillation_alpha
+            )
+        elif self.args.distillation_topk is not None:
+            # Memory-efficient top-K: compute logsumexp (B, T, 1) and topk on raw logits
+            # to avoid materializing full (B, T, V) log_softmax tensors
+            student_logsumexp = torch.logsumexp(student_logits, dim=-1, keepdim=True)  # (B, T, 1)
+            topk_student_logits, topk_indices = torch.topk(
+                student_logits, k=self.args.distillation_topk, dim=-1
+            )  # (B, T, K)
+            topk_student_log_probs = topk_student_logits - student_logsumexp  # (B, T, K)
 
-        # Compute the loss
-        per_token_loss, metrics = self._compute_self_distillation_loss_core(
-            student_log_probs=student_log_probs,
-            teacher_log_probs=teacher_log_probs,
-            response_mask=response_mask,
-            old_log_probs=old_log_probs,
-            self_distillation_mask=self_distillation_mask,
-        )
+            teacher_logsumexp = torch.logsumexp(teacher_logits, dim=-1, keepdim=True)  # (B, T, 1)
+            topk_teacher_logits = torch.gather(teacher_logits, dim=-1, index=topk_indices)  # (B, T, K)
+            topk_teacher_log_probs = topk_teacher_logits - teacher_logsumexp  # (B, T, K)
 
-        # Aggregate loss
+            if self.args.distillation_add_tail:
+                topk_student_log_probs = self._add_tail(topk_student_log_probs)
+                topk_teacher_log_probs = self._add_tail(topk_teacher_log_probs)
+            else:
+                topk_student_log_probs = self._renorm_topk_log_probs(topk_student_log_probs)
+                topk_teacher_log_probs = self._renorm_topk_log_probs(topk_teacher_log_probs)
+
+            per_token_loss = self._compute_divergence(
+                topk_student_log_probs, topk_teacher_log_probs, self.args.distillation_alpha
+            )
+        else:
+            # Fallback: token-level reverse KL using only the chosen-token log probs
+            if self.args.distillation_alpha != 1.0:
+                raise ValueError(
+                    f"Only reverse KL (alpha=1.0) is supported for token-level distillation without top-K, "
+                    f"got alpha={self.args.distillation_alpha}"
+                )
+            # Gather log p(chosen token) without full log_softmax
+            student_logsumexp = torch.logsumexp(student_logits, dim=-1, keepdim=True)
+            teacher_logsumexp = torch.logsumexp(teacher_logits, dim=-1, keepdim=True)
+            idx = completion_ids.unsqueeze(-1)
+            student_per_token_logps = (torch.gather(student_logits, dim=-1, index=idx) - student_logsumexp).squeeze(-1)
+            teacher_per_token_logps = (torch.gather(teacher_logits, dim=-1, index=idx) - teacher_logsumexp).squeeze(-1)
+            per_token_loss = self._compute_token_level_distillation_loss(
+                student_per_token_logps, teacher_per_token_logps
+            )
+
+        # Apply importance sampling clipping if enabled
+        if self.args.distillation_is_clip is not None:
+            old_log_probs = inputs.get("old_per_token_logps")
+            if old_log_probs is not None:
+                # Compute per-token log probs for IS ratio without full log_softmax
+                with torch.no_grad():
+                    student_lse = torch.logsumexp(student_logits, dim=-1, keepdim=True)
+                    idx = completion_ids.unsqueeze(-1)
+                    student_per_token_logps = (torch.gather(student_logits, dim=-1, index=idx) - student_lse).squeeze(
+                        -1
+                    )
+                per_token_loss = self._apply_importance_sampling_clipping(
+                    per_token_loss, student_per_token_logps, old_log_probs, self.args.distillation_is_clip
+                )
+
+        # Mask and aggregate
+        per_token_loss = per_token_loss * response_mask
         loss = self._aggregate_loss(per_token_loss, response_mask)
 
         # Log metrics
         mode = "train" if model.training else "eval"
-        for key, value in metrics.items():
-            self._metrics[mode][f"sdpo/{key}"].append(self.accelerator.gather(value).mean().item())
+        mean_distill_loss = (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
+        self._metrics[mode]["sdpo/distillation_loss"].append(
+            self.accelerator.gather(mean_distill_loss).mean().item()
+        )
 
         return loss
 
-    def _compute_self_distillation_loss_core(
-        self,
+    @staticmethod
+    def _compute_divergence(
         student_log_probs: torch.Tensor,
         teacher_log_probs: torch.Tensor,
-        response_mask: torch.Tensor,
-        old_log_probs: torch.Tensor | None = None,
-        self_distillation_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        alpha: float,
+    ) -> torch.Tensor:
         """
-        Core implementation of the self-distillation loss computation.
+        Compute generalized divergence between student and teacher distributions.
 
         Args:
-            student_log_probs: Student model's log probabilities, shape (B, T).
-            teacher_log_probs: Teacher model's log probabilities, shape (B, T).
-            response_mask: Mask indicating valid tokens, shape (B, T).
-            old_log_probs: Old log probabilities for importance sampling, shape (B, T).
-            self_distillation_mask: Optional mask for self-distillation, shape (B,).
+            student_log_probs: Student log probabilities, shape (..., K).
+            teacher_log_probs: Teacher log probabilities, shape (..., K).
+            alpha: Interpolation parameter. 0=forward KL, 1=reverse KL, 0<alpha<1=JSD.
 
         Returns:
-            A tuple of (per_token_loss, metrics).
+            Per-token divergence, shape (...) with last dim summed out.
         """
-        metrics = {}
-
-        # Apply self-distillation mask if provided
-        loss_mask = response_mask
-        if self_distillation_mask is not None:
-            loss_mask = loss_mask * self_distillation_mask.unsqueeze(1)
-
-        if self.args.full_logit_distillation:
-            # Full logit distillation (not yet implemented - requires full logits)
-            # For now, fall back to token-level distillation
-            per_token_loss = self._compute_token_level_distillation_loss(student_log_probs, teacher_log_probs)
+        if alpha == 0.0:
+            # Forward KL: KL(teacher || student)
+            kl = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        elif alpha == 1.0:
+            # Reverse KL: KL(student || teacher)
+            kl = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
         else:
-            # Token-level distillation (only supports reverse KL, alpha=1.0)
-            if self.args.distillation_alpha != 1.0:
-                raise ValueError(
-                    f"Only reverse KL (alpha=1.0) is supported for non-full-logit distillation, "
-                    f"got alpha={self.args.distillation_alpha}"
-                )
-            per_token_loss = self._compute_token_level_distillation_loss(student_log_probs, teacher_log_probs)
-
-        # Apply importance sampling clipping if enabled
-        if self.args.distillation_is_clip is not None:
-            if old_log_probs is None:
-                raise ValueError("old_log_probs is required for distillation IS ratio.")
-            per_token_loss = self._apply_importance_sampling_clipping(
-                per_token_loss, student_log_probs, old_log_probs, self.args.distillation_is_clip
+            # Generalized JSD
+            alpha_t = torch.tensor(alpha, dtype=student_log_probs.dtype, device=student_log_probs.device)
+            mixture = torch.logsumexp(
+                torch.stack([student_log_probs + torch.log(1 - alpha_t), teacher_log_probs + torch.log(alpha_t)]),
+                dim=0,
             )
+            kl_teacher = F.kl_div(mixture, teacher_log_probs, reduction="none", log_target=True)
+            kl_student = F.kl_div(mixture, student_log_probs, reduction="none", log_target=True)
+            kl = torch.lerp(kl_student, kl_teacher, alpha)
+        return kl.sum(-1)
 
-        # Apply mask
-        per_token_loss = per_token_loss * loss_mask
+    @staticmethod
+    def _add_tail(log_probs: torch.Tensor) -> torch.Tensor:
+        """
+        Add a tail term representing the probability mass of non-top-K tokens.
 
-        return per_token_loss, metrics
+        Args:
+            log_probs: Top-K log probabilities, shape (..., K).
+
+        Returns:
+            Log probabilities with tail appended, shape (..., K+1).
+        """
+        log_s = torch.logsumexp(log_probs, dim=-1, keepdim=True)
+        log_s = torch.clamp(log_s, max=-1e-7)
+        tail_log = torch.log(-torch.expm1(log_s))
+        return torch.cat([log_probs, tail_log], dim=-1)
+
+    @staticmethod
+    def _renorm_topk_log_probs(log_probs: torch.Tensor) -> torch.Tensor:
+        """
+        Renormalize top-K log probabilities to sum to 1.
+
+        Args:
+            log_probs: Top-K log probabilities, shape (..., K).
+
+        Returns:
+            Renormalized log probabilities, shape (..., K).
+        """
+        return log_probs - torch.logsumexp(log_probs, dim=-1, keepdim=True)
 
     def _compute_token_level_distillation_loss(
         self,
@@ -260,14 +332,13 @@ class SDPOTrainer(GRPOTrainer):
 
         Args:
             per_token_loss: The per-token loss.
-            student_log_probs: Student model's log probabilities.
-            old_log_probs: Old log probabilities.
+            student_log_probs: Student model's per-token log probabilities.
+            old_log_probs: Old per-token log probabilities.
             clip_coeff: Clipping coefficient.
 
         Returns:
             The clipped per-token loss.
         """
-        # Compute negative approximate KL divergence
         negative_approx_kl = (student_log_probs - old_log_probs).detach()
         negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
         ratio = torch.exp(negative_approx_kl).clamp(max=clip_coeff)
@@ -289,57 +360,9 @@ class SDPOTrainer(GRPOTrainer):
         Returns:
             The aggregated loss.
         """
-        # Use the same aggregation as DAPO loss in GRPO
         num_items_in_batch = (
             self.current_train_batch_size if hasattr(self, "current_train_batch_size") else mask.sum().clamp(min=1.0)
         )
         normalizer = num_items_in_batch / self.accelerator.num_processes
         loss = (per_token_loss * mask).sum() / normalizer
         return loss
-
-    def _get_teacher_log_probs(
-        self,
-        model,
-        inputs: dict[str, Any],
-    ) -> torch.Tensor:
-        """
-        Get teacher model's log probabilities.
-
-        For now, we use the same model with teacher demonstrations (success rollouts or feedback-conditioned inputs).
-        In a full implementation, this would use a separate teacher model or EMA updated model.
-
-        Args:
-            model: The model.
-            inputs: The inputs dict.
-
-        Returns:
-            Teacher log probabilities.
-        """
-        # For a minimal implementation, we reuse the student model
-        # In a full implementation, this would:
-        # 1. Use successful rollouts as teacher demonstrations
-        # 2. Or condition the model on feedback/teacher demonstrations
-        # 3. Or use an EMA-updated teacher model
-
-        # For now, return the same as student (placeholder)
-        # TODO: Implement proper teacher model logic
-        return inputs.get("per_token_logps", torch.zeros(1))
-
-    def _get_per_token_logps(
-        self,
-        model,
-        inputs: dict[str, Any],
-    ) -> torch.Tensor:
-        """
-        Get per-token log probabilities.
-
-        Args:
-            model: The model.
-            inputs: The inputs dict.
-
-        Returns:
-            Per-token log probabilities.
-        """
-        # This is a placeholder - in practice, this would be computed during forward pass
-        # and stored in inputs["per_token_logps"]
-        return inputs.get("per_token_logps", torch.zeros(1))
