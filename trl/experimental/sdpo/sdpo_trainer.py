@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 from typing import Any
 
 import torch
 import torch.nn.functional as F
 
 from trl.trainer.grpo_trainer import GRPOTrainer
+from trl.trainer.utils import pad
 
 from .sdpo_config import SDPOConfig
 
@@ -84,9 +86,163 @@ class SDPOTrainer(GRPOTrainer):
 
         super().__init__(*args, **kwargs)
 
-        # SDPO-specific attributes
-        self.teacher_model = None
-        self.teacher_ema = self.args.ema_update_rate
+        # Stash for per-func rewards from _calculate_rewards
+        self._last_rewards_per_func = None
+
+    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
+        rewards_per_func = super()._calculate_rewards(inputs, prompts, completions, completion_ids_list)
+        self._last_rewards_per_func = rewards_per_func
+        return rewards_per_func
+
+    def _generate_and_score_completions(
+        self, inputs: list[dict[str, torch.Tensor | Any]]
+    ) -> dict[str, torch.Tensor | Any]:
+        # Stash prompts before super() consumes inputs
+        prompts = [x["prompt"] for x in inputs]
+
+        output = super()._generate_and_score_completions(inputs)
+
+        # Compute weighted rewards from stashed per-func rewards (globally gathered)
+        device = self.accelerator.device
+        rewards_per_func = self._last_rewards_per_func  # shape: (total_samples, num_funcs)
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+
+        # Build teacher inputs and add to output
+        self._build_teacher_inputs(output, prompts, rewards)
+
+        return output
+
+    def _build_teacher_inputs(
+        self,
+        output: dict[str, torch.Tensor | Any],
+        prompts: list,
+        rewards: torch.Tensor,
+    ):
+        """Build teacher-conditioned inputs by reprompting with successful demonstrations."""
+        device = self.accelerator.device
+        num_generations = self.num_generations
+        total_samples = rewards.shape[0]  # globally gathered count
+
+        completion_ids = output["completion_ids"]  # local process, padded (B_local, T_comp)
+
+        # Process slice for this process (same logic as parent)
+        num_local = len(prompts)  # prompts per process
+        process_start = self.accelerator.process_index * num_local
+        process_slice = slice(process_start, process_start + num_local)
+
+        # We need global completion_ids to decode demonstrations from other generations in the group.
+        # Gather completion_ids across processes.
+        all_completion_ids = self.accelerator.gather(completion_ids)  # (total_samples, T_comp)
+
+        threshold = self.args.success_reward_threshold
+        dont_reprompt_self = self.args.dont_reprompt_on_self_success
+
+        # Gather all prompts across processes to map global indices to prompt text
+        from accelerate.utils import gather_object
+
+        all_prompts = gather_object(prompts)  # list of all prompts across processes
+
+        # Build per-sample teacher messages
+        teacher_messages_list = []
+        self_distillation_mask = torch.ones(total_samples, device=device)
+
+        for i in range(total_samples):
+            group_idx = i // num_generations
+            group_start = group_idx * num_generations
+            group_end = group_start + num_generations
+
+            if self_distillation_mask[i].item() == 0.0:
+                # No successful demo found; use original prompt (loss will be masked)
+                original_prompt = all_prompts[group_idx]
+                teacher_messages_list.append(original_prompt)
+                continue
+
+            # Find successful demo
+            successful = []
+            for j in range(group_start, group_end):
+                if dont_reprompt_self and j == i:
+                    continue
+                if rewards[j].item() >= threshold:
+                    successful.append(j)
+
+            demo_idx = successful[0]
+            demo_ids = all_completion_ids[demo_idx]
+            demo_ids = demo_ids[demo_ids != self.processing_class.pad_token_id]
+            demo_text = self.processing_class.decode(demo_ids, skip_special_tokens=True)
+
+            if self.args.remove_thinking_from_demonstration:
+                demo_text = re.sub(r"<think>.*?</think>", "", demo_text, flags=re.DOTALL).strip()
+
+            original_prompt = all_prompts[group_idx]
+
+            # Format the solution text
+            solution_text = self.args.solution_template.format(successful_previous_attempt=demo_text)
+
+            # Build the reprompted message
+            # original_prompt is a list of message dicts (conversational format)
+            # Extract the text content from the last user message
+            if isinstance(original_prompt, list):
+                # Conversational format - extract text from last user message
+                prompt_text = ""
+                for msg in original_prompt:
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            prompt_text = " ".join(
+                                part.get("text", "") for part in content if part.get("type") == "text"
+                            )
+                        else:
+                            prompt_text = content
+
+                reprompted_text = self.args.reprompt_template.format(prompt=prompt_text, solution=solution_text)
+                # Build new conversational message
+                teacher_messages_list.append([{"role": "user", "content": reprompted_text}])
+            else:
+                reprompted_text = self.args.reprompt_template.format(prompt=original_prompt, solution=solution_text)
+                teacher_messages_list.append(reprompted_text)
+
+        # Tokenize teacher messages
+        teacher_prompt_ids_list = []
+        for msg in teacher_messages_list:
+            if isinstance(msg, list) and isinstance(msg[0], dict):
+                # Conversational format
+                tokenized = self.processing_class.apply_chat_template(
+                    msg, tokenize=True, add_generation_prompt=True, return_tensors="pt"
+                )
+                if isinstance(tokenized, dict):
+                    ids = tokenized["input_ids"].squeeze(0)
+                else:
+                    ids = tokenized.squeeze(0)
+                # Truncate to max_reprompt_len
+                if ids.shape[0] > self.args.max_reprompt_len:
+                    ids = ids[-self.args.max_reprompt_len :]
+                teacher_prompt_ids_list.append(ids)
+            else:
+                ids = self.processing_class.encode(msg, return_tensors="pt").squeeze(0)
+                if ids.shape[0] > self.args.max_reprompt_len:
+                    ids = ids[-self.args.max_reprompt_len :]
+                teacher_prompt_ids_list.append(ids)
+
+        # Pad teacher prompt ids (left-padded like student prompts)
+        teacher_prompt_ids = [ids.to(device) for ids in teacher_prompt_ids_list]
+        teacher_prompt_mask = [torch.ones(len(ids), dtype=torch.long, device=device) for ids in teacher_prompt_ids]
+        teacher_prompt_ids = pad(teacher_prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+        teacher_prompt_mask = pad(teacher_prompt_mask, padding_value=0, padding_side="left")
+
+        # Concatenate with completion_ids (global) to form teacher_input_ids
+        teacher_input_ids = torch.cat([teacher_prompt_ids, all_completion_ids], dim=1)
+        teacher_attention_mask = torch.cat(
+            [teacher_prompt_mask, (all_completion_ids != self.pad_token_id).long()], dim=1
+        )
+
+        # Slice to local process portion
+        teacher_input_ids = teacher_input_ids[process_slice]
+        teacher_attention_mask = teacher_attention_mask[process_slice]
+        self_distillation_mask = self_distillation_mask[process_slice]
+
+        output["teacher_input_ids"] = teacher_input_ids
+        output["teacher_attention_mask"] = teacher_attention_mask
+        output["self_distillation_mask"] = self_distillation_mask
 
     def _compute_loss(
         self,
@@ -123,40 +279,62 @@ class SDPOTrainer(GRPOTrainer):
         """
         Compute the self-distillation loss via separate forward passes for student and teacher logits.
 
-        This implements the paper's generalized JSD divergence with optional top-K distillation.
+        The teacher sees reprompted inputs containing a successful demonstration, making the same model a better
+        teacher through conditioning.
 
         Args:
             model: The student model.
-            inputs: The inputs dict containing prompts, completions, rewards, etc.
+            inputs: The inputs dict containing prompts, completions, teacher_input_ids, etc.
 
         Returns:
             The self-distillation loss tensor.
         """
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)
-        response_mask = completion_mask
 
-        # Build model inputs
-        model_inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+        # Apply self_distillation_mask to response_mask
+        self_distillation_mask = inputs.get("self_distillation_mask")
+        if self_distillation_mask is not None:
+            response_mask = completion_mask * self_distillation_mask.unsqueeze(1)
+        else:
+            response_mask = completion_mask
+
+        # If all masked out, return zero loss
+        if response_mask.sum() == 0:
+            mode = "train" if model.training else "eval"
+            self._metrics[mode]["sdpo/distillation_loss"].append(0.0)
+            return torch.tensor(0.0, device=completion_ids.device, requires_grad=True)
+
+        # Student forward pass: standard prompt + completion
+        student_input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        student_attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        student_model_inputs = {
+            "input_ids": student_input_ids,
+            "attention_mask": student_attention_mask,
             "use_cache": False,
         }
         if "logits_to_keep" in self.model_kwarg_keys:
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
+            student_model_inputs["logits_to_keep"] = logits_to_keep + 1
 
-        # Student forward pass
-        student_logits = model(**model_inputs).logits
+        student_logits = model(**student_model_inputs).logits
         student_logits = student_logits[:, :-1, :]
         student_logits = student_logits[:, -logits_to_keep:, :]
         student_logits = student_logits / self.temperature
 
-        # Teacher forward pass (no grad)
+        # Teacher forward pass: reprompted input + same completion
+        teacher_input_ids = inputs["teacher_input_ids"]
+        teacher_attention_mask = inputs["teacher_attention_mask"]
+        teacher_model_inputs = {
+            "input_ids": teacher_input_ids,
+            "attention_mask": teacher_attention_mask,
+            "use_cache": False,
+        }
+        if "logits_to_keep" in self.model_kwarg_keys:
+            teacher_model_inputs["logits_to_keep"] = logits_to_keep + 1
+
         with torch.no_grad():
-            teacher_logits = model(**model_inputs).logits
+            teacher_logits = model(**teacher_model_inputs).logits
             teacher_logits = teacher_logits[:, :-1, :]
             teacher_logits = teacher_logits[:, -logits_to_keep:, :]
             teacher_logits = teacher_logits / self.temperature
@@ -212,7 +390,6 @@ class SDPOTrainer(GRPOTrainer):
         if self.args.distillation_is_clip is not None:
             old_log_probs = inputs.get("old_per_token_logps")
             if old_log_probs is not None:
-                # Compute per-token log probs for IS ratio without full log_softmax
                 with torch.no_grad():
                     student_lse = torch.logsumexp(student_logits, dim=-1, keepdim=True)
                     idx = completion_ids.unsqueeze(-1)
@@ -230,9 +407,7 @@ class SDPOTrainer(GRPOTrainer):
         # Log metrics
         mode = "train" if model.training else "eval"
         mean_distill_loss = (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
-        self._metrics[mode]["sdpo/distillation_loss"].append(
-            self.accelerator.gather(mean_distill_loss).mean().item()
-        )
+        self._metrics[mode]["sdpo/distillation_loss"].append(self.accelerator.gather(mean_distill_loss).mean().item())
 
         return loss
 
@@ -254,13 +429,10 @@ class SDPOTrainer(GRPOTrainer):
             Per-token divergence, shape (...) with last dim summed out.
         """
         if alpha == 0.0:
-            # Forward KL: KL(teacher || student)
             kl = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
         elif alpha == 1.0:
-            # Reverse KL: KL(student || teacher)
             kl = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
         else:
-            # Generalized JSD
             alpha_t = torch.tensor(alpha, dtype=student_log_probs.dtype, device=student_log_probs.device)
             mixture = torch.logsumexp(
                 torch.stack([student_log_probs + torch.log(1 - alpha_t), teacher_log_probs + torch.log(alpha_t)]),
@@ -315,7 +487,6 @@ class SDPOTrainer(GRPOTrainer):
         Returns:
             The per-token loss.
         """
-        # Reverse KL: D_KL(teacher || student)
         log_ratio = student_log_probs - teacher_log_probs
         per_token_loss = log_ratio.detach() * student_log_probs
         return per_token_loss

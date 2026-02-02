@@ -107,3 +107,19 @@ class SDPOConfig(GRPOConfig):
         default=True,
         metadata={"help": "Use successful rollouts as implicit feedback for self-distillation."},
     )
+    success_reward_threshold: float = field(
+        default=1.0,
+        metadata={"help": "Minimum reward for a rollout to be considered a successful demonstration."},
+    )
+    reprompt_template: str = field(
+        default="{prompt}{solution}\n\nCorrectly solve the original question.\n",
+        metadata={"help": "Template for reprompting the teacher with a successful demonstration."},
+    )
+    solution_template: str = field(
+        default="\nCorrect solution:\n\n{successful_previous_attempt}\n\n",
+        metadata={"help": "Template for formatting the successful demonstration text."},
+    )
+    remove_thinking_from_demonstration: bool = field(
+        default=False,
+        metadata={"help": "Whether to remove <think>...</think> blocks from the demonstration text."},
+    )
