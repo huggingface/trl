@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
 import torch
-import torch.nn.functional as F
-from typing import Optional, Any, Tuple, Dict
 
 from trl.trainer.grpo_trainer import GRPOTrainer
+
 from .sdpo_config import SDPOConfig
 
 
@@ -24,8 +25,8 @@ class SDPOTrainer(GRPOTrainer):
     """
     Trainer for Self-Distillation Policy Optimization (SDPO).
 
-    SDPO augments on-policy optimization with self-distillation from the model's own high-reward trajectories.
-    It converts tokenized feedback into a dense learning signal without any external teacher or explicit reward model.
+    SDPO augments on-policy optimization with self-distillation from the model's own high-reward trajectories. It
+    converts tokenized feedback into a dense learning signal without any external teacher or explicit reward model.
     SDPO treats the current model conditioned on feedback as a self-teacher and distills its feedback-informed
     next-token predictions back into the policy.
 
@@ -41,7 +42,8 @@ class SDPOTrainer(GRPOTrainer):
         eval_dataset (`datasets.Dataset`, *optional*):
             The evaluation dataset. Each item should have a "prompt" column.
         processing_class (`transformers.PreTrainedTokenizer` or `transformers.PreTrainedProcessor`, *optional*):
-            The tokenizer or processor to use for preprocessing. If not provided, the one associated with the model is used.
+            The tokenizer or processor to use for preprocessing. If not provided, the one associated with the model is
+            used.
         peft_config (`dict`, *optional*):
             Configuration for Parameter-Efficient Fine-Tuning (PEFT).
         callbacks (`list[transformers.TrainerCallback]`, *optional*):
@@ -115,13 +117,13 @@ class SDPOTrainer(GRPOTrainer):
     def _compute_self_distillation_loss(
         self,
         model,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
     ) -> torch.Tensor:
         """
         Compute the self-distillation loss.
 
-        This implements the self-distillation loss from the SDPO paper, which distills knowledge from
-        the model's own high-reward trajectories (acting as a teacher) back into the policy.
+        This implements the self-distillation loss from the SDPO paper, which distills knowledge from the model's own
+        high-reward trajectories (acting as a teacher) back into the policy.
 
         Args:
             model: The student model.
@@ -177,9 +179,9 @@ class SDPOTrainer(GRPOTrainer):
         student_log_probs: torch.Tensor,
         teacher_log_probs: torch.Tensor,
         response_mask: torch.Tensor,
-        old_log_probs: Optional[torch.Tensor] = None,
-        self_distillation_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        old_log_probs: torch.Tensor | None = None,
+        self_distillation_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """
         Core implementation of the self-distillation loss computation.
 
@@ -203,9 +205,7 @@ class SDPOTrainer(GRPOTrainer):
         if self.args.full_logit_distillation:
             # Full logit distillation (not yet implemented - requires full logits)
             # For now, fall back to token-level distillation
-            per_token_loss = self._compute_token_level_distillation_loss(
-                student_log_probs, teacher_log_probs
-            )
+            per_token_loss = self._compute_token_level_distillation_loss(student_log_probs, teacher_log_probs)
         else:
             # Token-level distillation (only supports reverse KL, alpha=1.0)
             if self.args.distillation_alpha != 1.0:
@@ -213,9 +213,7 @@ class SDPOTrainer(GRPOTrainer):
                     f"Only reverse KL (alpha=1.0) is supported for non-full-logit distillation, "
                     f"got alpha={self.args.distillation_alpha}"
                 )
-            per_token_loss = self._compute_token_level_distillation_loss(
-                student_log_probs, teacher_log_probs
-            )
+            per_token_loss = self._compute_token_level_distillation_loss(student_log_probs, teacher_log_probs)
 
         # Apply importance sampling clipping if enabled
         if self.args.distillation_is_clip is not None:
@@ -292,7 +290,9 @@ class SDPOTrainer(GRPOTrainer):
             The aggregated loss.
         """
         # Use the same aggregation as DAPO loss in GRPO
-        num_items_in_batch = self.current_train_batch_size if hasattr(self, "current_train_batch_size") else mask.sum().clamp(min=1.0)
+        num_items_in_batch = (
+            self.current_train_batch_size if hasattr(self, "current_train_batch_size") else mask.sum().clamp(min=1.0)
+        )
         normalizer = num_items_in_batch / self.accelerator.num_processes
         loss = (per_token_loss * mask).sum() / normalizer
         return loss
@@ -300,7 +300,7 @@ class SDPOTrainer(GRPOTrainer):
     def _get_teacher_log_probs(
         self,
         model,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
     ) -> torch.Tensor:
         """
         Get teacher model's log probabilities.
@@ -328,7 +328,7 @@ class SDPOTrainer(GRPOTrainer):
     def _get_per_token_logps(
         self,
         model,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
     ) -> torch.Tensor:
         """
         Get per-token log probabilities.

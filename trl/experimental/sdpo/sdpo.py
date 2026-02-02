@@ -15,12 +15,13 @@
 """
 Example of using SDPOTrainer for training with self-distillation.
 
-This example demonstrates how to use SDPOTrainer to train a model using
-self-distillation from high-reward trajectories.
+This example demonstrates how to use SDPOTrainer to train a model using self-distillation from high-reward
+trajectories.
 """
 
 from datasets import load_dataset
-from trl.experimental.sdpo import SDPOTrainer, SDPOConfig
+
+from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
 
 # Define a simple reward function
@@ -49,12 +50,10 @@ def main():
         learning_rate=1e-6,
         bf16=True,  # Use bf16 if supported
         report_to="none",
-
         # Generation parameters
         max_completion_length=512,
         num_generations=8,
         temperature=1.0,
-
         # SDPO-specific parameters
         distillation_alpha=1.0,  # Reverse KL (recommended)
         distillation_topk=20,
@@ -66,7 +65,6 @@ def main():
         max_reprompt_len=10240,
         distillation_weight=1.0,
         use_successful_as_teacher=True,
-
         # GRPO parameters (inherited)
         beta=0.0,  # No reference model
         loss_type="dapo",
