@@ -53,16 +53,16 @@ def get_agent_servers(
         global_config_dict = OmegaConf.create(yaml.safe_load(global_config_yaml))
 
         agent_servers = {}
-        for project_name, project_config in global_config_dict.items():
-            if hasattr(project_config, "responses_api_agents"):
-                agents = project_config.responses_api_agents
+        for server_name, server_config in global_config_dict.items():
+            if hasattr(server_config, "responses_api_agents"):
+                agents = server_config.responses_api_agents
                 for agent_key in agents.keys():
                     agent_config = getattr(agents, agent_key)
                     if hasattr(agent_config, "host") and hasattr(agent_config, "port"):
                         agent_host = agent_config.host
                         if agent_host in ("127.0.0.1", "0.0.0.0", "localhost"):
                             agent_host = head_server_host
-                        agent_servers[project_name] = f"http://{agent_host}:{agent_config.port}"
+                        agent_servers[server_name] = f"http://{agent_host}:{agent_config.port}"
 
         if not agent_servers:
             raise ValueError("No agents found in global config")
