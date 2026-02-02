@@ -1127,7 +1127,7 @@ def main(script_args: ScriptArguments):
                 text = gen_output.text if hasattr(gen_output, "text") else ""
 
                 tool_calls = None
-                finish_reason = "stop"
+                finish_reason = gen_output.finish_reason if hasattr(gen_output, "finish_reason") else "stop"
 
                 # Manual XML-json tool call parsing
                 if request.tools and text:
