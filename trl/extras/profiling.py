@@ -168,8 +168,8 @@ def profiling_decorator(func: Callable) -> Callable:
     """
     Decorator to profile a function and log execution time using [`extras.profiling.profiling_context`].
 
-    This decorator works with methods that have access to a trainer instance (typically as `self`).
-    For non-Trainer objects that have an `accelerator` attribute, it will use that for logging configuration.
+    This decorator works with methods that have access to a trainer instance (typically as `self`). For non-Trainer
+    objects that have an `accelerator` attribute, it will use that for logging configuration.
 
     Args:
         func (`Callable`):
