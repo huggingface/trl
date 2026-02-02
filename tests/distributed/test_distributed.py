@@ -99,7 +99,7 @@ class TestDistributed(TrlTestCase):
         [
             "ddp",
             pytest.param("zero2", marks=pytest.mark.xfail(reason="ZeRO 2 is currently failing; see #4884")),
-            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing; see #4831")),
+            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing; see #4884")),
             "fsdp2",
         ],
     )
