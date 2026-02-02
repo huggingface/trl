@@ -14,6 +14,8 @@
 
 """vLLM-based generation backend for TRL trainers."""
 
+import asyncio
+import inspect
 import json
 import os
 from collections.abc import Callable
@@ -603,7 +605,13 @@ class VLLMGeneration:
                         apply_chat_template({"prompt": prompt}, processing_class, **chat_template_kwargs)["prompt"]
                         for prompt in rollout_prompts
                     ]
-                output = rollout_func(rollout_prompts)
+                # Support both sync and async rollout functions:
+                if inspect.iscoroutinefunction(rollout_func):
+                    # Handle async rollout_func
+                    output = asyncio.run(rollout_func(rollout_prompts))
+                else:
+                    # [Legacy] Handle sync rollout_func
+                    output = rollout_func(rollout_prompts)
                 required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                 extra_fields = {k: v for k, v in output.items() if k not in required_keys}
                 prompt_ids = output["prompt_ids"]

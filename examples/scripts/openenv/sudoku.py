@@ -454,7 +454,7 @@ def extract_feedback(observation) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def rollout_once(
+async def rollout_once(
     trainer: GRPOTrainer,
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
@@ -464,7 +464,7 @@ def rollout_once(
     difficulty: str = "hard",
     api_delay: float = 0.0,
 ) -> dict[str, list]:
-    result = env.reset()
+    result = await env.reset()
     time.sleep(api_delay)  # Avoid rate limiting
     observation = result.observation
 
@@ -546,7 +546,7 @@ def rollout_once(
             print(f"EXTRACTED MOVE: {move}")
 
         # Step environment
-        result = env.step(TextArenaAction(message=move))
+        result = await env.step(TextArenaAction(message=move))
         time.sleep(api_delay)  # Avoid rate limiting
         observation = result.observation
         correct_score = float(result.reward or 0.0)
@@ -768,7 +768,8 @@ def main() -> None:
     grpo_config.trackio_space_id = args.trackio_space_id
     grpo_config.gradient_checkpointing = args.gradient_checkpointing
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    async def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+        """Async rollout function - TRL handles the event loop automatically."""
         all_prompt_ids = []
         all_completion_ids = []
         all_logprobs = []
@@ -779,7 +780,7 @@ def main() -> None:
         all_progress = []
 
         for _ in prompts:
-            episode = rollout_once(
+            episode = await rollout_once(
                 trainer=trainer,
                 env=client,
                 tokenizer=trainer.processing_class,

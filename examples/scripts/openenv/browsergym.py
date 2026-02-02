@@ -339,7 +339,7 @@ def parse_action(response_text: str) -> str:
     return "noop()"
 
 
-def rollout_once(
+async def rollout_once(
     trainer: GRPOTrainer,
     env: BrowserGymEnv,
     tokenizer: AutoTokenizer,
@@ -349,7 +349,7 @@ def rollout_once(
     debug: bool = False,
 ) -> dict[str, list]:
     """Run one episode and collect training data."""
-    result = env.reset()
+    result = await env.reset()
     observation = result.observation
 
     prompt_ids: list[int] = []
@@ -415,7 +415,7 @@ def rollout_once(
             print(f"Step {step_num + 1}: {action_str}")
 
         # Take action in environment
-        result = env.step(BrowserGymAction(action_str=action_str))
+        result = await env.step(BrowserGymAction(action_str=action_str))
         observation = result.observation
 
         # Track rewards
@@ -500,7 +500,7 @@ def main() -> None:
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
-        vllm_gpu_memory_utilization=0.4,
+        vllm_gpu_memory_utilization=0.5,
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
@@ -525,7 +525,8 @@ def main() -> None:
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    async def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+        """Async rollout function - TRL handles the event loop automatically."""
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
@@ -536,7 +537,7 @@ def main() -> None:
 
         for i, prompt_text in enumerate(prompts):
             print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
-            episode = rollout_once(
+            episode = await rollout_once(
                 trainer=trainer,
                 env=client,
                 tokenizer=tokenizer,
