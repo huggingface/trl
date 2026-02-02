@@ -1100,10 +1100,12 @@ Self-Distillation Policy Optimization (SDPO) enhances reinforcement learning wit
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
 training_args = SDPOConfig(
-    distillation_alpha=1.0,          # Reverse KL (recommended by the paper)
+    distillation_alpha=0.5,          # Jensen-Shannon divergence (recommended)
+    distillation_topk=100,           # Top-K distillation
     distillation_is_clip=2.0,        # Importance sampling clipping
     distillation_weight=1.0,         # Weight for self-distillation loss
     use_successful_as_teacher=True,  # Use successful rollouts as teacher
+    ema_update_rate=0.05,            # Teacher EMA update rate
 )
 
 trainer = SDPOTrainer(
