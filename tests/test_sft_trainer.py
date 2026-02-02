@@ -1475,6 +1475,7 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=1,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )
