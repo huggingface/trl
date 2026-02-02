@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 
 import transformers
@@ -273,14 +274,24 @@ class GRPOConfig(TrainingArguments):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
 
-                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped from above at C.
-                - `"token_mask"`: Token-level masked IS. Per-token ratios above C are set to zero.
-                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
-                  C and applied to all tokens in the sequence.
-                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
-        vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
-            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
-            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
+                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped to
+                [C_min, C_max].
+                - `"token_mask"`: Token-level masked IS. Per-token ratios outside [C_min, C_max] are set to zero.
+                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped to
+                [C_min, C_max] and applied to all tokens in the sequence.
+                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios outside [C_min, C_max] are masked
+                out.
+                - "sequence_geometric_mean_mask": Sequence-level geometric mean masked IS. Sequences with geometric mean
+                of ratios outside [C_min, C_max] are masked out.
+
+        vllm_importance_sampling_max (`float`, *optional*, defaults to `3.0`):
+            Importance sampling upper bound C_max used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
+            importance ratios are clipped from above at C_max. For `*_mask` modes, ratios larger than C_max are set to
+            zero.
+        vllm_importance_sampling_min (`float`, *optional*, defaults to `0.0`):
+            Importance sampling lower bound C_min used by `vllm_importance_sampling_mode`. For `*_truncate` modes,
+            ratios are clipped from below at C_min. For `*_mask` modes, ratios below C_min are set to zero. To strictly
+            mask ratios below C_min without upper bound, set `vllm_importance_sampling_max` to `float('inf')`.
         off_policy_mask_threshold (`float`, *optional*):
             Threshold for off-policy sequence masking. If `None`, off-policy sequence masking is disabled. When set,
             sequences with negative advantages and high KL divergence are masked out to stabilize training. This
@@ -765,20 +776,40 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Specifies how Importance Sampling (IS) is performed when "
             "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
-            "dimensions: (1) constraint, which determines how to handle ratios above "
-            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
-            "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+            "dimensions: (1) constraint, which determines how to handle ratios outside the bounds "
+            "[C_min, C_max]—either truncation (clip to range, ρ ← clamp(ρ, C_min, C_max)) or "
+            "masking (set ratios above C_max or below C_min to zero); and (2) granularity, which determines whether "
             "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
-            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
-            "'sequence_mask'."
+            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask',"
+            "and 'sequence_geometric_mean_mask'."
         },
     )
 
-    vllm_importance_sampling_cap: float = field(
+    vllm_importance_sampling_cap: float | None = field(
+        default=None,
+        metadata={
+            "help": "Deprecated, use `vllm_importance_sampling_max` instead. "
+            "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+        },
+    )
+
+    vllm_importance_sampling_max: float = field(
         default=3.0,
         metadata={
-            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
-            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+            "help": "Importance sampling upper bound C_max used by `vllm_importance_sampling_mode`. For '*_truncate' "
+            "modes, ratios are clipped from above at C_max. For '*_mask' modes, ratios larger than C_max are set to "
+            "zero."
+        },
+    )
+
+    vllm_importance_sampling_min: float = field(
+        default=0.0,
+        metadata={
+            "help": "Importance sampling lower bound C_min used by `vllm_importance_sampling_mode`. For `*_truncate` "
+            "modes, ratios are clipped from below at C_min. For `*_mask` modes, ratios below C_min are set to "
+            "zero. To strictly mask ratios below C_min without upper bound, set `vllm_importance_sampling_max` to "
+            "`float('inf')`"
         },
     )
     off_policy_mask_threshold: float | None = field(
@@ -899,3 +930,12 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.vllm_importance_sampling_cap is not None:
+            warnings.warn(
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in version 0.28.0. You "
+                "should instead use `vllm_importance_sampling_max`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.vllm_importance_sampling_max = self.vllm_importance_sampling_cap

@@ -476,7 +476,8 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
-        self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
+        self.vllm_importance_sampling_max = args.vllm_importance_sampling_max
+        self.vllm_importance_sampling_min = args.vllm_importance_sampling_min
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
@@ -1622,9 +1623,7 @@ class GRPOTrainer(BaseTrainer):
             # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
             # distribution mismatch between vLLM and the training model can be large and harm the training.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0 or (
-                self.use_vllm and self.vllm_importance_sampling_correction
-            ):
+            if self.args.gradient_accumulation_steps % generate_every != 0 or (self.use_vllm):
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
@@ -1637,36 +1636,55 @@ class GRPOTrainer(BaseTrainer):
             else:
                 old_per_token_logps = None
 
-            # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
-            if self.use_vllm and self.vllm_importance_sampling_correction:
+            # Compute sampling mismatch metrics when using vLLM
+            # - sampling_mean_kl_div: sequence-level geometric mean KL, used by OPSM
+            # - vllm_importance_sampling_ratio: only when IS correction is enabled
+            if self.use_vllm:
                 mask = completion_mask if not self.tools else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
-                sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
-                if sequence_level_is:
-                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
-                    logps_diff = per_sequence_logps_diff
-                else:
-                    logps_diff = per_token_logps_diff
+                # Sequence-level geometric mean KL (for OPSM)
+                per_seq_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                sampling_mean_kl_div = per_seq_logps_diff / mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
 
-                vllm_importance_sampling_ratio = torch.exp(logps_diff)
+                # Importance sampling ratio - only when correction is enabled
+                if self.vllm_importance_sampling_correction:
+                    if self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]:
+                        logps_diff = per_seq_logps_diff
+                    elif self.vllm_importance_sampling_mode == "sequence_geometric_mean_mask":
+                        logps_diff = sampling_mean_kl_div
+                    else:
+                        logps_diff = per_token_logps_diff
 
-                # vllm_importance_sampling_ratio.shape:
-                #   token_* modes:     (B, T)  (per-token ratio)
-                #   sequence_* modes:  (B, 1)  (per-sequence ratio)
+                    vllm_importance_sampling_ratio = torch.exp(logps_diff)
 
-                if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
-                    vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
-                    )
-                elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
-                    vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
-                    )
-                else:
-                    raise ValueError(
-                        f"Unknown vLLM importance sampling level: {self.vllm_importance_sampling_mode}. Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', and 'sequence_mask'."
-                    )
+                    # vllm_importance_sampling_ratio.shape:
+                    #   token_* modes:     (B, T)  (per-token ratio)
+                    #   sequence_* modes:  (B, 1)  (per-sequence ratio)
+
+                    if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
+                        vllm_importance_sampling_ratio = torch.clamp(
+                            vllm_importance_sampling_ratio,
+                            min=self.vllm_importance_sampling_min,
+                            max=self.vllm_importance_sampling_max,
+                        )
+                    elif self.vllm_importance_sampling_mode in [
+                        "sequence_mask",
+                        "sequence_geometric_mean_mask",
+                        "token_mask",
+                    ]:
+                        invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
+                            vllm_importance_sampling_ratio > self.vllm_importance_sampling_max
+                        )
+                        vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
+                            invalid_mis_mask, value=0.0
+                        )
+                    else:
+                        raise ValueError(
+                            f"Unknown vLLM importance sampling mode: {self.vllm_importance_sampling_mode}. "
+                            "Possible values are 'token_truncate', 'token_mask', 'sequence_truncate', 'sequence_mask', "
+                            "'sequence_geometric_mean_mask'."
+                        )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1804,7 +1822,8 @@ class GRPOTrainer(BaseTrainer):
                 self.accelerator.gather(max_delta).max().item()
             )
 
-            if sequence_level_is:
+            # Sequence-level modes produce (B, 1) ratios; token-level modes produce (B, T) ratios
+            if vllm_importance_sampling_ratio.shape[-1] == 1:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:
                 flat_is_ratio = vllm_importance_sampling_ratio[mask]
@@ -1838,10 +1857,11 @@ class GRPOTrainer(BaseTrainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if self.use_vllm and self.vllm_importance_sampling_correction:
-            output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
-        if sampling_per_token_logps is not None:
-            output["sampling_per_token_logps"] = sampling_per_token_logps
+        if self.use_vllm:
+            if self.vllm_importance_sampling_correction:
+                output["importance_sampling_ratio"] = vllm_importance_sampling_ratio
+            if self.off_policy_mask_threshold is not None:
+                output["sampling_mean_kl_div"] = sampling_mean_kl_div
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in forward_kwargs:
@@ -1925,23 +1945,48 @@ class GRPOTrainer(BaseTrainer):
     def get_off_policy_mask(
         advantages: torch.Tensor,
         per_token_logps: torch.Tensor,
-        sampling_per_token_logps: torch.Tensor,
+        old_per_token_logps: torch.Tensor,
+        sampling_mean_kl_div: torch.Tensor,
         mask: torch.Tensor,
         off_policy_threshold: float,
     ) -> torch.Tensor:
         """
-        Computes the Off-Policy Sequence Mask from DeepSeek-V3.2 paper. Returns a (B, 1) tensor where 1.0 indicates
-        "Keep" and 0.0 indicates "Drop".
+        Computes the Off-Policy Sequence Mask (OPSM) from the DeepSeek-V3.2 paper.
+
+        OPSM detects and drops sequences that have drifted too far from the current policy,
+        which can destabilize training. Off-policyness arises from two sources:
+
+        1. **Staleness** (always present): Gradient updates between when a sequence was generated
+           and when it is used for training cause the policy to drift. Measured as forward KL divergence
+           between per_token_logps (current policy during loss computation) and
+           old_per_token_logps (policy at start of training step).
+
+        2. **Sampling mismatch**: When using vLLM for generation, the sampling
+           distribution can differ from the training model due to quantization, different
+           attention implementations, etc. Measured as KL divergence between the training model's
+           logprobs and vLLM's sampling logprobs, passed in as sampling_mean_kl_div. When not
+           using vLLM, this is zeros.
+
+        The total off-policy KL is the sum of both sources. A sequence is kept if either:
+        - It has non-negative advantage (we want to reinforce it regardless of drift), OR
+        - Its total KL divergence is within the threshold (it's still on-policy enough)
+
+        Returns:
+            Mask tensor of shape (B, 1) where 1.0 = keep, 0.0 = drop.
         """
-        # forward KL div: log(pi_old) - log(pi_theta)
-        kl_div = sampling_per_token_logps - per_token_logps.detach()
-        # Sequence-level Mean KL (ignoring prompt+padding)
-        seq_kl_sum = (kl_div * mask).sum(dim=1, keepdim=True)
-        avg_seq_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        # Keep if (Advantage >= 0) OR (KL <= delta)
+        # Staleness KL: how much the policy has drifted due to gradient updates
+        # Forward KL: log(pi_theta) - log(pi_old)
+        staleness_kl = per_token_logps - old_per_token_logps
+        seq_kl_sum = (staleness_kl * mask).sum(dim=1, keepdim=True)
+        staleness_mean_kl = seq_kl_sum / mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+
+        # Total off-policy KL combines staleness and sampling mismatch
+        total_mean_kl = staleness_mean_kl + sampling_mean_kl_div
+
+        # Keep if (Advantage >= 0) OR (KL <= threshold)
         is_pos_adv = advantages >= 0
-        is_low_kl = avg_seq_kl <= off_policy_threshold
-        return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
+        is_low_kl = -total_mean_kl <= off_policy_threshold
+        return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
@@ -1987,16 +2032,17 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         if self.off_policy_mask_threshold is not None:
-            # OPSM should use inference-time logprobs to detect both sources of off-policyness:
-            # 1. Drift from gradient updates (always present)
-            # 2. Drift from training-inference mismatch (when using vLLM)
-            # When using vLLM, prioritize sampling_per_token_logps, otherwise use old_per_token_logps
-            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+            sampling_mean_kl_div = inputs.get("sampling_mean_kl_div")
+            if sampling_mean_kl_div is None:
+                sampling_mean_kl_div = torch.zeros(
+                    (per_token_logps.size(0), 1), dtype=per_token_logps.dtype, device=per_token_logps.device
+                )
 
             off_policy_mask = self.get_off_policy_mask(
                 advantages=advantages,
                 per_token_logps=per_token_logps,
-                sampling_per_token_logps=sampling_per_token_logps,
+                old_per_token_logps=old_per_token_logps,
+                sampling_mean_kl_div=sampling_mean_kl_div,
                 mask=mask,
                 off_policy_threshold=self.off_policy_mask_threshold,
             )

@@ -878,8 +878,9 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
 
         advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
-        sampling_per_token_logps = torch.zeros((3, 4))
         per_token_logps = torch.zeros((3, 4))
+        old_per_token_logps = torch.zeros((3, 4))
+        sampling_mean_kl_div = torch.zeros((3, 1))
 
         per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
         per_token_logps[1, :] = -0.5  # Neg adv + Low KL (0.5) -> Keep
@@ -890,7 +891,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, old_per_token_logps, sampling_mean_kl_div, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -900,8 +901,9 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # 2 valid tokens
         advantages = torch.tensor([[-1.0]])  # Negative advantage
 
-        sampling_per_token_logps = torch.zeros((1, 4))
         per_token_logps = torch.zeros((1, 4))
+        old_per_token_logps = torch.zeros((1, 4))
+        sampling_mean_kl_div = torch.zeros((1, 1))
 
         # Valid tokens have High KL (2.0)
         per_token_logps[0, 0] = -2.0
@@ -917,7 +919,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, old_per_token_logps, sampling_mean_kl_div, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -929,7 +931,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask_keep = torch.tensor([[1.0]])
 
         off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, old_per_token_logps, sampling_mean_kl_div, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
@@ -1172,8 +1174,18 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
-    def test_training_vllm_importance_sampling_correction(self):
-        """Test that training works with vLLM for generation with structured outputs."""
+    @pytest.mark.parametrize(
+        "vllm_importance_sampling_min, vllm_importance_sampling_max",
+        [
+            (0.0, 3.0),  # only cap/max (current default)
+            (0.5, float("inf")),  # only min
+            (0.5, 5.0),  # both (IcePop)
+        ],
+    )
+    def test_training_vllm_importance_sampling_correction(
+        self, vllm_importance_sampling_min, vllm_importance_sampling_max
+    ):
+        """Test that training works with vLLM for generation with importance sampling correction."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1185,7 +1197,8 @@ class TestGRPOTrainer(TrlTestCase):
             report_to="none",
             use_vllm=True,
             vllm_importance_sampling_correction=True,
-            vllm_importance_sampling_cap=3.0,
+            vllm_importance_sampling_min=vllm_importance_sampling_min,
+            vllm_importance_sampling_max=vllm_importance_sampling_max,
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
