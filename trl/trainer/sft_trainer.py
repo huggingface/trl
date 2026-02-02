@@ -606,7 +606,7 @@ class SFTTrainer(BaseTrainer):
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            if not Version(transformers.__version__) < Version("5.0.0"):
+            if Version(transformers.__version__) < Version("5.0.0"):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
