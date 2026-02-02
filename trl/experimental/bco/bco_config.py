@@ -60,8 +60,8 @@ class BCOConfig(TrainingArguments):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model and
+            reference model from strings.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         prompt_sample_size (`int`, *optional*, defaults to `1024`):
