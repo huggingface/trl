@@ -14,7 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from .grpo_config import GRPOConfig
+from trl.trainer.grpo_config import GRPOConfig
 
 
 @dataclass

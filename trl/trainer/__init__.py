@@ -65,8 +65,6 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
-    "sdpo_config": ["SDPOConfig"],
-    "sdpo_trainer": ["SDPOTrainer"],
     "utils": [
         "RunningMoments",
         "disable_dropout_in_model",
@@ -128,8 +126,6 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
-    from .sdpo_config import SDPOConfig
-    from .sdpo_trainer import SDPOTrainer
     from .utils import (
         RunningMoments,
         disable_dropout_in_model,

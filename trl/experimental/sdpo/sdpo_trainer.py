@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from typing import Optional, Any, Tuple, Dict
 
-from .grpo_trainer import GRPOTrainer
+from trl.trainer.grpo_trainer import GRPOTrainer
 from .sdpo_config import SDPOConfig
 
 

@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from trl import SDPOConfig, SDPOTrainer
+from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
 
 def test_sdpo_config_defaults():
@@ -97,7 +97,7 @@ def test_sdpo_config_alpha_validation():
 
 def test_sdpo_trainer_import():
     """Test that SDPOTrainer can be imported from trl."""
-    from trl import SDPOTrainer
+    from trl.experimental.sdpo import SDPOTrainer
 
     assert SDPOTrainer is not None
     assert hasattr(SDPOTrainer, "__init__")
@@ -106,7 +106,7 @@ def test_sdpo_trainer_import():
 
 def test_sdpo_config_import():
     """Test that SDPOConfig can be imported from trl."""
-    from trl import SDPOConfig
+    from trl.experimental.sdpo import SDPOConfig
 
     assert SDPOConfig is not None
     assert SDPOConfig.distillation_alpha == 1.0
@@ -114,21 +114,23 @@ def test_sdpo_config_import():
 
 def test_sdpo_trainer_is_subclass_of_grpo():
     """Test that SDPOTrainer is a subclass of GRPOTrainer."""
-    from trl import SDPOTrainer, GRPOTrainer
+    from trl.experimental.sdpo import SDPOTrainer
+    from trl import GRPOTrainer
 
     assert issubclass(SDPOTrainer, GRPOTrainer)
 
 
 def test_sdpo_config_is_subclass_of_grpo_config():
     """Test that SDPOConfig is a subclass of GRPOConfig."""
-    from trl import SDPOConfig, GRPOConfig
+    from trl.experimental.sdpo import SDPOConfig
+    from trl import GRPOConfig
 
     assert issubclass(SDPOConfig, GRPOConfig)
 
 
 def test_sdpo_trainer_inheritance():
     """Test that SDPOTrainer inherits methods from GRPOTrainer."""
-    from trl import SDPOTrainer
+    from trl.experimental.sdpo import SDPOTrainer
 
     # Check that GRPOTrainer methods are available
     assert hasattr(SDPOTrainer, "_compute_loss")
@@ -138,7 +140,7 @@ def test_sdpo_trainer_inheritance():
 
 def test_sdpo_trainer_custom_methods():
     """Test that SDPOTrainer has its custom methods."""
-    from trl import SDPOTrainer
+    from trl.experimental.sdpo import SDPOTrainer
 
     # Check that SDPO-specific methods are available
     assert hasattr(SDPOTrainer, "_compute_self_distillation_loss")
@@ -151,7 +153,7 @@ def test_sdpo_trainer_custom_methods():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_sdpo_trainer_instantiation():
     """Test that SDPOTrainer can be instantiated (minimal test)."""
-    from trl import SDPOTrainer, SDPOConfig
+    from trl.experimental.sdpo import SDPOTrainer, SDPOConfig
     from datasets import Dataset
 
     # Create a minimal dataset
