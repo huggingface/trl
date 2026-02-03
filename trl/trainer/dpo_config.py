@@ -181,6 +181,11 @@ class DPOConfig(TrainingArguments):
             PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave `ref_model` as
             `None`, the trainer will automatically make a copy of the adapter to use as the reference model. For
             training, load a single adapter only, and it must be named `'default'`; do not load it under a custom name.
+        ref_adapter_name (`str`, *optional*):
+            This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a pretrained
+            PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave `ref_model` as
+            `None`, the trainer will automatically make a copy of the adapter to use as the reference model. For
+            training, load a single adapter only, and it must be named `'default'`; do not load it under a custom name.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
