@@ -1464,11 +1464,13 @@ class GRPOTrainer(BaseTrainer):
                 tool_failure_count,
             ) = self._tool_call_loop(prompts, prompt_ids, completion_ids, completions, logprobs)
         else:
-            tool_mask = None
+            # Support custom env_mask from rollout_func (e.g., for environment feedback masking)
+            # Internally treated as tool_mask - marks model tokens (1) vs external tokens (0)
+            tool_mask = extra_fields.pop("env_mask", None)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
-        if tool_mask is not None:  # count only non-tool tokens (tool_mask=1)
+        if tool_mask is not None:  # count only model-generated tokens (tool_mask=1)
             completion_lengths = torch.tensor([sum(mask) for mask in tool_mask], device=device)
         else:
             completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
@@ -1570,9 +1572,11 @@ class GRPOTrainer(BaseTrainer):
             sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
         else:
             sampling_per_token_logps = None
-        if self.tools:
+        if tool_mask_list is not None:
             tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
-            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")  # 0 for tool result tokens, 1 elsewhere
+            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")
+        else:
+            tool_mask = None
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1639,7 +1643,7 @@ class GRPOTrainer(BaseTrainer):
 
             # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
             if self.use_vllm and self.vllm_importance_sampling_correction:
-                mask = completion_mask if not self.tools else completion_mask * tool_mask
+                mask = completion_mask if tool_mask is None else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
@@ -1793,7 +1797,7 @@ class GRPOTrainer(BaseTrainer):
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
-            mask = completion_mask.bool() if not self.tools else (completion_mask * tool_mask).bool()
+            mask = completion_mask.bool() if tool_mask is None else (completion_mask * tool_mask).bool()
             delta = delta[mask]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
             max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
@@ -1856,7 +1860,7 @@ class GRPOTrainer(BaseTrainer):
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
-        if self.tools:
+        if tool_mask is not None:
             output["tool_mask"] = tool_mask
         return output
 
@@ -1950,7 +1954,7 @@ class GRPOTrainer(BaseTrainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        mask = completion_mask if not self.tools else completion_mask * inputs["tool_mask"]
+        mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
