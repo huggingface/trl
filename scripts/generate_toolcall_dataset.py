@@ -160,7 +160,7 @@ def main(test_size, push_to_hub, repo_id):
     get_wind_conditions = get_json_schema(get_wind_conditions)
 
     # fmt: off
-    toolcall_messages_dataset = Dataset.from_dict({
+    language_modeling_dataset = Dataset.from_dict({
         "messages": [
             [
                 {"role": "user", "content": "Set a timer for 10 minutes."},
@@ -222,11 +222,11 @@ def main(test_size, push_to_hub, repo_id):
             [get_weather_forecast, get_wind_conditions],
         ]
     })
-    toolcall_messages_dataset = toolcall_messages_dataset.train_test_split(test_size=test_size, shuffle=False)
+    language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
-        toolcall_messages_dataset.push_to_hub(repo_id, config_name="messages")
+        language_modeling_dataset.push_to_hub(repo_id, config_name="messages")
 
-    toolcall_preference_dataset = Dataset.from_dict({
+    preference_dataset = Dataset.from_dict({
         "prompt": [
             [{"role": "user", "content": "Set a timer for 10 minutes."}],
             [{"role": "user", "content": "What time is it in Tokyo?"}],
@@ -328,9 +328,9 @@ def main(test_size, push_to_hub, repo_id):
             [get_wind_conditions],
         ],
     })
-    toolcall_preference_dataset = toolcall_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
+    preference_dataset = preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
-        toolcall_preference_dataset.push_to_hub(repo_id, config_name="preference")
+        preference_dataset.push_to_hub(repo_id, config_name="preference")
     # fmt: on
 
 
