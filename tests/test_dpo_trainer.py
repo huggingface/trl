@@ -18,7 +18,7 @@ import transformers
 from datasets import load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
@@ -46,8 +46,7 @@ class TestDataCollatorForPreference(TrlTestCase):
             {"prompt_ids": [1, 2, 3], "chosen_ids": [4, 5], "rejected_ids": [6]},
             {"prompt_ids": [7, 8], "chosen_ids": [9, 10], "rejected_ids": [11, 12, 13]},
         ]
-
-        output = collator(examples)
+        result = collator(examples)
 
         expected_input_ids = torch.tensor(
             [
@@ -74,9 +73,10 @@ class TestDataCollatorForPreference(TrlTestCase):
             ]
         )
 
-        assert torch.equal(output["input_ids"], expected_input_ids)
-        assert torch.equal(output["attention_mask"], expected_attention_mask)
-        assert torch.equal(output["completion_mask"], expected_completion_mask)
+        assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
+        torch.testing.assert_close(result["input_ids"], expected_input_ids)
+        torch.testing.assert_close(result["attention_mask"], expected_attention_mask)
+        torch.testing.assert_close(result["completion_mask"], expected_completion_mask)
 
     def test_optional_reference_logps(self):
         collator = DataCollatorForPreference(pad_token_id=0)
@@ -96,14 +96,20 @@ class TestDataCollatorForPreference(TrlTestCase):
                 "ref_rejected_logps": 0.4,
             },
         ]
-
-        output = collator(examples)
+        result = collator(examples)
 
         expected_ref_chosen_logps = torch.tensor([0.1, 0.3])
         expected_ref_rejected_logps = torch.tensor([0.2, 0.4])
 
-        assert torch.equal(output["ref_chosen_logps"], expected_ref_chosen_logps)
-        assert torch.equal(output["ref_rejected_logps"], expected_ref_rejected_logps)
+        assert set(result.keys()) == {
+            "input_ids",
+            "attention_mask",
+            "completion_mask",
+            "ref_chosen_logps",
+            "ref_rejected_logps",
+        }
+        torch.testing.assert_close(result["ref_chosen_logps"], expected_ref_chosen_logps)
+        torch.testing.assert_close(result["ref_rejected_logps"], expected_ref_rejected_logps)
 
     def test_with_pad_to_multiple_of(self):
         collator = DataCollatorForPreference(pad_token_id=0, pad_to_multiple_of=5)
@@ -111,8 +117,7 @@ class TestDataCollatorForPreference(TrlTestCase):
             {"prompt_ids": [1], "chosen_ids": [2], "rejected_ids": [3]},
             {"prompt_ids": [4, 5], "chosen_ids": [6, 7], "rejected_ids": [8, 9]},
         ]
-
-        output = collator(examples)
+        result = collator(examples)
 
         expected_input_ids = torch.tensor(
             [
@@ -123,7 +128,8 @@ class TestDataCollatorForPreference(TrlTestCase):
             ]
         )
 
-        assert torch.equal(output["input_ids"], expected_input_ids)
+        assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
+        torch.testing.assert_close(result["input_ids"], expected_input_ids)
 
 
 class TestDPOTrainer(TrlTestCase):
@@ -192,7 +198,10 @@ class TestDPOTrainer(TrlTestCase):
 
     def test_train_model(self):
         # Instantiate the model
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            dtype="float32",
+        )
 
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -245,9 +254,9 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             loss_type=loss_type,
             label_smoothing=1e-3 if loss_type == "exo_pair" else 0.0,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
             eval_strategy="steps",
             eval_steps=3,
@@ -482,7 +491,7 @@ class TestDPOTrainer(TrlTestCase):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             model_init_kwargs={"dtype": torch.float16},
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = DPOTrainer(
@@ -513,7 +522,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_dense_with_peft_config_lora(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -554,7 +563,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_moe_with_peft_config(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -595,7 +604,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_peft_model(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -632,14 +641,14 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    # In practice, this test is the same as `test_train_dense_with_peft_config`, since gradient checkpointing is
-    # enabled by default in `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still
+    # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
+    # enabled by default in `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still
     # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         # Get the dataset
@@ -769,6 +778,38 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    def test_train_with_chat_template_kwargs(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "preference", split="train")
+
+        # Initialize the trainer
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        # The following template is a simplified version of the Qwen chat template, where an additional argument
+        # `role_capital` is used to control the capitalization of roles.
+        tokenizer.chat_template = '{%- if messages[0]["role"] == "system" -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\n" + messages[0]["content"] + "<|im_end|>\\n" }}{%- else -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\\n" }}{%- endif -%}{%- for message in messages -%}    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) -%}        {{ "<|im_start|>" + (message.role.upper() if role_capital else message.role) + "\\n" + message.content + "<|im_end|>\\n" }}    {%- elif message.role == "assistant" -%}        {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") }}        {%- if message.content -%}            {{ "\\n" + message.content }}        {%- endif -%}        {{ "<|im_end|>\\n" }}    {%- elif message.role == "tool" -%}        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") -%}            {{ "<|im_start|>" + ("USER" if role_capital else "user") }}        {%- endif -%}        {{ "\\n<tool_response>\\n" + message.content + "\\n</tool_response>" }}        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") -%}            {{ "<|im_end|>\\n" }}        {%- endif -%}    {%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}    {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") + "\\n" }}{%- endif -%}'
+
+        dataset.add_column("chat_template_kwargs", [{"role_capital": bool(i % 2)} for i in range(len(dataset))])
+
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
     def test_train_toolcall_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
@@ -864,7 +905,7 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
-    # `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
+    # `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
         # Get the dataset
@@ -927,8 +968,8 @@ class TestDPOTrainer(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  # high memory peak, skipped for now
-            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  # high memory peak, skipped for now
+            # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
+            # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
@@ -1045,10 +1086,9 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            gradient_checkpointing=True,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )
