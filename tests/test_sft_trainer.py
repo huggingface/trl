@@ -1252,7 +1252,7 @@ class TestSFTTrainer(TrlTestCase):
         # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
+        # Check that the custom metric is logged
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
