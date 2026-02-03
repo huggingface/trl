@@ -664,7 +664,7 @@ class TestRewardTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -674,7 +674,7 @@ class TestRewardTrainer(TrlTestCase):
         # Train the model
         trainer.train()
 
-        # Check that the training loss is not None
+        # Check that the custom metric is logged
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
