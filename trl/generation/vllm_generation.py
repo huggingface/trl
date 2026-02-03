@@ -549,7 +549,11 @@ class VLLMGeneration:
                                 apply_chat_template({"prompt": p}, processing_class, **chat_template_kwargs)["prompt"]
                                 for p in rollout_prompts
                             ]
-                        output = rollout_func(rollout_prompts)
+                        # Support both sync and async rollout functions:
+                        if inspect.iscoroutinefunction(rollout_func):
+                            output = asyncio.run(rollout_func(rollout_prompts))
+                        else:
+                            output = rollout_func(rollout_prompts)
                     else:
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                             output = self.vllm_client.chat(
