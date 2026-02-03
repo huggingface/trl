@@ -33,7 +33,13 @@ from trl.experimental.ppo import (
     PPOConfig,
     PPOTrainer,
 )
-from trl.experimental.ppo.ppo_trainer import batch_generation, masked_mean, masked_var, masked_whiten
+from trl.experimental.ppo.ppo_trainer import (
+    PolicyAndValueWrapper,
+    batch_generation,
+    masked_mean,
+    masked_var,
+    masked_whiten,
+)
 
 from ..testing_utils import (
     TrlTestCase,
@@ -824,3 +830,36 @@ class TestPPOTrainer(TrlTestCase):
 
         assert critic_weights_updated, "Critic weights were not updated during training"
         assert policy_weights_updated, "Policy LoRA weights were not updated during training"
+
+
+class TestPolicyAndValueWrapper(TrlTestCase):
+    def setup_method(self):
+        policy_model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.policy = AutoModelForCausalLM.from_pretrained(policy_model_id)
+
+        value_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        self.value_model = AutoModelForSequenceClassification.from_pretrained(value_model_id, num_labels=1)
+
+        self.wrapper = PolicyAndValueWrapper(self.policy, self.value_model)
+
+    def teardown_method(self):
+        gc.collect()
+
+    def test_gradient_checkpointing_enable(self):
+        self.wrapper.gradient_checkpointing_enable()
+        assert self.wrapper.is_gradient_checkpointing is True
+        assert self.policy.is_gradient_checkpointing is True
+
+    def test_gradient_checkpointing_disable(self):
+        self.wrapper.gradient_checkpointing_disable()
+        assert self.wrapper.is_gradient_checkpointing is False
+        assert self.policy.is_gradient_checkpointing is False
+
+    def test_gradient_checkpointing_toggle(self):
+        self.wrapper.gradient_checkpointing_disable()
+        assert self.wrapper.is_gradient_checkpointing is False
+        assert self.policy.is_gradient_checkpointing is False
+
+        self.wrapper.gradient_checkpointing_enable()
+        assert self.wrapper.is_gradient_checkpointing is True
+        assert self.policy.is_gradient_checkpointing is True

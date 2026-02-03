@@ -287,6 +287,14 @@ class PolicyAndValueWrapper(nn.Module):
         logits = self.value_model.score(output.hidden_states[-1])
         return self.policy(**kwargs), logits
 
+    def gradient_checkpointing_enable(self):
+        self.is_gradient_checkpointing = True
+        self.policy.gradient_checkpointing_enable()
+
+    def gradient_checkpointing_disable(self):
+        self.is_gradient_checkpointing = False
+        self.policy.gradient_checkpointing_disable()
+
 
 class PPOTrainer(BaseTrainer):
     """Trainer for Proximal Policy Optimization (PPO).
