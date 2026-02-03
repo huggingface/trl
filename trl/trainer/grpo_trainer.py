@@ -654,7 +654,7 @@ class GRPOTrainer(BaseTrainer):
                     async def rollout_func(prompts):
                         return await self.rollout_func(prompts, self)
                 else:
-                    # [Legacy] Wrap sync function to pass trainer context
+                    # Wrap sync function to pass trainer context
                     def rollout_func(prompts):
                         return self.rollout_func(prompts, self)
 

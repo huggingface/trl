@@ -610,7 +610,7 @@ class VLLMGeneration:
                     # Handle async rollout_func
                     output = asyncio.run(rollout_func(rollout_prompts))
                 else:
-                    # [Legacy] Handle sync rollout_func
+                    # Handle sync rollout_func
                     output = rollout_func(rollout_prompts)
                 required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                 extra_fields = {k: v for k, v in output.items() if k not in required_keys}
