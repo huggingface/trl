@@ -299,7 +299,7 @@ class CPOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
+        self.pad_token_id = processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
@@ -768,7 +768,7 @@ class CPOTrainer(BaseTrainer):
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
-            padding_value=self.padding_value,
+            padding_value=self.pad_token_id,
             device=self.accelerator.device,
         )
         len_chosen = batch["chosen_labels"].shape[0]
