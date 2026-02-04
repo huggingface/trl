@@ -1556,7 +1556,13 @@ class GRPOTrainer(BaseTrainer):
         prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
         prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
-        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+
+        # Allow custom completion_mask from rollout_func for multi-turn training
+        if "completion_mask" in extra_fields:
+            completion_mask_list = extra_fields.pop("completion_mask")
+            completion_mask = [torch.tensor(m, device=device, dtype=torch.long) for m in completion_mask_list]
+        else:
+            completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
         if sampling_per_token_logps_list is not None:
@@ -1578,7 +1584,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+
+        # attend to all non-padding tokens, but mask out user/tool result tokens in loss
+        completion_attention_mask = (completion_ids != self.pad_token_id).long()
+        attention_mask = torch.cat([prompt_mask, completion_attention_mask], dim=1)  # (B, P+C)
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
@@ -1799,7 +1808,6 @@ class GRPOTrainer(BaseTrainer):
             self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
                 self.accelerator.gather(max_delta).max().item()
             )
-
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:
