@@ -23,7 +23,7 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
 from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
@@ -264,6 +264,11 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 
 class TestSFTTrainer(TrlTestCase):
+    def test_init_with_training_arguments(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -1222,6 +1227,34 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+    def test_train_with_compute_metrics(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        def dummy_compute_metrics(eval_pred):
+            return {"my_metric": 0.123}
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            eval_strategy="steps",
+            eval_steps=3,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=dummy_compute_metrics,
+        )
+
+        # Train the model
+        trainer.train()
+
+        # Check that the custom metric is logged
+        assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
+
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
@@ -1311,7 +1344,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
@@ -1365,7 +1398,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1405,7 +1438,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1441,7 +1474,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             per_device_train_batch_size=1,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
