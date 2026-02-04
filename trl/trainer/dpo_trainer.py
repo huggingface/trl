@@ -1177,7 +1177,7 @@ class DPOTrainer(BaseTrainer):
             rejected_scores = rejected_logratios - torch.log1p(torch.exp(rejected_logratios))
         elif self.f_divergence_type == "alpha_divergence":
             # alpha-divergence: f'(t) = (t^(α-1) - 1)/(α-1)
-            if abs(self.f_alpha_divergence_coef - 1.0) < 1e-6:
+            if abs(self.f_alpha_divergence_coef - 1.0) < 1e-6:  # limit case f'(t) -> log(t), fall back to reverse_kl
                 chosen_scores = chosen_logratios
                 rejected_scores = rejected_logratios
             else:

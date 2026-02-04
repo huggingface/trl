@@ -389,7 +389,6 @@ class TestDPOTrainer(TrlTestCase):
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
             f_divergence_type=f_divergence_type,
-            f_alpha_divergence_coef=0.5,
         )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",

@@ -122,7 +122,7 @@ class DPOConfig(TrainingArguments):
         f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
             f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: `reverse_kl`
             (default), `forward_kl`, `js_divergence`, `alpha_divergence`.
-        f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
+        f_alpha_divergence_coef (`float`, *optional*, defaults to `0.5`):
             α coefficient for the α-divergence u^-α regularizer, used only when `f_divergence_type='alpha_divergence'`.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
             Label smoothing parameter used in Robust DPO and EXO. In Robust DPO, it is interpreted as the probability
@@ -332,7 +332,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     f_alpha_divergence_coef: float = field(
-        default=1.0,
+        default=0.5,
         metadata={
             "help": "α coefficient for the α-divergence u^-α regularizer, used only when "
             "`f_divergence_type='alpha_divergence'`."
