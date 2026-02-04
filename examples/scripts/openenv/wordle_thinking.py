@@ -41,6 +41,18 @@ Terminal 2 (Training on GPU 1):
         --learning-rate 1e-6 \
         --warmup-steps 10 \
         --max-new-tokens 8192
+
+    CUDA_VISIBLE_DEVICES=1,2 accelerate launch
+        --config_file examples/accelerate_configs/fsdp2_sharding_2gpu.yaml \
+        examples/scripts/openenv/wordle_thinking.py \
+        --env-url https://sergiopaniego-wordle-test.hf.space \
+        --vllm-mode server \
+        --vllm-server-url http://localhost:8000 \
+        --gradient-accumulation-steps 2 \
+        --learning-rate 1e-6 \
+        --warmup-steps 10 \
+        --max-new-tokens 8192
+
 """
 
 from __future__ import annotations
@@ -350,7 +362,7 @@ def make_user_prompt(messages: Iterable[TextArenaMessage]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def rollout_once(
+async def rollout_once(
     trainer: GRPOTrainer,
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
@@ -358,7 +370,7 @@ def rollout_once(
     max_turns: int,
     max_new_tokens: int = 512,
 ) -> dict[str, list]:
-    result = env.reset()
+    result = await env.reset()
     observation = result.observation
 
     prompt_ids: list[int] = []
@@ -464,7 +476,7 @@ def rollout_once(
         repeat_info = f", REPEAT x{prev_count + 1}" if prev_count > 0 else ""
         print(f"  [Turn {_turn + 1}] Generated {len(rollout_outputs['completion_ids'])} tokens, <think>={has_think_open}, </think>={has_think_close}, guess={guess}{repeat_info}")
 
-        result = env.step(TextArenaAction(message=guess))
+        result = await env.step(TextArenaAction(message=guess))
         raw_rewards.append(float(result.reward or 0.0))
         observation = result.observation
         correct_score = float(result.reward or 0.0)
@@ -588,7 +600,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    client = TextArenaEnv(base_url=args.env_url)
+    env_url = args.env_url
 
     system_prompt = resolve_system_prompt(args.system_prompt_path)
 
@@ -597,15 +609,6 @@ def main() -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     default_output_dir = Path("outputs") / f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}"
     output_dir = Path(args.output_dir or default_output_dir)
-
-    from peft import LoraConfig
-    peft_config = LoraConfig(
-        r=8,
-        lora_alpha=8,
-        target_modules=["q_proj", "v_proj", "o_proj"],
-    )
-
-    import torch
 
     grpo_config = GRPOConfig(
         use_vllm=True,
@@ -634,14 +637,13 @@ def main() -> None:
         vllm_gpu_memory_utilization=0.1,
         vllm_max_model_length=32768,
         vllm_importance_sampling_correction=False,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        gradient_checkpointing=False,
+        #gradient_checkpointing_kwargs={"use_reentrant": False},
         bf16=True,
-        optim="adamw_bnb_8bit",
+        optim="adamw_torch",  # adamw_bnb_8bit not compatible with FSDP2 sharding
         max_grad_norm=1.0,
         model_init_kwargs={
-            "attn_implementation": "kernels-community/flash-attn3",
-            "dtype": torch.bfloat16,
+            "tie_word_embeddings": False,  # Required for FSDP2 compatibility
         },
     )
 
@@ -652,7 +654,7 @@ def main() -> None:
     os.environ["WANDB_PROJECT"] = f"wordle-grpo-{sanitize_name(args.model_id)}"
     os.environ["WANDB_RUN_ID"] = f"{timestamp}"
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    async def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
@@ -662,23 +664,29 @@ def main() -> None:
         format_rewards: list[float] = []
         repetition_rewards: list[float] = []
 
-        for _ in prompts:
-            episode = rollout_once(
-                trainer=trainer,
-                env=client,
-                tokenizer=tokenizer,
-                system_prompt=system_prompt,
-                max_turns=args.max_turns,
-                max_new_tokens=args.max_new_tokens,
-            )
-            episode_prompt_ids.append(episode["prompt_ids"])
-            episode_completion_ids.append(episode["completion_ids"])
-            episode_logprobs.append(episode["logprobs"])
-            episode_env_masks.append(episode["env_mask"])
-            correctness_rewards.append(episode["correct_reward"])
-            position_rewards.append(episode["position_reward"])
-            format_rewards.append(compute_format_reward_thinking(episode["model_outputs"]))
-            repetition_rewards.append(episode["repetition_reward"])
+        # Create client inside rollout_func to ensure it's in the correct event loop
+        # (asyncio.run() creates a new loop each time, breaking WebSocket connections)
+        client = TextArenaEnv(base_url=env_url, message_timeout_s=300.0)
+        try:
+            for _ in prompts:
+                episode = await rollout_once(
+                    trainer=trainer,
+                    env=client,
+                    tokenizer=tokenizer,
+                    system_prompt=system_prompt,
+                    max_turns=args.max_turns,
+                    max_new_tokens=args.max_new_tokens,
+                )
+                episode_prompt_ids.append(episode["prompt_ids"])
+                episode_completion_ids.append(episode["completion_ids"])
+                episode_logprobs.append(episode["logprobs"])
+                episode_env_masks.append(episode["env_mask"])
+                correctness_rewards.append(episode["correct_reward"])
+                position_rewards.append(episode["position_reward"])
+                format_rewards.append(compute_format_reward_thinking(episode["model_outputs"]))
+                repetition_rewards.append(episode["repetition_reward"])
+        finally:
+            await client.close()
 
         return {
             "prompt_ids": episode_prompt_ids,
@@ -703,16 +711,13 @@ def main() -> None:
         train_dataset=dataset,
         args=grpo_config,
         rollout_func=rollout_func,
-        peft_config=peft_config,
     )
 
     print("Starting GRPO training with Wordle environment (thinking mode + env_mask)...")
     print(f"Using {args.num_generations} rollouts per dataset prompt")
 
-    try:
-        trainer.train()
-    finally:
-        client.close()
+    # Client is now created/closed inside rollout_func for each batch
+    trainer.train()
 
 
 if __name__ == "__main__":
