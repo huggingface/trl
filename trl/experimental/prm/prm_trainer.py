@@ -248,7 +248,6 @@ class PRMTrainer(BaseTrainer):
         tokenizer,
         step_separator,
         max_length,
-        max_prompt_length,
         max_completion_length,
         train_on_last_step_only,
         is_eval,
@@ -265,8 +264,6 @@ class PRMTrainer(BaseTrainer):
                 Separator between steps in the completion.
             max_length (`int` or `None`):
                Maximum length of the sequences (prompt + completion). If `None`, the sequences are not truncated.
-            max_prompt_length (`int` or `None`):
-                Maximum length of the prompt. If `None`, the prompt is not truncated.
             max_completion_length (`int` or `None`):
                 Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
             train_on_last_step_only (`bool`):
@@ -323,9 +320,7 @@ class PRMTrainer(BaseTrainer):
         if tokenizer.bos_token_id is not None:
             prompt_ids = [tokenizer.bos_token_id] + prompt_ids
 
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_ids = prompt_ids[-max_prompt_length:]
+        # Truncate completion sequences
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
             labels = labels[:max_completion_length]
