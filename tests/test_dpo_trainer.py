@@ -779,7 +779,7 @@ class TestDPOTrainer(TrlTestCase):
 
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         # Initialize the trainer
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
