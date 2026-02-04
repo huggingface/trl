@@ -185,7 +185,7 @@ The following steps run in 3 terminals. It can also be ran with processes in the
    export WANDB_API_KEY=... 
    uv add omegaconf 
 
-   CUDA_VISIBLE_DEVICES=1 python train_multi_environment.py --config config_workplace.yaml
+   CUDA_VISIBLE_DEVICES=1 python train_multi_environment.py --config config.yaml
    ```
 
 ## Multi-Node Training with Slurm
