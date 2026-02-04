@@ -1318,15 +1318,15 @@ class DPOTrainer(BaseTrainer):
             if self.use_weighting:
                 # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
                 completion_lengths = shift_completion_mask.sum(dim=1).clamp_min(1)
-                log_probs = F.log_softmax(shift_logits, dim=-1)
-                log_denom = torch.logsumexp(2 * log_probs, dim=-1)
-                aligned_logps = per_token_logps - log_denom
-                aligned_logps[shift_completion_mask == 0] = 0.0
+                with torch.no_grad():
+                    lse1 = torch.logsumexp(shift_logits, dim=-1)
+                    lse2 = torch.logsumexp(2.0 * shift_logits, dim=-1)
+                    log_denom = lse2 - 2.0 * lse1
+                    aligned_logps = (per_token_logps - log_denom) * shift_completion_mask
                 mean_logps = aligned_logps.sum(dim=1) / completion_lengths
-                weights = torch.exp(mean_logps).detach()
+                weights = torch.exp(mean_logps)
                 chosen_weights, rejected_weights = weights.chunk(2, dim=0)
-                pair_weights = chosen_weights * rejected_weights
-                per_sequence_loss = per_sequence_loss * pair_weights
+                per_sequence_loss *= chosen_weights * rejected_weights
 
             loss += per_sequence_loss.mean() * loss_weight
 
