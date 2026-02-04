@@ -1173,8 +1173,8 @@ class DPOTrainer(BaseTrainer):
             rejected_scores = -torch.exp(-rejected_logratios)
         elif self.f_divergence_type == "js_divergence":
             # f'(t) = log(2t/(t+1)) -> drop log 2
-            chosen_scores = chosen_logratios - torch.log1p(torch.exp(chosen_logratios))
-            rejected_scores = rejected_logratios - torch.log1p(torch.exp(rejected_logratios))
+            chosen_scores = F.logsigmoid(chosen_logratios)
+            rejected_scores = F.logsigmoid(rejected_logratios)
         elif self.f_divergence_type == "alpha_divergence":
             # alpha-divergence: f'(t) = (t^(α-1) - 1)/(α-1)
             if abs(self.f_alpha_divergence_coef - 1.0) < 1e-6:  # limit case f'(t) -> log(t), fall back to reverse_kl
@@ -1182,8 +1182,15 @@ class DPOTrainer(BaseTrainer):
                 rejected_scores = rejected_logratios
             else:
                 coef = 1.0 / (self.f_alpha_divergence_coef - 1.0)
-                chosen_scores = torch.exp((self.f_alpha_divergence_coef - 1.0) * chosen_logratios) * coef
-                rejected_scores = torch.exp((self.f_alpha_divergence_coef - 1.0) * rejected_logratios) * coef
+                t_chosen = (self.f_alpha_divergence_coef - 1.0) * chosen_logratios
+                t_rejected = (self.f_alpha_divergence_coef - 1.0) * rejected_logratios
+                dtype = t_chosen.dtype
+                # Clamp max so exp(.) stays representable after casting back
+                clamp_max = {torch.float16: 11.0, torch.bfloat16: 80.0, torch.float32: 80.0}[dtype]
+                t_chosen_float = torch.clamp(t_chosen.float(), max=clamp_max)
+                t_rejected_float = torch.clamp(t_rejected.float(), max=clamp_max)
+                chosen_scores = torch.exp(t_chosen_float).to(dtype) * coef
+                rejected_scores = torch.exp(t_rejected_float).to(dtype) * coef
         else:
             raise ValueError(f"Unknown f_divergence_type: {self.f_divergence_type}")
 
