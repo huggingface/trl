@@ -252,19 +252,6 @@ class CPOTrainer(BaseTrainer):
             max_length = 512
         else:
             max_length = args.max_length
-        if args.max_prompt_length is None:
-            logger.warning(
-                "`max_prompt_length` is not set in the CPOConfig's init"
-                " it will default to `128` by default, but you should do it yourself in the future.",
-            )
-            max_prompt_length = 128
-        else:
-            max_prompt_length = args.max_prompt_length
-
-        if not max_prompt_length < max_length:
-            raise ValueError(
-                f"max_prompt_length ({max_prompt_length}) should be strictly less than max_length ({max_length})."
-            )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
             logger.warning(
@@ -300,7 +287,6 @@ class CPOTrainer(BaseTrainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
-        self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.processing_class = processing_class
