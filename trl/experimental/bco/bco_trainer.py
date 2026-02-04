@@ -205,20 +205,10 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         if eos_token_id != all_tokens["answer_input_ids"][-1]:
             max_length -= 1
 
-        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                if kwargs["truncation_mode"] == "keep_start":
-                    all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
-                elif kwargs["truncation_mode"] == "keep_end":
-                    all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
-
-        # if that's still too long, truncate the response
+        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the response
         if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
             for k in ["answer_input_ids", "answer_attention_mask"]:
-                all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
+                all_tokens[k] = all_tokens[k][: max_length - len(all_tokens["prompt_input_ids"])]
 
         # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
         batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
@@ -262,9 +252,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         completion_tokens = kwargs["tokenizer"](
             completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
         )
-        prompt_tokens = kwargs["tokenizer"](
-            prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
-        )
+        prompt_tokens = kwargs["tokenizer"](prompt, truncation=True, add_special_tokens=True)
 
         batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
         batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
