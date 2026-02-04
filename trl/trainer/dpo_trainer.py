@@ -842,6 +842,15 @@ class DPOTrainer(BaseTrainer):
                     prompt_ids = processing_class(text=example["prompt"])["input_ids"]
                     prompt_chosen_ids = processing_class(text=example["prompt"] + example["chosen"])["input_ids"]
                     prompt_rejected_ids = processing_class(text=example["prompt"] + example["rejected"])["input_ids"]
+                    # Fix transformers inconsistency: for VLMs, processing_class returns lists of lists
+                    # even for single examples, while for LLMs it returns lists of ints.
+                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
+                    prompt_chosen_ids = (
+                        prompt_chosen_ids[0] if isinstance(prompt_chosen_ids[0], list) else prompt_chosen_ids
+                    )
+                    prompt_rejected_ids = (
+                        prompt_rejected_ids[0] if isinstance(prompt_rejected_ids[0], list) else prompt_rejected_ids
+                    )
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
