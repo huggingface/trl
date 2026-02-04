@@ -205,7 +205,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --max_new_tokens 53 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --gradient_checkpointing \
     --save_steps 0.1 \
     --push_to_hub
 ```
