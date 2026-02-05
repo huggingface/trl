@@ -176,9 +176,9 @@ class DPOConfig(TrainingArguments):
         > Deprecated parameters
 
         <Deprecated version="0.28.0">
-        
+
         The following parameters are deprecated and will be removed in version ...
-        
+
         </Deprecated>
 
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
