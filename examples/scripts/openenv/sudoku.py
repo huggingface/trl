@@ -25,19 +25,13 @@
 """
 GRPO training for Sudoku with TextArena environment.
 
-Setup (Option A - Install from HF Space):
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/openenv/sudoku
 ```
 
-Setup (Option B - Install from PyPI):
-
-```sh
-uv pip install "openenv-core[core]>=0.2.1"
-```
-
-Setup (Option C - Clone OpenEnv repo, for development):
+Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
 git clone https://github.com/meta-pytorch/OpenEnv.git

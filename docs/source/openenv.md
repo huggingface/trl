@@ -12,24 +12,18 @@ In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel 
 
 ## Installation
 
-To use OpenEnv with TRL, install the environment package. You have three options:
+To use OpenEnv with TRL, install the environment package. You have two options:
 
-**Option A - Install from HF Space:**
+**Option A - Install from HF Space (recommended):**
 
 ```bash
 pip install git+https://huggingface.co/spaces/openenv/echo_env
 ```
 
-**Option B - Install from PyPI:**
-
-```bash
-pip install "openenv-core[core]>=0.2.1"
-```
-
 > [!TIP]
-> Using a specific version (like `>=0.2.1`) is recommended to ensure stability and reproducibility. Check [PyPI](https://pypi.org/project/openenv-core/) for the latest stable version.
+> You can also install the core package from PyPI with `pip install "openenv-core[core]>=0.2.1"`, but note that environment-specific dependencies may need to be installed separately.
 
-**Option C - Clone OpenEnv repo (for development):**
+**Option B - Clone OpenEnv repo (for development):**
 
 ```bash
 git clone https://github.com/meta-pytorch/OpenEnv.git

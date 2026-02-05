@@ -26,16 +26,10 @@
 """
 Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
-Setup (Option A - Install from HF Space):
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/burtenshaw/wordle
-```
-
-Setup (Option B - Install from PyPI):
-
-```sh
-uv pip install "openenv-core[core]>=0.2.1"
 ```
 
 # Option 1: HF Spaces + Colocated vLLM (1 GPU required)
