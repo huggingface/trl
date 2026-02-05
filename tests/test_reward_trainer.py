@@ -294,7 +294,7 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -331,7 +331,7 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -368,7 +368,7 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -408,7 +408,7 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 

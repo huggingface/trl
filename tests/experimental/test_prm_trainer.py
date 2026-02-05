@@ -365,7 +365,7 @@ class TestPRMTrainer(TrlTestCase):
         # Check that the non trainable parameters have not changed
         for n, param in previous_non_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+            torch.testing.assert_close(param, new_param, atol=1e-12, rtol=1e-12)
 
     def test_tags(self):
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
