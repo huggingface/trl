@@ -563,8 +563,6 @@ class DPOConfig(TrainingArguments):
                 "`max_prompt_length` is deprecated and will be removed in version 0.29.0. We recommend filtering out"
                 "overlong prompts from your dataset before passing it to the trainer instead of using this parameter."
             )
-        else:  # keep the old default
-            self.max_prompt_length = 512
 
         if self.model_adapter_name is not None:
             warnings.warn(
