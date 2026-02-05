@@ -182,9 +182,9 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. In the future the base model
-            will be retrieved via `get_decoder`; if your model does not support this, it will no longer be supported by
-            the [`DPOTrainer`].
+            This parameter is deprecated and will be removed in version 0.29.0. In the future the base model will be
+            retrieved via `get_decoder`; if your model does not support this, it will no longer be supported by the
+            [`DPOTrainer`].
 
             </Deprecated>
         ref_model_init_kwargs (`dict[str, Any]`, *optional*):
@@ -193,8 +193,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. If you need different init
-            kwargs for the reference model, instantiate it yourself and pass it via the `ref_model` argument.
+            This parameter is deprecated and will be removed in version 0.29.0. If you need different init kwargs for
+            the reference model, instantiate it yourself and pass it via the `ref_model` argument.
 
             </Deprecated>
         model_adapter_name (`str`, *optional*):
@@ -203,8 +203,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. Only the default adapter will
-            be supported going forward.
+            This parameter is deprecated and will be removed in version 0.29.0. Only the default adapter will be
+            supported going forward.
 
             </Deprecated>
         ref_adapter_name (`str`, *optional*):
@@ -214,9 +214,9 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. If you used it to resume
-            training an adapter, you won't need this argument anymore in the next version and can rely on the trainer.
-            For now, it is still the only supported way to do this.
+            This parameter is deprecated and will be removed in version 0.29.0. If you used it to resume training an
+            adapter, you won't need this argument anymore in the next version and can rely on the trainer. For now, it
+            is still the only supported way to do this.
 
             </Deprecated>
         force_use_ref_model (`bool`, *optional*, defaults to `False`):
@@ -225,8 +225,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. There is no need to pass this
-            argument anymore: if you provide a reference model, it will be used automatically.
+            This parameter is deprecated and will be removed in version 0.29.0. There is no need to pass this argument
+            anymore: if you provide a reference model, it will be used automatically.
 
             </Deprecated>
         generate_during_eval (`bool`, *optional*, defaults to `False`):
@@ -235,8 +235,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. Please use a callback instead;
-            see `https://gist.github.com/qgallouedec/a08da3457a3a76c5ca539d4a0b38e482`.
+            This parameter is deprecated and will be removed in version 0.29.0. Please use a callback instead; see
+            `https://gist.github.com/qgallouedec/a08da3457a3a76c5ca539d4a0b38e482`.
 
             </Deprecated>
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
@@ -244,8 +244,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. It will no longer be possible
-            to set this value.
+            This parameter is deprecated and will be removed in version 0.29.0. It will no longer be possible to set
+            this value.
 
             </Deprecated>
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
@@ -254,8 +254,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. We recommend filtering
-            overlong prompts from your dataset before passing it to the trainer instead of using this parameter.
+            This parameter is deprecated and will be removed in version 0.29.0. We recommend filtering overlong prompts
+            from your dataset before passing it to the trainer instead of using this parameter.
 
             </Deprecated>
         max_completion_length (`int`, *optional*):
@@ -263,8 +263,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. We recommend using
-            `max_length` instead to control the maximum length of samples.
+            This parameter is deprecated and will be removed in version 0.29.0. We recommend using `max_length` instead
+            to control the maximum length of samples.
 
             </Deprecated>
         reference_free (`bool`, *optional*, defaults to `False`):
@@ -273,8 +273,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. If you want a reference-free
-            objective, use [`CPOTrainer`] instead.
+            This parameter is deprecated and will be removed in version 0.29.0. If you want a reference-free objective,
+            use [`CPOTrainer`] instead.
 
             </Deprecated>
         rpo_alpha (`float`, *optional*):
@@ -284,9 +284,9 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. This is equivalent to
-            including `"sft"` in `loss_type`; we recommend adding `"sft"` to `loss_type` and setting its weight in
-            `loss_weights` to `rpo_alpha`.
+            This parameter is deprecated and will be removed in version 0.29.0. This is equivalent to including `"sft"`
+            in `loss_type`; we recommend adding `"sft"` to `loss_type` and setting its weight in `loss_weights` to
+            `rpo_alpha`.
 
             </Deprecated>
         tools (`list[dict] | None`, *optional*):
@@ -295,9 +295,9 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. In 0.29 this argument will be
-            ignored; tools should be provided via the dataset instead. For now, `DPOConfig.tools` remains the only
-            supported way to pass tools.
+            This parameter is deprecated and will be removed in version 0.29.0. In 0.29 this argument will be ignored;
+            tools should be provided via the dataset instead. For now, `DPOConfig.tools` remains the only supported way
+            to pass tools.
 
             </Deprecated>
         use_logits_to_keep (`bool`, *optional*, defaults to `False`):
@@ -307,8 +307,8 @@ class DPOConfig(TrainingArguments):
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version 0.29.0. The DPO trainer will no longer
-            use this setting.
+            This parameter is deprecated and will be removed in version 0.29.0. The DPO trainer will no longer use this
+            setting.
 
             </Deprecated>
     """
@@ -531,14 +531,14 @@ class DPOConfig(TrainingArguments):
         metadata={"help": "Deprecated. It will no longer be possible to set this value."},
     )
     max_completion_length: int | None = field(
-        # This default value is used to determine whether the user has set it or not, since `None` is not a valid
-        # value for this parameter. This is overridden in `__post_init__` to preserve the old default value of `None`.
+        # This default value is used to determine whether the user has set it or not, since `None` is a valid value for
+        # this parameter. This is overridden in `__post_init__` to preserve the old default value of `None`.
         default=-1,
         metadata={"help": "Deprecated. Use `max_length` instead to control the maximum length of samples."},
     )
     max_prompt_length: int | None = field(
-        # This default value is used to determine whether the user has set it or not, since `None` is a valid
-        # value for this parameter. This is overridden in `__post_init__` to preserve the old default value of `512`.
+        # This default value is used to determine whether the user has set it or not, since `None` is a valid value for
+        # this parameter. This is overridden in `__post_init__` to preserve the old default value of `512`.
         default=-1,
         metadata={
             "help": "Deprecated. We recommend filtering overlong prompts from your dataset before passing it to the "
