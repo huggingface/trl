@@ -65,7 +65,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
             self.mixture_coef * ref_model_output.logits + (1 - self.mixture_coef) * model_output.logits, dim=-1
         )
 
-        torch.testing.assert_close(wrapper_output.logits, expected_logits, atol=1e-5)
+        torch.testing.assert_close(wrapper_output.logits, expected_logits)
 
     def test_prepare_inputs_for_generation(self):
         input_ids = torch.tensor([[1, 2, 3, 4, 5]], device=self.device)
