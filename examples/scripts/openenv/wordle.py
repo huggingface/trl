@@ -18,8 +18,7 @@
 #     "peft",
 #     "trackio>=0.13.0",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-core @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1",
 # ]
 # ///
 
@@ -27,10 +26,16 @@
 """
 Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
-Setup:
+Setup (Option A - Install from HF Space):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/burtenshaw/wordle
+```
+
+Setup (Option B - Install a specific version from GitHub):
+
+```sh
+uv pip install "textarena_env @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1#subdirectory=envs/textarena_env"
 ```
 
 # Option 1: HF Spaces + Colocated vLLM (1 GPU required)
