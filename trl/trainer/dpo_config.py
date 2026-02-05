@@ -207,7 +207,7 @@ class DPOConfig(TrainingArguments):
             `https://gist.github.com/qgallouedec/a08da3457a3a76c5ca539d4a0b38e482`.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels. It will no longer be possible to set this value.
-        max_prompt_length (`int` or `None`, *optional*):
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. We recommend filtering overlong prompts from your dataset before passing it
             to the trainer instead of using this parameter.
         max_completion_length (`int`, *optional*):
@@ -450,11 +450,15 @@ class DPOConfig(TrainingArguments):
         metadata={"help": "Deprecated. It will no longer be possible to set this value."},
     )
     max_completion_length: int | None = field(
-        default=None,
+        # This default value is used to determine whether the user has set it or not, since `None` is not a valid
+        # value for this parameter. This is overridden in `__post_init__` to preserve the old default value of `None`.
+        default=-1,
         metadata={"help": "Deprecated. Use `max_length` instead to control the maximum length of samples."},
     )
     max_prompt_length: int | None = field(
-        default=None,
+        # This default value is used to determine whether the user has set it or not, since `None` is not a valid
+        # value for this parameter. This is overridden in `__post_init__` to preserve the old default value of `512`.
+        default=-1,
         metadata={
             "help": "Deprecated. We recommend filtering overlong prompts from your dataset before passing it to the "
             "trainer instead of using this parameter."
@@ -574,13 +578,15 @@ class DPOConfig(TrainingArguments):
                 stacklevel=2,
             )
 
-        if self.max_prompt_length is not None:
+        if self.max_prompt_length != -1:
             warnings.warn(
                 "`max_prompt_length` is deprecated and will be removed in version 0.29.0. We recommend filtering out"
                 "overlong prompts from your dataset before passing it to the trainer instead of using this parameter.",
                 FutureWarning,
                 stacklevel=2,
             )
+        else:  # keep the old default
+            self.max_prompt_length = 512
 
         if self.model_adapter_name is not None:
             warnings.warn(
