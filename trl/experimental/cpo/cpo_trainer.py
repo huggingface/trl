@@ -299,11 +299,14 @@ class CPOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.pad_token_id = processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.processing_class = processing_class
+
+        if processing_class.pad_token is None:
+            processing_class.pad_token = processing_class.eos_token
+        self.pad_token_id = processing_class.pad_token_id
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
             logger.warning(
