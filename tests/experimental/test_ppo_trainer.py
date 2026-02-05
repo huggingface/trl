@@ -369,8 +369,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
             assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                torch.testing.assert_close(param, model_from_pretrained.state_dict()[name]), (
-                    f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+                (
+                    torch.testing.assert_close(param, model_from_pretrained.state_dict()[name]),
+                    (f"Parameter {name} is not the same after push_to_hub and from_pretrained"),
                 )
 
 
@@ -460,8 +461,9 @@ class TestSeq2SeqValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
             assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                torch.testing.assert_close(param, model_from_pretrained.state_dict()[name]), (
-                    f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+                (
+                    torch.testing.assert_close(param, model_from_pretrained.state_dict()[name]),
+                    (f"Parameter {name} is not the same after push_to_hub and from_pretrained"),
                 )
 
     def test_transformers_bf16_kwargs(self):

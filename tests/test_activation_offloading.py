@@ -71,8 +71,9 @@ class TestActivationOffloading(TrlTestCase):
         for name_orig, grad_orig in grads_original:
             for name_param, param in model.named_parameters():
                 if name_param == name_orig and param.requires_grad and param.grad is not None:
-                    torch.testing.assert_close(grad_orig, param.grad, rtol=1e-4, atol=1e-5), (
-                        f"Gradient mismatch for {name_orig}"
+                    (
+                        torch.testing.assert_close(grad_orig, param.grad, rtol=1e-4, atol=1e-5),
+                        (f"Gradient mismatch for {name_orig}"),
                     )
 
     @require_torch_accelerator
