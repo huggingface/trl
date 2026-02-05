@@ -20,14 +20,14 @@ To use OpenEnv with TRL, install the environment package. You have three options
 pip install git+https://huggingface.co/spaces/openenv/echo_env
 ```
 
-**Option B - Install a specific version from GitHub:**
+**Option B - Install from PyPI:**
 
 ```bash
-pip install "echo_env @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1#subdirectory=envs/echo_env"
+pip install "openenv-core[core]>=0.2.1"
 ```
 
 > [!TIP]
-> Using a specific version tag (like `v0.2.1`) is recommended over installing from `main`, as it ensures stability and reproducibility. Check the [OpenEnv releases](https://github.com/meta-pytorch/OpenEnv/releases) for the latest stable version.
+> Using a specific version (like `>=0.2.1`) is recommended to ensure stability and reproducibility. Check [PyPI](https://pypi.org/project/openenv-core/) for the latest stable version.
 
 **Option C - Clone OpenEnv repo (for development):**
 

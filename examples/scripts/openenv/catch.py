@@ -33,10 +33,10 @@ Setup (Option A - Install from HF Space):
 uv pip install git+https://huggingface.co/spaces/openenv/openspiel_env
 ```
 
-Setup (Option B - Install a specific version from GitHub):
+Setup (Option B - Install from PyPI):
 
 ```sh
-uv pip install "openspiel_env @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1#subdirectory=envs/openspiel_env"
+uv pip install "openenv-core[core]>=0.2.1"
 ```
 
 Setup (Option C - Clone OpenEnv repo, for development):

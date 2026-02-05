@@ -32,10 +32,10 @@ Setup (Option A - Install from HF Space):
 uv pip install git+https://huggingface.co/spaces/burtenshaw/wordle
 ```
 
-Setup (Option B - Install a specific version from GitHub):
+Setup (Option B - Install from PyPI):
 
 ```sh
-uv pip install "textarena_env @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1#subdirectory=envs/textarena_env"
+uv pip install "openenv-core[core]>=0.2.1"
 ```
 
 # Option 1: HF Spaces + Colocated vLLM (1 GPU required)
