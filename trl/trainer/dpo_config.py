@@ -175,17 +175,17 @@ class DPOConfig(TrainingArguments):
 
         > Deprecated parameters
 
-        <Deprecated version="0.28.0">
-
-        The following parameters are deprecated and will be removed in version ...
-
-        </Deprecated>
-
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
             `True`. In the future the base model will be retrieved via `get_decoder`; if your model does not support
             this, it will no longer be supported by the DPO trainer.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version ...
+
+            </Deprecated>
         ref_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument of the
             [`DPOTrainer`] is provided as a string. If you need different init kwargs for the reference model,
