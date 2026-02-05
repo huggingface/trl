@@ -252,7 +252,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         completion_tokens = kwargs["tokenizer"](
             completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
         )
-        prompt_tokens = kwargs["tokenizer"](prompt, truncation=True, add_special_tokens=True)
+        prompt_tokens = kwargs["tokenizer"](prompt, add_special_tokens=True)
 
         batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
         batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
