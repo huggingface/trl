@@ -201,7 +201,7 @@ class DPOConfig(TrainingArguments):
             `https://gist.github.com/qgallouedec/a08da3457a3a76c5ca539d4a0b38e482`.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels. It will no longer be possible to set this value.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
+        max_prompt_length (`int` or `None`, *optional*):
             Maximum length of the prompt. We recommend filtering overlong prompts from your dataset before passing it
             to the trainer instead of using this parameter.
         max_completion_length (`int`, *optional*):
