@@ -145,7 +145,7 @@ def _tokenize(
     )
 
     if embedding_tokenizer is not None:
-        embedding_tokenized = embedding_tokenizer(batch["prompt"], truncation=True, add_special_tokens=False)
+        embedding_tokenized = embedding_tokenizer(batch["prompt"], add_special_tokens=False)
 
         output.update(
             {
