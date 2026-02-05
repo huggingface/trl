@@ -68,8 +68,6 @@ class CPOConfig(TrainingArguments):
             standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: `r = (1 - p^(-alpha))
             / alpha` from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). This parameter works with all
             loss types.
-        padding_value (`int`, *optional*):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`,*optional*,  defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
@@ -172,10 +170,6 @@ class CPOConfig(TrainingArguments):
             "(default), uses standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: "
             "`r = (1 - p^(-alpha)) / alpha` from the AlphaPO paper. This parameter works with all loss types."
         },
-    )
-    padding_value: int | None = field(
-        default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
     )
     truncation_mode: str = field(
         default="keep_end",
