@@ -939,7 +939,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
