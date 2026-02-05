@@ -20,7 +20,7 @@ To use OpenEnv with TRL, install the environment package. You have three options
 pip install git+https://huggingface.co/spaces/openenv/echo_env
 ```
 
-**Option B - Install a specific version from GitHub (recommended):**
+**Option B - Install a specific version from GitHub:**
 
 ```bash
 pip install "echo_env @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1#subdirectory=envs/echo_env"
