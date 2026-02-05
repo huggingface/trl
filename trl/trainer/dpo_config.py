@@ -537,7 +537,7 @@ class DPOConfig(TrainingArguments):
         metadata={"help": "Deprecated. Use `max_length` instead to control the maximum length of samples."},
     )
     max_prompt_length: int | None = field(
-        # This default value is used to determine whether the user has set it or not, since `None` is not a valid
+        # This default value is used to determine whether the user has set it or not, since `None` is a valid
         # value for this parameter. This is overridden in `__post_init__` to preserve the old default value of `512`.
         default=-1,
         metadata={
