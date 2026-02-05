@@ -178,58 +178,139 @@ class DPOConfig(TrainingArguments):
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
-            `True`. In the future the base model will be retrieved via `get_decoder`; if your model does not support
-            this, it will no longer be supported by the DPO trainer.
+            `True`.
 
             <Deprecated version="0.28.0">
 
-            The following parameter is deprecated and will be removed in version ...
+            The following parameter is deprecated and will be removed in version 0.29.0. In the future the base model
+            will be retrieved via `get_decoder`; if your model does not support this, it will no longer be supported by
+            the [`DPOTrainer`].
 
             </Deprecated>
         ref_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument of the
-            [`DPOTrainer`] is provided as a string. If you need different init kwargs for the reference model,
-            instantiate it yourself and pass it via the `ref_model` argument.
+            [`DPOTrainer`] is provided as a string.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. If you need different init
+            kwargs for the reference model, instantiate it yourself and pass it via the `ref_model` argument.
+
+            </Deprecated>
         model_adapter_name (`str`, *optional*):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters. Only the default adapter
             will be supported going forward.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. Only the default adapter will
+            be supported going forward.
+
+            </Deprecated>
         ref_adapter_name (`str`, *optional*):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters. If you used it to resume
             training an adapter, you won't need this argument anymore in the next version and can rely on the trainer.
             For now, it is still the only supported way to do this.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. If you used it to resume
+            training an adapter, you won't need this argument anymore in the next version and can rely on the trainer.
+            For now, it is still the only supported way to do this.
+
+            </Deprecated>
         force_use_ref_model (`bool`, *optional*, defaults to `False`):
             If you provide a PEFT model as the active model and wish to use a different model for the `ref_model`, set
-            this flag to `True`. There is no need to pass this argument anymore: if you provide a reference model, it
-            will be used automatically.
+            this flag to `True`.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. There is no need to pass this
+            argument anymore: if you provide a reference model, it will be used automatically.
+
+            </Deprecated>
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to generate and log completions from both the model and the reference model to W&B or Comet during
-            evaluation. Please use a callback instead; see
-            `https://gist.github.com/qgallouedec/a08da3457a3a76c5ca539d4a0b38e482`.
+            evaluation.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. Please use a callback instead;
+            see `https://gist.github.com/qgallouedec/a08da3457a3a76c5ca539d4a0b38e482`.
+
+            </Deprecated>
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Padding value to use for labels. It will no longer be possible to set this value.
+            Padding value to use for labels.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. It will no longer be possible
+            to set this value.
+
+            </Deprecated>
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. We recommend filtering overlong prompts from your dataset before passing it
             to the trainer instead of using this parameter.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. We recommend filtering
+            overlong prompts from your dataset before passing it to the trainer instead of using this parameter.
+
+            </Deprecated>
         max_completion_length (`int`, *optional*):
-            Maximum length of the completion. We recommend using `max_length` instead to control the maximum length of
-            samples.
+            Maximum length of the completion.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. We recommend using
+            `max_length` instead to control the maximum length of samples.
+
+            </Deprecated>
         reference_free (`bool`, *optional*, defaults to `False`):
             Whether to ignore the provided reference model and implicitly use a reference model that assigns equal
-            probability to all responses. If you want a reference-free objective, use `CPOTrainer` instead.
+            probability to all responses.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. If you want a reference-free
+            objective, use [`CPOTrainer`] instead.
+
+            </Deprecated>
         rpo_alpha (`float`, *optional*):
             α parameter from the [RPO paper](https://huggingface.co/papers/2404.19733) (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
-            DPO loss. The paper recommends `rpo_alpha=1.0`. This is equivalent to including `"sft"` in `loss_type`; we
-            recommend adding `"sft"` to `loss_type` and setting its weight in `loss_weights` to `rpo_alpha`.
+            DPO loss. The paper recommends `rpo_alpha=1.0`.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. This is equivalent to
+            including `"sft"` in `loss_type`; we recommend adding `"sft"` to `loss_type` and setting its weight in
+            `loss_weights` to `rpo_alpha`.
+
+            </Deprecated>
         tools (`list[dict] | None`, *optional*):
             List of tools (callable functions) that will be accessible to the model. If the template does not support
-            function calling, this argument will have no effect. In 0.29 this argument will be ignored; tools should be
-            provided via the dataset instead. For now, `DPOConfig.tools` remains the only supported way to pass tools.
+            function calling, this argument will have no effect.
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. In 0.29 this argument will be
+            ignored; tools should be provided via the dataset instead. For now, `DPOConfig.tools` remains the only
+            supported way to pass tools.
+
+            </Deprecated>
         use_logits_to_keep (`bool`, *optional*, defaults to `False`):
             If `True`, only a specified number of logits are computed in the forward pass. This can be useful for
             saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
-            when working with very long prompts where labels are ignored (-100). The DPO trainer will no longer use
-            this setting.
+            when working with very long prompts where labels are ignored (-100).
+
+            <Deprecated version="0.28.0">
+
+            The following parameter is deprecated and will be removed in version 0.29.0. The DPO trainer will no longer
+            use this setting.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
