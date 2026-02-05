@@ -35,8 +35,6 @@ class BCOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
@@ -109,13 +107,6 @@ class BCOConfig(TrainingArguments):
         default=1024,
         metadata={
             "help": "Maximum length of the sequences (prompt + completion) in the batch. "
-            "This argument is required if you want to use the default data collator."
-        },
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. "
             "This argument is required if you want to use the default data collator."
         },
     )

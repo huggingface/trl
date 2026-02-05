@@ -337,6 +337,11 @@ class DPOTrainer(BaseTrainer):
                 "same as `model`, you can simply omit the `ref_model` argument and it will be created for you."
             )
 
+        if args.force_use_ref_model is None:
+            self.force_use_ref_model = ref_model is not None
+        else:
+            self.force_use_ref_model = args.force_use_ref_model
+
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(model_id)
@@ -582,10 +587,10 @@ class DPOTrainer(BaseTrainer):
                     "model along with the new `peft_config` to the trainer."
                 )
 
-            if ref_model is not None and not args.force_use_ref_model:
+            if ref_model is not None and not self.force_use_ref_model:
                 raise ValueError(
-                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
+                    "You passed a ref_model and a peft_config with `force_use_ref_model=False`. For training PEFT adapters with DPO there is no need to pass a reference"
+                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with in DPOTrainer's init, and unset force_use_ref_model"
                     " if you want to use a different ref_model."
                 )
 
