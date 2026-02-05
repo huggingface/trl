@@ -29,19 +29,13 @@ This example automatically detects and uses vision capabilities when VLM models 
 Screenshots from BrowserGym are collected and passed to the model during training. The GRPO
 trainer auto-detects multimodal support by checking for images in the rollout data.
 
-Setup (Option A - Install from HF Space):
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/openenv/browsergym_env
 ```
 
-Setup (Option B - Install a specific version from GitHub):
-
-```sh
-uv pip install "browsergym_env @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1#subdirectory=envs/browsergym_env"
-```
-
-Setup (Option C - Clone OpenEnv repo, for development):
+Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
 git clone https://github.com/meta-pytorch/OpenEnv.git

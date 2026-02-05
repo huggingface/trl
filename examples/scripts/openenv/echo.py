@@ -27,19 +27,13 @@
 Simple script to run GRPO training with OpenEnv's Echo environment and vLLM. The reward function encourages
 longer completions.
 
-Setup (Option A - Install from HF Space):
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/openenv/echo_env
 ```
 
-Setup (Option B - Install a specific version from GitHub):
-
-```sh
-uv pip install "echo_env @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1#subdirectory=envs/echo_env"
-```
-
-Setup (Option C - Clone OpenEnv repo, for development):
+Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
 git clone https://github.com/meta-pytorch/OpenEnv.git
