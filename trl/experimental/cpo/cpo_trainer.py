@@ -252,19 +252,6 @@ class CPOTrainer(BaseTrainer):
             max_length = 512
         else:
             max_length = args.max_length
-        if args.max_prompt_length is None:
-            logger.warning(
-                "`max_prompt_length` is not set in the CPOConfig's init"
-                " it will default to `128` by default, but you should do it yourself in the future.",
-            )
-            max_prompt_length = 128
-        else:
-            max_prompt_length = args.max_prompt_length
-
-        if not max_prompt_length < max_length:
-            raise ValueError(
-                f"max_prompt_length ({max_prompt_length}) should be strictly less than max_length ({max_length})."
-            )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
             logger.warning(
@@ -299,7 +286,6 @@ class CPOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.processing_class = processing_class
@@ -512,23 +498,11 @@ class CPOTrainer(BaseTrainer):
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
-            # if combined sequence is too long, truncate the prompt
-            for answer_tokens in [chosen_tokens, rejected_tokens, prompt_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
-                    if self.truncation_mode == "keep_start":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
-                    elif self.truncation_mode == "keep_end":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
-                    else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
-
-            # if that's still too long, truncate the response
+            # if combined sequence is too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
+                        answer_tokens[k] = answer_tokens[k][: self.max_length - longer_response_length]
 
             # Create labels
             chosen_sequence_tokens = {
@@ -563,9 +537,7 @@ class CPOTrainer(BaseTrainer):
             rejected_tokens = self.processing_class(
                 rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            prompt_tokens = self.processing_class(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
-            )
+            prompt_tokens = self.processing_class(prompt, add_special_tokens=True)
 
             batch["chosen_labels"] = chosen_tokens["input_ids"]
             batch["rejected_labels"] = rejected_tokens["input_ids"]

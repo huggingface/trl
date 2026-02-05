@@ -42,7 +42,6 @@ python examples/scripts/bco.py \
     --output_dir bco-aligned-model \
     --logging_first_step \
     --max_length 2048 \
-    --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1
@@ -63,7 +62,6 @@ python examples/scripts/bco.py \
     --logging_first_step \
     --warmup_ratio 0.1 \
     --max_length 2048 \
-    --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
