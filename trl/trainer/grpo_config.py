@@ -302,6 +302,11 @@ class GRPOConfig(TrainingArguments):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+        log_completions_hub_repo (`str`, *optional*):
+            Hugging Face Hub repository to save the completions. Should be a complete repository name like
+            `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
+            created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -690,7 +695,7 @@ class GRPOConfig(TrainingArguments):
             "The clipped weights are then multiplied with the advantages and policy model's log probs. "
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
-            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
+            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585). "
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
@@ -813,6 +818,16 @@ class GRPOConfig(TrainingArguments):
             "prompts are logged."
         },
     )
+    log_completions_hub_repo: str | None = field(
+        default=None,
+        metadata={
+            "help": "Hugging Face Hub repository to save the completions. Should be a complete repository name like "
+            "`'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will "
+            "be created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be "
+            "public unless you set `hub_private_repo=True` or your organization's default is to create private "
+            "repositories."
+        },
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -828,6 +843,12 @@ class GRPOConfig(TrainingArguments):
         super().__post_init__()
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+
+        if self.log_completions_hub_repo is not None and not self.log_completions:
+            raise ValueError(
+                "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
+                "completions to the Hub, or unset log_completions_hub_repo."
+            )
 
         num_processes = self.world_size
         # The current default effective batch size

@@ -621,7 +621,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=16, #  batch size in Section B of the paper
     learning_rate=1e-3, # learning rate in Section B of the paper
     beta=0.01, # $\beta$ in Section B of the paper,
-    max_prompt_length=128, # max prompt length in Section B of the paper
     max_length=512, # max length in Section B of the paper
     label_smoothing=0.1 # label smoothing $\epsilon$ in section 6 of the paper
 
@@ -642,8 +641,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=128, #  batch size in Section C of the paper
     learning_rate=5e-7, # learning rate in Section C of the paper
     beta=0.01, # $\beta$ in Section C of the paper,
-    max_prompt_length=1536, # max prompt length in Section C of the paper
-    max_completion_length=512, # max completion length in Section C of the paper
 )
 ```
 
@@ -721,8 +718,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
     learning_rate=2e-7, # learning rate in Section 5.2 of the paper
     beta=0.1, # $\beta$ in Section 5.2 of the paper,
-    max_prompt_length=512, # prompt length in Section 5.2 of the paper
-    max_completion_length=512, # completion length in Section 5.2 of the paper
 )
 ```
 
@@ -734,8 +729,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
     learning_rate=2e-7, # learning rate in Section 5.2 of the paper
     beta=0.1, # $\beta$ in Section 5.2 of the paper,
-    max_prompt_length=512, # prompt length in Section 5.2 of the paper
-    max_completion_length=512, # completion length in Section 5.2 of the paper
 )
 ```
 
@@ -879,6 +872,18 @@ trainer = SFTTrainer(
     ...,
     peft_config=LoraConfig(),
 )
+```
+
+### DoRA: Weight-Decomposed Low-Rank Adaptation
+
+**📜 Paper**: https://huggingface.co/papers/2402.09353
+
+Weight-Decomposed Low-Rank Adaptation (DoRA) can improve the performance of LoRA, especially at low ranks. DoRA decomposes pre-trained weight into two component: magnitude and direction. Direction is handled by normal LoRA, and magnitude is learnable parameters. TRL integrate DoRA via the [PEFT library](https://huggingface.co/docs/peft/index) and can be easily enable through setting `use_dora=True` to the [`~peft.LoraConfig`].
+
+``` python
+from peft import LoraConfig
+
+config = LoraConfig(use_dora=True, ...)
 ```
 
 ## Reinforce Leave-One-Out

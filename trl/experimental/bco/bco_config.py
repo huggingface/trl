@@ -37,8 +37,6 @@ class BCOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
@@ -60,11 +58,8 @@ class BCOConfig(TrainingArguments):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
-        ref_model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
-            from a string.
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model and
+            reference model from strings.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         prompt_sample_size (`int`, *optional*, defaults to `1024`):
@@ -75,7 +70,7 @@ class BCOConfig(TrainingArguments):
             Maximum value of the density ratio. The estimated density ratio is clamped to this value.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     logging_steps: float = field(
@@ -114,13 +109,6 @@ class BCOConfig(TrainingArguments):
         default=1024,
         metadata={
             "help": "Maximum length of the sequences (prompt + completion) in the batch. "
-            "This argument is required if you want to use the default data collator."
-        },
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. "
             "This argument is required if you want to use the default data collator."
         },
     )
@@ -178,13 +166,6 @@ class BCOConfig(TrainingArguments):
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
             "model from a string."
-        },
-    )
-    ref_model_init_kwargs: dict[str, Any] | None = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "reference model from a string."
         },
     )
     dataset_num_proc: int | None = field(

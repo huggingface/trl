@@ -34,7 +34,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
     def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForCausalLM.from_pretrained(model_id).to(self.device)
+        self.model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32").to(self.device)
         self.ref_model = create_reference_model(self.model).to(self.device)
         self.generation_config = GenerationConfig.from_pretrained(model_id)
         self.mixture_coef = 0.5
@@ -65,7 +65,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
             self.mixture_coef * ref_model_output.logits + (1 - self.mixture_coef) * model_output.logits, dim=-1
         )
 
-        assert torch.allclose(wrapper_output.logits, expected_logits, atol=1e-5)
+        torch.testing.assert_close(wrapper_output.logits, expected_logits)
 
     def test_prepare_inputs_for_generation(self):
         input_ids = torch.tensor([[1, 2, 3, 4, 5]], device=self.device)
@@ -81,7 +81,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
 class TestNashMDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)

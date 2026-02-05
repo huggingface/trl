@@ -53,7 +53,7 @@ from transformers.utils import is_flash_attn_2_available, is_peft_available, is_
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
@@ -398,14 +398,6 @@ class OnlineDPOTrainer(BaseTrainer):
         # Define the collator if not provided
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=self.pad_token_id)
-
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
-        # the "input_ids" key. As a result, the trainer issues the warning: "Could not estimate the number of tokens
-        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
-        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
-        # that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
 
         super().__init__(
             model=model,

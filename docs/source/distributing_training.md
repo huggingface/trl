@@ -294,7 +294,6 @@ training_args = SFTConfig(
     # to get the most out of SP
     max_seq_length=4096,
     packing=True,
-    gradient_checkpointing=True,
     attn_implementation="flash_attention_2",
     per_device_train_batch_size=1,
     ...
@@ -345,7 +344,6 @@ accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.ya
     --packing \
     --packing_strategy wrapped \
     --torch_dtype bfloat16 \
-    --gradient_checkpointing \
     --attn_implementation flash_attention_2 \
     --output_dir output-alst-4gpu \
     --logging_steps 10 \
