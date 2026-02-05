@@ -534,7 +534,7 @@ class CPOTrainer(BaseTrainer):
             rejected_tokens = self.processing_class(
                 rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            prompt_tokens = self.processing_class(prompt, truncation=True, add_special_tokens=True)
+            prompt_tokens = self.processing_class(prompt, add_special_tokens=True)
 
             batch["chosen_labels"] = chosen_tokens["input_ids"]
             batch["rejected_labels"] = rejected_tokens["input_ids"]
