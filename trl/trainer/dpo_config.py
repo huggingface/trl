@@ -175,6 +175,8 @@ class DPOConfig(TrainingArguments):
 
         > Deprecated parameters
 
+        <Deprecated version="0.28.0">
+
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
@@ -224,6 +226,8 @@ class DPOConfig(TrainingArguments):
             saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
             when working with very long prompts where labels are ignored (-100). The DPO trainer will no longer use
             this setting.
+
+        </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
