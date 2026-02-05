@@ -475,7 +475,7 @@ class TestRewardTrainer(TrlTestCase):
 
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
