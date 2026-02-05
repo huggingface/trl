@@ -151,9 +151,9 @@ class TestActivationOffloading(TrlTestCase):
         grads2 = [p.grad.clone() for p in model.parameters()]
 
         # Check outputs and gradients match
-        torch.testing.assert_close(out1, out2, rtol=1e-5)
+        torch.testing.assert_close(out1, out2)
         for g1, g2 in zip(grads1, grads2, strict=True):
-            torch.testing.assert_close(g1, g2, rtol=1e-5)
+            torch.testing.assert_close(g1, g2)
 
     @require_torch_accelerator
     def test_tensor_deduplication(self):
