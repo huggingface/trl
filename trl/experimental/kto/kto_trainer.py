@@ -55,10 +55,9 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
-    pad_to_length,
     selective_log_softmax,
 )
-from ..utils import DPODataCollatorWithPadding
+from ..utils import DPODataCollatorWithPadding, pad_to_length
 from .kto_config import KTOConfig
 
 

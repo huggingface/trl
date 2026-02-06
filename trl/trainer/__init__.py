@@ -69,9 +69,7 @@ _import_structure = {
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "utils": [
-        "RunningMoments",
         "disable_dropout_in_model",
-        "empty_cache",
         "ensure_master_addr_port",
         "get_kbit_device_map",
         "get_peft_config",
@@ -133,9 +131,7 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
-        RunningMoments,
         disable_dropout_in_model,
-        empty_cache,
         ensure_master_addr_port,
         get_kbit_device_map,
         get_peft_config,

@@ -48,13 +48,8 @@ from transformers.utils import is_peft_available, is_torch_fx_proxy
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ...models.utils import peft_module_casting_to_bf16
 from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
-    pad_to_length,
-    selective_log_softmax,
-)
-from ..utils import DPODataCollatorWithPadding, add_bos_token_if_needed, add_eos_token_if_needed
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ..utils import DPODataCollatorWithPadding, add_bos_token_if_needed, add_eos_token_if_needed, pad_to_length
 from .cpo_config import CPOConfig
 
 
