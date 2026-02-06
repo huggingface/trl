@@ -618,7 +618,7 @@ class DPOConfig(TrainingArguments):
                 "will be retrieved via `get_decoder`; if your model does not support this, it will no longer be "
                 "supported by the DPO trainer.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         else:  # keep the old default
             self.base_model_attribute_name = "model"
@@ -628,7 +628,7 @@ class DPOConfig(TrainingArguments):
                 "`force_use_ref_model` is deprecated and will be removed in version 0.29.0. There is no need to pass "
                 "this argument anymore: if you provide a reference model, it will be used automatically.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         if self.generate_during_eval is not None:
@@ -636,7 +636,7 @@ class DPOConfig(TrainingArguments):
                 "`generate_during_eval` is deprecated and will be removed in version 0.29.0. Please use a callback "
                 "instead. See the example at `https://gist.github.com/qgallouedec/a08da3457a3a76c5ca539d4a0b38e482`.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         else:  # keep the old default
             self.generate_during_eval = False
@@ -646,7 +646,7 @@ class DPOConfig(TrainingArguments):
                 "`label_pad_token_id` is deprecated and will be removed in version 0.29.0. It will no longer be "
                 "possible to set this value.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         else:  # keep the old default
             self.label_pad_token_id = -100
@@ -656,7 +656,7 @@ class DPOConfig(TrainingArguments):
                 "`max_completion_length` is deprecated and will be removed in version 0.29.0. We recommend using "
                 "`max_length` instead to control the maximum length of samples.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         else:  # keep the old default
             self.max_completion_length = None
@@ -666,7 +666,7 @@ class DPOConfig(TrainingArguments):
                 "`max_prompt_length` is deprecated and will be removed in version 0.29.0. We recommend filtering out"
                 "overlong prompts from your dataset before passing it to the trainer instead of using this parameter.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         else:  # keep the old default
             self.max_prompt_length = 512
@@ -676,7 +676,7 @@ class DPOConfig(TrainingArguments):
                 "`model_adapter_name` is deprecated and will be removed in version 0.29.0. Only the default adapter "
                 "will be supported going forward.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         if self.ref_adapter_name is not None:
@@ -685,7 +685,7 @@ class DPOConfig(TrainingArguments):
                 "training an adapter, you won't need this argument anymore in the next version and can rely on the "
                 "trainer. For now, it is still the only supported way to do this.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         if self.ref_model_init_kwargs is not None:
@@ -694,7 +694,7 @@ class DPOConfig(TrainingArguments):
                 "init kwargs for the reference model, instantiate it yourself and pass it via the `ref_model` "
                 "argument.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         if self.reference_free is not None:
@@ -702,7 +702,7 @@ class DPOConfig(TrainingArguments):
                 "`reference_free` is deprecated and will be removed in version 0.29.0. If you want a reference-free "
                 "objective, use `CPOTrainer` instead.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         else:  # keep the old default
             self.reference_free = False
@@ -713,7 +713,7 @@ class DPOConfig(TrainingArguments):
                 "`'sft'` in `loss_type`; we recommend adding `'sft'` to `loss_type` and setting its weight in "
                 "`loss_weights` to `rpo_alpha`.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         if self.tools is not None:
@@ -722,7 +722,7 @@ class DPOConfig(TrainingArguments):
                 "tools should be provided via the dataset instead but for now, `DPOConfig.tools` remains the only "
                 "supported way to pass tools.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
         if self.use_logits_to_keep is not None:
@@ -730,7 +730,7 @@ class DPOConfig(TrainingArguments):
                 "`use_logits_to_keep` is deprecated and will be removed in version 0.29.0. The DPO trainer will no "
                 "longer use this setting.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         else:  # keep the old default
             self.use_logits_to_keep = False
