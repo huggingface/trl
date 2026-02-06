@@ -846,8 +846,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
     learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
     beta=0.1,  # β in Section 5.2 of the paper,
-    max_prompt_length=512,  # prompt length in Section 5.2 of the paper
-    max_completion_length=512,  # completion length in Section 5.2 of the paper
 )
 ```
 
