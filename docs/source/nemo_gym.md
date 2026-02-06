@@ -212,7 +212,7 @@ An example five-node training script is provided in `submit.sh`. Nodes one throu
 
 ## Multi-Environment Training
 
-Train on multiple NeMo Gym environments simultaneously. This allows learning diverse capabilities (such as tool calling and math reasoning) in a single training run.
+Train on multiple NeMo Gym environments simultaneously. This allows learning diverse capabilities, such as tool calling and math reasoning, in a single training run.
 
 1. **Prepare Individual Datasets**
 
@@ -248,7 +248,7 @@ Train on multiple NeMo Gym environments simultaneously. This allows learning div
 
 1. **Update Training Config**
 
-   Create `config_multi_env.yaml` pointing to the combined dataset:
+   Update the config to point to the combined dataset:
 
    ```yaml
    model_name: "Qwen/Qwen3-4B-Instruct-2507"
@@ -274,7 +274,7 @@ Train on multiple NeMo Gym environments simultaneously. This allows learning div
    resources_servers/workplace_assistant/configs/workplace_assistant.yaml,\
    resources_servers/reasoning_gym/configs/reasoning_gym.yaml"
 
-   ng_run "+config_paths=[${config_paths}]" +head_server.host=0.0.0.0
+   ng_run "+config_paths=[${config_paths}]"
    ```
 
    This starts servers for both environments. The training script automatically routes each example to the correct agent server based on its `agent_ref` field.
