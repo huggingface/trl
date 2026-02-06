@@ -303,7 +303,7 @@ def parse_action(response_text: str) -> str:
     return "noop()"
 
 
-def rollout_once(
+async def rollout_once(
     trainer: GRPOTrainer,
     env: BrowserGymEnv,
     tokenizer: AutoTokenizer,
@@ -312,7 +312,7 @@ def rollout_once(
     debug: bool = False,
 ) -> dict[str, list]:
     """Run one episode and collect training data (text-only, no screenshots)."""
-    result = env.reset()
+    result = await env.reset()
     observation = result.observation
 
     prompt_ids: list[int] = []
@@ -358,7 +358,7 @@ def rollout_once(
             print(f"Step {step_num + 1}: {action_str}")
 
         # Take action in environment
-        result = env.step(BrowserGymAction(action_str=action_str))
+        result = await env.step(BrowserGymAction(action_str=action_str))
         observation = result.observation
 
         # Track rewards
@@ -445,7 +445,8 @@ def main() -> None:
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    async def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+        """Async rollout function - TRL handles the event loop automatically."""
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
@@ -457,7 +458,7 @@ def main() -> None:
         for i, prompt_text in enumerate(prompts):
             if args.debug:
                 print(f"[DEBUG] Processing prompt {i + 1}/{len(prompts)}")
-            episode = rollout_once(
+            episode = await rollout_once(
                 trainer=trainer,
                 env=client,
                 tokenizer=trainer.processing_class,

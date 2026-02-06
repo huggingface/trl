@@ -14,6 +14,8 @@
 
 """vLLM-based generation backend for TRL trainers."""
 
+import asyncio
+import inspect
 import json
 import os
 from collections.abc import Callable
@@ -50,6 +52,45 @@ if is_vllm_available():
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
+
+
+# Persistent event loop for scripts - preserves async resources (e.g., websockets) across calls
+_async_rollout_loop = None
+
+
+def run_async_safely(coro):
+    """
+    Run an async coroutine safely from any context (notebooks, Colab, scripts, etc.).
+
+    - If an event loop is running: applies nest_asyncio automatically (must be installed)
+    - If no event loop is running: uses a persistent loop to preserve async resources
+    """
+    global _async_rollout_loop
+
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop is not None:
+        # Already in async context (e.g., notebook) - apply nest_asyncio automatically
+        try:
+            import nest_asyncio
+
+            nest_asyncio.apply()
+        except ImportError:
+            raise RuntimeError(
+                "An event loop is already running (e.g., in a notebook). "
+                "Please install nest_asyncio (`pip install nest_asyncio`) to enable async rollout functions."
+            )
+        return asyncio.run(coro)
+
+    # No running loop - use a persistent loop to preserve async resources
+    if _async_rollout_loop is None or _async_rollout_loop.is_closed():
+        _async_rollout_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_async_rollout_loop)
+
+    return _async_rollout_loop.run_until_complete(coro)
 
 
 class VLLMGeneration:
@@ -547,7 +588,11 @@ class VLLMGeneration:
                                 apply_chat_template({"prompt": p}, processing_class, **chat_template_kwargs)["prompt"]
                                 for p in rollout_prompts
                             ]
-                        output = rollout_func(rollout_prompts)
+                        # Support both sync and async rollout functions:
+                        if inspect.iscoroutinefunction(rollout_func):
+                            output = run_async_safely(rollout_func(rollout_prompts))
+                        else:
+                            output = rollout_func(rollout_prompts)
                     else:
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
                             output = self.vllm_client.chat(
@@ -603,7 +648,13 @@ class VLLMGeneration:
                         apply_chat_template({"prompt": prompt}, processing_class, **chat_template_kwargs)["prompt"]
                         for prompt in rollout_prompts
                     ]
-                output = rollout_func(rollout_prompts)
+                # Support both sync and async rollout functions:
+                if inspect.iscoroutinefunction(rollout_func):
+                    # Handle async rollout_func
+                    output = run_async_safely(rollout_func(rollout_prompts))
+                else:
+                    # Handle sync rollout_func
+                    output = rollout_func(rollout_prompts)
                 required_keys = {"prompt_ids", "completion_ids", "logprobs"}
                 extra_fields = {k: v for k, v in output.items() if k not in required_keys}
                 prompt_ids = output["prompt_ids"]

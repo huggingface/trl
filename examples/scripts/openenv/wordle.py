@@ -308,7 +308,7 @@ def make_user_prompt(prompt_text: str, messages: Iterable[TextArenaMessage]) -> 
     return f"Conversation so far:\n{history_section}\n\nReply with your next guess enclosed in square brackets."
 
 
-def rollout_once(
+async def rollout_once(
     trainer: GRPOTrainer,
     env: TextArenaEnv,
     tokenizer: AutoTokenizer,
@@ -317,7 +317,7 @@ def rollout_once(
     max_turns: int,
     max_new_tokens: int = 16,
 ) -> dict[str, list]:
-    result = env.reset()
+    result = await env.reset()
     observation = result.observation
 
     prompt_ids: list[int] = []
@@ -390,7 +390,7 @@ def rollout_once(
         guess = extract_guess(completion_text)
         model_outputs.append(completion_text.strip())  # Store raw model output for format reward
 
-        result = env.step(TextArenaAction(message=guess))
+        result = await env.step(TextArenaAction(message=guess))
 
         raw_rewards.append(float(result.reward or 0.0))
         observation = result.observation
@@ -544,7 +544,8 @@ def main() -> None:
     grpo_config.project = args.project or f"wordle-grpo-{sanitize_name(args.model_id)}-{timestamp}"
     grpo_config.trackio_space_id = args.trackio_space_id
 
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+    async def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
+        """Async rollout function - TRL handles the event loop automatically."""
         episode_prompt_ids: list[list[int]] = []
         episode_completion_ids: list[list[int]] = []
         episode_logprobs: list[list[float]] = []
@@ -554,7 +555,7 @@ def main() -> None:
         format_rewards: list[float] = []
 
         for prompt_text in prompts:
-            episode = rollout_once(
+            episode = await rollout_once(
                 trainer=trainer,
                 env=client,
                 tokenizer=tokenizer,

@@ -648,9 +648,15 @@ class GRPOTrainer(BaseTrainer):
             # Wrap rollout_func to capture trainer context if provided
             rollout_func = None
             if self.rollout_func is not None:
-
-                def rollout_func(prompts):
-                    return self.rollout_func(prompts, self)
+                # Check if the user's rollout_func is async
+                if inspect.iscoroutinefunction(self.rollout_func):
+                    # Wrap async function to pass trainer context
+                    async def rollout_func(prompts):
+                        return await self.rollout_func(prompts, self)
+                else:
+                    # Wrap sync function to pass trainer context
+                    def rollout_func(prompts):
+                        return self.rollout_func(prompts, self)
 
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
