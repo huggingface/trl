@@ -26,7 +26,7 @@ class FDivergenceType(Enum):
     """
     Types of f-divergence functions for DPO loss regularization.
 
-    <Deprecated version="0.27.0">
+    <Deprecated version="0.28.0">
 
     Using `FDivergenceType` for `f_divergence_type` in [`DPOConfig`] is deprecated and will be removed in version
     0.29.0. Use a string instead.
