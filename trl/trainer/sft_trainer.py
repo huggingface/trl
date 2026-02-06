@@ -724,6 +724,24 @@ class SFTTrainer(BaseTrainer):
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
 
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
+
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
@@ -879,6 +897,14 @@ class SFTTrainer(BaseTrainer):
                 compute_loss_func = dft_loss
             else:
                 raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,

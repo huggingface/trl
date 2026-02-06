@@ -20,8 +20,10 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import PartialState, logging
 from datasets import Dataset, features
+from packaging.version import Version
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -190,7 +192,6 @@ class PRMTrainer(BaseTrainer):
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,
                     "max_length": args.max_length,
-                    "max_prompt_length": args.max_prompt_length,
                     "max_completion_length": args.max_completion_length,
                     "train_on_last_step_only": args.train_on_last_step_only,
                 }
@@ -225,6 +226,14 @@ class PRMTrainer(BaseTrainer):
                         ),
                     )
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -249,7 +258,6 @@ class PRMTrainer(BaseTrainer):
         tokenizer,
         step_separator,
         max_length,
-        max_prompt_length,
         max_completion_length,
         train_on_last_step_only,
         is_eval,
@@ -266,8 +274,6 @@ class PRMTrainer(BaseTrainer):
                 Separator between steps in the completion.
             max_length (`int` or `None`):
                Maximum length of the sequences (prompt + completion). If `None`, the sequences are not truncated.
-            max_prompt_length (`int` or `None`):
-                Maximum length of the prompt. If `None`, the prompt is not truncated.
             max_completion_length (`int` or `None`):
                 Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
             train_on_last_step_only (`bool`):
@@ -324,9 +330,7 @@ class PRMTrainer(BaseTrainer):
         if tokenizer.bos_token_id is not None:
             prompt_ids = [tokenizer.bos_token_id] + prompt_ids
 
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_ids = prompt_ids[-max_prompt_length:]
+        # Truncate completion sequences
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
             labels = labels[:max_completion_length]

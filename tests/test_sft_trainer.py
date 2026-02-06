@@ -83,10 +83,10 @@ class TestDFTLoss(TrlTestCase):
 class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_basic_padding(self):
         """Test basic padding functionality without completion masks."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
@@ -95,13 +95,13 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_completion_mask(self):
         """Test completion mask functionality."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
             {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
             {"input_ids": [4, 5], "completion_mask": [0, 1]},
         ]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
@@ -194,10 +194,10 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_custom_position_ids_but_no_padding_free(self):
         """Test that custom position_ids are ignored if padding_free is False."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3], "seq_lengths": [1, 2]}, {"input_ids": [4, 5], "seq_lengths": [2]}]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
@@ -206,10 +206,10 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_single_example(self):
         """Test collator with a single example."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3, 4]}]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4]]))
@@ -230,13 +230,13 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_assistant_masks(self):
         """Test handling of assistant masks in examples."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
             {"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 1]},
             {"input_ids": [4, 5], "assistant_masks": [0, 1]},
         ]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
@@ -514,7 +514,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -580,7 +580,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             else:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -617,7 +617,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -654,7 +654,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -694,7 +694,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
@@ -939,7 +939,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
@@ -949,11 +949,29 @@ class TestSFTTrainer(TrlTestCase):
         # `role_capital` is used to control the capitalization of roles.
         tokenizer.chat_template = '{%- if messages[0]["role"] == "system" -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\n" + messages[0]["content"] + "<|im_end|>\\n" }}{%- else -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\\n" }}{%- endif -%}{%- for message in messages -%}    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) -%}        {{ "<|im_start|>" + (message.role.upper() if role_capital else message.role) + "\\n" + message.content + "<|im_end|>\\n" }}    {%- elif message.role == "assistant" -%}        {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") }}        {%- if message.content -%}            {{ "\\n" + message.content }}        {%- endif -%}        {{ "<|im_end|>\\n" }}    {%- elif message.role == "tool" -%}        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") -%}            {{ "<|im_start|>" + ("USER" if role_capital else "user") }}        {%- endif -%}        {{ "\\n<tool_response>\\n" + message.content + "\\n</tool_response>" }}        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") -%}            {{ "<|im_end|>\\n" }}        {%- endif -%}    {%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}    {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") + "\\n" }}{%- endif -%}'
 
-        dataset.add_column("chat_template_kwargs", [{"role_capital": bool(i % 2)} for i in range(len(dataset))])
+        dataset = dataset.add_column(
+            "chat_template_kwargs", [{"role_capital": bool(i % 2)} for i in range(len(dataset))]
+        )
+        assert "chat_template_kwargs" in dataset.features
 
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
         )
+
+        # Assert trainer uses the same chat template as tokenizer
+        assert trainer.processing_class.chat_template == tokenizer.chat_template
+
+        # Assert chat_template is applied
+        for i in range(2):
+            role = "SYSTEM" if i else "system"
+            system_prompt = (
+                f"<|im_start|>{role}\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>"
+            )
+            system_prompt_ids = trainer.processing_class(system_prompt)["input_ids"]
+            assert trainer.train_dataset[i]["input_ids"][: len(system_prompt_ids)] == system_prompt_ids
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1167,7 +1185,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_toolcall_data(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/toolcall", split="train")
+        dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
@@ -1226,6 +1244,34 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the eval losses are not None
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
+
+    def test_train_with_compute_metrics(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        def dummy_compute_metrics(eval_pred):
+            return {"my_metric": 0.123}
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            eval_strategy="steps",
+            eval_steps=3,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=dummy_compute_metrics,
+        )
+
+        # Train the model
+        trainer.train()
+
+        # Check that the custom metric is logged
+        assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
@@ -1316,7 +1362,7 @@ class TestSFTTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
@@ -1370,7 +1416,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1410,7 +1456,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1446,7 +1492,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
             per_device_train_batch_size=1,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
@@ -1506,7 +1552,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n.startswith("model.visual"):
-                assert torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated"
             else:
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
@@ -1536,7 +1582,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if "base_model" in n:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "prompt_encoder" in n:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
@@ -1592,7 +1638,7 @@ class TestSFTTrainer(TrlTestCase):
                 param = param.float()
 
             if "lora" not in n:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "lora" in n:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
@@ -1622,7 +1668,7 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if "base_model" in n:  # We expect the base model parameters to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
             elif "prompt_encoder" in n:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:

@@ -26,8 +26,10 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
 from datasets import Dataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
@@ -252,19 +254,6 @@ class CPOTrainer(BaseTrainer):
             max_length = 512
         else:
             max_length = args.max_length
-        if args.max_prompt_length is None:
-            logger.warning(
-                "`max_prompt_length` is not set in the CPOConfig's init"
-                " it will default to `128` by default, but you should do it yourself in the future.",
-            )
-            max_prompt_length = 128
-        else:
-            max_prompt_length = args.max_prompt_length
-
-        if not max_prompt_length < max_length:
-            raise ValueError(
-                f"max_prompt_length ({max_prompt_length}) should be strictly less than max_length ({max_length})."
-            )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
             logger.warning(
@@ -299,11 +288,13 @@ class CPOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
-        self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.processing_class = processing_class
+
+        if processing_class.pad_token is None:
+            processing_class.pad_token = processing_class.eos_token
+        self.pad_token_id = processing_class.pad_token_id
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
             logger.warning(
@@ -335,15 +326,6 @@ class CPOTrainer(BaseTrainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in CPO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
-        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
-        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
-        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
-        # that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
-
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().main_process_first():
@@ -364,6 +346,14 @@ class CPOTrainer(BaseTrainer):
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -518,23 +508,11 @@ class CPOTrainer(BaseTrainer):
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
-            # if combined sequence is too long, truncate the prompt
-            for answer_tokens in [chosen_tokens, rejected_tokens, prompt_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
-                    if self.truncation_mode == "keep_start":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
-                    elif self.truncation_mode == "keep_end":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
-                    else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
-
-            # if that's still too long, truncate the response
+            # if combined sequence is too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
+                        answer_tokens[k] = answer_tokens[k][: self.max_length - longer_response_length]
 
             # Create labels
             chosen_sequence_tokens = {
@@ -569,9 +547,7 @@ class CPOTrainer(BaseTrainer):
             rejected_tokens = self.processing_class(
                 rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            prompt_tokens = self.processing_class(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
-            )
+            prompt_tokens = self.processing_class(prompt, add_special_tokens=True)
 
             batch["chosen_labels"] = chosen_tokens["input_ids"]
             batch["rejected_labels"] = rejected_tokens["input_ids"]
@@ -777,7 +753,7 @@ class CPOTrainer(BaseTrainer):
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
-            padding_value=self.padding_value,
+            padding_value=self.pad_token_id,
             device=self.accelerator.device,
         )
         len_chosen = batch["chosen_labels"].shape[0]

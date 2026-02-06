@@ -527,13 +527,13 @@ class GRPOTrainer(BaseTrainer):
         # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
 
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys is "prompt". As a result, the trainer issues the warning:
-        # "Could not estimate the number of tokens of the input, floating-point operations will not be computed." To
-        # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
-        # This acts as a flag to indicate that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -1578,11 +1578,15 @@ class GRPOTrainer(BaseTrainer):
         else:
             tool_mask = None
 
-        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        # If mask_truncated_completions is enabled, zero out truncated completions for attention and loss masking
         if self.mask_truncated_completions:
             eos_and_pad = [self.eos_token_id, self.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
+            # Also mask tool_mask for consistency in multi-turn training
+            if tool_mask is not None:
+                tool_mask = tool_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -1807,7 +1811,6 @@ class GRPOTrainer(BaseTrainer):
             self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
                 self.accelerator.gather(max_delta).max().item()
             )
-
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
             else:

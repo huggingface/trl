@@ -26,9 +26,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
@@ -335,6 +337,11 @@ class DPOTrainer(BaseTrainer):
                 "same as `model`, you can simply omit the `ref_model` argument and it will be created for you."
             )
 
+        if args.force_use_ref_model is None:
+            self.force_use_ref_model = ref_model is not None
+        else:
+            self.force_use_ref_model = args.force_use_ref_model
+
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(model_id)
@@ -409,14 +416,6 @@ class DPOTrainer(BaseTrainer):
                 average_log_prob=False,
                 loss_type=args.loss_type,
             )
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
-        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
-        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
-        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
-        # that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
 
         # Data collator
         if data_collator is None:
@@ -496,6 +495,14 @@ class DPOTrainer(BaseTrainer):
                 }
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -580,10 +587,10 @@ class DPOTrainer(BaseTrainer):
                     "model along with the new `peft_config` to the trainer."
                 )
 
-            if ref_model is not None and not args.force_use_ref_model:
+            if ref_model is not None and not self.force_use_ref_model:
                 raise ValueError(
-                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
+                    "You passed a ref_model and a peft_config with `force_use_ref_model=False`. For training PEFT adapters with DPO there is no need to pass a reference"
+                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with in DPOTrainer's init, and unset force_use_ref_model"
                     " if you want to use a different ref_model."
                 )
 
