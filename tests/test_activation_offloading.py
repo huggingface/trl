@@ -71,8 +71,9 @@ class TestActivationOffloading(TrlTestCase):
         for name_orig, grad_orig in grads_original:
             for name_param, param in model.named_parameters():
                 if name_param == name_orig and param.requires_grad and param.grad is not None:
-                    assert torch.allclose(grad_orig, param.grad, rtol=1e-4, atol=1e-5), (
-                        f"Gradient mismatch for {name_orig}"
+                    (
+                        torch.testing.assert_close(grad_orig, param.grad, rtol=1e-4, atol=1e-5),
+                        (f"Gradient mismatch for {name_orig}"),
                     )
 
     @require_torch_accelerator
@@ -103,7 +104,7 @@ class TestActivationOffloading(TrlTestCase):
 
         # Gradients should match as NoOpManager should have prevented offloading
         for g1, g2 in zip(grads1, grads2, strict=True):
-            assert torch.allclose(g1, g2, rtol=1e-4, atol=1e-5)
+            torch.testing.assert_close(g1, g2, rtol=1e-4, atol=1e-5)
 
     @require_torch_accelerator
     def test_min_offload_size(self):
@@ -150,9 +151,9 @@ class TestActivationOffloading(TrlTestCase):
         grads2 = [p.grad.clone() for p in model.parameters()]
 
         # Check outputs and gradients match
-        assert torch.allclose(out1, out2, rtol=1e-5)
+        torch.testing.assert_close(out1, out2)
         for g1, g2 in zip(grads1, grads2, strict=True):
-            assert torch.allclose(g1, g2, rtol=1e-5)
+            torch.testing.assert_close(g1, g2)
 
     @require_torch_accelerator
     def test_tensor_deduplication(self):

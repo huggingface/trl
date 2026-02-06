@@ -15,6 +15,7 @@
 import gc
 import os
 import warnings
+from collections.abc import Callable
 from unittest.mock import patch
 
 import numpy as np
@@ -36,12 +37,14 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
     TrlTestCase,
     require_ampere_or_newer,
     require_bitsandbytes,
+    require_jmespath,
     require_kernels,
     require_liger_kernel,
     require_peft,
@@ -53,6 +56,34 @@ from .testing_utils import (
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
+
+
+def multiply_tool(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+
+async def async_multiply_tool(a: int, b: int) -> int:
+    """
+    Asynchronously multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
 
 
 class TestGetHighEntropyMask(TrlTestCase):
@@ -253,6 +284,33 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
+    # Regression test for eval_on_start with loss_type="grpo" (one of the loss types that depends on
+    # current_gradient_accumulation_steps): evaluation runs before the first training step, when that value is still
+    # unset. Previously this caused the initial eval to crash.
+    def test_training_eval_on_start(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            loss_type="grpo",
+            eval_strategy="steps",
+            eval_steps=2,
+            eval_on_start=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+        trainer.train()
+
     def test_training_multiple_iterations(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -315,7 +373,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -329,7 +387,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -352,31 +410,26 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
+    # In practice, this test is the same as `test_training_peft_config`, since gradient checkpointing is enabled by
+    # default in `GRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test
+    # PEFT + gradient checkpointing, which has caused issues in the past.
     @require_peft
     def test_training_peft_with_gradient_checkpointing(self):
-        """Test that training works with PEFT and gradient checkpointing enabled."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            dtype=torch.float32,  # Use float32 for testing to avoid precision issues
-        )
-
-        lora_config = LoraConfig(
-            r=8, lora_alpha=32, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none"
-        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
-            gradient_checkpointing=True,  # Enable gradient checkpointing
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            gradient_checkpointing=True,  # enable gradient checkpointing
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -384,26 +437,22 @@ class TestGRPOTrainer(TrlTestCase):
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
-            peft_config=lora_config,
+            peft_config=LoraConfig(),
         )
 
-        # Verify gradient checkpointing is enabled
-        assert isinstance(trainer.model, PeftModel)
-
-        # Store initial parameters to check which ones change
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that only LoRA parameters have changed, base model parameters remain unchanged
+        # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if "lora" in n.lower():  # LoRA parameters should change
-                assert not torch.equal(param, new_param), f"LoRA parameter {n} has not changed."
-            else:  # Base model parameters should not change
-                assert torch.equal(param, new_param), f"Base parameter {n} has changed."
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
@@ -759,6 +808,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
+            beta=0.1,  # ensure ref model is created so sync can update it
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -775,6 +825,8 @@ class TestGRPOTrainer(TrlTestCase):
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        assert trainer.ref_model is not None
+        previous_ref_params = {n: param.clone() for n, param in trainer.ref_model.named_parameters()}
 
         trainer.train()
 
@@ -784,6 +836,8 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            new_ref_param = trainer.ref_model.get_parameter(n)
+            assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
     def test_training_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -824,7 +878,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.ones((3, 4))  # B=3 sequences, T=4 tokens
 
         advantages = torch.tensor([1.0, -1.0, -1.0]).unsqueeze(-1)
-        old_per_token_logps = torch.zeros((3, 4))
+        sampling_per_token_logps = torch.zeros((3, 4))
         per_token_logps = torch.zeros((3, 4))
 
         per_token_logps[0, :] = -2.0  # Pos adv + High KL (0−(−2)=2) -> Keep
@@ -836,7 +890,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[1.0], [1.0], [0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -846,7 +900,7 @@ class TestGRPOTrainer(TrlTestCase):
         mask = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # 2 valid tokens
         advantages = torch.tensor([[-1.0]])  # Negative advantage
 
-        old_per_token_logps = torch.zeros((1, 4))
+        sampling_per_token_logps = torch.zeros((1, 4))
         per_token_logps = torch.zeros((1, 4))
 
         # Valid tokens have High KL (2.0)
@@ -863,7 +917,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask = torch.tensor([[0.0]])
 
         off_policy_mask = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask, expected_mask)
@@ -875,7 +929,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_mask_keep = torch.tensor([[1.0]])
 
         off_policy_mask_keep = GRPOTrainer.get_off_policy_mask(
-            advantages, per_token_logps, old_per_token_logps, mask, off_policy_threshold
+            advantages, per_token_logps, sampling_per_token_logps, mask, off_policy_threshold
         )
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
@@ -1039,7 +1093,9 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
-        model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
+        model = AutoModelForCausalLM.from_pretrained(
+            "Qwen/Qwen2.5-0.5B-Instruct", dtype="float32"
+        )  # tiny model is too small for vLLM
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1075,7 +1131,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n and "original_module" not in n:
                 # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
@@ -1235,7 +1291,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1715,7 +1771,7 @@ class TestGRPOTrainer(TrlTestCase):
     @require_vision
     @require_peft
     def test_training_vlm_peft(self, model_id):
-        model = AutoModelForImageTextToText.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1749,7 +1805,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
@@ -1800,7 +1856,7 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        Version(transformers.__version__).is_devrelease,  # Tests with dev dependencies
+        Version(transformers.__version__) >= Version("5.0.0") and not is_liger_kernel_available(min_version="0.6.5"),
         reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
         "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
         strict=True,
@@ -2000,26 +2056,16 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        condition=Version(transformers.__version__) < Version("5.0.0"),
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
-    def test_training_with_tools(self):
+    @require_jmespath
+    @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
+    def test_training_with_tools(self, tools: list[Callable]):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
         # succeed and the other will fail (because of a wrong argument name).
-        def multiply(a: int, b: int) -> int:
-            """
-            Multiplies two integers.
-
-            Args:
-                a: The first integer.
-                b: The second integer.
-
-            Returns:
-                The product of the two integers.
-            """
-            return a * b
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -2036,25 +2082,41 @@ class TestGRPOTrainer(TrlTestCase):
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
-            tools=[multiply],
+            tools=tools,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        tool_name = tools[0].__name__
 
         def fake_generate(input_ids, **kwargs):
             if input_ids.shape[0] == 3:  # first call
                 # fmt: off
-                completion_ids = torch.tensor(
-                    [
-                        # '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 64648, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
-                        # '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 64648, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
-                        # "I don't know any tool<|im_end|>"
-                        [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                    ],
-                    device=input_ids.device,
-                )
+                if tool_name == "multiply_tool":
+                    completion_ids = torch.tensor(
+                        [
+                            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                            # an invalid tool call with wrong argument name
+                            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+                            # "I don't know any tool<|im_end|>"
+                            [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        ],
+                        device=input_ids.device,
+                    )
+                elif tool_name == "async_multiply_tool":
+                    completion_ids = torch.tensor(
+                        [
+                            # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                            # an invalid tool call with wrong argument name
+                            # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+                            [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+                            # "I don't know any tool<|im_end|>"
+                            [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        ],
+                        device=input_ids.device,
+                    )
                 # fmt: on
             else:  # second call will only have two inputs in the batch, because two examples have a tool call.
                 completion_ids = torch.tensor(
@@ -2197,7 +2259,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             logging_strategy="no",
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
@@ -2245,7 +2307,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             logging_strategy="no",
         )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
@@ -2302,7 +2364,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
         if Version(transformers.__version__) < Version("4.57.0"):
-            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.57.0")
+            pytest.xfail("Bug in transformers solved in GH#40692, released in 4.57.0.")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2496,7 +2558,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             use_vllm=True,  # Enable vLLM
             vllm_mode="colocate",  # Use colocate mode to avoid server dependency
             vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)
-            gradient_checkpointing=True,  # Enable gradient checkpointing to save memory
             bf16=True,  # Use bfloat16 to reduce memory
             report_to="none",
             logging_strategy="no",

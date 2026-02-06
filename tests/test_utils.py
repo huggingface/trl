@@ -225,13 +225,13 @@ class TestNanStd(TrlTestCase):
     def test_nanstd_ignores_nans(self):
         x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
         result = nanstd(x)
-        assert torch.allclose(result, torch.tensor(1.0))
+        torch.testing.assert_close(result, torch.tensor(1.0))
 
     def test_nanstd_dim_and_keepdim(self):
         x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
         result = nanstd(x, dim=1, keepdim=True)
         assert torch.isnan(result[0, 0])
-        assert torch.allclose(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
 
     def test_nanstd_all_nan(self):
         x = torch.tensor([float("nan"), float("nan")])
@@ -853,7 +853,7 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
         result = unsplit_pixel_values_by_grid(batch)
         assert isinstance(result["pixel_values"], torch.Tensor)
-        assert torch.allclose(result["pixel_values"], pixel_values_merged)
+        torch.testing.assert_close(result["pixel_values"], pixel_values_merged)
         assert isinstance(result["image_grid_thw"], torch.Tensor)
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
@@ -915,10 +915,16 @@ class TestForwardMaskedLogits:
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("4.57.0"),
-                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__) >= Version("5.0.0"),
+                        reason="Blocked by upstream transformers bug (transformers#43334)",
+                    ),
+                ],
             ),
         ],
     )

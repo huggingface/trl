@@ -37,8 +37,6 @@ class CPOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
@@ -70,10 +68,6 @@ class CPOConfig(TrainingArguments):
             standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: `r = (1 - p^(-alpha))
             / alpha` from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). This parameter works with all
             loss types.
-        label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, *optional*):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`,*optional*,  defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
@@ -118,8 +112,8 @@ class CPOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -131,13 +125,6 @@ class CPOConfig(TrainingArguments):
     max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
     )
     max_completion_length: int | None = field(
         default=None,
@@ -183,14 +170,6 @@ class CPOConfig(TrainingArguments):
             "(default), uses standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: "
             "`r = (1 - p^(-alpha)) / alpha` from the AlphaPO paper. This parameter works with all loss types."
         },
-    )
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={"help": "Label pad token id."},
-    )
-    padding_value: int | None = field(
-        default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
     )
     truncation_mode: str = field(
         default="keep_end",

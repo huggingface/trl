@@ -160,7 +160,7 @@ def main(test_size, push_to_hub, repo_id):
     get_wind_conditions = get_json_schema(get_wind_conditions)
 
     # fmt: off
-    dataset = Dataset.from_dict({
+    language_modeling_dataset = Dataset.from_dict({
         "messages": [
             [
                 {"role": "user", "content": "Set a timer for 10 minutes."},
@@ -176,8 +176,8 @@ def main(test_size, push_to_hub, repo_id):
             ],
             [
                 {"role": "user", "content": "Is the air clean today in Lisbon?"},
-                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_air_quality", "arguments": {"location": "Lisbon, Portugal"}}}]},
-                {"role": "tool", "name": "get_air_quality", "content": "53"},
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_air_quality_index", "arguments": {"location": "Lisbon, Portugal"}}}]},
+                {"role": "tool", "name": "get_air_quality_index", "content": "53"},
                 {"role": "assistant", "content": "The air quality is moderate."},
             ],
             [
@@ -202,7 +202,7 @@ def main(test_size, push_to_hub, repo_id):
                 {"role": "user", "content": "Remind me to call mom at 7 PM."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "create_reminder", "arguments": {"time": "19:00", "note": "Call mom"}}}]},
                 {"role": "tool", "name": "create_reminder", "content": "Reminder set"},
-                {"role": "assistant", "content": "Okay, I’ll remind you to call mom at 7 PM."}
+                {"role": "assistant", "content": "Okay, I'll remind you to call mom at 7 PM."}
             ],
             [
                 {"role": "user", "content": "How strong is the wind in Chicago right now?"},
@@ -222,9 +222,115 @@ def main(test_size, push_to_hub, repo_id):
             [get_weather_forecast, get_wind_conditions],
         ]
     })
-    dataset = dataset.train_test_split(test_size=test_size, shuffle=False)
+    language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
-        dataset.push_to_hub(repo_id)
+        language_modeling_dataset.push_to_hub(repo_id, config_name="messages")
+
+    preference_dataset = Dataset.from_dict({
+        "prompt": [
+            [{"role": "user", "content": "Set a timer for 10 minutes."}],
+            [{"role": "user", "content": "What time is it in Tokyo?"}],
+            [{"role": "user", "content": "Is the air clean today in Lisbon?"}],
+            [{"role": "user", "content": "Play some music."}],
+            [{"role": "user", "content": "What's the weather like tomorrow in Berlin?"}],
+            [{"role": "user", "content": "Turn on the living room lights."}],
+            [{"role": "user", "content": "Remind me to call mom at 7 PM."}],
+            [{"role": "user", "content": "How strong is the wind in Chicago right now?"}],
+        ],
+        "chosen": [
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "start_timer", "arguments": {"duration": 600}}}]},
+                {"role": "tool", "name": "start_timer", "content": "600"},
+                {"role": "assistant", "content": "Timer set for 10 minutes."},
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_current_time", "arguments": {"location": "Tokyo"}}}]},
+                {"role": "tool", "name": "get_current_time", "content": "06:22:48"},
+                {"role": "assistant", "content": "The current time in Tokyo is 06:22 AM."},
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_air_quality_index", "arguments": {"location": "Lisbon, Portugal"}}}]},
+                {"role": "tool", "name": "get_air_quality_index", "content": "53"},
+                {"role": "assistant", "content": "The air quality is moderate."},
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "play_music", "arguments": {"title": "Take Five", "artist": "Dave Brubeck"}}}]},
+                {"role": "tool", "name": "play_music", "content": "{'status': 'Playing'}"},
+                {"role": "assistant", "content": "Enjoy the jazz tunes!"},
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_weather_forecast", "arguments": {"city": "Berlin", "date": "2025-06-16"}}}]},
+                {"role": "tool", "name": "get_weather_forecast", "content": "{'temperature': 22, 'condition': 'partly cloudy'}"},
+                {"role": "assistant", "content": "Tomorrow in Berlin will be partly cloudy with a high of 22°C."}
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "control_light", "arguments": {"room": "living room", "state": "on"}}}]},
+                {"role": "tool", "name": "control_light", "content": "{'state': 'on'}"},
+                {"role": "assistant", "content": "The living room lights are now on."}
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "create_reminder", "arguments": {"time": "19:00", "note": "Call mom"}}}]},
+                {"role": "tool", "name": "create_reminder", "content": "Reminder set"},
+                {"role": "assistant", "content": "Okay, I’ll remind you to call mom at 7 PM."}
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_wind_conditions", "arguments": {"city": "Chicago", "unit": "mph"}}}]},
+                {"role": "tool", "name": "get_wind_conditions", "content": "(14, 'NW')"},
+                {"role": "assistant", "content": "The wind in Chicago is blowing at 14 mph from the northwest."}
+            ],
+        ],
+        "rejected": [
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "start_timer", "arguments": {"duration": 10}}}]},
+                {"role": "tool", "name": "start_timer", "content": "10"},
+                {"role": "assistant", "content": "Timer set for 10 seconds."},
+            ],
+            [
+                {"role": "assistant", "content": "It is 6:22 AM in Tokyo."},
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_air_quality_index", "arguments": {"location": "Lisbon"}}}]},
+                {"role": "tool", "name": "get_air_quality_index", "content": "53"},
+                {"role": "assistant", "content": "The air quality is great."},
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "play_music", "arguments": {"title": "Take Five", "artist": "Daft Punk"}}}]},
+                {"role": "tool", "name": "play_music", "content": "{'status': 'Playing'}"},
+                {"role": "assistant", "content": "Playing your song."},
+            ],
+            [
+                {"role": "assistant", "content": "Tomorrow in Berlin will be hot and sunny."},
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "control_light", "arguments": {"room": "living room", "state": "off"}}}]},
+                {"role": "tool", "name": "control_light", "content": "{'state': 'off'}"},
+                {"role": "assistant", "content": "The living room lights are now off."}
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "create_reminder", "arguments": {"time": "07:00", "note": "Call mom"}}}]},
+                {"role": "tool", "name": "create_reminder", "content": "Reminder set"},
+                {"role": "assistant", "content": "Okay, I'll remind you to call mom at 7 AM."}
+            ],
+            [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_weather_forecast", "arguments": {"city": "Chicago", "date": "2025-06-16"}}}]},
+                {"role": "tool", "name": "get_weather_forecast", "content": "{'temperature': 22, 'condition': 'partly cloudy'}"},
+                {"role": "assistant", "content": "Tomorrow in Chicago will be partly cloudy with a high of 22°C."}
+            ],
+        ],
+        "tools": [
+            [start_timer],
+            [get_current_time],
+            [get_air_quality_index],
+            [play_music],
+            [get_weather_forecast],
+            [control_light],
+            [create_reminder],
+            [get_wind_conditions],
+        ],
+    })
+    preference_dataset = preference_dataset.train_test_split(test_size=test_size, shuffle=False)
+    if push_to_hub:
+        preference_dataset.push_to_hub(repo_id, config_name="preference")
     # fmt: on
 
 
