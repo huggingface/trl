@@ -285,7 +285,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
     return {
         "prompt_ids": unique_prompt_ids,
         "completion_ids": completion_ids,
-        "completion_mask": completion_mask,
+        "env_mask": completion_mask,
         "logprobs": logprobs,
         "env_reward": env_rewards,
         "num_turns": num_turns_list,
