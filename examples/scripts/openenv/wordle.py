@@ -16,9 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv-core @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/sergiopaniego/wordle",
 # ]
 # ///
 
