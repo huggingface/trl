@@ -83,7 +83,7 @@ class DPOConfig(TrainingArguments):
         pad_token (`str`, *optional*):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
-        max_length (`int`, *optional*, defaults to `1024`):
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
