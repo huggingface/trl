@@ -651,13 +651,15 @@ class DPOConfig(TrainingArguments):
         else:  # keep the old default
             self.label_pad_token_id = -100
 
-        if self.max_completion_length is not None:
+        if self.max_completion_length != -1:
             warnings.warn(
                 "`max_completion_length` is deprecated and will be removed in version 0.29.0. We recommend using "
                 "`max_length` instead to control the maximum length of samples.",
                 FutureWarning,
                 stacklevel=2,
             )
+        else:  # keep the old default
+            self.max_completion_length = None
 
         if self.max_prompt_length != -1:
             warnings.warn(
