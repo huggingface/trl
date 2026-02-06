@@ -583,7 +583,7 @@ class DPOConfig(TrainingArguments):
                 "just pass the PEFT model as the `model` argument and leave `ref_model` as `None`, the trainer will "
                 "automatically make a copy of the adapter to use as the reference model.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.use_logits_to_keep is not None:
             warnings.warn(
@@ -648,7 +648,7 @@ class DPOConfig(TrainingArguments):
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.29.0. Use "
                 "`use_liger_kernel` instead.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
             self.use_liger_kernel = self.use_liger_loss
         if self.rpo_alpha is not None:
