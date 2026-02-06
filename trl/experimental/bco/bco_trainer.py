@@ -32,8 +32,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import Accelerator, PartialState, logging
+import transformers
+from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
@@ -715,6 +718,14 @@ class BCOTrainer(BaseTrainer):
             undesirable = train_dataset.filter(
                 lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
             )
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,

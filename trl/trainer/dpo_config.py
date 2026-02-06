@@ -17,8 +17,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-import transformers
-from packaging.version import Version
 from transformers import TrainingArguments
 
 
