@@ -2040,8 +2040,8 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         elif self.loss_type == "sapo":
-            temps = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
-            soft_coef_1 = torch.sigmoid(temps * (coef_1 - 1)) * 4 / temps
+            temperatures = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
+            soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures
             per_token_loss = -soft_coef_1 * advantages
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
