@@ -530,7 +530,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=1.0,  # increase the learning rate to speed up the test
+            learning_rate=1.0,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -618,7 +618,7 @@ class TestDPOTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            learning_rate=1.0,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
         trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -782,7 +782,11 @@ class TestDPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         # Initialize the trainer
-        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
 
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         # The following template is a simplified version of the Qwen chat template, where an additional argument
@@ -1001,6 +1005,7 @@ class TestDPOTrainer(TrlTestCase):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
             report_to="none",
         )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
