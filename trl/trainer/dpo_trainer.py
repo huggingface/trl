@@ -504,6 +504,11 @@ class DPOTrainer(BaseTrainer):
             ref_model_id = ref_model
             ref_model = None
 
+        if args.force_use_ref_model is None:
+            self.force_use_ref_model = ref_model is not None
+        else:
+            self.force_use_ref_model = args.force_use_ref_model
+
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))

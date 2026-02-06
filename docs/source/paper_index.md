@@ -719,7 +719,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=16,  # batch size in Section B of the paper
     learning_rate=1e-3,  # learning rate in Section B of the paper
     beta=0.1,  # β in Section B of the paper,
-    max_prompt_length=128,  # max prompt length in Section B of the paper
     max_length=512,  # max length in Section B of the paper
     label_smoothing=0.1  # label smoothing $\varepsilon$ in Section 6 of the paper
 )
@@ -759,8 +758,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=128,
     learning_rate=5e-7,
     beta=0.01,
-    max_prompt_length=1536,
-    max_completion_length=512,
 )
 ```
 
@@ -862,8 +859,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
     learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
     beta=0.1,  # β in Section 5.2 of the paper,
-    max_prompt_length=512,  # prompt length in Section 5.2 of the paper
-    max_completion_length=512,  # completion length in Section 5.2 of the paper
 )
 ```
 

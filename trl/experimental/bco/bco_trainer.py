@@ -145,7 +145,7 @@ def _tokenize(
     )
 
     if embedding_tokenizer is not None:
-        embedding_tokenized = embedding_tokenizer(batch["prompt"], truncation=True, add_special_tokens=False)
+        embedding_tokenized = embedding_tokenizer(batch["prompt"], add_special_tokens=False)
 
         output.update(
             {
@@ -205,20 +205,10 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         if eos_token_id != all_tokens["answer_input_ids"][-1]:
             max_length -= 1
 
-        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                if kwargs["truncation_mode"] == "keep_start":
-                    all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
-                elif kwargs["truncation_mode"] == "keep_end":
-                    all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
-
-        # if that's still too long, truncate the response
+        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the response
         if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
             for k in ["answer_input_ids", "answer_attention_mask"]:
-                all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
+                all_tokens[k] = all_tokens[k][: max_length - len(all_tokens["prompt_input_ids"])]
 
         # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
         batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
@@ -262,9 +252,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         completion_tokens = kwargs["tokenizer"](
             completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
         )
-        prompt_tokens = kwargs["tokenizer"](
-            prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
-        )
+        prompt_tokens = kwargs["tokenizer"](prompt, add_special_tokens=True)
 
         batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
         batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
@@ -501,15 +489,6 @@ class BCOTrainer(BaseTrainer):
         if args.max_length is not None:
             max_length = args.max_length
 
-        if args.max_prompt_length is None:
-            logger.warning(
-                "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the `BCOConfig`. "
-                "It will be set to `128` by default, but you should do it yourself in the future.",
-            )
-            max_prompt_length = 128
-        if args.max_prompt_length is not None:
-            max_prompt_length = args.max_prompt_length
-
         max_completion_length = None
         if args.max_completion_length is None and self.is_encoder_decoder:
             logger.warning(
@@ -546,7 +525,6 @@ class BCOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
@@ -619,7 +597,6 @@ class BCOTrainer(BaseTrainer):
                 "tokenizer": processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
-                "max_prompt_length": self.max_prompt_length,
                 "max_completion_length": self.max_completion_length,
             }
             train_dataset = train_dataset.map(
@@ -646,7 +623,6 @@ class BCOTrainer(BaseTrainer):
                     "tokenizer": processing_class,
                     "max_length": self.max_length,
                     "truncation_mode": self.truncation_mode,
-                    "max_prompt_length": self.max_prompt_length,
                     "max_completion_length": self.max_completion_length,
                 }
                 eval_dataset = eval_dataset.map(
