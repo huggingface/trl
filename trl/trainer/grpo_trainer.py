@@ -1976,11 +1976,9 @@ class GRPOTrainer(BaseTrainer):
                 mask = completion_mask if not self.tools else completion_mask * tool_mask
                 per_token_logps_diff = (old_per_token_logps - sampling_per_token_logps) * mask
 
-                # Sequence-level geometric mean KL (for OPSM)
                 per_seq_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
                 sampling_mean_kl_div = per_seq_logps_diff / mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
 
-                # Importance sampling ratio - only when correction is enabled
                 if self.vllm_importance_sampling_correction:
                     if self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]:
                         logps_diff = per_seq_logps_diff
