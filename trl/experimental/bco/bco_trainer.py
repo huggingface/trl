@@ -31,9 +31,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import Accelerator, PartialState, logging
 import transformers
-from accelerate import PartialState, logging
+from accelerate import Accelerator, PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset
 from packaging.version import Version

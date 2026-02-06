@@ -24,17 +24,13 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset, IterableDataset, IterableDatasetDict
 from datasets.fingerprint import Hasher
-import transformers
-from accelerate import PartialState, logging
-from accelerate.utils import tqdm
-from datasets import Dataset, IterableDataset
 from packaging.version import Version
-from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,

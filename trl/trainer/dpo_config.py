@@ -515,14 +515,6 @@ class DPOConfig(TrainingArguments):
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
-        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
-        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
-        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
-        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
-            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
-
         if isinstance(self.loss_type, str):
             self.loss_type = [self.loss_type]
         if self.loss_weights is not None and len(self.loss_weights) != len(self.loss_type):
