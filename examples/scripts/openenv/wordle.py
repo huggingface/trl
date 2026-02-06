@@ -105,7 +105,7 @@ from datasets import Dataset
 from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openenv import generate_rollout_completions
+from trl.experimental.openenv import generate_rollout_completions, get_rubric_scores
 
 
 # Ensure src/ is on the path
@@ -325,7 +325,6 @@ def rollout_once(
     logprobs: list[float] = []
     env_mask: list[int] = []  # 1 for model-generated tokens, 0 for environment tokens
     model_outputs: list[str] = []
-    raw_rewards: list[float] = []
     position_scores: list[float] = []
     correct_scores: list[float] = []
     prev_env_output_len: int = 0  # Track length to only add NEW portion each turn
@@ -392,10 +391,23 @@ def rollout_once(
 
         result = env.step(TextArenaAction(message=guess))
 
-        raw_rewards.append(float(result.reward or 0.0))
         observation = result.observation
         correct_score = float(result.reward or 0.0)
-        feedback = extract_wordle_feedback(observation)
+
+        # Calculate position score (greens worth 1.0, yellows worth 0.5)
+        rubric_scores = get_rubric_scores(observation=observation)
+        if rubric_scores:
+            position_score = rubric_scores.get("wordle.greens", 0.0) + 0.5 * rubric_scores.get("wordle.yellows", 0.0)
+        else:
+            feedback = extract_wordle_feedback(observation)
+            if not feedback:
+                position_score = 0.0
+            else:
+                green_count, yellow_count = extract_feedback_counts(feedback)
+                position_score = (green_count + 0.5 * yellow_count) / 5.0
+
+        position_scores.append(position_score)
+        correct_scores.append(correct_score)
 
         full_env_output = format_history(observation.messages) if observation.messages else ""
         new_env_output = full_env_output[prev_env_output_len:].lstrip("\n")
@@ -413,36 +425,27 @@ def rollout_once(
         accumulated_messages.append({"role": "user", "content": user_prompt})
         accumulated_messages.append({"role": "assistant", "content": completion_with_env})
 
-        if not feedback:
-            position_score = 0.0
-        else:
-            green_count, yellow_count = extract_feedback_counts(feedback)
-            position_score = (green_count + 0.5 * yellow_count) / 5.0
+    # Final rewards: correct is binary win/lose, position uses last attempt (or 1.0 if won)
+    correct_reward_value = correct_scores[-1] if correct_scores else 0.0
+    final_position_reward = 1.0 if correct_reward_value >= 1.0 else (position_scores[-1] if position_scores else 0.0)
 
-        position_scores.append(position_score)
-        correct_scores.append(correct_score)
-
-    # Use the final correct reward (win/lose is binary at end)
-    correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
-
-    # Position reward as shaping signal:
-    # - If model WINS: position_reward = 1.0 (no penalty for winning fast)
-    # - If model LOSES: position_reward = last attempt (where it ended up)
-    if correct_reward_value >= 1.0:
-        final_position_reward = 1.0
-    else:
-        final_position_reward = position_scores[-1] if position_scores else 0.0
-
-    return {
+    result_dict = {
         "prompt_ids": prompt_ids,
         "completion_ids": completion_ids,
         "logprobs": logprobs,
         "env_mask": env_mask,
-        "raw_rewards": raw_rewards,
         "correct_reward": correct_reward_value,
         "position_reward": final_position_reward,
         "model_outputs": model_outputs,
     }
+
+    # Add rubric component scores for logging
+    rubric_scores = get_rubric_scores(observation=observation)
+    for name, score in rubric_scores.items():
+        clean_name = name.replace("wordle.", "") if name.startswith("wordle.") else name
+        result_dict[f"rubric_{clean_name}"] = score
+
+    return result_dict
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +555,7 @@ def main() -> None:
         correctness_rewards: list[float] = []
         position_rewards: list[float] = []
         format_rewards: list[float] = []
+        rubric_component_scores: dict[str, list[float]] = {}
 
         for prompt_text in prompts:
             episode = rollout_once(
@@ -571,7 +575,15 @@ def main() -> None:
             position_rewards.append(episode["position_reward"])
             format_rewards.append(compute_format_reward(episode["model_outputs"]))
 
-        return {
+            # Collect rubric component scores
+            for key, value in episode.items():
+                if key.startswith("rubric_"):
+                    component_name = key
+                    if component_name not in rubric_component_scores:
+                        rubric_component_scores[component_name] = []
+                    rubric_component_scores[component_name].append(value)
+
+        result = {
             "prompt_ids": episode_prompt_ids,
             "completion_ids": episode_completion_ids,
             "logprobs": episode_logprobs,
@@ -580,6 +592,11 @@ def main() -> None:
             "position_reward": position_rewards,
             "format_reward": format_rewards,
         }
+
+        # Add rubric component scores to result for logging
+        result.update(rubric_component_scores)
+
+        return result
 
     trainer = GRPOTrainer(
         model=args.model_id,

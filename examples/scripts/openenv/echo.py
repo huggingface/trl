@@ -211,7 +211,6 @@ def main():
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
         outputs = generate_rollout_completions(trainer, prompts)
         tokenizer = trainer.processing_class
-
         completions_text = [tokenizer.decode(output["completion_ids"], skip_special_tokens=True) for output in outputs]
 
         env_result = client.reset()

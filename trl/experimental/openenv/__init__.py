@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .utils import generate_rollout_completions
+from .utils import generate_rollout_completions, get_rubric_scores
 
 
-__all__ = ["generate_rollout_completions"]
+__all__ = ["generate_rollout_completions", "get_rubric_scores"]

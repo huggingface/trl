@@ -207,3 +207,70 @@ def _generate_rollout_completions_colocate(
         trainer.vllm_generation.llm.sleep(level=2)
 
     return results
+
+
+def get_rubric_scores(env: Any = None, observation: Any = None) -> dict[str, float]:
+    """
+    Extract named rubric component scores from an environment or observation.
+
+    This function supports multiple ways of accessing rubric scores:
+    1. From observation.info["reward_signals"] (TextArena pattern)
+    2. From observation.metadata["reward_signals"] (TextArena pattern)
+    3. From env.rubric.named_rubrics() (direct rubric introspection)
+    4. From env.rubric.last_score (single rubric)
+
+    Args:
+        env: An OpenEnv environment instance with optional rubric support
+        observation: An observation object that may contain reward_signals
+
+    Returns:
+        Dictionary mapping rubric component names to float scores.
+        Returns empty dict if no rubric scores are available.
+
+    Example:
+        >>> # From observation (TextArena pattern)
+        >>> scores = get_rubric_scores(observation=observation)
+        >>> # scores might be: {"wordle.greens": 0.8, "wordle.yellows": 0.4, ...}
+        >>>
+        >>> # From environment rubric
+        >>> scores = get_rubric_scores(env=env)
+        >>> # scores might be: {"greens": 0.8, "yellows": 0.4, ...}
+    """
+    scores = {}
+
+    # First, try to extract from observation (TextArena pattern)
+    if observation is not None:
+        try:
+            # Try observation.info["reward_signals"]
+            if hasattr(observation, "info") and isinstance(observation.info, dict):
+                reward_signals = observation.info.get("reward_signals", {})
+                if reward_signals:
+                    scores.update({k: float(v) for k, v in reward_signals.items()})
+                    return scores
+
+            # Try observation.metadata["reward_signals"]
+            if hasattr(observation, "metadata") and isinstance(observation.metadata, dict):
+                reward_signals = observation.metadata.get("reward_signals", {})
+                if reward_signals:
+                    scores.update({k: float(v) for k, v in reward_signals.items()})
+                    return scores
+        except Exception:
+            pass
+
+    # Fall back to environment rubric introspection
+    if env is not None:
+        try:
+            # Check if env has rubric attribute
+            if hasattr(env, "rubric") and env.rubric is not None:
+                # Check if rubric has named_rubrics method (composable rubrics)
+                if hasattr(env.rubric, "named_rubrics"):
+                    for name, rubric in env.rubric.named_rubrics():
+                        if hasattr(rubric, "last_score"):
+                            scores[name] = float(rubric.last_score)
+                # Single rubric with last_score
+                elif hasattr(env.rubric, "last_score"):
+                    scores["rubric"] = float(env.rubric.last_score)
+        except Exception:
+            pass
+
+    return scores
