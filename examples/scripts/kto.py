@@ -35,7 +35,7 @@ python trl/scripts/kto.py \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
     --output_dir kto-aligned-model \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --logging_first_step
 
 # QLoRA:
@@ -49,7 +49,7 @@ python trl/scripts/kto.py \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
     --output_dir kto-aligned-model-lora \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --logging_first_step \
     --use_peft \
     --load_in_4bit \
