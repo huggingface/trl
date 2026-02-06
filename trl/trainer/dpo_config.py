@@ -538,7 +538,7 @@ class DPOConfig(TrainingArguments):
                 "`loss_type='aot_pair'` is deprecated and will be removed in a version 0.29.0. Please use "
                 "`loss_type='aot_unpaired'` instead.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
             self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
         if self.max_prompt_length is not None:
@@ -547,7 +547,7 @@ class DPOConfig(TrainingArguments):
                 "is no longer used. We recommend filtering out samples that exceed your desired prompt length during "
                 "dataset preprocessing.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.max_completion_length is not None:
             warnings.warn(
@@ -555,7 +555,7 @@ class DPOConfig(TrainingArguments):
                 "parameter is no longer used. We recommend using the `max_length` parameter to control the total "
                 "sequence length.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.ref_model_init_kwargs is not None:
             warnings.warn(
@@ -565,7 +565,7 @@ class DPOConfig(TrainingArguments):
                 "instantiating the reference model yourself and passing it to the `DPOTrainer`. This argument is no "
                 "longer used.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.generate_during_eval is not None:
             warnings.warn(
@@ -573,7 +573,7 @@ class DPOConfig(TrainingArguments):
                 "parameter is no longer used. Please use a dedicated callback, like `LogCompletionsCallback`. This "
                 "argument is no longer used.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.force_use_ref_model:
             warnings.warn(
@@ -591,7 +591,7 @@ class DPOConfig(TrainingArguments):
                 "now automatically uses a more efficient method than using `use_logits_to_keep`. You can safely "
                 "ignore this parameter.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.model_adapter_name is not None:
             warnings.warn(
@@ -601,7 +601,7 @@ class DPOConfig(TrainingArguments):
                 "the adapter to use as the reference model. For training, load a single adapter only, and it must "
                 "be named `'default'`; do not load it under a custom name.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.ref_adapter_name is not None:
             warnings.warn(
@@ -611,28 +611,28 @@ class DPOConfig(TrainingArguments):
                 "the adapter to use as the reference model. For training, load a single adapter only, and it must "
                 "be named `'default'`; do not load it under a custom name.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.label_pad_token_id is not None:
             warnings.warn(
                 "The `label_pad_token_id` argument is deprecated and will be removed in version 0.29.0. From now "
                 "on, the label padding token ID is hardcoded to -100 in the trainer.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.tools is not None:
             warnings.warn(
                 "`tools` is deprecated and will be removed in version 0.29.0. This parameter is no longer used. "
                 "Provide tools per example in the dataset via a `tools` column instead.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if isinstance(self.f_divergence_type, FDivergenceType):
             warnings.warn(
                 "`f_divergence_type` will require a string in 0.29.0; `FDivergenceType` is deprecated. Use one of: "
                 "`reverse_kl`, `forward_kl`, `js_divergence`, `alpha_divergence`.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
             self.f_divergence_type = self.f_divergence_type.value
         if self.reference_free is not None:
@@ -641,7 +641,7 @@ class DPOConfig(TrainingArguments):
                 "no longer used and the DPO trainer no longer supports reference-free training. For reference-free "
                 "training, use the CPOTrainer instead.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if self.use_liger_loss is not None:
             warnings.warn(
@@ -656,7 +656,7 @@ class DPOConfig(TrainingArguments):
                 "The `rpo_alpha` argument is deprecated and will be removed in version 0.29.0. To migrate, add 'sft' "
                 "to `loss_type` and set its weight in `loss_weights` to `rpo_alpha`.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
             if "sft" not in self.loss_type:
                 self.loss_type.append("sft")
