@@ -2029,7 +2029,7 @@ class GRPOTrainer(BaseTrainer):
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
-        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
             if self.args.delta is not None:
@@ -2079,6 +2079,11 @@ class GRPOTrainer(BaseTrainer):
         elif self.loss_type in ["cispo", "dapo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
+        elif self.loss_type == "luspo":
+            # Length-Unbiased Sequence Policy Optimization (LUSPO)
+            loss = (per_token_loss * mask).sum(-1).mean()
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            loss = loss / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 

@@ -205,7 +205,7 @@ class TestGRPOTrainer(TrlTestCase):
         expected_sapo_token_loss = torch.full_like(sample_token_importance_ratio, 2.0)
         torch.testing.assert_close(sapo_token_loss, expected_sapo_token_loss)
 
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo"])
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo"])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

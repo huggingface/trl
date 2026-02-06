@@ -700,6 +700,7 @@ class GRPOConfig(TrainingArguments):
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
             "off-policy updates while preserving useful learning signals."
+            "'luspo': Length-Unbiased Sequence Policy Optimization loss. Similar to 'grpo' but without the length normalization within the sequence."
         },
     )
     mask_truncated_completions: bool = field(
