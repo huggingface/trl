@@ -83,10 +83,10 @@ class TestDFTLoss(TrlTestCase):
 class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_basic_padding(self):
         """Test basic padding functionality without completion masks."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
@@ -95,13 +95,13 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_completion_mask(self):
         """Test completion mask functionality."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
             {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
             {"input_ids": [4, 5], "completion_mask": [0, 1]},
         ]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
@@ -194,10 +194,10 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_custom_position_ids_but_no_padding_free(self):
         """Test that custom position_ids are ignored if padding_free is False."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3], "seq_lengths": [1, 2]}, {"input_ids": [4, 5], "seq_lengths": [2]}]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
@@ -206,10 +206,10 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_single_example(self):
         """Test collator with a single example."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3, 4]}]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "labels"}
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4]]))
@@ -230,13 +230,13 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
     def test_assistant_masks(self):
         """Test handling of assistant masks in examples."""
-        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [
             {"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 1]},
             {"input_ids": [4, 5], "assistant_masks": [0, 1]},
         ]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
@@ -955,8 +955,14 @@ class TestSFTTrainer(TrlTestCase):
         assert "chat_template_kwargs" in dataset.features
 
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
         )
+
+        # Assert trainer uses the same chat template as tokenizer
+        assert trainer.processing_class.chat_template == tokenizer.chat_template
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1170,7 +1176,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_toolcall_data(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/toolcall", split="train")
+        dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")

@@ -44,7 +44,7 @@ accelerate launch \
     --save_steps 300 \
     --learning_rate 8e-5 \
     --max_grad_norm 0.3 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --lr_scheduler_type cosine \
     --push_to_hub False \
     --dtype bfloat16
