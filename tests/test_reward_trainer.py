@@ -494,6 +494,7 @@ class TestRewardTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
+            processing_class=tokenizer,
         )
 
         # Assert trainer uses the same chat template as tokenizer
