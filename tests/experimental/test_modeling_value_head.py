@@ -15,9 +15,10 @@
 
 import torch
 
-from trl import AutoModelForCausalLMWithValueHead, create_reference_model
+from trl import create_reference_model
+from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
 
-from .testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase
 
 
 class TestReferenceModel(TrlTestCase):
