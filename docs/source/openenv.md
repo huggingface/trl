@@ -114,6 +114,29 @@ args = GRPOConfig(
 # CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen3-1.7B --tensor-parallel-size 4
 ```
 
+## OpenEnv Rubric System
+
+OpenEnv environments use Rubrics to expose composable reward components. Instead of a single scalar reward, rubrics provide named component scores (e.g., `"wordle.greens"`, `"wordle.yellows"`, `"wordle.correct"`) for logging and custom reward shaping.
+
+### Using Rubrics in TRL
+
+Extract rubric scores from observations using `get_rubric_scores()`:
+
+```python
+from trl.experimental.openenv import get_rubric_scores
+
+# In your rollout function
+result = env.step(action)
+scores = get_rubric_scores(observation=result.observation)
+# Example: {"wordle.greens": 0.8, "wordle.yellows": 0.4, "wordle.correct": 1.0}
+
+# Use in reward functions
+def reward_correct(completions, **kwargs):
+    return [float(r) for r in kwargs.get("rubric_correct", [0.0] * len(completions))]
+```
+
+See [`examples/scripts/openenv/wordle.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/wordle.py) for a complete example using TextArena rubrics.
+
 ## Running the Environments
 
 You can run OpenEnv environments in three different ways: 
