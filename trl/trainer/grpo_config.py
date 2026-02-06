@@ -233,10 +233,10 @@ class GRPOConfig(TrainingArguments):
               clipped weights are then multiplied with the advantages and policy model's log probs. Individual token
               losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
               This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
-            - `"sapo"`: Soft Adaptive Policy Optimization loss, as introduced in the [Soft Adaptive Policy Optimization
-              paper](https://huggingface.co/papers/2506.13585). Replaces hard clipping with a smooth,
-              temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
-              learning signals.
+            - `"luspo"`: Length-Unbiased Sequence Policy Optimization loss. Similar to `"grpo"` but without the length
+              normalization within the sequence. This method is a modification of GSPO and requires
+              `importance_sampling_level="sequence"`. Introduced in the [LUSPO
+              paper](https://arxiv.org/abs/2602.05261).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -700,7 +700,9 @@ class GRPOConfig(TrainingArguments):
             "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
             "off-policy updates while preserving useful learning signals."
-            "'luspo': Length-Unbiased Sequence Policy Optimization loss. Similar to 'grpo' but without the length normalization within the sequence."
+            "'luspo': Length-Unbiased Sequence Policy Optimization loss. Similar to 'grpo' but without the length "
+            "normalization within the sequence. This method is a modification of GSPO and requires "
+            "`importance_sampling_level=\"sequence\"`. Introduced in the [LUSPO paper](https://arxiv.org/abs/2602.05261)."
         },
     )
     mask_truncated_completions: bool = field(

@@ -517,6 +517,9 @@ class GRPOTrainer(BaseTrainer):
                 "When using `sapo` loss, both `sapo_temperature_neg` and `sapo_temperature_pos` must be set."
             )
 
+        if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
+            raise ValueError("When using `luspo` loss, `importance_sampling_level` must be set to `sequence`.")
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
@@ -2081,7 +2084,7 @@ class GRPOTrainer(BaseTrainer):
             loss = (per_token_loss * mask).sum() / normalizer
         elif self.loss_type == "luspo":
             # Length-Unbiased Sequence Policy Optimization (LUSPO)
-            loss = (per_token_loss * mask).sum(-1).mean()
+            loss = (per_token_loss * mask.sum(-1)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss / normalizer
         else:
