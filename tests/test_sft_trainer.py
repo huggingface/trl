@@ -958,6 +958,9 @@ class TestSFTTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
+        # Assert trainer uses the same chat template as tokenizer
+        assert trainer.processing_class.chat_template == tokenizer.chat_template
+
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
