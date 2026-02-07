@@ -171,6 +171,16 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')"
 ]
+filterwarnings = [
+    # PyTorch JIT deprecations (upstream, not actionable in TRL)
+    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+
+    # PyTorch DataLoader pin_memory device argument deprecations
+    # Triggered internally by torch.utils.data, not by our code
+    "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
+    "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
+]
 addopts = [
     "-k", "not experimental",
 ]
