@@ -256,27 +256,39 @@ def prepare_fsdp(model, accelerator):
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
     from torch.distributed.fsdp import FSDPModule
     from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
-
+    fsdp_plugin = accelerator.state.fsdp_plugin
+    #check if using fsdp2
+    use_fsdp2 = getattr(fsdp_plugin, "fsdp_version", 1) == 2
     # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
     # don't wrap it again
     if not (isinstance(model, FSDP) or isinstance(model, FSDPModule)):
-        accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
-        fsdp_plugin = accelerator.state.fsdp_plugin
-        kwargs = {
-            "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
-            "cpu_offload": fsdp_plugin.cpu_offload,
-            "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
-            "mixed_precision": fsdp_plugin.mixed_precision_policy,
-            "sync_module_states": fsdp_plugin.sync_module_states,
-            "backward_prefetch": fsdp_plugin.backward_prefetch,
-            "forward_prefetch": fsdp_plugin.forward_prefetch,
-            "use_orig_params": fsdp_plugin.use_orig_params,
-            "param_init_fn": fsdp_plugin.param_init_fn,
-            "ignored_modules": fsdp_plugin.ignored_modules,
-            "limit_all_gathers": fsdp_plugin.limit_all_gathers,
-            "device_id": accelerator.device,
-        }
-        model = FSDP(model, **kwargs)
+        if use_fsdp2:
+            from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, OffloadPolicy, fully_shard
+            fully_shard(
+                model,
+                mesh=getattr(fsdp_plugin, "mesh",  None),
+                reshard_after_forward=fsdp_plugin.reshard_after_forward not in ("NO_SHARD", "SHARD_GRAD_OP") if isinstance(fsdp_plugin.reshard_after_forward, str) else fsdp_plugin.reshard_after_forward,
+                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                offload_policy=CPUOffloadPolicy() if fsdp_plugin.cpu_offload is True or getattr(fsdp_plugin.cpu_offload, "offload_params", False) else OffloadPolicy(),
+                ignored_params={p for m in fsdp_plugin.ignored_modules for p in m.parameters()} if fsdp_plugin.ignored_modules else None
+            )
+        else:
+            accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+            kwargs = {
+                "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
+                "cpu_offload": fsdp_plugin.cpu_offload,
+                "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
+                "mixed_precision": fsdp_plugin.mixed_precision_policy,
+                "sync_module_states": fsdp_plugin.sync_module_states,
+                "backward_prefetch": fsdp_plugin.backward_prefetch,
+                "forward_prefetch": fsdp_plugin.forward_prefetch,
+                "use_orig_params": fsdp_plugin.use_orig_params,
+                "param_init_fn": fsdp_plugin.param_init_fn,
+                "ignored_modules": fsdp_plugin.ignored_modules,
+                "limit_all_gathers": fsdp_plugin.limit_all_gathers,
+                "device_id": accelerator.device,
+            }
+            model = FSDP(model, **kwargs)
     model.eval()
     return model
 
