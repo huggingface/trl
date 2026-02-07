@@ -2083,8 +2083,7 @@ class GRPOTrainer(BaseTrainer):
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
         elif self.loss_type == "luspo":
-            # Length-Unbiased Sequence Policy Optimization (LUSPO)
-            loss = (per_token_loss * mask.sum(-1)).mean()
+            loss = (per_token_loss * mask.sum(-1, keepdim=True)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss / normalizer
         else:
