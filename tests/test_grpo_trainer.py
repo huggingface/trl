@@ -2137,6 +2137,62 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_training_with_malformed_tool_calls(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            # If input_ids.shape[0] < 3, it means that it's a second call, which should not happen here
+            assert input_ids.shape[0] == 3
+            # fmt: off
+            completion_ids = torch.tensor(
+                [
+                    # '<tool_call>\n{"arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+                    # an invalid tool call with wrong argument name
+                    # '<tool_call>\n{"arguments": {}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 16370, 788, 4687, 532, 151658, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    # "<tool_call>\n{}\n</tool_call><|im_end|>"
+                    [151657, 198, 16094, 151658, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                ],
+                device=input_ids.device,
+            )
+            # fmt: on
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_mismatched_reward_processing_classes_length(self):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
