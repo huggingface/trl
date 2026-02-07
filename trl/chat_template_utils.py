@@ -275,6 +275,289 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     )
 
 
+# docstyle-ignore
+qwen3_chat_template_all_assistant = r"""
+{%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0].role == 'system' %}
+        {{- messages[0].content + '\n\n' }}
+    {%- endif %}
+    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {%- if messages[0].role == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
+{%- for message in messages[::-1] %}
+    {%- set index = (messages|length - 1) - loop.index0 %}
+    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
+        {%- set ns.multi_step_tool = false %}
+        {%- set ns.last_query_index = index %}
+    {%- endif %}
+{%- endfor %}
+{%- for message in messages %}
+    {%- if message.content is string %}
+        {%- set content = message.content %}
+    {%- else %}
+        {%- set content = '' %}
+    {%- endif %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {%- set reasoning_content = '' %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- if '</think>' in content %}
+                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+            {%- endif %}
+        {%- endif %}
+
+        {{- '<|im_start|>' + message.role }}
+        {% generation %}
+        {%- if loop.index0 > ns.last_query_index %}
+            {%- if loop.last or (not loop.last and reasoning_content) %}
+                {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+            {%- else %}
+                {{- content }}
+            {%- endif %}
+        {%- else %}
+            {{- content }}
+        {%- endif %}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif %}
+                {{- '}\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>' }}
+        {% endgeneration %}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\n\n</think>\n\n' }}
+    {%- endif %}
+{%- endif %}"""
+
+# docstyle-ignore
+qwen3_chat_template_final_assistant = r"""
+{%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0].role == 'system' %}
+        {{- messages[0].content + '\n\n' }}
+    {%- endif %}
+    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {%- if messages[0].role == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- set last_ai = namespace(idx=-1) %}
+{%- for m in messages %}
+    {%- if m.role == 'assistant' %}
+        {%- set last_ai.idx = loop.index0 %}
+    {%- endif %}
+{%- endfor %}
+{%- for message in messages %}
+    {%- if message.content is string %}
+        {%- set content = message.content %}
+    {%- else %}
+        {%- set content = '' %}
+    {%- endif %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {%- set reasoning_content = '' %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- if '</think>' in content %}
+                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+            {%- endif %}
+        {%- endif %}
+
+        {{- '<|im_start|>' + message.role }}
+        {%- if loop.index0 == last_ai.idx %}
+        {{- '\n' }}{% generation %}{%- if loop.last or (not loop.last and reasoning_content) %}
+            {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {%- else %}
+            {{- content }}
+        {%- endif %}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif %}
+                {{- '}\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>' }}
+        {% endgeneration %}
+        {%- else %}
+        {{- '\n' + content }}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif %}
+                {{- '}\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\n\n</think>\n\n' }}
+    {%- endif %}
+{%- endif %}"""
+
+
+def add_generation_tags(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
+    r"""
+    Adds the appropriate generation tags to the tokenizer.
+
+    At the time of initial implementation, many tokenizers do not use the {% generation %} {% endgeneration %} tags
+    that are necessary for using 'assistant_only_loss=True'. While waiting for broader adoption, we provide this
+    utility function to manually set the response schema for known chat templates.
+
+    Args:
+        tokenizer (`PreTrainedTokenizer`):
+            Tokenizer to which the response schema will be added.
+
+    Returns:
+        `PreTrainedTokenizer`:
+            Tokenizer with the added response schema.
+
+    Examples:
+
+    ```python
+    >>> from tokenizers import AutoTokenizer
+    >>> from trl.chat_template_utils import add_generation_tags
+    # Load tokenizer
+
+    >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    # Automatically add generation tags
+
+    >>> tokenizer = add_generation_tags(tokenizer)
+    # Apply template with assistant token masking
+
+    >>> conversation = [
+    ...     {"role": "user", "content": "Hello assistant"},
+    ...     {"role": "assistant", "content": "Hello user"},
+    ...     {"role": "user", "content": "How are you?"},
+    ...     {"role": "assistant", "content": "I'm good"},
+    ... ]
+
+    >>> tokenized_output = tokenizer.apply_chat_template(
+    ...     conversation,
+    ...     return_assistant_tokens_mask=True,
+    ...     return_dict=True,
+    ... )
+    # BEFORE
+    # {'input_ids': [151644, 872, 198, 9707, 17847, 151645, 198, 151644, 77091, 198, 9707, 1196, 151645, 198, 151644, 872, 198, 4340, 525, 498, 30, 151645, 198, 151644, 77091, 198, 151667, 271, 151668, 271, 40, 2776, 1661, 151645, 198],
+    #  'attention_mask': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    #  'assistant_masks': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    # }
+    
+    # AFTER
+    # {'input_ids': [151644, 872, 198, 9707, 17847, 151645, 198, 151644, 77091, 198, 9707, 1196, 151645, 198, 151644, 872, 198, 4340, 525, 498, 30, 151645, 198, 151644, 77091, 198, 151667, 271, 151668, 271, 40, 2776, 1661, 151645, 198],
+    #  'attention_mask': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    #  'assistant_masks': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    # }
+    ```
+    """
+    # note that the Qwen team actually rejected the request to change their Qwen3 chat templates on a HuggingFace discussion: https://huggingface.co/Qwen/Qwen3-8B/discussions/14
+    # while their response makes sense within their context on a model-wide basis, if the user passes 'assistant_only_loss=True' we probably want to support this
+
+    # Full credit to HuggingFace users 'waleko' and 'HarryMayne' for their progress with Qwen3, much of the code and the templates above is taken from:
+    # https://huggingface.co/Qwen/Qwen3-8B/discussions/14 and https://github.com/HarryMayne/qwen_3_chat_templates
+    if tokenizer.chat_template == qwen3_chat_template:
+        tokenizer.chat_template = qwen3_chat_template_all_assistant
+    # probably want to add support here for most other popular model families like Llama 2/3/3.1, OLMo 2/3/3.1 etc... is there a way to do this fully automatically?
+        return tokenizer
+
+    raise ValueError(
+        "Unrecognized chat template, failed to add generation tags. Please manually set the generation tags on the "
+        "tokenizer or processor. See the Transformers "
+        "[docs on assistant messages only](https://huggingface.co/docs/trl/en/sft_trainer#train-on-assistant-messages-only) and the Tokenizers "
+        "[docs on the assistant tokens mask](https://huggingface.co/docs/transformers/main_classes/tokenizer#transformers.PythonBackend.apply_chat_template.return_assistant_tokens_mask)"
+        "for more details on generation tags and assistant loss."
+    )
+
+
 def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     """
     Check whether the chat template preserves prefixes when applied.
