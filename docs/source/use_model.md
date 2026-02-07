@@ -9,7 +9,7 @@ If you have fine-tuned a model fully, meaning without the use of PEFT you can si
 ```python
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-model_name_or_path = "kashif/stack-llama-2" #path/to/your/model/or/name/on/hub
+model_name_or_path = "Qwen/Qwen3-0.6B" #path/to/your/model/or/name/on/hub
 device = "cpu" # or "cuda" if you have a GPU
 
 model = AutoModelForCausalLM.from_pretrained(model_name_or_path).to(device)
@@ -25,7 +25,7 @@ Alternatively you can also use the pipeline:
 ```python
 from transformers import pipeline
 
-model_name_or_path = "kashif/stack-llama-2" #path/to/your/model/or/name/on/hub
+model_name_or_path = "Qwen/Qwen3-0.6B" #path/to/your/model/or/name/on/hub
 pipe = pipeline("text-generation", model=model_name_or_path)
 print(pipe("This movie was really")[0]["generated_text"])
 ```
@@ -36,7 +36,7 @@ print(pipe("This movie was really")[0]["generated_text"])
 from peft import PeftConfig, PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-base_model_name = "kashif/stack-llama-2" #path/to/your/model/or/name/on/hub
+base_model_name = "Qwen/Qwen3-0.6B" #path/to/your/model/or/name/on/hub
 adapter_model_name = "path/to/my/adapter"
 
 model = AutoModelForCausalLM.from_pretrained(base_model_name)
