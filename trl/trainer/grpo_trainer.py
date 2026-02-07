@@ -487,6 +487,9 @@ class GRPOTrainer(BaseTrainer):
             raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
+        self.smoothing_alpha = args.smoothing_alpha
+        self.trust_region_method = args.trust_region_method
+
         if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
@@ -2031,14 +2034,24 @@ class GRPOTrainer(BaseTrainer):
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
         elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
-            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-            # Two-sided clipping
-            if self.args.delta is not None:
-                coef_1 = torch.clamp(coef_1, max=self.args.delta)
+            if self.trust_region_method == "clip":
+                coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+                # Two-sided clipping
+                if self.args.delta is not None:
+                    coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
-            per_token_loss1 = coef_1 * advantages
-            per_token_loss2 = coef_2 * advantages
-            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+                per_token_loss1 = coef_1 * advantages
+                per_token_loss2 = coef_2 * advantages
+                per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+            elif self.trust_region_method == "pspo":
+                # smooth the ratio (equiv. to smoothing prob when smoothing toward behaviour policy)
+                coef_2 = (1.0 - self.smoothing_alpha) * coef_1 + self.smoothing_alpha
+                per_token_loss1 = None
+                per_token_loss2 = None
+                # always use smoothing for loss (no min)
+                per_token_loss = -(coef_2 * advantages.unsqueeze(1))
+            else:
+                raise ValueError(f"Unkown trust region method: {self.trust_region_method}")
         elif self.loss_type == "sapo":
             temperatures = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
             soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures

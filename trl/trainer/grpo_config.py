@@ -816,6 +816,26 @@ class GRPOConfig(TrainingArguments):
             "prompts are logged."
         },
     )
+    trust_region_method: str = field(
+        default="clip",
+        metadata={
+            "help": (
+                "Which trust-region constraint to use. Options:\n"
+                "  - 'clip': Standard PPO/GRPO ratio clipping (default)\n"
+                "  - 'pspo': Probability smoothing toward behavior policy\n"
+                "See https://arxiv.org/abs/2509.21282 for details on PSPO."
+            )
+        },
+    )
+    smoothing_alpha: float = field(
+        default=0.1,
+        metadata={
+            "help": "Smoothing strength in [0,1]. For use with pspo trust_region_method. 0 disables smoothing; 1 is maximum smoothing."
+        },
+    )
+
+    # Deprecated arguments
+    max_prompt_length: int | None = field(
     log_completions_hub_repo: str | None = field(
         default=None,
         metadata={
@@ -889,3 +909,27 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_kernel:
             raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
+
+        if self.max_prompt_length is not None:
+            warnings.warn(
+                "The `max_prompt_length` argument is deprecated and will be removed in version 0.28.0. You should "
+                "instead filter your dataset before training to ensure that prompts do not exceed your desired "
+                "length.",
+                FutureWarning,
+                stacklevel=2,
+            )
+
+        if self.wandb_log_unique_prompts is not None:
+            warnings.warn(
+                "The `wandb_log_unique_prompts` argument is deprecated and will be removed in version 0.27.0. Please "
+                "use `log_unique_prompts` instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self.log_unique_prompts = self.wandb_log_unique_prompts
+
+        valid_tr_methods = {"clip", "pspo"}
+        if self.trust_region_method not in valid_tr_methods:
+            raise ValueError(
+                f"trust_region_method must be one of {valid_tr_methods}, got {self.trust_region_method!r}."
+            )
