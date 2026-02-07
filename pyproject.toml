@@ -175,6 +175,6 @@ addopts = [
     "-k", "not experimental",
 ]
 filterwarnings = [
-    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
     "error::DeprecationWarning",
+    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
 ]
