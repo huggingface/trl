@@ -174,3 +174,6 @@ markers = [
 addopts = [
     "-k", "not experimental",
 ]
+filterwarnings = [
+    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+]
