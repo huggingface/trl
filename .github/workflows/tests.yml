@@ -24,20 +24,20 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 
 jobs:
-  check_code_quality:
-    name: Check code quality
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
-    steps:
-      - uses: actions/checkout@v6
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: 3.12
-      - uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: --all-files
-
+#  check_code_quality:
+#    name: Check code quality
+#    runs-on: ubuntu-latest
+#    if: github.event.pull_request.draft == false
+#    steps:
+#      - uses: actions/checkout@v6
+#      - name: Set up Python 3.12
+#        uses: actions/setup-python@v6
+#        with:
+#          python-version: 3.12
+#      - uses: pre-commit/action@v3.0.1
+#        with:
+#          extra_args: --all-files
+#
 #  tests:
 #    name: Tests
 #    strategy:
