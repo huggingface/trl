@@ -29,7 +29,7 @@ TRL is a cutting-edge library designed for post-training foundation models using
 
 ## Highlights
 
-- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
+- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`HICRATrainer`](https://huggingface.co/docs/trl/hicra_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
 
 - **Efficient and scalable**:
   - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
@@ -106,6 +106,34 @@ trainer.train()
 
 > [!NOTE]
 > For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
+
+### `HICRATrainer`
+
+[`HICRATrainer`](https://huggingface.co/docs/trl/hicra_trainer) implements [Hierarchy-Aware Credit Assignment (HICRA)](https://huggingface.co/papers/2509.03646), which extends GRPO by focusing optimization on strategic planning tokens to develop hierarchical reasoning capabilities.
+
+```python
+from datasets import load_dataset
+from trl import HICRATrainer, HICRAConfig
+from trl.rewards import accuracy_reward
+
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+
+config = HICRAConfig(
+    hicra_alpha=0.2,  # Amplification factor for planning tokens
+    use_hicra=True,   # Enable HICRA advantage modification
+)
+
+trainer = HICRATrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=accuracy_reward,
+    args=config,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+> [!TIP]
+> HICRA is particularly effective for complex reasoning tasks where strategic planning is important.
 
 ### `DPOTrainer`
 
