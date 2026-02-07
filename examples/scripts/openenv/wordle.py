@@ -16,9 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv-core @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/sergiopaniego/wordle",
 # ]
 # ///
 
@@ -535,7 +535,7 @@ def main() -> None:
         top_p=args.top_p,
         vllm_gpu_memory_utilization=0.25,
         vllm_max_model_length=8192,
-        vllm_importance_sampling_correction=False,
+        vllm_importance_sampling_mode="token_truncate",  # Less aggressive than default sequence_mask
         optim="adamw_torch",
         max_grad_norm=1.0,  # Clip gradients to prevent explosion
     )
