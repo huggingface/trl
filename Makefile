@@ -5,7 +5,7 @@ check_dirs := examples tests trl
 ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
 
 test:
-	pytest -W default::DeprecationWarning -W error::DeprecationWarning -n auto -m "not slow and not low_priority" -s -v tests/
+	pytest -n auto -m "not slow and not low_priority" -s -v tests/
 
 precommit:
 	python scripts/add_copyrights.py
