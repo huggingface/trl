@@ -47,7 +47,6 @@ def sanitize_logprob(logprob):
 
     return value
 
-    return value
 
 
 if TYPE_CHECKING:
