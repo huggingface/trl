@@ -37,6 +37,7 @@ import torch
 
 MODEL_REVISIONS = {
     # Add model_id: revision mappings here to test PRs
+    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration": "refs/pr/5",
 }
 
 
