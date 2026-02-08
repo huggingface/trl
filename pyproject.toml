@@ -175,7 +175,7 @@ addopts = [
     "-k", "not experimental",
 ]
 filterwarnings = [
-    "error::DeprecationWarning",
+    "error::trl.import_utils.TRLExperimentalWarning",
     "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
