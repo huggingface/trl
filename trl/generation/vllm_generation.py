@@ -48,7 +48,6 @@ def sanitize_logprob(logprob):
     return value
 
 
-
 if TYPE_CHECKING:
     from accelerate import Accelerator
     from peft import PeftModel
