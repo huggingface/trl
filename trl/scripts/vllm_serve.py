@@ -34,6 +34,7 @@ from packaging.version import Version
 from transformers import AutoTokenizer, is_torch_xpu_available, is_vision_available
 
 from trl import TrlParser
+from trl.generation.vllm_generation import sanitize_logprob
 from trl.import_utils import (
     is_fastapi_available,
     is_pydantic_available,
@@ -429,17 +430,6 @@ def chunk_list(lst: list, n: int) -> list[list]:
     """
     k, r = divmod(len(lst), n)
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
-
-
-def sanitize_logprob(logprob):
-    import math
-
-    value = logprob.logprob
-    if math.isnan(value):
-        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
-        return None
-
-    return value
 
 
 def _replace_prefix_tokens(

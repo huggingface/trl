@@ -15,6 +15,7 @@
 import inspect
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -26,9 +27,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
@@ -494,6 +497,14 @@ class DPOTrainer(BaseTrainer):
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -765,7 +776,19 @@ class DPOTrainer(BaseTrainer):
     ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
+
+        Note: Unlike `tokenize_row`, this method does not truncate prompts even if `max_prompt_length` is set. For
+        vision models, prompts contain image tokens that must exactly match the image features (pixel_values).
+        Truncating these tokens would cause a mismatch, leading to errors during the forward pass, like "Image features
+        and image tokens do not match". Users should filter their datasets to ensure prompts are an appropriate length
+        before training.
         """
+        if max_prompt_length is not None:
+            warnings.warn(
+                "max_prompt_length is not supported for vision models and will be ignored. "
+                "Truncating prompts would cause image token/feature mismatch errors.",
+                stacklevel=2,
+            )
         processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
@@ -784,9 +807,11 @@ class DPOTrainer(BaseTrainer):
             chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
             rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+        # Truncate completion sequences only.
+        # Note: We do not truncate prompt_input_ids for vision models because the prompts contain image tokens
+        # that must exactly match the image features (pixel_values). Truncating would cause errors like
+        # "Image features and image tokens do not match: tokens: X, features: Y". Users should filter overlong
+        # prompts from their dataset before training (the recommended approach for the deprecated max_prompt_length).
         if max_completion_length is not None:
             chosen_input_ids = chosen_input_ids[:max_completion_length]
             rejected_input_ids = rejected_input_ids[:max_completion_length]

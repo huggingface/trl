@@ -33,13 +33,13 @@ if is_peft_available():
 class TestDataCollatorForPreference(TrlTestCase):
     def test_basic_padding(self):
         """Test basic padding functionality without completion masks."""
-        self.collator = DataCollatorForPreference(pad_token_id=0)
+        collator = DataCollatorForPreference(pad_token_id=0)
         examples = [
             {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]},
             {"chosen_input_ids": [6, 7], "rejected_input_ids": [8]},
         ]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 0], [4, 5, 0], [8, 0, 0]]))
         torch.testing.assert_close(
@@ -65,10 +65,10 @@ class TestDataCollatorForPreference(TrlTestCase):
 
     def test_single_example(self):
         """Test collator with a single example."""
-        self.collator = DataCollatorForPreference(pad_token_id=0)
+        collator = DataCollatorForPreference(pad_token_id=0)
         examples = [{"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]}]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
@@ -91,13 +91,13 @@ class TestDataCollatorForPreference(TrlTestCase):
         )
 
     def test_collate_with_margin(self):
-        self.collator = DataCollatorForPreference(pad_token_id=0)
+        collator = DataCollatorForPreference(pad_token_id=0)
         examples = [
             {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5], "margin": 0.1},
             {"chosen_input_ids": [6, 7], "rejected_input_ids": [8], "margin": 0.2},
         ]
 
-        result = self.collator(examples)
+        result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 0], [4, 5, 0], [8, 0, 0]]))
         torch.testing.assert_close(
@@ -494,7 +494,21 @@ class TestRewardTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
+            processing_class=tokenizer,
         )
+
+        # Assert trainer uses the same chat template as tokenizer
+        assert trainer.processing_class.chat_template == tokenizer.chat_template
+
+        # Assert chat_template is applied
+        for i in range(2):
+            role = "SYSTEM" if i else "system"
+            system_prompt = (
+                f"<|im_start|>{role}\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>"
+            )
+            system_prompt_ids = trainer.processing_class(system_prompt)["input_ids"]
+            assert trainer.train_dataset[i]["chosen_input_ids"][: len(system_prompt_ids)] == system_prompt_ids
+            assert trainer.train_dataset[i]["rejected_input_ids"][: len(system_prompt_ids)] == system_prompt_ids
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

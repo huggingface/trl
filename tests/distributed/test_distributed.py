@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import torch
+from packaging.version import Version
 
 from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
 
@@ -60,7 +62,7 @@ class TestDistributed(TrlTestCase):
             "ddp",
             "zero2",
             "zero3",
-            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see see #4812")),
+            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see #4812")),
         ],
     )
     def test_dpo(self, config, get_config_path):
@@ -98,8 +100,20 @@ class TestDistributed(TrlTestCase):
         "config",
         [
             "ddp",
-            pytest.param("zero2", marks=pytest.mark.xfail(reason="ZeRO 2 is currently failing; see #4884")),
-            pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing; see #4831")),
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    condition=Version("2.10") <= Version(torch.__version__),
+                    reason="ZeRO 2 + PEFT is failing on torch 2.10; see #4884",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    condition=Version("2.10") <= Version(torch.__version__),
+                    reason="ZeRO 3 + PEFT is failing on torch 2.10; see #4884",
+                ),
+            ),
             "fsdp2",
         ],
     )

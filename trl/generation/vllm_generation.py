@@ -15,6 +15,8 @@
 """vLLM-based generation backend for TRL trainers."""
 
 import json
+import logging
+import math
 import os
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -32,6 +34,18 @@ from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
+
+
+logger = logging.getLogger(__name__)
+
+
+def sanitize_logprob(logprob):
+    value = logprob.logprob
+    if math.isnan(value):
+        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
+        return None
+
+    return value
 
 
 if TYPE_CHECKING:
@@ -666,7 +680,7 @@ class VLLMGeneration:
                 all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
                 all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
                 all_logprobs = [
-                    [next(iter(lp.values())).logprob for lp in output.logprobs]
+                    [sanitize_logprob(next(iter(lp.values()))) for lp in output.logprobs]
                     for outputs in all_outputs
                     for output in outputs.outputs
                 ]

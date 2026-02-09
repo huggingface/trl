@@ -1027,6 +1027,36 @@ def add_margin(example):
 dataset = dataset.map(add_margin)
 ```
 
+### The Perfect Blend: Redefining RLHF with Mixture of Judges
+
+**📜 Paper**: https://huggingface.co/papers/2409.20370
+
+This paper introduces Constrained Generative Policy Optimization (CGPO), a post-training RLHF paradigm for multi-task learning. Its core contribution is the Mixture of Judges (MoJ) framework, which aggregates multiple reward signals to mitigate reward hacking and achieve Pareto-optimal trade-offs across many objectives. CGPO outperforms common RLHF algorithms like PPO and DPO across general chat, STEM reasoning, instruction following, math, coding, and knowledge benchmarks.
+
+⚠️ Experimental: CGPO is not yet implemented as a TRL trainer. Users can experiment with multiple reward/judge aggregation using [`trl.experimental.judges.AllTrueJudge`].
+
+
+```python
+from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge
+
+# Example placeholder judges
+class RewardJudge(BaseBinaryJudge):
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
+        return [1 for _ in completions]
+
+class SafetyJudge(BaseBinaryJudge):
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
+        return [1 for _ in completions]
+
+moj = AllTrueJudge(judges=[RewardJudge(), SafetyJudge()])
+
+results = moj.judge(
+    prompts=["Explain gravity."],
+    completions=["Gravity is a fundamental force of nature."]
+)
+print(results)  
+```
+
 ## Distillation
 
 Papers relating to training a student model with the help of a teacher model.

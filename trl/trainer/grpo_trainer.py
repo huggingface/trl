@@ -530,6 +530,14 @@ class GRPOTrainer(BaseTrainer):
         # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -1917,13 +1925,6 @@ class GRPOTrainer(BaseTrainer):
             return self._compute_loss(model, inputs)
 
     @staticmethod
-    def get_sapo_token_loss(unclipped_token_loss: torch.Tensor, temperature: float) -> torch.Tensor:
-        sigmoid_input = temperature * (unclipped_token_loss - 1)
-        sigmoid_smoothed_loss = torch.nn.functional.sigmoid(sigmoid_input)
-        sapo_token_loss = sigmoid_smoothed_loss * 4 / temperature
-        return sapo_token_loss
-
-    @staticmethod
     def get_off_policy_mask(
         advantages: torch.Tensor,
         per_token_logps: torch.Tensor,
@@ -2042,15 +2043,9 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         elif self.loss_type == "sapo":
-            per_token_loss = torch.empty_like(coef_1)
-            positive_advantages_mask = advantages.repeat([1, coef_1.shape[1]]) > 0
-            per_token_loss[positive_advantages_mask] = self.get_sapo_token_loss(
-                coef_1[positive_advantages_mask], self.args.sapo_temperature_pos
-            )
-            per_token_loss[~positive_advantages_mask] = self.get_sapo_token_loss(
-                coef_1[~positive_advantages_mask], self.args.sapo_temperature_neg
-            )
-            per_token_loss = -per_token_loss * advantages
+            temperatures = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
+            soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures
+            per_token_loss = -soft_coef_1 * advantages
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
