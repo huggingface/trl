@@ -697,7 +697,7 @@ training_args = DPOConfig(
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="aot_pair", # Section 3 of the paper
+    loss_type="aot_unpaired", # Section 3 of the paper
 )
 ```
 
