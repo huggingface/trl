@@ -58,6 +58,18 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
 
 
+def _liger_supports_vllm_is_ratio():
+    """Check if the installed liger-kernel supports vllm_is_ratio parameter in LigerFusedLinearGRPOLoss."""
+    try:
+        import inspect
+
+        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+
+        return "vllm_is_ratio" in inspect.signature(LigerFusedLinearGRPOLoss.forward).parameters
+    except Exception:
+        return False
+
+
 def multiply_tool(a: int, b: int) -> int:
     """
     Multiplies two integers.
@@ -987,6 +999,68 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    @pytest.mark.xfail(
+        not _liger_supports_vllm_is_ratio(),
+        reason="Requires vllm_is_ratio support in liger-kernel (linkedin/Liger-Kernel#1088)",
+        strict=True,
+    )
+    def test_compute_liger_loss_passes_vllm_is_ratio(self):
+        """Test that importance_sampling_ratio from inputs is passed to liger_grpo_loss as vllm_is_ratio."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Wrap _generate_and_score_completions to inject importance_sampling_ratio
+        original_gen = trainer._generate_and_score_completions
+
+        def gen_with_is_ratio(*args, **kwargs):
+            result = original_gen(*args, **kwargs)
+            B, T = result["completion_ids"].shape
+            result["importance_sampling_ratio"] = torch.full((B, T), 0.5, device=result["completion_ids"].device)
+            return result
+
+        # Wrap liger_grpo_loss.forward to capture vllm_is_ratio argument
+        original_fwd = trainer.liger_grpo_loss.forward
+        captured_vllm_is_ratios = []
+
+        def capturing_forward(*args, **kwargs):
+            captured_vllm_is_ratios.append(kwargs.get("vllm_is_ratio"))
+            return original_fwd(*args, **kwargs)
+
+        trainer.liger_grpo_loss.forward = capturing_forward
+        trainer._generate_and_score_completions = gen_with_is_ratio
+
+        trainer.train()
+
+        # Verify vllm_is_ratio was passed in every call to liger_grpo_loss
+        assert len(captured_vllm_is_ratios) > 0, "liger_grpo_loss.forward was never called"
+        for vllm_is_ratio in captured_vllm_is_ratios:
+            assert vllm_is_ratio is not None, (
+                "vllm_is_ratio should not be None when importance_sampling_ratio is present"
+            )
+            assert (vllm_is_ratio == 0.5).all(), (
+                "vllm_is_ratio values should match the injected importance_sampling_ratio"
+            )
+
+        release_memory(trainer.model, trainer)
 
     def test_training_with_bias_correction_kl(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
