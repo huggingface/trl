@@ -76,6 +76,10 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
+if Version(transformers.__version__) >= Version("5.2.0.dev0"):
+    from transformers.trainer_pt_utils import nested_gather
+
+
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -1447,7 +1451,10 @@ class OnlineDPOTrainer(BaseTrainer):
             logs: dict[str, float] = {}
 
             # all_gather + mean() to get average loss over all processes
-            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+            if Version(transformers.__version__) >= Version("5.2.0.dev0"):
+                tr_loss_scalar = nested_gather(tr_loss, self.args.parallel_mode).mean().item()
+            else:
+                tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
 
             # reset tr_loss to zero
             tr_loss -= tr_loss
