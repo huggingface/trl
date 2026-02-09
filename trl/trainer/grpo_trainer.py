@@ -2043,6 +2043,16 @@ class GRPOTrainer(BaseTrainer):
             temperatures = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
             soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures
             per_token_loss = -soft_coef_1 * advantages
+
+        elif self.loss_type == "cfpo":
+            """
+            Clipping Free Policy Optimization for Large Language Models
+            # L = -advantage * ratio + |advantage| * (ratio - 1)^2 / (2 * epsilon)
+            https://arxiv.org/abs/2601.22801
+            """
+            per_token_loss = - (
+                                advantages * coef_1 - torch.abs(advantages) * torch.pow(coef_1 - 1, 2) / (2 * self.epsilon_high)
+                               )
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -2059,7 +2069,7 @@ class GRPOTrainer(BaseTrainer):
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
         mode = "train" if self.model.training else "eval"
-        if self.loss_type in ["grpo", "sapo"]:
+        if self.loss_type in ["grpo", "sapo", "cfpo]:
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
@@ -2093,7 +2103,7 @@ class GRPOTrainer(BaseTrainer):
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo","cfpo"]: #cfpo does not clip, this is for logging purposes.
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
