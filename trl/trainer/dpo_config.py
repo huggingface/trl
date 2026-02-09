@@ -360,15 +360,6 @@ class DPOConfig(TrainingArguments):
         },
     )
 
-    # Deprecated parameters
-    use_liger_loss: bool = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. Use `use_liger_kernel` "
-            "instead."
-        },
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
@@ -380,14 +371,6 @@ class DPOConfig(TrainingArguments):
                 f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
             )
 
-        if "aot_pair" in self.loss_type:
-            warnings.warn(
-                "`loss_type='aot_pair'` is deprecated and will be removed in a version 0.29.0. Please use "
-                "`loss_type='aot_unpaired'` instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
         if isinstance(self.f_divergence_type, FDivergenceType):
             warnings.warn(
                 "`f_divergence_type` will require a string in 0.29.0; `FDivergenceType` is deprecated. Use one of: "
@@ -396,13 +379,5 @@ class DPOConfig(TrainingArguments):
                 stacklevel=3,
             )
             self.f_divergence_type = self.f_divergence_type.value
-        if self.use_liger_loss is not None:
-            warnings.warn(
-                "The `use_liger_loss` argument is deprecated and will be removed in version 0.29.0. Use "
-                "`use_liger_kernel` instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            self.use_liger_kernel = self.use_liger_loss
 
         super().__post_init__()
