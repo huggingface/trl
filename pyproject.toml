@@ -52,7 +52,8 @@ deepspeed = [
 ]
 judges = [
     "openai>=1.23.2",
-    "llm-blender>=0.0.2"
+    "llm-blender>=0.0.2",
+    "transformers<5.0.0",  # see #4918
 ]
 kernels = [
     "kernels"
@@ -171,7 +172,16 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')"
 ]
+norecursedirs = [
+    "tests/experimental",
+]
 filterwarnings = [
+    # SWIG deprecations from SWIG-generated C/C++ extensions: sentencepiece
+    # Upstream issue: https://github.com/google/sentencepiece/issues/1150
+    "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+
     # PyTorch JIT deprecations (upstream, not actionable in TRL)
     # Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/7835
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
@@ -182,7 +192,4 @@ filterwarnings = [
     # Upstream issue: https://github.com/pytorch/pytorch/issues/174546
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
-]
-addopts = [
-    "-k", "not experimental",
 ]
