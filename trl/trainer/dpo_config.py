@@ -149,41 +149,6 @@ class DPOConfig(TrainingArguments):
         ref_model_sync_steps (`int`, *optional*, defaults to `512`):
             τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
             the reference policy. To use this parameter, you must set `sync_ref_model=True`.
-
-        > Deprecated parameters
-
-        max_prompt_length (`int`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer used. We
-            recommend filtering out samples that exceed your desired prompt length during dataset preprocessing.
-        max_completion_length (`int`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer used. We
-            recommend using the `max_length` parameter to control the total sequence length.
-        ref_model_init_kwargs (`dict[str, Any]`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. The reference model is instantiated
-            with the same keyword arguments as the main model. If you need to customize the reference model
-            initialization, we recommend instantiating the reference model yourself and passing it to the `DPOTrainer`.
-        generate_during_eval (`bool`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. Please use a dedicated callback, like
-            `LogCompletionsCallback`.
-        force_use_ref_model (`bool`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. If you provide a PEFT model along with
-            a `ref_model`, the `ref_model` will be automatically used as the reference model. If you used this
-            parameter to train a pretrained PEFT adapter, you can now safely just pass the PEFT model as the `model`
-            argument and leave `ref_model` as `None`, the trainer will automatically make a copy of the adapter to use
-            as the reference model.
-        use_logits_to_keep (`bool`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. The trainer now automatically uses a
-            more efficient method than using `use_logits_to_keep`. You can safely ignore this parameter.
-        model_adapter_name (`str`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a pretrained
-            PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave `ref_model` as
-            `None`, the trainer will automatically make a copy of the adapter to use as the reference model. For
-            training, load a single adapter only, and it must be named `'default'`; do not load it under a custom name.
-        ref_adapter_name (`str`, *optional*):
-            This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a pretrained
-            PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave `ref_model` as
-            `None`, the trainer will automatically make a copy of the adapter to use as the reference model. For
-            training, load a single adapter only, and it must be named `'default'`; do not load it under a custom name.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -396,119 +361,11 @@ class DPOConfig(TrainingArguments):
     )
 
     # Deprecated parameters
-    max_prompt_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer "
-            "used. We recommend filtering out samples that exceed your desired prompt length during dataset "
-            "preprocessing.",
-        },
-    )
-    max_completion_length: int | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. This parameter is no longer "
-            "used. We recommend using the `max_length` parameter to control the total sequence length.",
-        },
-    )
-    ref_model_init_kwargs: dict[str, Any] | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. The reference model is "
-            "instantiated with the same keyword arguments as the main model. If you need to customize the reference "
-            "model initialization, we recommend instantiating the reference model yourself and passing it to the "
-            "`DPOTrainer`."
-        },
-    )
-    generate_during_eval: bool | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. Please use a dedicated "
-            "callback, like `LogCompletionsCallback`."
-        },
-    )
-    force_use_ref_model: bool | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. If you provide a PEFT model "
-            "along with a `ref_model`, the `ref_model` will be automatically used as the reference model. If you used "
-            "this parameter to train a pretrained PEFT adapter, you can now safely just pass the PEFT model as the "
-            "`model` argument and leave `ref_model` as `None`, the trainer will automatically make a copy of the "
-            "adapter to use as the reference model."
-        },
-    )
-    use_logits_to_keep: bool | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. The trainer now "
-            "automatically uses a more efficient method than using `use_logits_to_keep`. You can safely ignore this "
-            "parameter."
-        },
-    )
-    model_adapter_name: str | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a "
-            "pretrained PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave "
-            "`ref_model` as `None`, the trainer will automatically make a copy of the adapter to use as the reference "
-            "model. For training, load a single adapter only, and it must be named `'default'`; do not load it under "
-            "a custom name."
-        },
-    )
-    ref_adapter_name: str | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. To resume the training of a "
-            "pretrained PEFT adapter, you can now safely just pass the PEFT model as the `model` argument and leave "
-            "`ref_model` as `None`, the trainer will automatically make a copy of the adapter to use as the reference "
-            "model. For training, load a single adapter only, and it must be named `'default'`; do not load it under "
-            "a custom name."
-        },
-    )
-    label_pad_token_id: int | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. From now on, the label "
-            "padding token ID is hardcoded to -100 in the trainer."
-        },
-    )
-    tools: list[dict] | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. Provide tools per example in "
-            "the dataset via a `tools` column instead."
-        },
-    )
-    reference_free: bool | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. The DPO trainer no longer "
-            "supports reference-free training. For reference-free training, use the CPOTrainer instead."
-        },
-    )
     use_liger_loss: bool = field(
         default=None,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.29.0. Use `use_liger_kernel` "
             "instead."
-        },
-    )
-    base_model_attribute_name: str | None = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.29.0. The base model is now "
-            "automatically retrieved with `model.get_decoder()`."
-        },
-    )
-    rpo_alpha: float | None = field(
-        default=None,
-        metadata={
-            "help": (
-                "This parameter is deprecated and will be removed in version 0.29.0. `rpo_alpha` previously "
-                "controlled the weight of the NLL (SFT) term in RPO. With support for combining multiple loss types "
-                "in DPO, this is now equivalent to including 'sft' in `loss_type` with weight `rpo_alpha`. To "
-                "migrate, add 'sft' to `loss_type` and set its weight in `loss_weights` to `rpo_alpha`."
-            )
         },
     )
 
@@ -531,92 +388,6 @@ class DPOConfig(TrainingArguments):
                 stacklevel=3,
             )
             self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
-        if self.max_prompt_length is not None:
-            warnings.warn(
-                "The `max_prompt_length` argument is deprecated and will be removed in version 0.29.0. This parameter "
-                "is no longer used. We recommend filtering out samples that exceed your desired prompt length during "
-                "dataset preprocessing.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.max_completion_length is not None:
-            warnings.warn(
-                "The `max_completion_length` argument is deprecated and will be removed in version 0.29.0. This "
-                "parameter is no longer used. We recommend using the `max_length` parameter to control the total "
-                "sequence length.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.ref_model_init_kwargs is not None:
-            warnings.warn(
-                "The `ref_model_init_kwargs` argument is deprecated and will be removed in version 0.29.0. This "
-                "parameter is no longer used. The reference model is instantiated with the same keyword arguments as "
-                "the main model. If you need to customize the reference model initialization, we recommend "
-                "instantiating the reference model yourself and passing it to the `DPOTrainer`. This argument is no "
-                "longer used.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.generate_during_eval is not None:
-            warnings.warn(
-                "The `generate_during_eval` argument is deprecated and will be removed in version 0.29.0. This "
-                "parameter is no longer used. Please use a dedicated callback, like `LogCompletionsCallback`. This "
-                "argument is no longer used.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.force_use_ref_model:
-            warnings.warn(
-                "The `force_use_ref_model` argument is deprecated and will be removed in version 0.29.0. If you "
-                "provide a PEFT model along with a `ref_model`, the `ref_model` will be automatically used as the "
-                "reference model. If you used this argument to train a pretrained PEFT adapter, you can now safely "
-                "just pass the PEFT model as the `model` argument and leave `ref_model` as `None`, the trainer will "
-                "automatically make a copy of the adapter to use as the reference model.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.use_logits_to_keep is not None:
-            warnings.warn(
-                "The `use_logits_to_keep` argument is deprecated and will be removed in version 0.29.0. The trainer "
-                "now automatically uses a more efficient method than using `use_logits_to_keep`. You can safely "
-                "ignore this parameter.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.model_adapter_name is not None:
-            warnings.warn(
-                "The `model_adapter_name` argument is deprecated and will be removed in version 0.29.0. To resume "
-                "the training of a pretrained PEFT adapter, you can now safely just pass the PEFT model as the "
-                "`model` argument and leave `ref_model` as `None`, the trainer will automatically make a copy of "
-                "the adapter to use as the reference model. For training, load a single adapter only, and it must "
-                "be named `'default'`; do not load it under a custom name.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.ref_adapter_name is not None:
-            warnings.warn(
-                "The `ref_adapter_name` argument is deprecated and will be removed in version 0.29.0. To resume "
-                "the training of a pretrained PEFT adapter, you can now safely just pass the PEFT model as the "
-                "`model` argument and leave `ref_model` as `None`, the trainer will automatically make a copy of "
-                "the adapter to use as the reference model. For training, load a single adapter only, and it must "
-                "be named `'default'`; do not load it under a custom name.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.label_pad_token_id is not None:
-            warnings.warn(
-                "The `label_pad_token_id` argument is deprecated and will be removed in version 0.29.0. From now "
-                "on, the label padding token ID is hardcoded to -100 in the trainer.",
-                FutureWarning,
-                stacklevel=3,
-            )
-        if self.tools is not None:
-            warnings.warn(
-                "`tools` is deprecated and will be removed in version 0.29.0. This parameter is no longer used. "
-                "Provide tools per example in the dataset via a `tools` column instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
         if isinstance(self.f_divergence_type, FDivergenceType):
             warnings.warn(
                 "`f_divergence_type` will require a string in 0.29.0; `FDivergenceType` is deprecated. Use one of: "
@@ -625,14 +396,6 @@ class DPOConfig(TrainingArguments):
                 stacklevel=3,
             )
             self.f_divergence_type = self.f_divergence_type.value
-        if self.reference_free is not None:
-            warnings.warn(
-                "The `reference_free` argument is deprecated and will be removed in version 0.29.0. This parameter is "
-                "no longer used and the DPO trainer no longer supports reference-free training. For reference-free "
-                "training, use the CPOTrainer instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
         if self.use_liger_loss is not None:
             warnings.warn(
                 "The `use_liger_loss` argument is deprecated and will be removed in version 0.29.0. Use "
@@ -641,18 +404,5 @@ class DPOConfig(TrainingArguments):
                 stacklevel=3,
             )
             self.use_liger_kernel = self.use_liger_loss
-        if self.rpo_alpha is not None:
-            warnings.warn(
-                "The `rpo_alpha` argument is deprecated and will be removed in version 0.29.0. To migrate, add 'sft' "
-                "to `loss_type` and set its weight in `loss_weights` to `rpo_alpha`.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            if "sft" not in self.loss_type:
-                self.loss_type.append("sft")
-                if self.loss_weights is None:
-                    self.loss_weights = [1.0] * (len(self.loss_type) - 1) + [self.rpo_alpha]
-                else:
-                    self.loss_weights.append(self.rpo_alpha)
 
         super().__post_init__()

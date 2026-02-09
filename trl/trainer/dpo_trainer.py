@@ -506,11 +506,6 @@ class DPOTrainer(BaseTrainer):
             ref_model_id = ref_model
             ref_model = None
 
-        if args.force_use_ref_model is None:
-            self.force_use_ref_model = ref_model is not None
-        else:
-            self.force_use_ref_model = args.force_use_ref_model
-
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
@@ -693,13 +688,12 @@ class DPOTrainer(BaseTrainer):
                 # initial model.
                 self.ref_model = None
             else:
-                # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-                model_init_kwargs = args.ref_model_init_kwargs or args.model_init_kwargs or {}
+                ref_model_init_kwargs = args.model_init_kwargs or {}
                 # Distributed training requires device_map=None ("auto" fails)
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    model_init_kwargs["device_map"] = None
+                    ref_model_init_kwargs["device_map"] = None
                 ref_model_path = ref_model_id or get_config_model_id(self.model.config)
-                self.ref_model = create_model_from_path(ref_model_path, **model_init_kwargs)
+                self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
         else:
             self.ref_model = ref_model
 
