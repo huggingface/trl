@@ -518,7 +518,7 @@ class GRPOTrainer(BaseTrainer):
             )
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
-            raise ValueError("When using `luspo` loss, `importance_sampling_level` must be set to `sequence`.")
+            raise ValueError("When using `'luspo'` loss, `importance_sampling_level` must be set to `'sequence'`.")
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -2078,7 +2078,8 @@ class GRPOTrainer(BaseTrainer):
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
         elif self.loss_type == "luspo":
-            loss = (per_token_loss * mask.sum(-1, keepdim=True)).mean()
+            # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
+            loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
             loss = loss / normalizer
         else:
