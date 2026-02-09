@@ -704,9 +704,6 @@ class GRPOConfig(TrainingArguments):
             "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each sequence's"
             'loss by its length. This is a modification of GSPO and requires `importance_sampling_level="sequence"`.'
             "Introduced in the [LUSPO paper](https://huggingface.co/papers/2602.05261)."
-            "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each sequence's"
-            'loss by its length. This is a modification of GSPO and requires `importance_sampling_level="sequence"`.'
-            "Introduced in the [LUSPO paper](https://huggingface.co/papers/2602.05261)."
         },
     )
     mask_truncated_completions: bool = field(
