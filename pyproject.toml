@@ -174,3 +174,10 @@ markers = [
 addopts = [
     "-k", "not experimental",
 ]
+filterwarnings = [
+    # SWIG deprecations from SWIG-generated C/C++ extensions: sentencepiece
+    # Upstream issue: https://github.com/google/sentencepiece/issues/1150
+    "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+]
