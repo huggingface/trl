@@ -173,11 +173,13 @@ markers = [
 ]
 filterwarnings = [
     # PyTorch JIT deprecations (upstream, not actionable in TRL)
+    # Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/7835
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
     "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
 
     # PyTorch DataLoader pin_memory device argument deprecations
     # Triggered internally by torch.utils.data, not by our code
+    # Upstream issue: https://github.com/pytorch/pytorch/issues/174546 
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
 ]
