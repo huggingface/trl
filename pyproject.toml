@@ -179,7 +179,7 @@ filterwarnings = [
 
     # PyTorch DataLoader pin_memory device argument deprecations
     # Triggered internally by torch.utils.data, not by our code
-    # Upstream issue: https://github.com/pytorch/pytorch/issues/174546 
+    # Upstream issue: https://github.com/pytorch/pytorch/issues/174546
     "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
     "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
 ]
