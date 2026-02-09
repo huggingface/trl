@@ -824,10 +824,12 @@ class TestDPOTrainer(TrlTestCase):
             model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
+        # Instantiating the reference model explicitly and pass it via ref_model
+        ref_model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float16")
 
         trainer = DPOTrainer(
             model=self.model_id,
-            ref_model=self.model_id,
+            ref_model=ref_model,
             processing_class=self.tokenizer,
             args=training_args,
             train_dataset=dummy_dataset["train"],
