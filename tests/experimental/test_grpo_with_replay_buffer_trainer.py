@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -250,8 +250,9 @@ class TestUpdateWithReplayBuffer:
 
 
 @pytest.mark.low_priority
+@pytest.mark.parametrize("scale_rewards", ["batch", "group"])
 class TestGRPOWithReplayBufferTrainer(TrlTestCase):
-    def test_training_with_replay_buffer(self):
+    def test_training_with_replay_buffer(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         # Guarantee that some rewards have 0 std
@@ -263,12 +264,13 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
 
         training_args = GRPOWithReplayBufferConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=4,  # reduce the batch size to reduce memory usage
             num_generations=4,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             replay_buffer_size=8,
             report_to="none",
+            scale_rewards=scale_rewards,
         )
         trainer = GRPOWithReplayBufferTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",

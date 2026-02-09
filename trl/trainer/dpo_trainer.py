@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 import inspect
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -27,9 +26,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
@@ -40,6 +41,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations import (
@@ -48,13 +50,12 @@ from transformers.integrations import (
     is_wandb_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
+from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
-from ..models.utils import prepare_fsdp
+from ..models.utils import peft_module_casting_to_bf16, prepare_fsdp
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
@@ -70,7 +71,6 @@ from .utils import (
     log_table_to_comet_experiment,
     pad,
     pad_to_length,
-    peft_module_casting_to_bf16,
     selective_log_softmax,
 )
 
@@ -202,7 +202,7 @@ class DPOTrainer(BaseTrainer):
               using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        ref_model ([`PreTrainedModelWrapper`]):
+        ref_model ([`~transformers.PreTrainedModel`])
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
@@ -294,9 +294,24 @@ class DPOTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
+        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+        # batches from multiple processes, leading to mismatch errors.
+        if isinstance(train_dataset, IterableDataset):
+            if args.accelerator_config.dispatch_batches is True:
+                logger.warning(
+                    "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
+                    "is forced to `False` when using an `IterableDataset`. To remove this warning, unset "
+                    "`dispatch_batches` in `DPOConfig` or set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+
         # Model and reference model
         if isinstance(model, str):
-            model = create_model_from_path(model, **args.model_init_kwargs or {})
+            model_init_kwargs = args.model_init_kwargs or {}
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
+            model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
@@ -305,7 +320,11 @@ class DPOTrainer(BaseTrainer):
                 )
         model_id = get_config_model_id(model.config)
         if isinstance(ref_model, str):
-            ref_model = create_model_from_path(ref_model, **args.ref_model_init_kwargs or {})
+            model_init_kwargs = args.ref_model_init_kwargs or {}
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
+            ref_model = create_model_from_path(ref_model, **model_init_kwargs)
         else:
             if args.ref_model_init_kwargs is not None:
                 logger.warning(
@@ -317,6 +336,11 @@ class DPOTrainer(BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
                 "same as `model`, you can simply omit the `ref_model` argument and it will be created for you."
             )
+
+        if args.force_use_ref_model is None:
+            self.force_use_ref_model = ref_model is not None
+        else:
+            self.force_use_ref_model = args.force_use_ref_model
 
         # Processing class
         if processing_class is None:
@@ -334,21 +358,14 @@ class DPOTrainer(BaseTrainer):
 
         # Get the pad token: if not provided, use the one from the processing class or the eos token
         # if the processing class does not have a pad token.
-        if args.padding_value is not None:  # deprecated, will be removed in 0.26.0.
-            warnings.warn(
-                "The `padding_value` argument is deprecated and will be removed in version 0.26.0. Please use "
-                "`pad_token` (str) instead."
+        pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
+        self.pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
+        if self.pad_token_id is None:
+            raise ValueError(
+                f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
+                f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
+                "in the vocabulary before using it as a padding token."
             )
-            self.pad_token_id = args.padding_value
-        else:
-            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
-            self.pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
-            if self.pad_token_id is None:
-                raise ValueError(
-                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
-                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
-                    "in the vocabulary before using it as a padding token."
-                )
 
         # PEFT configuration and model wrapping
         model = self._prepare_peft_model(model, ref_model, peft_config, args)
@@ -399,14 +416,6 @@ class DPOTrainer(BaseTrainer):
                 average_log_prob=False,
                 loss_type=args.loss_type,
             )
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
-        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
-        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
-        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
-        # that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
 
         # Data collator
         if data_collator is None:
@@ -434,7 +443,7 @@ class DPOTrainer(BaseTrainer):
             if args.per_device_train_batch_size == 1:
                 logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "of 1 annihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
         self.padding_free = args.padding_free
@@ -486,6 +495,14 @@ class DPOTrainer(BaseTrainer):
                 }
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -550,22 +567,6 @@ class DPOTrainer(BaseTrainer):
         if "bco_pair" in self.loss_type:
             self.running = RunningMoments(self.accelerator)
 
-    @property
-    def padding_value(self):
-        warnings.warn(
-            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
-            "`pad_token_id` instead.",
-        )
-        return self.pad_token_id
-
-    @padding_value.setter
-    def padding_value(self, value):
-        warnings.warn(
-            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
-            "`pad_token_id` instead.",
-        )
-        self.pad_token_id = value
-
     def _prepare_peft_model(
         self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig
     ) -> PreTrainedModel:
@@ -579,14 +580,17 @@ class DPOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_config, we merge and unload it first
             if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
-
-            if ref_model is not None and not args.force_use_ref_model:
                 raise ValueError(
-                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
+                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
+                    "model along with the new `peft_config` to the trainer."
+                )
+
+            if ref_model is not None and not self.force_use_ref_model:
+                raise ValueError(
+                    "You passed a ref_model and a peft_config with `force_use_ref_model=False`. For training PEFT adapters with DPO there is no need to pass a reference"
+                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with in DPOTrainer's init, and unset force_use_ref_model"
                     " if you want to use a different ref_model."
                 )
 
@@ -656,6 +660,8 @@ class DPOTrainer(BaseTrainer):
                 map_kwargs["desc"] = f"Extracting prompt in {dataset_name} dataset"
             dataset = dataset.map(maybe_extract_prompt, **map_kwargs)
 
+            is_chat = is_conversational(next(iter(dataset)))
+
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
@@ -676,6 +682,7 @@ class DPOTrainer(BaseTrainer):
                     "max_completion_length": args.max_completion_length,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens": False,
+                    "is_chat": is_chat,
                 },
                 **map_kwargs,
             )
@@ -689,6 +696,7 @@ class DPOTrainer(BaseTrainer):
         max_prompt_length: int | None = None,
         max_completion_length: int | None = None,
         add_special_tokens: bool = True,
+        is_chat: bool = False,
     ) -> dict[str, list[int]]:
         """
         Tokenize a row of the dataset.
@@ -706,6 +714,9 @@ class DPOTrainer(BaseTrainer):
                 Whether to add special tokens to the sequences. Typically used for encoder-decoder models. If `True`,
                 the prompt sequence will have a bos token prepended and an eos token appended. In any case, the
                 completion sequences will have an eos token appended.
+            is_chat (`bool`):
+                Whether the data is conversational. If `True`, the completion sequences will not have an eos token
+                appended.
 
         Returns:
             `dict[str, list[int]]`:
@@ -735,8 +746,10 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        # For conversational data, the chat template already includes proper EOS tokens
+        if not is_chat:
+            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
@@ -758,6 +771,7 @@ class DPOTrainer(BaseTrainer):
         max_prompt_length: int | None = None,
         max_completion_length: int | None = None,
         add_special_tokens: bool = True,
+        is_chat: bool = False,
     ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
@@ -776,8 +790,9 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        if not is_chat:
+            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:

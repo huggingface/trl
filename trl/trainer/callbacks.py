@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-import os
+import warnings
 
 import pandas as pd
 import torch
@@ -34,11 +34,9 @@ from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
-from ..import_utils import is_mergekit_available, is_weave_available
-from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
+from ..import_utils import is_weave_available, suppress_experimental_warning
 from ..models.utils import unwrap_model_for_generation
-from .judges import BasePairwiseJudge
-from .utils import get_config_model_id, log_table_to_comet_experiment
+from .utils import log_table_to_comet_experiment
 
 
 if is_rich_available():
@@ -57,6 +55,8 @@ if is_weave_available():
     from weave import EvaluationLogger
     from weave.trace.context import weave_client_context
 
+with suppress_experimental_warning():
+    from ..experimental.winrate_callback import WinRateCallback as _WinRateCallback
 
 # Logger for module-level logging
 logger = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ def _generate_completions(
         list[str]: A list of generated text completions corresponding to the input prompts.
     """
     completions = []
+    # TODO: Override model.generation_config with generation_kwargs
     with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         for idx in range(0, len(prompts), batch_size):
             batch = prompts[idx : idx + batch_size]
@@ -253,206 +254,17 @@ class RichProgressCallback(TrainerCallback):
         self.current_step = None
 
 
-def _win_rate_completions_df(
-    state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
-) -> pd.DataFrame:
-    global_step = [str(state.global_step)] * len(prompts)
-    data = list(zip(global_step, prompts, completions, winner_indices, strict=True))
-    # Split completions from reference model and policy
-    split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
-    return pd.DataFrame(split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"])
-
-
-class WinRateCallback(TrainerCallback):
-    """
-    A [`~transformers.TrainerCallback`] that computes the win rate of a model based on a reference.
-
-    It generates completions using prompts from the evaluation dataset and compares the trained model's outputs against
-    a reference. The reference is either the initial version of the model (before training) or the reference model, if
-    available in the trainer. During each evaluation step, a judge determines how often the trained model's completions
-    win against the reference using a judge. The win rate is then logged in the trainer's logs under the key
-    `"eval_win_rate"`.
-
-    Usage:
-    ```python
-    trainer = DPOTrainer(...)
-    judge = PairRMJudge()
-    win_rate_callback = WinRateCallback(judge=judge, trainer=trainer)
-    trainer.add_callback(win_rate_callback)
-    ```
-
-    Args:
-        judge ([`BasePairwiseJudge`]):
-            The judge to use for comparing completions.
-        trainer (`Trainer`):
-            Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
-            column containing the prompts for generating completions. If the `Trainer` has a reference model (via the
-            `ref_model` attribute), it will use this reference model for generating the reference completions;
-            otherwise, it defaults to using the initial model.
-        generation_config ([`~transformers.GenerationConfig`], *optional*):
-            The generation config to use for generating completions.
-        num_prompts (`int`, *optional*):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
-            the evaluation dataset.
-        shuffle_order (`bool`, *optional*, defaults to `True`):
-            Whether to shuffle the order of the completions before judging.
-        use_soft_judge (`bool`, *optional*, defaults to `False`):
-            Whether to use a soft judge that returns a win probability between 0 and 1 for the first completion vs the
-            second.
-    """
-
-    def __init__(
-        self,
-        judge: BasePairwiseJudge,
-        trainer: Trainer,
-        generation_config: GenerationConfig | None = None,
-        num_prompts: int | None = None,
-        shuffle_order: bool = True,
-        use_soft_judge: bool = False,
-    ):
-        self.judge = judge
-        self.trainer = trainer
-        self.shuffle_order = shuffle_order
-        self.generation_config = generation_config
-        self.ref_completions = []
-        self.use_soft_judge = use_soft_judge
-
-        if self.trainer.eval_dataset is None:
-            raise ValueError("Trainer must have an evaluation dataset to use the WinRateCallback.")
-        else:
-            self.eval_dataset = self.trainer.eval_dataset
-
-        if num_prompts is not None:
-            self.eval_dataset = self.eval_dataset.select(range(num_prompts))
-
-    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        # When the trainer is initialized, we generate completions for the reference model.
-        tokenizer = kwargs["processing_class"]
-        tokenizer.padding_side = "left"
-        accelerator = self.trainer.accelerator
-        # Use the reference model if available, otherwise use the initial model
-        model = getattr(self.trainer, "ref_model", None)
-        # At this point, there are two cases where `ref_model` is None:
-        # 1. The method doesn't require a reference model.
-        # 2. The method uses a reference model, but `ref_model` is set to None.
-        #    This occurs when using PEFT, where the reference model can be obtained by simply disabling the model's adapter.
-        #    In theory, we should disable the adapter here, but since it's zero-initialized at the start of training,
-        #    the model behaves identically with or without the adapter.
-        #    Therefore, there's no need to explicitly disable it at this point.
-        if model is None:
-            model = self.trainer.model_wrapped
-        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
-            self.ref_completions = _generate_completions(
-                prompts,
-                model=model,
-                tokenizer=tokenizer,
-                accelerator=accelerator,
-                generation_config=self.generation_config,
-                batch_size=args.per_device_eval_batch_size,
-            )
-            # Compute initial win rate as a reference point
-            completions = list(zip(self.ref_completions, self.ref_completions, strict=True))
-            if self.use_soft_judge:
-                ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
-                winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
-                ref_win_probs = gather_object(ref_win_probs)
-            else:
-                winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
-            prompts = gather_object(prompts)
-            completions = gather_object(completions)
-            winner_indices = gather_object(winner_indices)
-
-        # Logging
-        if self.trainer.accelerator.is_main_process:
-            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-            if self.use_soft_judge:
-                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
-                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
-            else:
-                self.trainer.log({"eval_win_rate": win_rate})
-
-            if "wandb" in args.report_to:
-                if wandb.run is not None:
-                    df = _win_rate_completions_df(
-                        state=state,
-                        prompts=prompts,
-                        completions=completions,
-                        winner_indices=winner_indices,
-                    )
-                    wandb.log({"win_rate_completions": wandb.Table(dataframe=df)})
-
-            if "comet_ml" in args.report_to:
-                df = _win_rate_completions_df(
-                    state=state,
-                    prompts=prompts,
-                    completions=completions,
-                    winner_indices=winner_indices,
-                )
-                log_table_to_comet_experiment(
-                    name="win_rate_completions.csv",
-                    table=df,
-                )
-
-    def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        # At every evaluation step, we generate completions for the model and compare them with the reference
-        # completions that have been generated at the beginning of training. We then compute the win rate and log it to
-        # the trainer.
-        tokenizer = kwargs["processing_class"]
-        tokenizer.padding_side = "left"
-        accelerator = self.trainer.accelerator
-        model = self.trainer.model_wrapped
-        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
-            completions = _generate_completions(
-                prompts,
-                model=model,
-                tokenizer=tokenizer,
-                accelerator=accelerator,
-                generation_config=self.generation_config,
-                batch_size=args.per_device_eval_batch_size,
-            )
-
-            completions = list(zip(self.ref_completions, completions, strict=True))
-
-            if self.use_soft_judge:
-                ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
-                winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
-                ref_win_probs = gather_object(ref_win_probs)
-            else:
-                winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
-            prompts = gather_object(prompts)
-            completions = gather_object(completions)
-            winner_indices = gather_object(winner_indices)
-
-        # Logging
-        if self.trainer.accelerator.is_main_process:
-            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-            if self.use_soft_judge:
-                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
-                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
-            else:
-                self.trainer.log({"eval_win_rate": win_rate})
-
-            if "wandb" in args.report_to:
-                if wandb.run is not None:
-                    df = _win_rate_completions_df(
-                        state=state,
-                        prompts=prompts,
-                        completions=completions,
-                        winner_indices=winner_indices,
-                    )
-                    wandb.log({"win_rate_completions": wandb.Table(dataframe=df)})
-
-            if "comet_ml" in args.report_to:
-                df = _win_rate_completions_df(
-                    state=state,
-                    prompts=prompts,
-                    completions=completions,
-                    winner_indices=winner_indices,
-                )
-                log_table_to_comet_experiment(
-                    name="win_rate_completions.csv",
-                    table=df,
-                )
+class WinRateCallback(_WinRateCallback):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "The `WinRateCallback` is now located in `trl.experimental`. Please update your imports to "
+            "`from trl.experimental.winrate_callback import WinRateCallback`. The current import path will be removed "
+            "and no longer supported in TRL 0.29. For more information, see "
+            "https://github.com/huggingface/trl/issues/4223.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
 
 
 class LogCompletionsCallback(TrainerCallback):
@@ -774,67 +586,6 @@ class WeaveCallback(TrainerCallback):
                     logger.warning(f"Failed to finish evaluation logger: {finish_e}")
 
         self._last_logged_step = state.global_step
-
-
-class MergeModelCallback(TrainerCallback):
-    r"""
-    A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based
-    on a merge configuration.
-
-    Args:
-        merge_config ([`MergeConfig`], *optional*):
-            Configuration used for the merging process. If not provided, the default [`MergeConfig`] is used.
-        merge_at_every_checkpoint (`bool`, *optional*, defaults to `False`):
-            Whether to merge the model at every checkpoint.
-        push_to_hub (`bool`, *optional*, defaults to `False`):
-            Whether to push the merged model to the Hub after merging.
-
-    Example:
-
-    ```python
-    from trl.mergekit_utils import MergeConfig
-    from trl import MergeModelCallback
-
-    config = MergeConfig()
-    merge_callback = MergeModelCallback(config)
-    trainer = DPOTrainer(..., callbacks=[merge_callback])
-    ```
-    """
-
-    def __init__(
-        self,
-        merge_config: "MergeConfig | None" = None,
-        merge_at_every_checkpoint: bool = False,
-        push_to_hub: bool = False,
-    ):
-        if not is_mergekit_available():
-            raise ImportError(
-                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install mergekit`."
-            )
-        self.merge_config = merge_config or MergeConfig()
-        self.merge_at_every_checkpoint = merge_at_every_checkpoint
-        self.push_to_hub = push_to_hub
-
-    def _merge_and_maybe_push(self, output_dir, global_step, model):
-        checkpoint_path = os.path.join(output_dir, f"checkpoint-{global_step}")
-        self.merge_config.policy_model_path = checkpoint_path
-        if self.merge_config.target_model_path is None:
-            self.merge_config.target_model_path = get_config_model_id(model.config)
-        merge_path = os.path.join(checkpoint_path, "merged")
-
-        merge_models(self.merge_config.create(), merge_path)
-
-        if self.push_to_hub:
-            repo_name = f"{output_dir}_checkpoint-{global_step}_merged"
-            upload_model_to_hf(merge_path, repo_name)
-
-    def on_save(self, args, state, control, model=None, **kwargs):
-        if self.merge_at_every_checkpoint:
-            self._merge_and_maybe_push(args.output_dir, state.global_step, model)
-
-    def on_train_end(self, args, state, control, model=None, **kwargs):
-        if not self.merge_at_every_checkpoint:
-            self._merge_and_maybe_push(args.output_dir, state.global_step, model)
 
 
 class BEMACallback(TrainerCallback):

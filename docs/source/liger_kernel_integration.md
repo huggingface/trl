@@ -67,7 +67,7 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 <hfoption id="GKD">
 
 ```python
-from trl import GKDConfig
+from trl.experimental.gkd import GKDConfig
 
 training_args = GKDConfig(..., use_liger_kernel=True)
 ```

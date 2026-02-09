@@ -30,7 +30,8 @@ requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
-    "transformers>=4.56.1",
+    "packaging>20.0",
+    "transformers>=4.56.2",
 ]
 dynamic = ["version"]
 
@@ -46,14 +47,18 @@ bco = [
     "joblib"
 ]
 deepspeed = [
-    "deepspeed>=0.14.4"
+    "deepspeed>=0.14.4",
+    "transformers!=5.1.0",  # see transformers#43780
 ]
 judges = [
     "openai>=1.23.2",
     "llm-blender>=0.0.2"
 ]
+kernels = [
+    "kernels"
+]
 liger = [
-    "liger-kernel>=0.6.2"
+    "liger-kernel>=0.6.4"
 ]
 peft = [
     "peft>=0.8.0"
@@ -70,12 +75,13 @@ scikit = [
 ]
 test = [
     "pytest-cov",
+    "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest"
 ]
 vllm = [
-    "vllm==0.10.2",
+    "vllm>=0.10.2,<0.13.0",
     "fastapi",
     "pydantic",
     "requests",
@@ -95,11 +101,14 @@ dev = [
     "joblib",
     # deepspeed
     "deepspeed>=0.14.4",
+    "transformers!=5.1.0",  # see transformers#43780
     # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
+    # kernels
+    "kernels",
     # liger
-    "liger-kernel>=0.6.2",
+    "liger-kernel>=0.6.4",
     # peft
     "peft>=0.8.0",
     # quality
@@ -110,6 +119,7 @@ dev = [
     # scikit: included in bco
     # test
     "pytest-cov",
+    "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-rerunfailures==15.1",
     "pytest-xdist",
     "pytest",
@@ -117,7 +127,9 @@ dev = [
     # vlm
     "Pillow",
     "torchvision",
-    "num2words==0.5.14"
+    "num2words==0.5.14",
+    # for response parsing (required for training with tools)
+    "jmespath",
 ]
 
 [tool.setuptools]

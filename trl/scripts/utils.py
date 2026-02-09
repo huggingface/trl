@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -169,8 +169,6 @@ class ScriptArguments:
         dataset_streaming (`bool`, *optional*, defaults to `False`):
             Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If `datasets` is
             provided, this will be ignored.
-        gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
-            Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
             Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
             type, inplace operation. See
@@ -202,10 +200,6 @@ class ScriptArguments:
             "help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If "
             "`datasets` is provided, this will be ignored."
         },
-    )
-    gradient_checkpointing_use_reentrant: bool = field(
-        default=False,
-        metadata={"help": "Whether to apply `use_reentrant` for gradient checkpointing."},
     )
     ignore_bias_buffers: bool = field(
         default=False,

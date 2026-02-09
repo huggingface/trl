@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,24 +16,23 @@ import textwrap
 from io import StringIO
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+import transformers
+from packaging.version import Version
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
-from trl.trainer import compute_accuracy
 from trl.trainer.utils import (
-    DataCollatorForChatML,
     RepeatSampler,
-    batch_generation,
     entropy_from_logits,
     flush_left,
     flush_right,
+    forward_masked_logits,
     generate_model_card,
     get_peft_config,
+    nanstd,
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
@@ -41,13 +40,67 @@ from trl.trainer.utils import (
     split_pixel_values_by_grid,
     split_tensor_dict,
     unsplit_pixel_values_by_grid,
+    use_adapter,
 )
 
 from .testing_utils import TrlTestCase, require_peft, require_rich
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import AutoPeftModelForCausalLM, LoraConfig
+
+
+@require_peft
+class TestUseAdapter(TrlTestCase):
+    def test_disables_on_none(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        with model.disable_adapter():
+            expected = model(input_ids).logits
+
+        with use_adapter(model, None):
+            output = model(input_ids).logits
+
+        assert torch.equal(output, expected)
+
+    def test_restores_previous_adapter(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        expected = model(input_ids).logits
+        with use_adapter(model, "my_adapter"):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+        with use_adapter(model, None):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+    def test_with_multiple_adapters(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter_1"
+        )
+        model.load_adapter("trl-internal-testing/tiny-PeftModel-2", "my_adapter_2")
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+
+        model.set_adapter("my_adapter_1")  # should be a no-op, but let's keep it for clarity
+        expected_1 = model(input_ids).logits
+        model.set_adapter("my_adapter_2")
+        expected_2 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_1"):
+            output_1 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_2"):
+            output_2 = model(input_ids).logits
+
+        assert torch.equal(output_1, expected_1)
+        assert torch.equal(output_2, expected_2)
 
 
 class TestPad(TrlTestCase):
@@ -168,6 +221,24 @@ class TestGetPEFTConfig(TrlTestCase):
             assert getattr(peft_config, arg) == value
 
 
+class TestNanStd(TrlTestCase):
+    def test_nanstd_ignores_nans(self):
+        x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
+        result = nanstd(x)
+        torch.testing.assert_close(result, torch.tensor(1.0))
+
+    def test_nanstd_dim_and_keepdim(self):
+        x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
+        result = nanstd(x, dim=1, keepdim=True)
+        assert torch.isnan(result[0, 0])
+        torch.testing.assert_close(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
+
+    def test_nanstd_all_nan(self):
+        x = torch.tensor([float("nan"), float("nan")])
+        result = nanstd(x)
+        assert torch.isnan(result)
+
+
 class TestGenerateModelCard(TrlTestCase):
     def test_full(self):
         model_card = generate_model_card(
@@ -212,219 +283,6 @@ class TestGenerateModelCard(TrlTestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
-
-
-class TestDataCollatorForChatML(TrlTestCase):
-    def setup_method(self):
-        # Initialize the tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # Define token IDs
-        self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
-        self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
-        # Token ID for "true", the last assistant's response in the example:
-        self.ignore_index = -100
-        self.max_length = 1024
-        self.messages_key = "messages"
-
-        # Example input
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        self.examples = dataset.to_list()
-
-        # Initialize the data collator
-        self.collator = DataCollatorForChatML(
-            tokenizer=self.tokenizer,
-            max_length=self.max_length,
-            ignore_index=self.ignore_index,
-        )
-
-    def test_data_collator_for_chatml(self):
-        # Process the data
-        data = self.collator(self.examples)
-
-        # Verify basic shapes and types
-        assert "input_ids" in data
-        assert "attention_mask" in data
-        assert "labels" in data
-        assert "prompts" in data
-        assert "prompt_attention_mask" in data
-
-        # Decode input_ids and labels for verification
-        input_ids = data["input_ids"][0].tolist()
-        labels = data["labels"][0].tolist()
-        prompt_only = data["prompts"][0].tolist()
-
-        # Get the last assistant's response for comparison
-        last_message = self.examples[0][self.messages_key][-1]
-        assert last_message["role"] == "assistant", "Last message should be from assistant"
-        last_assistant_response = last_message["content"]
-
-        # Verify that input_ids contain both prompt and response
-        decoded_input = self.tokenizer.decode(input_ids)
-        assert last_assistant_response in decoded_input, "Input should contain assistant's response"
-
-        # Verify that prompts only contain the conversation up to the last response
-        decoded_prompt = self.tokenizer.decode(prompt_only)
-        assert last_assistant_response not in decoded_prompt, "Prompt should not contain assistant's response"
-
-        # Verify labels are -100 for non-assistant parts
-        prompt_length = len(prompt_only)
-        assert all(label == self.ignore_index for label in labels[:prompt_length]), (
-            "Labels should be ignore_index for prompt tokens"
-        )
-
-        # Verify labels match assistant response after prompt
-        # Add a filter to remove any trailing tokens after the first <|im_end|>
-        last_assistant_response_with_end = last_assistant_response + self.tokenizer.eos_token
-        last_assistant_response_tokens = self.tokenizer.encode(
-            last_assistant_response_with_end, add_special_tokens=False
-        )
-
-        response_labels = []
-        for label in labels[prompt_length:]:
-            if label == self.ignore_index:
-                continue
-            response_labels.append(label)
-            if label == self.tokenizer.convert_tokens_to_ids("<|im_end|>"):
-                break
-        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
-
-        # Verify there isn't a generation prompt at the end
-        generation_prompt = "<|im_start|>assistant"
-        assert not decoded_input.strip().endswith(generation_prompt), (
-            f"Input should not end with generation prompt '{generation_prompt}'"
-        )
-
-        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
-
-
-class TestBatchGeneration(TrlTestCase):
-    def setup_method(self):
-        # Initialize the tokenizer
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id).to(self.device)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-
-        self.generation_config = GenerationConfig(
-            max_new_tokens=128,
-            temperature=0.5,
-            do_sample=True,
-            top_k=0,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
-
-        # Example input
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-        self.examples = dataset["messages"]
-        self.mini_batch_size = 3
-
-    def test_mini_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, self.mini_batch_size, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        assert max_length_query > context_length
-        assert query_responses.shape == (bs, max_length_query)
-        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
-
-    def test_single_batch_generation(self):
-        batch = [
-            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
-            for example in self.examples
-        ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
-        bs, context_length = queries.shape
-
-        query_responses, logits = batch_generation(
-            self.model, queries, bs, self.tokenizer.pad_token_id, self.generation_config
-        )
-
-        max_length_query = query_responses.shape[1]
-        max_length_logits = max_length_query - context_length
-
-        assert max_length_query > context_length
-        assert query_responses.shape == (bs, max_length_query)
-        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
-
-
-class TestComputeAccuracy(TrlTestCase):
-    def test_token_classification_task(self):
-        eval_pred = (
-            np.array(
-                [
-                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
-                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
-                ]
-            ),
-            np.array([[0, 1], [1, 0]]),
-        )
-        expected_accuracy = 0.5  # 2 matches, 2 mismatches
-        result = compute_accuracy(eval_pred)
-        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
-
-    def test_token_classification_task_with_ignored_tokens_0(self):
-        eval_pred = (
-            np.array(
-                [
-                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
-                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
-                ]
-            ),
-            np.array([[1, 0], [1, -100]]),
-        )
-        expected_accuracy = 1.0  # All non-ignored tokens match
-        result = compute_accuracy(eval_pred)
-        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
-
-    def test_token_classification_task_with_ignored_tokens_1(self):
-        eval_pred = (
-            np.array(
-                [
-                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
-                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
-                ]
-            ),
-            np.array([[1, 1], [0, -100]]),
-        )
-        expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
-        result = compute_accuracy(eval_pred)
-        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
-
-    def test_rewards_comparison_task(self, caplog):
-        eval_pred = (
-            np.array(
-                [
-                    [0.9, 0.1],  # Batch 1
-                    [0.6, 0.4],  # Batch 2
-                    [0.5, 0.5],  # Batch 3 (equal)
-                ]
-            ),
-            np.array([0, 1, 1]),
-        )
-        expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
-
-        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
-            result = compute_accuracy(eval_pred)
-
-        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
-        expected_warning = (
-            "There are 1 out of 3 instances where the predictions for both options are equal. "
-            "These instances are ignored in the accuracy computation."
-        )
-        assert expected_warning in caplog.text
 
 
 class TestFlushLeft(TrlTestCase):
@@ -995,7 +853,7 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
         result = unsplit_pixel_values_by_grid(batch)
         assert isinstance(result["pixel_values"], torch.Tensor)
-        assert torch.allclose(result["pixel_values"], pixel_values_merged)
+        torch.testing.assert_close(result["pixel_values"], pixel_values_merged)
         assert isinstance(result["image_grid_thw"], torch.Tensor)
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
@@ -1005,3 +863,84 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         batch = {"pixel_values": original}
         result = unsplit_pixel_values_by_grid(batch)
         assert torch.equal(result["pixel_values"], original)
+
+
+class TestForwardMaskedLogits:
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-CohereForCausalLM",
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",
+            "trl-internal-testing/tiny-GemmaForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            "trl-internal-testing/tiny-Phi3ForCausalLM",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        ],
+    )
+    def test_llm(self, model_id):
+        device = torch.device("cuda")
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+        logits_mask = torch.tensor(
+            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
+            device=device,
+        )
+
+        full_outputs = model(input_ids=input_ids)
+        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
+
+        torch.testing.assert_close(
+            masked_outputs.flat_logits,
+            full_outputs.logits[logits_mask.bool()],
+        )
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__) >= Version("5.0.0"),
+                        reason="Blocked by upstream transformers bug (transformers#43334)",
+                    ),
+                ],
+            ),
+        ],
+    )
+    def test_vlm(self, model_id):
+        device = torch.device("cuda")
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.text_config.vocab_size, (2, 8), device=device)
+        logits_mask = torch.tensor(
+            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
+            device=device,
+        )
+
+        full_outputs = model(input_ids=input_ids)
+        masked_outputs = forward_masked_logits(model, logits_mask, input_ids=input_ids)
+
+        torch.testing.assert_close(
+            masked_outputs.flat_logits,
+            full_outputs.logits[logits_mask.bool()],
+        )

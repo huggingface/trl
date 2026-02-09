@@ -1,7 +1,7 @@
 # Judges
 
 > [!WARNING]
-> TRL Judges is an experimental API which is subject to change at any time.
+> TRL Judges is an experimental API which is subject to change at any time. As of TRL v1.0, judges have been moved to the `trl.experimental.judges` module.
 
 TRL provides judges to easily compare two completions.
 
@@ -13,10 +13,10 @@ pip install trl[judges]
 
 ## Using the provided judges
 
-TRL provides several judges out of the box. For example, you can use the [`HfPairwiseJudge`] to compare two completions using a pre-trained model from the Hugging Face model hub:
+TRL provides several judges out of the box. For example, you can use the [`experimental.judges.HfPairwiseJudge`] to compare two completions using a pre-trained model from the Hugging Face model hub:
 
 ```python
-from trl import HfPairwiseJudge
+from trl.experimental.judges import HfPairwiseJudge
 
 judge = HfPairwiseJudge()
 judge.judge(
@@ -27,12 +27,12 @@ judge.judge(
 
 ## Define your own judge
 
-To define your own judge, we provide several base classes that you can subclass. For rank-based judges, you need to subclass [`BaseRankJudge`] and implement the [`BaseRankJudge.judge`] method. For pairwise judges, you need to subclass [`BasePairJudge`] and implement the [`BasePairJudge.judge`] method. If you want to define a judge that doesn't fit into these categories, you need to subclass [`BaseJudge`] and implement the [`BaseJudge.judge`] method.
+To define your own judge, we provide several base classes that you can subclass. For rank-based judges, you need to subclass [`experimental.judges.BaseRankJudge`] and implement the [`experimental.judges.BaseRankJudge.judge`] method. For pairwise judges, you need to subclass [`experimental.judges.BasePairJudge`] and implement the [`experimental.judges.BasePairJudge.judge`] method. If you want to define a judge that doesn't fit into these categories, you need to subclass [`experimental.judges.BaseJudge`] and implement the [`experimental.judges.BaseJudge.judge`] method.
 
 As an example, let's define a pairwise judge that prefers shorter completions:
 
 ```python
-from trl import BasePairwiseJudge
+from trl.experimental.judges import BasePairwiseJudge
 
 class PrefersShorterJudge(BasePairwiseJudge):
     def judge(self, prompts, completions, shuffle_order=False):
@@ -53,34 +53,34 @@ judge.judge(
 
 ### PairRMJudge
 
-[[autodoc]] PairRMJudge
+[[autodoc]] trl.experimental.judges.PairRMJudge
 
 ### HfPairwiseJudge
 
-[[autodoc]] HfPairwiseJudge
+[[autodoc]] trl.experimental.judges.HfPairwiseJudge
 
 ### OpenAIPairwiseJudge
 
-[[autodoc]] OpenAIPairwiseJudge
+[[autodoc]] trl.experimental.judges.OpenAIPairwiseJudge
 
 ### AllTrueJudge
 
-[[autodoc]] AllTrueJudge
+[[autodoc]] trl.experimental.judges.AllTrueJudge
 
 ## Base classes
 
 ### BaseJudge
 
-[[autodoc]] BaseJudge
+[[autodoc]] trl.experimental.judges.BaseJudge
 
 ### BaseBinaryJudge
 
-[[autodoc]] BaseBinaryJudge
+[[autodoc]] trl.experimental.judges.BaseBinaryJudge
 
 ### BaseRankJudge
 
-[[autodoc]] BaseRankJudge
+[[autodoc]] trl.experimental.judges.BaseRankJudge
 
 ### BasePairwiseJudge
 
-[[autodoc]] BasePairwiseJudge
+[[autodoc]] trl.experimental.judges.BasePairwiseJudge

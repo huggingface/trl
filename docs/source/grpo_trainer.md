@@ -14,10 +14,10 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [UltraFeedback prompts dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -28,21 +28,14 @@ Below is the script to train the model.
 ```python
 # train_grpo.py
 from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOTrainer
+from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
+dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-# Dummy reward function for demonstration purposes
-def reward_num_unique_letters(completions, **kwargs):
-    """Reward function that rewards completions with more unique letters."""
-    completion_contents = [completion[0]["content"] for completion in completions]
-    return [float(len(set(content))) for content in completion_contents]
-
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_num_unique_letters,
-    args=training_args,
+    reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
 trainer.train()
@@ -78,6 +71,7 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 
 > [!TIP]
 > It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
+> Note that turning off std-based scaling also removes variance normalization, so update magnitudes depend directly on the raw reward scale and batch composition.
 
 > [!TIP]
 > As shown in [Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221), calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
@@ -144,35 +138,57 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
+Alternatively, in the [SAPO paper](https://huggingface.co/papers/2511.20347), the Qwen team proposes replacing the "hard" clipping mechanism of GRPO with a smooth, temperature-controlled soft gating mechanism. While GRPO zeroes out gradients when the policy deviates too far from the reference, SAPO uses a soft trust region that smoothly decays the gradient weight. This allows the model to retain useful learning signals from "near-on-policy" tokens while suppressing noise from extreme deviations.
+
+The loss function is defined as:
+
+$$
+\mathcal{L}_{\text{SAPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} f_{i,t} \left( \frac{\pi_\theta(o_{i,t} | q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t} | q, o_{i,<t})} \right) \hat{A}_{i,t}
+$$
+
+The soft-gating function  \\( f_{i,t} \\) is defined using the sigmoid function  \\( \sigma \\) as:
+
+$$
+f_{i,t}(x) = \sigma \left( \tau_{i,t} (x - 1) \right) \cdot \frac{4}{\tau_{i,t}}
+$$
+
+The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
+
+$$
+\tau_{i,t} = \begin{cases} 
+\tau_{\text{pos}}, & \text{if } \hat{A}_{i,t} > 0 \\
+\tau_{\text{neg}}, & \text{otherwise}
+\end{cases}
+$$
+
+They recommends using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
+
+To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
+
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
 
-- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
-- `completions/mean_length`: The average length of generated completions.
-- `completions/min_length`: The minimum length of generated completions.
-- `completions/max_length`: The maximum length of generated completions.
-- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
-- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
-- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions. When using tools, only non-tool tokens are counted.
+- `step_time`: The average time (in seconds) taken per training step (including generation).
+- `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
-- `reward`: The overall average reward after applying reward weights.
-- `reward_std`: The standard deviation of rewards after applying reward weights.  
-  - If `scale_rewards` is `"group"` or `"none"`, this is the average of the per-group standard deviations.
-  - If `scale_rewards` is `"batch"`, this is the standard deviation computed over all rewards in the batch (ignoring groups).
+- `reward`: The overall average reward after summing rewards across functions (unweighted).
+- `reward_std`: The standard deviation of summed rewards across functions (unweighted), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
-- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
-  $$
-  \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
-  $$
-  A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
@@ -245,6 +261,38 @@ training_args = GRPOConfig(
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
+
+#### Dealing with the Training-Inference Mismatch
+While vLLM greatly accelerates inference, it also decouples the inference engine from the training engine. In theory these engines are mathematically identical, in practice however they can produce different outputs due to precision effects and hardware specific optimizations. This divergence reflects the different optimization objectives of the two systems. This divergence reflects the distinct optimization goals of the two systems. Inference engines aim to maximize sampling throughput, typically measured in tokens per second, while maintaining acceptable sampling fidelity. Training frameworks instead focus on numerical stability and precision for gradient computation, often using higher precision formats like FP32 for master weights and optimizer states. These differing priorities and constraints introduce an inevitable, albeit subtle, mismatch between training and inference.
+
+This mismatch leads to a biased gradient update which has been observed to destabilize training ([[1]](https://fengyao.notion.site/off-policy-rl)[[2]](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)[[3]](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/#true-on-policy-rl)[[4]](https://huggingface.co/papers/2510.26788)[[5]](https://huggingface.co/papers/2510.18855)). For simplicity, consider the REINFORCE policy gradient:
+
+$$
+\nabla_\theta \mathcal{J}(x,\theta)
+= \mathbb{E}_{y \sim \pi^\text{train}(\cdot \mid x,\theta)}
+\left[ \nabla_\theta \log \pi^\text{train}(y \mid x,\theta) \cdot R(x,y) \right]
+$$
+
+Here  \\( x \\) denotes prompts sampled from some data distribution, and  \\( \pi^\text{train} \\) is the policy implemented by the training engine. With vLLM in the loop we obtain a separate inference policy  \\( \pi^\text{inference} \\), so the effective policy gradient becomes
+
+$$
+\nabla_\theta \mathcal{J}_{\text{biased}}(x,\theta)
+= \mathbb{E}_{y \sim \pi^\text{inference}(\cdot \mid x,\theta)}
+\left[ \nabla_\theta \log \pi^\text{train}(y \mid x,\theta) \cdot R(x,y) \right].
+$$
+
+This turns an otherwise on policy RL problem into an off policy one.
+
+The standard way to correct for this distribution shift is **importance sampling (IS)**. We provide two IS variants: [Truncated Importance Sampling (TIS)](paper_index#truncated-importance-sampling) and [Masked Importance Sampling (MIS)](paper_index#masked-importance-sampling). Both variants can be applied either at the token level or at the sequence level.Let  \\( \rho \\) denote the importance weight, for example  \\( \rho_t \\) per token or  \\( \rho_{\text{seq}} \\) per sequence. Under TIS, ratios larger than `vllm_importance_sampling_cap` are clipped,
+
+$$
+\rho \leftarrow \min(\rho, C).
+$$
+
+Under MIS, ratios larger than `vllm_importance_sampling_cap` are set to zero, so those samples do not contribute to the gradient. In other words, large ratio samples are downweighted under TIS and discarded under MIS. The configuration flag `vllm_importance_sampling_mode` chooses both the IS variant (masking or truncation) and the granularity (token level or sequence level).
+
+Importance sampling is the principled algorithmic response to the training–inference mismatch. However, there are also more direct approaches that attempt to reduce the mismatch between the two engines themselves. Most of these are engineering solutions. For example, [MiniMax M1 uses an FP32 language model head](https://huggingface.co/papers/2506.13585) in the inference engine. Thinking Machines has explored [deterministic inference kernels](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/), although this comes with a significant efficiency cost. vLLM has shown [bitwise consistent policies](https://blog.vllm.ai/2025/11/10/bitwise-consistent-train-inference.html) by building on the batch invariant deterministic kernels from Thinking Machines, but as of November 2025 there remains a substantial throughput penalty relative to standard vLLM inference.
+
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
@@ -289,29 +337,27 @@ import argparse
 
 from datasets import load_dataset
 from trl import GRPOTrainer, GRPOConfig
+from trl.rewards import accuracy_reward
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
     args = parser.parse_args()
 
-    # Example dataset from TLDR
-    dataset = load_dataset("trl-lib/tldr", split="train")
-
-    # Dummy reward function: count the number of unique characters in the completions
-    def reward_num_unique_chars(completions, **kwargs):
-        return [len(set(c)) for c in completions]
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
     training_args = GRPOConfig(
-        output_dir="Qwen2.5-72B-GRPO",
         per_device_train_batch_size=4,
-        bf16=True,
-        gradient_checkpointing=True,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 
-    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer = GRPOTrainer(
+        model="Qwen/Qwen2.5-72B",
+        args=training_args,
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset
+    )
     trainer.train()
 
 if __name__=="__main__":
@@ -322,11 +368,13 @@ if __name__=="__main__":
 
 The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
 
+Reward functions can be either synchronous Python callables or asynchronous `async def` coroutines. When you provide multiple asynchronous reward functions, they are awaited concurrently (run in parallel via `asyncio.gather`) so their latency overlaps.
+
 1. **Input arguments**:
    - The function must accept the following as keyword arguments:
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
-     - `completions_ids` (contains the tokenized completions),
+     - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
@@ -342,9 +390,9 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
 Below is an example of a reward function for a standard format that rewards longer completions:
 
 ```python
-def reward_func(completions_ids, **kwargs):
+def reward_func(completion_ids, **kwargs):
     """Reward function that assigns higher scores to longer completions (in terms of token count)."""
-    return [float(len(ids)) for ids in completions_ids]
+    return [float(len(ids)) for ids in completion_ids]
 ```
 
 You can test it as follows:
@@ -352,8 +400,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
 >>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
->>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
->>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+>>> completion_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completion_ids=completion_ids)
 [2.0, 4.0]
 ```
 
@@ -372,8 +420,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]
 >>> completions = [" blue.", " in the sky."]
->>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
->>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+>>> completion_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
+>>> reward_func(prompts=prompts, completions=completions, completion_ids=completion_ids)
 [6.0, 12.0]
 ```
 
@@ -494,6 +542,22 @@ In this example, the `math_reward_func` and `coding_reward_func` are designed to
 
 Note that the [`GRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
+#### Example 5: Asynchronous reward functions
+
+Custom reward functions can also be defined as `async def` coroutines. This is useful if your reward depends on slow I/O (for example, calling a remote service). When you pass multiple async reward functions, [`GRPOTrainer`] executes them concurrently so their latency overlaps.
+
+Below is a minimal example of an async reward function that simulates an I/O-bound operation:
+
+```python
+import asyncio
+
+async def async_reward_func(prompts, completions, **kwargs):
+    # Simulate an I/O-bound call (e.g., HTTP request, database lookup)
+    await asyncio.sleep(0.01)
+    # Simple toy reward: 1.0 if the completion is non-empty, else 0.0
+    return [1.0 if completion else 0.0 for completion in completions]
+```
+
 #### Passing the reward function to the trainer
 
 To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
@@ -507,13 +571,13 @@ trainer = GRPOTrainer(
 )
 ```
 
-If you have multiple reward functions, you can pass them as a list:
+You can pass several reward functions as a list; this list may include both synchronous and asynchronous functions:
 
 ```python
 from trl import GRPOTrainer
 
 trainer = GRPOTrainer(
-    reward_funcs=[reward_func1, reward_func2],
+    reward_funcs=[reward_func, async_reward_func1, async_reward_func2],
     ...,
 )
 ```
@@ -521,6 +585,85 @@ trainer = GRPOTrainer(
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+
+### Rapid Experimentation for GRPO
+
+RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple GRPO configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
+
+## Agent Training
+
+GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
+This parameter expects a list of Python functions (sync or async) that define the tools available to the agent:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    tools=[tool1, tool2],
+    ...,
+)
+```
+
+Each tool must be a standard Python function with **type-hinted arguments and return types**, along with a **Google-style docstring** describing its purpose, arguments, and return value.
+For more details, see the [Passing tools guide](https://huggingface.co/docs/transformers/en/chat_extras#passing-tools).
+
+Example:
+
+```python
+from trl import GRPOTrainer
+
+def multiply(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+async def async_add(a: int, b: int) -> int:
+    """
+    Asynchronously adds two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The sum of the two integers.
+    """
+    return a + b
+
+trainer = GRPOTrainer(
+    tools=[multiply, async_add],
+    ...,
+)
+```
+
+### Supported Models
+
+Tested with:
+
+- **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
+
+> [!TIP]
+> Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+
+### Quick Start
+
+Use [grpo\_agent.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_agent.py) to fine-tune a LLM for agentic workflows.
+
+```bash
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/grpo_agent.py \
+  --model_name_or_path Qwen/Qwen3-0.6B
+  ...
+```
 
 ## Vision-Language Model (VLM) Training
 
@@ -550,9 +693,7 @@ accelerate launch \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
-  --gradient_checkpointing \
   --dtype bfloat16 \
-  --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
@@ -562,15 +703,6 @@ accelerate launch \
 ```
 
 ### Configuration Tips
-
-> [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`GRPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
->
-> ```python
-> GRPOConfig(max_prompt_length=None, ...)
-> ```
->
-> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage

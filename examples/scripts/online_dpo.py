@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ python examples/scripts/online_dpo.py \
     --output_dir pythia-1b-tldr-online-dpo \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 16 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0
 
 With LoRA:
@@ -44,7 +44,7 @@ python examples/scripts/online_dpo.py \
     --output_dir pythia-1b-tldr-online-dpo \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 8 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --use_peft
 """
@@ -56,19 +56,16 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
-    HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
-    OpenAIPairwiseJudge,
-    PairRMJudge,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
+from trl.experimental.judges import HfPairwiseJudge, OpenAIPairwiseJudge, PairRMJudge
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 
 # Enable logging in a Hugging Face Space

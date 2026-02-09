@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import functools
-import random
 import signal
 import warnings
 from collections.abc import Callable
@@ -24,7 +23,6 @@ import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
-    is_flash_attn_2_available,
     is_kernels_available,
     is_peft_available,
     is_rich_available,
@@ -32,8 +30,8 @@ from transformers.utils import (
     is_vision_available,
 )
 
-from trl import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import (
+    is_jmespath_available,
     is_joblib_available,
     is_liger_kernel_available,
     is_llm_blender_available,
@@ -45,6 +43,8 @@ from trl.import_utils import (
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
+require_jmespath = pytest.mark.skipif(not is_jmespath_available(), reason="test requires jmespath")
+require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_llm_blender = pytest.mark.skipif(not is_llm_blender_available(), reason="test requires llm-blender")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
@@ -85,42 +85,16 @@ require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
 )
 
 
-def is_flash_attn_available():
-    flash_attn_available = is_flash_attn_2_available()
-    kernels_available = is_kernels_available()
-    try:
-        from kernels import get_kernel
+def is_ampere_or_newer(device_index=0):
+    if not torch.cuda.is_available():
+        return False
 
-        get_kernel("kernels-community/flash-attn")
-    except Exception:
-        kernels_available = False
-
-    return kernels_available or flash_attn_available
+    major, minor = torch.cuda.get_device_capability(device_index)
+    # Ampere starts at compute capability 8.0 (e.g., A100 = 8.0, RTX 30xx = 8.6)
+    return (major, minor) >= (8, 0)
 
 
-# Function ported from transformers.testing_utils
-require_flash_attn = pytest.mark.skipif(not is_flash_attn_available(), reason="test requires Flash Attention")
-
-
-class RandomBinaryJudge(BaseBinaryJudge):
-    """
-    Random binary judge, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [random.choice([0, 1, -1]) for _ in range(len(prompts))]
-
-
-class RandomPairwiseJudge(BasePairwiseJudge):
-    """
-    Random pairwise judge, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
-        if not return_scores:
-            return [random.randint(0, len(completion) - 1) for completion in completions]
-        else:
-            return [random.random() for _ in range(len(prompts))]
+require_ampere_or_newer = pytest.mark.skipif(not is_ampere_or_newer(), reason="test requires Ampere or newer GPU")
 
 
 class TrlTestCase:

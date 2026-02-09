@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 from transformers.generation.configuration_utils import GenerationConfig
@@ -38,7 +38,6 @@ from transformers.integrations.integration_utils import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import (
     is_flash_attn_2_available,
@@ -49,19 +48,19 @@ from transformers.utils import (
 
 from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
 from ...extras.profiling import profiling_decorator
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
-    DataCollatorForChatML,
     create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
     pad,
 )
+from ..utils import DataCollatorForChatML
 from .gold_config import GOLDConfig
 
 
@@ -73,7 +72,7 @@ if is_wandb_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -83,6 +82,9 @@ if is_rich_available():
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 def print_prompt_completions_sample_uld(
@@ -232,8 +234,9 @@ class ULDLoss(nn.Module):
     Universal Logit Distillation Loss.
     """
 
-    def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None):
+    def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None, device=None):
         super().__init__()
+        self.device = device
         self.crossentropy_weight = config.uld_crossentropy_weight
         self.distillation_weight = config.uld_distillation_weight
         self.student_temperature = config.uld_student_temperature
@@ -319,6 +322,13 @@ class ULDLoss(nn.Module):
         self._teacher_matched_ids = teacher_matched_ids
         self._student_matched_ids = student_matched_ids
 
+        max_matched_teacher_id = max(self._vocab_mapping.keys())
+        self.mapping_tensor = torch.full((max_matched_teacher_id + 1,), -1, dtype=torch.long)  # -1 for unmapped ids
+        for k, v in self._vocab_mapping.items():
+            self.mapping_tensor[k] = v
+        if self.device is not None:
+            self.mapping_tensor = self.mapping_tensor.to(self.device)
+
     def _compute_distillation_loss(
         self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
     ):
@@ -379,13 +389,15 @@ class ULDLoss(nn.Module):
                 )
 
                 # Merge student probabilities using student alignment groups
+                # Pass student_token_ids to enable corrected conditional probability merging
                 student_aligned = self._merge_probabilities_with_alignment_groups(
-                    student_probs, student_alignment_groups
+                    student_probs, student_alignment_groups, student_token_ids
                 )
 
                 # Merge teacher probabilities using teacher alignment groups
+                # Pass teacher_token_ids to enable corrected conditional probability merging
                 teacher_aligned = self._merge_probabilities_with_alignment_groups(
-                    teacher_probs, teacher_alignment_groups
+                    teacher_probs, teacher_alignment_groups, teacher_token_ids
                 )
             else:
                 min_length = min(len(student_token_ids), len(teacher_token_ids))
@@ -515,16 +527,34 @@ class ULDLoss(nn.Module):
 
         return s_groups, t_groups
 
-    def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups):
+    def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
         """
-        Merge probabilities based on alignment groups.
+        Merge probabilities based on alignment groups with corrected conditional probability handling.
+
+        For a group merging tokens at positions [i, i+1, ..., i+k], we compute:
+            P_merged(y | x) = P(y | x) × P(token_{i+1} | token_i, x) × ... × P(token_{i+k} | ..., x)
+
+        Where:
+        - P(y | x) is the marginal probability distribution over all vocabulary tokens at position i
+        - token_{i+1}, ..., token_{i+k} are the ACTUAL tokens that were generated
+        - The conditional probabilities P(token_j | ..., x) are extracted as SCALARS
+        - y ranges over all vocabulary tokens at position i
+
+        This ensures the probability of the actual generated sequence is correct (by the chain rule), while introducing
+        a known bias for counterfactual tokens (since we don't have P(token_{i+k} | y, x) for y != token_i). The merged
+        distribution is unnormalized but preserves correct relative probabilities.
 
         Args:
             probs: Probability tensor [seq_len, vocab_size]
             alignment_groups: List of alignment groups (each group is a list of positions to merge)
+            token_ids: Actual token IDs that were generated [seq_len]. REQUIRED when any group has
+                      len(group) > 1. If None when multi-token groups exist, raises ValueError.
 
         Returns:
             Merged probability tensor [num_groups, vocab_size]
+
+        Raises:
+            ValueError: If token_ids is None when merging multi-token groups
         """
         if not alignment_groups:
             return probs
@@ -532,19 +562,40 @@ class ULDLoss(nn.Module):
         # Create aligned tensor
         vocab_size = probs.size(-1)
         target_len = len(alignment_groups)
-        aligned_probs = torch.zeros(target_len, vocab_size, device=probs.device)
+        aligned_probs = torch.zeros(target_len, vocab_size, device=probs.device, dtype=probs.dtype)
+        eps = 1e-8
 
         # Process each alignment group
         for group_idx, group in enumerate(alignment_groups):
             # Handle probability merging
             if len(group) > 1:
-                # Multiple tokens map to this group - merge them
-                eps = 1e-8
-                logp = torch.log(probs[group[0]].clamp_min(eps))
+                # Multiple tokens map to this group - merge using corrected conditional probability approach
+                if token_ids is None:
+                    raise ValueError(
+                        "token_ids must be provided when merging multi-token groups. "
+                        "This is required for mathematically correct probability merging."
+                    )
+
+                # Start with the marginal distribution at the first position
+                first_pos = group[0]
+                marginal_probs = probs[first_pos]  # P(y | x₀) for all y
+
+                # For each subsequent token in the group, extract the SCALAR conditional probability
+                # of the actual token that was generated, and multiply
+                conditional_prob_product = 1.0
                 for idx in group[1:]:
-                    if idx < probs.size(0):
-                        logp = logp + torch.log(probs[idx].clamp_min(eps))
-                aligned_probs[group_idx] = torch.softmax(logp, dim=-1)
+                    # Get the actual token ID that was generated at this position
+                    actual_token_id = token_ids[idx]
+                    # Extract its probability (scalar)
+                    token_prob = probs[idx, actual_token_id].clamp_min(eps)
+                    conditional_prob_product *= token_prob
+
+                # Merge: multiply the scalar conditional prob product with the entire marginal distribution
+                # This gives: P(y | x_0) × P(token_1 | token_0, x) × ... × P(token_k | ..., x)
+                # Note: This is unnormalized, but preserves the correct joint probability for the actual sequence
+                merged_probs = marginal_probs * conditional_prob_product
+                aligned_probs[group_idx] = merged_probs
+
             elif len(group) == 1:
                 aligned_probs[group_idx] = probs[group[0]]
             else:
@@ -573,9 +624,7 @@ class ULDLoss(nn.Module):
         # Convert sets to sorted tensors for indexing
         if self._teacher_matched_ids:
             teacher_matched_indices = torch.tensor(sorted(self._teacher_matched_ids), dtype=torch.long, device=device)
-            student_matched_indices = torch.tensor(
-                [self._vocab_mapping[tid.item()] for tid in teacher_matched_indices], dtype=torch.long, device=device
-            )
+            student_matched_indices = self.mapping_tensor[teacher_matched_indices]
         else:
             teacher_matched_indices = torch.tensor([], dtype=torch.long, device=device)
             student_matched_indices = torch.tensor([], dtype=torch.long, device=device)
@@ -859,16 +908,20 @@ class GOLDTrainer(SFTTrainer):
                 config=args,
                 student_tokenizer=processing_class,
                 teacher_tokenizer=self.teacher_tokenizer,
+                device=self.accelerator.device,
             )
 
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_completion_length,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            do_sample=True,
-            top_k=args.top_k,
-            pad_token_id=self.processing_class.pad_token_id,
-        )
+        generation_kwargs = {
+            "max_new_tokens": args.max_completion_length,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "do_sample": True,
+            "top_k": args.top_k,
+            "pad_token_id": self.processing_class.pad_token_id,
+        }
+        self.generation_config = GenerationConfig(**generation_kwargs)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
+        self.generation_kwargs = generation_kwargs
         if (
             hasattr(self.model.generation_config, "eos_token_id")
             and self.model.generation_config.eos_token_id is not None
@@ -941,6 +994,15 @@ class GOLDTrainer(SFTTrainer):
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
                 ensure_master_addr_port()
 
+                vllm_quantization = None
+                if is_bitsandbytes_available():
+                    for _, module in model.named_modules():
+                        if isinstance(module, bnb.nn.Linear4bit):
+                            vllm_quantization = "bitsandbytes"
+                            break
+                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                            raise ValueError("vLLM does not support in-flight 8-bit quantization.")
+
                 self.vllm_engine = LLM(
                     model=student_model_name_or_path,
                     revision=self.model_revision,
@@ -952,6 +1014,7 @@ class GOLDTrainer(SFTTrainer):
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     enable_sleep_mode=self.vllm_enable_sleep_mode,
+                    quantization=vllm_quantization,
                 )
 
                 if self.vllm_enable_sleep_mode:
@@ -963,7 +1026,7 @@ class GOLDTrainer(SFTTrainer):
                 self.accelerator.wait_for_everyone()
             else:
                 raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
-            self.vllm_guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.vllm_structured_outputs_regex = args.vllm_structured_outputs_regex
             self.vllm_sync_frequency = args.vllm_sync_frequency
             self._last_vllm_sync_step = -1
 
@@ -1042,18 +1105,7 @@ class GOLDTrainer(SFTTrainer):
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                try:
-                    dataset = dataset.map(_func, batched=False, **map_kwargs)
-                except Exception as e:
-                    warnings.warn(
-                        f"Failed to apply the formatting function due to the following error: {e}. This may be "
-                        "because the function is designed for batched input. Please update it to process one example "
-                        "at a time (i.e., accept and return a single example). For now, we will attempt to apply the "
-                        "function in batched mode, but note that batched formatting is deprecated and will be removed "
-                        "in version 0.21.",
-                        DeprecationWarning,
-                    )
-                    dataset = dataset.map(_func, batched=True, **map_kwargs)
+                dataset = dataset.map(_func, batched=False, **map_kwargs)
 
             # Convert the dataset to ChatML if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1100,10 +1152,12 @@ class GOLDTrainer(SFTTrainer):
 
                     if is_conversational(example):
                         prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"], **example.get("chat_template_kwargs", {})
+                            example["prompt"], return_dict=False, **example.get("chat_template_kwargs", {})
                         )
                         prompt_completion_ids = processing_class.apply_chat_template(
-                            example["prompt"] + example["completion"], **example.get("chat_template_kwargs", {})
+                            example["prompt"] + example["completion"],
+                            return_dict=False,
+                            **example.get("chat_template_kwargs", {}),
                         )
                     else:
                         prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -1116,7 +1170,8 @@ class GOLDTrainer(SFTTrainer):
                         warnings.warn(
                             "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                             "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                            "token handling. Verify that the tokenizer is processing text consistently."
+                            "token handling. Verify that the tokenizer is processing text consistently.",
+                            stacklevel=2,
                         )
 
                     # Create a completion mask
@@ -1142,16 +1197,16 @@ class GOLDTrainer(SFTTrainer):
                             # Apply chat template to get the prompt (everything up to assistant)
                             prompt_text = processing_class.apply_chat_template(
                                 user_messages,
+                                add_generation_prompt=True,  # add assistant prompt
                                 tokenize=False,
-                                add_generation_prompt=True,  # Add assistant prompt
                                 **example.get("chat_template_kwargs", {}),
                             )
 
                             # Get the full conversation with assistant response
                             full_text = processing_class.apply_chat_template(
                                 messages,
-                                tokenize=False,
                                 add_generation_prompt=False,
+                                tokenize=False,
                                 **example.get("chat_template_kwargs", {}),
                             )
 
@@ -1649,7 +1704,7 @@ class GOLDTrainer(SFTTrainer):
         # prompts_text = [p.replace(target_system_prompt, system_prompt) for p in prompts_text]
         # Add system prompt to prompts
 
-        max_completion_length = generation_config.max_completion_length
+        max_completion_length = generation_config.max_new_tokens
         temperature = generation_config.temperature
         # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
         top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
@@ -1670,8 +1725,8 @@ class GOLDTrainer(SFTTrainer):
                     top_k=top_k,
                     min_p=min_p,
                     max_tokens=max_completion_length,
-                    guided_decoding_regex=self.vllm_guided_decoding_regex,
-                )
+                    structured_outputs_regex=self.vllm_structured_outputs_regex,
+                )["completion_ids"]
             else:
                 completion_ids = [None] * len(all_prompts_text)
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
@@ -1681,10 +1736,12 @@ class GOLDTrainer(SFTTrainer):
             )
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
-            if self.vllm_guided_decoding_regex:
-                guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.vllm_guided_decoding_regex)
+            if self.vllm_structured_outputs_regex:
+                structured_outputs = StructuredOutputsParams(
+                    backend="outlines", regex=self.vllm_structured_outputs_regex
+                )
             else:
-                guided_decoding = None
+                structured_outputs = None
             sampling_params = SamplingParams(
                 n=1,
                 repetition_penalty=repetition_penalty,
@@ -1693,7 +1750,7 @@ class GOLDTrainer(SFTTrainer):
                 top_k=top_k,
                 min_p=min_p,
                 max_tokens=max_completion_length,
-                guided_decoding=guided_decoding,
+                structured_outputs=structured_outputs,
             )
 
             if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
@@ -1832,6 +1889,8 @@ class GOLDTrainer(SFTTrainer):
         if self.vllm_mode == "colocate" and self.vllm_enable_sleep_mode:
             empty_cache()
             self.vllm_engine.wake_up(tags=["weights"])
+            # Work around for https://github.com/vllm-project/vllm/issues/29341
+            self.vllm_engine.collective_rpc("reload_weights")
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
@@ -1911,7 +1970,13 @@ class GOLDTrainer(SFTTrainer):
                 )
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
             else:
-                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                with (
+                    unwrap_model_for_generation(
+                        model,
+                        self.accelerator,
+                        generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    ) as unwrapped_model
+                ):
                     result = self.generate_on_policy_outputs(
                         unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
                     )

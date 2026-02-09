@@ -19,25 +19,20 @@ To reduce memory usage, it's important to truncate sequences to a reasonable len
 <hfoptions id="truncation">
 <hfoption id="DPO">
 
-DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
+DPO truncation is controlled via `max_length`, which truncates the combined prompt+completion sequence.
 
 ![DPO truncation](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png)
 
-To set the truncation parameters, use the following code snippet:
+To set the truncation parameter, use the following code snippet:
 
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., max_prompt_length=..., max_length=...)
+training_args = DPOConfig(..., max_length=...)
 ```
 
-You can also use the `max_completion_length` parameter to truncate the completion, though this is less common since the goal is typically to preserve the completion's full length whenever possible.
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., max_completion_length=...)
-```
+> [!WARNING]
+> The legacy `max_prompt_length` and `max_completion_length` parameters are deprecated and will be removed; instead, filter or pre-truncate overlong prompts/completions in your dataset before training.
 
 </hfoption>
 <hfoption id="SFT">
@@ -77,7 +72,7 @@ To help you choose an appropriate value, we provide a utility to visualize the s
 
 Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
 
-![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png)
+![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_3.png)
 
 Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
 
@@ -90,9 +85,35 @@ from trl import SFTConfig
 training_args = SFTConfig(..., packing=True, max_length=512)
 ```
 
+## PEFT for parameter-efficient fine-tuning
+
+Parameter-Efficient Fine-Tuning (PEFT) methods like LoRA are among the most effective techniques for reducing memory usage during training. Instead of training all model parameters, PEFT methods train only a small number of adapter parameters, significantly reducing memory requirements and enabling fine-tuning of larger models on limited hardware.
+
+For comprehensive details on using PEFT with TRL, including various adapter methods, quantization options, and advanced configurations, see [PEFT Integration](peft_integration).
+
+To use PEFT for reducing memory usage:
+
+```python
+from datasets import load_dataset
+from peft import LoraConfig
+from trl import SFTTrainer
+
+dataset = load_dataset("trl-lib/Capybara", split="train")
+
+peft_config = LoraConfig()
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    train_dataset=dataset,
+    peft_config=peft_config,
+)
+```
+
+PEFT can be combined with other memory reduction techniques such as quantization (4-bit or 8-bit) for even greater memory savings. See [PEFT Integration](peft_integration) for quantization examples.
+
 ## Liger for reducing peak memory usage
 
-> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
+[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
@@ -129,7 +150,7 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 <hfoption id="KTO">
 
 ```python
-from trl import KTOConfig
+from trl.experimental.kto import KTOConfig
 
 training_args = KTOConfig(..., use_liger_kernel=True)
 ```
@@ -138,7 +159,7 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 <hfoption id="GKD">
 
 ```python
-from trl import GKDConfig
+from trl.experimental.gkd import GKDConfig
 
 training_args = GKDConfig(..., use_liger_kernel=True)
 ```
@@ -161,7 +182,7 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
 ```
 
 </hfoption>
@@ -170,7 +191,7 @@ training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
 ```
 
 </hfoption>
@@ -238,7 +259,7 @@ training_args = GRPOConfig(..., ds3_gather_for_generation=False)
 <hfoption id="Online DPO">
 
 ```python
-from trl import OnlineDPOConfig
+from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
 ```
@@ -247,7 +268,7 @@ training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
 <hfoption id="PPO">
 
 ```python
-from trl import PPOConfig
+from trl.experimental.ppo import PPOConfig
 
 training_args = PPOConfig(..., ds3_gather_for_generation=False)
 ```
@@ -290,3 +311,20 @@ training_args = RLOOConfig(..., vllm_enable_sleep_mode=True)
 
 </hfoption>
 </hfoptions>
+
+Offloading the vLLM weights and cache helps keep GPU memory usage low, which can be particularly beneficial when training large models or using limited GPU resources. However, waking the vLLM engine from sleep mode introduces some host–device transfer latency, which may slightly impact training speed.
+
+## Gradient checkpointing
+
+Gradient checkpointing trades compute for memory by not storing all intermediate activations during the forward pass, recomputing them during the backward pass instead.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., gradient_checkpointing=True)
+```
+
+> [!NOTE]
+> Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+
+For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
