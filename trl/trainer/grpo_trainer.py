@@ -518,7 +518,10 @@ class GRPOTrainer(BaseTrainer):
             )
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
-            raise ValueError("When using `'luspo'` loss, `importance_sampling_level` must be set to `'sequence'`.")
+            logger.warning(
+                "When using `'luspo'` loss, `importance_sampling_level` should be set to `'sequence'` to mirror the "
+                "paper's setup."
+            )
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
