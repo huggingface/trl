@@ -535,7 +535,7 @@ training_args = GRPOConfig(
 
 ## Direct Policy Optimization
 
-- Papers relating to the [`DPOTrainer`]
+Papers relating to the [`DPOTrainer`]
 
 ### Direct Preference Optimization: Your Language Model is Secretly a Reward Model
 
@@ -1028,6 +1028,18 @@ def add_margin(example):
 dataset = dataset.map(add_margin)
 ```
 
+## Online Direct Preference Optimization
+
+Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
+
+### Direct Language Model Alignment from Online AI Feedback
+
+**📜 Paper**: https://huggingface.co/papers/2402.04792
+
+Online DPO improves direct alignment from preferences methods by providing real-time feedback from a model, outperforming both DPO and PPO methods.
+
+To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
+
 ### The Perfect Blend: Redefining RLHF with Mixture of Judges
 
 **📜 Paper**: https://huggingface.co/papers/2409.20370
@@ -1035,7 +1047,6 @@ dataset = dataset.map(add_margin)
 This paper introduces Constrained Generative Policy Optimization (CGPO), a post-training RLHF paradigm for multi-task learning. Its core contribution is the Mixture of Judges (MoJ) framework, which aggregates multiple reward signals to mitigate reward hacking and achieve Pareto-optimal trade-offs across many objectives. CGPO outperforms common RLHF algorithms like PPO and DPO across general chat, STEM reasoning, instruction following, math, coding, and knowledge benchmarks.
 
 ⚠️ Experimental: CGPO is not yet implemented as a TRL trainer. Users can experiment with multiple reward/judge aggregation using [`trl.experimental.judges.AllTrueJudge`].
-
 
 ```python
 from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge
