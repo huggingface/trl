@@ -17,6 +17,8 @@
     title: DPO
   - local: grpo_trainer
     title: GRPO
+  - local: maxrl_trainer
+    title: MaxRL
   - local: reward_trainer
     title: Reward
   - local: rloo_trainer

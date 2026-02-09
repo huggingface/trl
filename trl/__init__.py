@@ -72,6 +72,8 @@ _import_structure = {
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
+        "MaxRLConfig",
+        "MaxRLTrainer",
         "ModelConfig",
         "NashMDConfig",  # deprecated import
         "NashMDTrainer",  # deprecated import
@@ -150,6 +152,8 @@ if TYPE_CHECKING:
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
+        MaxRLConfig,
+        MaxRLTrainer,
         ModelConfig,
         NashMDConfig,  # deprecated import
         NashMDTrainer,  # deprecated import

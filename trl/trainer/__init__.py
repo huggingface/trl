@@ -48,6 +48,8 @@ _import_structure = {
     ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
+    "maxrl_config": ["MaxRLConfig"],
+    "maxrl_trainer": ["MaxRLTrainer"],
     "model_config": ["ModelConfig"],
     "nash_md_config": ["NashMDConfig"],  # deprecated import
     "nash_md_trainer": ["NashMDTrainer"],  # deprecated import
@@ -109,6 +111,8 @@ if TYPE_CHECKING:
     )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
+    from .maxrl_config import MaxRLConfig
+    from .maxrl_trainer import MaxRLTrainer
     from .model_config import ModelConfig
     from .nash_md_config import NashMDConfig  # deprecated import
     from .nash_md_trainer import NashMDTrainer  # deprecated import
