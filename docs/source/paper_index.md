@@ -520,7 +520,7 @@ The authors provide a easy-to-use, slurm-free training example that enable the c
 
 **📜 Paper**: https://huggingface.co/papers/2602.05261
 
-Length-Unbiased Sequence Policy Optimization (LUSPO) is a modification to GSPO that removes the length normalization within the sequence likelihood ratio. It is dependent on sequence-level importance sampling. To reproduce the paper's setting, use this configuration:
+Length-Unbiased Sequence Policy Optimization (LUSPO) modifies GSPO by scaling each sequence's loss by its length. This corrects GSPO's gradient bias that penalizes longer responses. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import GRPOConfig
@@ -528,7 +528,8 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     loss_type="luspo",
     importance_sampling_level="sequence",
-    ...
+    epsilon=2e-3, # section 5.1 of the paper
+    epsilon_high=2.5e-3, # section 5.1 of the paper
 )
 ```
 
@@ -557,7 +558,7 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2310.12036
 
-A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
+A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
