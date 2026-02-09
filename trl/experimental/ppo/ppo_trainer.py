@@ -940,6 +940,8 @@ class PPOTrainer(BaseTrainer):
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
+        if self.eval_dataset is None:
+            return  # no eval set to sample from (pass eval_dataset and eval_strategy != "no" for sample generations)
         args = self.args
         processing_class = self.processing_class
         generation_kwargs = {

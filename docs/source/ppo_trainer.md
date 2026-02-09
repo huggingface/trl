@@ -183,6 +183,8 @@ To validate the PPO implementation works, we ran experiment on the 1B model. Her
 ```shell
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
+    --dataset_name trl-lib/tldr \
+    --dataset_test_split validation \
     --output_dir models/minimal/ppo_tldr \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 16 \
@@ -193,7 +195,9 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
     --missing_eos_penalty 1.0 \
-    --stop_token eos
+    --stop_token eos \
+    --eval_strategy steps \
+    --eval_steps 100
 ```
 
 Checkpoints and experiment tracking are available at:
