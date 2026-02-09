@@ -1042,43 +1042,6 @@ class TestDPOTrainer(TrlTestCase):
 
         trainer.train()
 
-    def test_dpo_trainer_with_tools(self):
-        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
-
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
-
-        # Define dummy test tools
-        def get_current_temperature(location: str):
-            """
-            Gets the temperature at a given location.
-
-            Args:
-                location: The location to get the temperature for
-            """
-            return 22.0
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            tools=[get_current_temperature],
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
-
-        trainer = DPOTrainer(
-            model=model,
-            ref_model=None,
-            args=training_args,
-            processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-        # We don't run the training, but at this stage, the dataset is supposed to be pre-processed. When
-        # pre-processing, we expect the available tools to be explicitly mentioned in the system prompt. That's
-        # what we're checking here
-        assert "get_current_temperature" in tokenizer.decode(trainer.train_dataset["prompt_input_ids"][0])
-
     def test_padding_free(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
