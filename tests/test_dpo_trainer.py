@@ -1193,6 +1193,7 @@ class TestDPOTrainer(TrlTestCase):
 
 @require_vision
 class TestDPOVisionTrainer(TrlTestCase):
+    @pytest.mark.filterwarnings("ignore:max_prompt_length is not supported for vision models:UserWarning")  # See #5023
     @pytest.mark.parametrize(
         "model_id",
         [
