@@ -15,6 +15,7 @@
 import inspect
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -782,6 +783,13 @@ class DPOTrainer(BaseTrainer):
         and image tokens do not match". Users should filter their datasets to ensure prompts are an appropriate length
         before training.
         """
+        if max_prompt_length is not None:
+            warnings.warn(
+                "max_prompt_length is not supported for vision models and will be ignored. "
+                "Truncating prompts would cause image token/feature mismatch errors.",
+                UserWarning,
+                stacklevel=2,
+            )
         processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
