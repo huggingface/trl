@@ -35,6 +35,8 @@ _import_structure = {
     "grpo_trainer": ["GRPOTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
+    "maxrl_config": ["MaxRLConfig"],
+    "maxrl_trainer": ["MaxRLTrainer"],
     "model_config": ["ModelConfig"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer"],
@@ -71,6 +73,8 @@ if TYPE_CHECKING:
     from .grpo_trainer import GRPOTrainer
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
+    from .maxrl_config import MaxRLConfig
+    from .maxrl_trainer import MaxRLTrainer
     from .model_config import ModelConfig
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
