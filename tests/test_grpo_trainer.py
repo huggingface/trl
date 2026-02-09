@@ -58,18 +58,6 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
 
 
-def _liger_supports_vllm_is_ratio():
-    """Check if the installed liger-kernel supports vllm_is_ratio parameter in LigerFusedLinearGRPOLoss."""
-    try:
-        import inspect
-
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
-
-        return "vllm_is_ratio" in inspect.signature(LigerFusedLinearGRPOLoss.forward).parameters
-    except Exception:
-        return False
-
-
 def multiply_tool(a: int, b: int) -> int:
     """
     Multiplies two integers.
@@ -1002,8 +990,8 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_liger_kernel
     @pytest.mark.xfail(
-        not _liger_supports_vllm_is_ratio(),
-        reason="Requires vllm_is_ratio support in liger-kernel (linkedin/Liger-Kernel#1088)",
+        not is_liger_kernel_available(min_version="0.6.6"),
+        reason="Requires vllm_is_ratio support in liger-kernel >= 0.6.6 (linkedin/Liger-Kernel#1088)",
         strict=True,
     )
     def test_compute_liger_loss_passes_vllm_is_ratio(self):
