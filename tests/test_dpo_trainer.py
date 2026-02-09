@@ -1304,8 +1304,18 @@ class TestDPOVisionTrainer(TrlTestCase):
         "model_id",
         [
             # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                marks=pytest.mark.filterwarnings(
+                    "ignore:max_prompt_length is not supported for vision models:UserWarning"
+                ),  # See #5023
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                marks=pytest.mark.filterwarnings(
+                    "ignore:max_prompt_length is not supported for vision models:UserWarning"
+                ),  # See #5023
+            ),
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
         ],
     )
