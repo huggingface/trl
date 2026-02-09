@@ -350,45 +350,6 @@ class TestDPOTrainer(TrlTestCase):
                 loss_weights=[1.0, 0.5, 0.1],  # Wrong length
             )
 
-    @pytest.mark.parametrize("rpo_alpha", [None, 0.5])
-    def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            precompute_ref_log_probs=True,
-            rpo_alpha=rpo_alpha,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        trainer = DPOTrainer(
-            model=self.model,
-            ref_model=None,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the parameters have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if param.sum() != 0:  # ignore 0 biases
-                assert not torch.equal(param, new_param)
-
     def test_dpo_trainer_with_ref_model_is_model(self):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -980,7 +941,6 @@ class TestDPOTrainer(TrlTestCase):
             eval_strategy="steps",
             beta=0.1,
             use_logits_to_keep=True,
-            rpo_alpha=0.5,
             report_to="none",
         )
 
