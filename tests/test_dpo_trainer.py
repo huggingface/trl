@@ -858,6 +858,7 @@ class TestDPOTrainer(TrlTestCase):
         )
         assert torch.isfinite(losses).cpu().numpy().all()
 
+    @pytest.mark.filterwarnings("ignore:`tools` is deprecated:FutureWarning")
     def test_dpo_trainer_with_tools(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
