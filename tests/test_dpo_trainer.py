@@ -822,13 +822,14 @@ class TestDPOTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             max_steps=1,
             model_init_kwargs={"dtype": "float16"},
-            ref_model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
+        # Instantiating the reference model explicitly and pass it via ref_model
+        ref_model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float16")
 
         trainer = DPOTrainer(
             model=self.model_id,
-            ref_model=self.model_id,
+            ref_model=ref_model,
             processing_class=self.tokenizer,
             args=training_args,
             train_dataset=dummy_dataset["train"],
@@ -853,28 +854,6 @@ class TestDPOTrainer(TrlTestCase):
         ):
             _ = DPOTrainer(
                 model=self.model_id,
-                processing_class=self.tokenizer,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-            )
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=1,
-            ref_model_init_kwargs={"dtype": -1},
-            report_to="none",
-        )
-
-        with pytest.raises(
-            ValueError,
-            match=re.escape(
-                "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1."
-            ),
-        ):
-            _ = DPOTrainer(
-                model=self.model_id,
-                ref_model=self.model_id,
                 processing_class=self.tokenizer,
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
@@ -1304,8 +1283,18 @@ class TestDPOVisionTrainer(TrlTestCase):
         "model_id",
         [
             # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                marks=pytest.mark.filterwarnings(
+                    "ignore:max_prompt_length is not supported for vision models:UserWarning"
+                ),  # See #5023
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                marks=pytest.mark.filterwarnings(
+                    "ignore:max_prompt_length is not supported for vision models:UserWarning"
+                ),  # See #5023
+            ),
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
         ],
     )
