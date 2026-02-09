@@ -40,7 +40,6 @@ from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
     require_liger_kernel,
-    require_no_wandb,
     require_peft,
     require_torch_accelerator,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
@@ -350,45 +349,6 @@ class TestDPOTrainer(TrlTestCase):
                 loss_weights=[1.0, 0.5, 0.1],  # Wrong length
             )
 
-    @pytest.mark.parametrize("rpo_alpha", [None, 0.5])
-    def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            precompute_ref_log_probs=True,
-            rpo_alpha=rpo_alpha,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        trainer = DPOTrainer(
-            model=self.model,
-            ref_model=None,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the parameters have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if param.sum() != 0:  # ignore 0 biases
-                assert not torch.equal(param, new_param)
-
     def test_dpo_trainer_with_ref_model_is_model(self):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -559,37 +519,6 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
-    @require_no_wandb
-    def test_dpo_trainer_generate_during_eval_no_wandb(self):
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            generate_during_eval=True,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        with pytest.raises(
-            ValueError,
-            match="`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
-            " Please install `wandb`, `mlflow` or `comet-ml` to resolve.",
-        ):
-            DPOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
-
     @require_bitsandbytes
     @require_peft
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
@@ -647,32 +576,20 @@ class TestDPOTrainer(TrlTestCase):
         trainer.save_model()
 
     @pytest.mark.parametrize(
-        "loss_type, pre_compute, gen_during_eval",
+        "loss_type, pre_compute",
         [
-            ("sigmoid", False, False),
-            ("sigmoid", False, True),
-            ("sigmoid", True, False),
-            ("sigmoid", True, True),
-            ("ipo", False, False),
-            ("ipo", False, True),
-            ("ipo", True, False),
-            ("ipo", True, True),
-            ("aot_pair", False, False),
-            ("aot_pair", False, True),
-            ("aot_pair", True, False),
-            ("aot_pair", True, True),
-            ("aot", False, False),
-            ("aot", False, True),
-            ("aot", True, False),
-            ("aot", True, True),
-            ("bco_pair", False, False),
-            ("bco_pair", False, True),
-            ("bco_pair", True, False),
-            ("bco_pair", True, True),
-            ("robust", False, False),
-            ("robust", False, True),
-            ("robust", True, False),
-            ("robust", True, True),
+            ("sigmoid", False),
+            ("sigmoid", True),
+            ("ipo", False),
+            ("ipo", True),
+            ("aot_pair", False),
+            ("aot_pair", True),
+            ("aot", False),
+            ("aot", True),
+            ("bco_pair", False),
+            ("bco_pair", True),
+            ("robust", False),
+            ("robust", True),
         ],
     )
     @require_bitsandbytes
@@ -681,7 +598,7 @@ class TestDPOTrainer(TrlTestCase):
         get_device_properties()[0] == "cuda" and get_device_properties()[1] < 8,
         reason="Skipping because bf16 not supported on CUDA GPU with capability < 8.0",
     )
-    def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
+    def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute):
         from peft import LoraConfig
         from transformers import BitsAndBytesConfig
 
@@ -708,7 +625,6 @@ class TestDPOTrainer(TrlTestCase):
             eval_strategy="steps",
             bf16=True,
             beta=0.1,
-            generate_during_eval=gen_during_eval,
             loss_type=loss_type,
             precompute_ref_log_probs=pre_compute,
             report_to="none",
@@ -822,13 +738,14 @@ class TestDPOTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             max_steps=1,
             model_init_kwargs={"dtype": "float16"},
-            ref_model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
+        # Instantiating the reference model explicitly and pass it via ref_model
+        ref_model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float16")
 
         trainer = DPOTrainer(
             model=self.model_id,
-            ref_model=self.model_id,
+            ref_model=ref_model,
             processing_class=self.tokenizer,
             args=training_args,
             train_dataset=dummy_dataset["train"],
@@ -853,28 +770,6 @@ class TestDPOTrainer(TrlTestCase):
         ):
             _ = DPOTrainer(
                 model=self.model_id,
-                processing_class=self.tokenizer,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-            )
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=1,
-            ref_model_init_kwargs={"dtype": -1},
-            report_to="none",
-        )
-
-        with pytest.raises(
-            ValueError,
-            match=re.escape(
-                "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1."
-            ),
-        ):
-            _ = DPOTrainer(
-                model=self.model_id,
-                ref_model=self.model_id,
                 processing_class=self.tokenizer,
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
@@ -1225,8 +1120,18 @@ class TestDPOVisionTrainer(TrlTestCase):
         "model_id",
         [
             # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                marks=pytest.mark.filterwarnings(
+                    "ignore:max_prompt_length is not supported for vision models:UserWarning"
+                ),  # See #5023
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                marks=pytest.mark.filterwarnings(
+                    "ignore:max_prompt_length is not supported for vision models:UserWarning"
+                ),  # See #5023
+            ),
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
         ],
     )
@@ -1438,7 +1343,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             report_to="none",
             gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-            generate_during_eval=False,
             loss_type=loss_type,
             precompute_ref_log_probs=pre_compute_logits,
             beta=0.1,
@@ -1507,7 +1411,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             beta=0.1,
-            generate_during_eval=False,
             loss_type=loss_type,
             precompute_ref_log_probs=pre_compute_logits,
             max_length=self.max_length,
