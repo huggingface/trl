@@ -787,7 +787,6 @@ class DPOTrainer(BaseTrainer):
             warnings.warn(
                 "max_prompt_length is not supported for vision models and will be ignored. "
                 "Truncating prompts would cause image token/feature mismatch errors.",
-                UserWarning,
                 stacklevel=2,
             )
         processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
