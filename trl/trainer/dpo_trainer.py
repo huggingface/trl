@@ -15,6 +15,7 @@
 import inspect
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -775,7 +776,19 @@ class DPOTrainer(BaseTrainer):
     ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
+
+        Note: Unlike `tokenize_row`, this method does not truncate prompts even if `max_prompt_length` is set. For
+        vision models, prompts contain image tokens that must exactly match the image features (pixel_values).
+        Truncating these tokens would cause a mismatch, leading to errors during the forward pass, like "Image features
+        and image tokens do not match". Users should filter their datasets to ensure prompts are an appropriate length
+        before training.
         """
+        if max_prompt_length is not None:
+            warnings.warn(
+                "max_prompt_length is not supported for vision models and will be ignored. "
+                "Truncating prompts would cause image token/feature mismatch errors.",
+                stacklevel=2,
+            )
         processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
@@ -794,9 +807,11 @@ class DPOTrainer(BaseTrainer):
             chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
             rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+        # Truncate completion sequences only.
+        # Note: We do not truncate prompt_input_ids for vision models because the prompts contain image tokens
+        # that must exactly match the image features (pixel_values). Truncating would cause errors like
+        # "Image features and image tokens do not match: tokens: X, features: Y". Users should filter overlong
+        # prompts from their dataset before training (the recommended approach for the deprecated max_prompt_length).
         if max_completion_length is not None:
             chosen_input_ids = chosen_input_ids[:max_completion_length]
             rejected_input_ids = rejected_input_ids[:max_completion_length]
