@@ -67,7 +67,7 @@ trainer.train()
 
 ```python
 from post_training_toolkit import DiagnosticsCallback
-from trl import ORPOTrainer
+from trl.experimental.orpo import ORPOTrainer
 
 trainer = ORPOTrainer(
     model=model,
