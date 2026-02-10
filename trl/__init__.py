@@ -43,8 +43,6 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "models": [
-        "AutoModelForCausalLMWithValueHead",  # deprecated import
-        "AutoModelForSeq2SeqLMWithValueHead",  # deprecated import
         "PreTrainedModelWrapper",  # deprecated import
         "create_reference_model",
     ],
@@ -94,8 +92,6 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .models import (
-        AutoModelForCausalLMWithValueHead,  # deprecated import
-        AutoModelForSeq2SeqLMWithValueHead,  # deprecated import
         PreTrainedModelWrapper,  # deprecated import
         create_reference_model,
     )

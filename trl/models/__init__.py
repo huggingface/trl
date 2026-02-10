@@ -20,7 +20,6 @@ from ..import_utils import _LazyModule
 _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
     "modeling_base": ["PreTrainedModelWrapper"],
-    "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
     "utils": ["create_reference_model", "prepare_deepspeed", "prepare_fsdp", "unwrap_model_for_generation"],
 }
 
@@ -28,7 +27,6 @@ _import_structure = {
 if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
     from .modeling_base import PreTrainedModelWrapper
-    from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 else:
     import sys
