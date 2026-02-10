@@ -202,7 +202,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 
 Checkpoints and experiment tracking are available at:
 
-- [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/ppo_tldr)
+- [🤗 Model checkpoint](https://huggingface.co/trl-lib/ppo_tldr)
 - [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
 To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
@@ -211,7 +211,7 @@ For more information on how to use judges, see [Judges](judges).
 ```bash
 $ python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
 Model win rate: 33.00%
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/ppo_tldr --judge_model gpt-4o-mini --num_examples 1000
+$ python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/ppo_tldr --judge_model gpt-4o-mini --num_examples 1000
 Model win rate: 64.70%
 ```
 

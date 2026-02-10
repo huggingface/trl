@@ -39,13 +39,13 @@ Model win rate: 51.60%
 python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/rloo_tldr --judge_model gpt-4o-mini --num_examples 1000
 Model win rate: 51.20%
 
-python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/ppo_tldr --num_examples 1000
+python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/ppo_tldr --num_examples 1000
 Model win rate: 46.30%
 
-python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/ppo_tldr --judge_model gpt-3.5-turbo-0125 --num_examples 1000
+python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/ppo_tldr --judge_model gpt-3.5-turbo-0125 --num_examples 1000
 Model win rate: 52.50%
 
-python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/ppo_tldr --judge_model gpt-4o-mini --num_examples 1000
+python examples/scripts/evals/judge_tldr.py --model_name_or_path trl-lib/ppo_tldr --judge_model gpt-4o-mini --num_examples 1000
 Model win rate: 63.00%
 """
 
