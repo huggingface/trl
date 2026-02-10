@@ -18,8 +18,6 @@ from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "bco_config": ["BCOConfig"],  # deprecated import
-    "bco_trainer": ["BCOTrainer"],  # deprecated import
     "callbacks": [
         "BEMACallback",
         "LogCompletionsCallback",
@@ -82,8 +80,6 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
-    from .bco_config import BCOConfig  # deprecated import
-    from .bco_trainer import BCOTrainer  # deprecated import
     from .callbacks import (
         BEMACallback,
         LogCompletionsCallback,
