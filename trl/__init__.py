@@ -43,7 +43,6 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "models": [
-        "PreTrainedModelWrapper",  # deprecated import
         "create_reference_model",
     ],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
@@ -92,7 +91,6 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .models import (
-        PreTrainedModelWrapper,  # deprecated import
         create_reference_model,
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
