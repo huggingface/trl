@@ -24,27 +24,14 @@ _import_structure = {
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "WinRateCallback",  # deprecated import
     ],
     "dpo_config": ["DPOConfig"],
     "dpo_trainer": ["DPOTrainer"],
-    "gkd_config": ["GKDConfig"],  # deprecated import
-    "gkd_trainer": ["GKDTrainer"],  # deprecated import
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
-    "nash_md_config": ["NashMDConfig"],  # deprecated import
-    "nash_md_trainer": ["NashMDTrainer"],  # deprecated import
-    "online_dpo_config": ["OnlineDPOConfig"],  # deprecated import
-    "online_dpo_trainer": ["OnlineDPOTrainer"],  # deprecated import
-    "orpo_config": ["ORPOConfig"],  # deprecated import
-    "orpo_trainer": ["ORPOTrainer"],  # deprecated import
-    "ppo_config": ["PPOConfig"],  # deprecated import
-    "ppo_trainer": ["PPOTrainer"],  # deprecated import
-    "prm_config": ["PRMConfig"],  # deprecated import
-    "prm_trainer": ["PRMTrainer"],  # deprecated import
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
@@ -58,8 +45,6 @@ _import_structure = {
         "get_peft_config",
         "get_quantization_config",
     ],
-    "xpo_config": ["XPOConfig"],  # deprecated import
-    "xpo_trainer": ["XPOTrainer"],  # deprecated import
 }
 
 if TYPE_CHECKING:
@@ -69,27 +54,14 @@ if TYPE_CHECKING:
         RichProgressCallback,
         SyncRefModelCallback,
         WeaveCallback,
-        WinRateCallback,  # deprecated import
     )
     from .dpo_config import DPOConfig
     from .dpo_trainer import DPOTrainer
-    from .gkd_config import GKDConfig  # deprecated import
-    from .gkd_trainer import GKDTrainer  # deprecated import
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
-    from .nash_md_config import NashMDConfig  # deprecated import
-    from .nash_md_trainer import NashMDTrainer  # deprecated import
-    from .online_dpo_config import OnlineDPOConfig  # deprecated import
-    from .online_dpo_trainer import OnlineDPOTrainer  # deprecated import
-    from .orpo_config import ORPOConfig  # deprecated import
-    from .orpo_trainer import ORPOTrainer  # deprecated import
-    from .ppo_config import PPOConfig  # deprecated import
-    from .ppo_trainer import PPOTrainer  # deprecated import
-    from .prm_config import PRMConfig  # deprecated import
-    from .prm_trainer import PRMTrainer  # deprecated import
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
@@ -103,8 +75,6 @@ if TYPE_CHECKING:
         get_peft_config,
         get_quantization_config,
     )
-    from .xpo_config import XPOConfig  # deprecated import
-    from .xpo_trainer import XPOTrainer  # deprecated import
 else:
     import sys
 
