@@ -104,7 +104,6 @@ uv run "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.p
     --packing \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 16 \
-    --gradient_checkpointing \
     --eval_strategy no \
     --use_peft \
     --lora_r 256 \
@@ -196,7 +195,7 @@ hf jobs uv run \
     --output_dir grpo-full-qwen3-0.6b \
     --learning_rate 1.0e-6 \
     --lr_scheduler_type cosine \
-    --warmup_ratio 0.0 \
+    --warmup_steps 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
     --max_completion_length 4096 \
@@ -230,7 +229,7 @@ uv run "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/
     --output_dir grpo-full-qwen3-0.6b \
     --learning_rate 1.0e-6 \
     --lr_scheduler_type cosine \
-    --warmup_ratio 0.0 \
+    --warmup_steps 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
     --max_completion_length 4096 \

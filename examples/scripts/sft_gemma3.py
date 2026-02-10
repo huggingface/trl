@@ -53,7 +53,6 @@ def main():
         output_dir=f"{model_id}-codeforces-SFT",
         bf16=True,
         use_liger_kernel=True,
-        gradient_checkpointing=True,
         max_length=8192,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,

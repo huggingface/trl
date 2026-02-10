@@ -19,7 +19,8 @@ import pytest
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 
-from trl.extras.vllm_client import VLLMClient
+from trl.generation.vllm_client import VLLMClient
+from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
 from .testing_utils import (
@@ -29,6 +30,10 @@ from .testing_utils import (
     require_torch_multi_accelerator,
     require_vllm,
 )
+
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
 
 
 class TestChunkList(TrlTestCase):
@@ -146,6 +151,120 @@ class TestVLLMClientServer(TrlTestCase):
     def test_reset_prefix_cache(self):
         # Test resetting the prefix cache
         self.client.reset_prefix_cache()
+
+    def test_chat_completions_endpoint(self):
+        data = self.client.chat_completions(
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+        )
+
+        assert "id" in data
+        assert "choices" in data
+        assert "usage" in data
+        assert len(data["choices"]) > 0
+        assert data["choices"][0]["message"]["role"] == "assistant"
+        assert data["choices"][0]["finish_reason"] in ["stop", "length", "tool_calls"]
+
+    def test_chat_completions_with_tools(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather information for a location",
+                    "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+                },
+            }
+        ]
+        data = self.client.chat_completions(
+            messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+            tools=tools,
+            max_tokens=100,
+        )
+
+        assert "choices" in data
+        assert len(data["choices"]) > 0
+        assert "message" in data["choices"][0]
+
+    def test_chat_completions_with_params(self):
+        data = self.client.chat_completions(
+            messages=[{"role": "user", "content": "Tell me a joke"}],
+            n=2,
+            temperature=0.8,
+            top_p=0.9,
+            max_tokens=32,
+        )
+
+        assert len(data["choices"]) == 2
+
+        for i, choice in enumerate(data["choices"]):
+            assert choice["index"] == i, f"Expected choice at position {i} to have index {i}, got {choice['index']}"
+            assert "message" in choice
+            assert choice["message"]["role"] == "assistant"
+
+    def test_tokenize_endpoint(self):
+        data = self.client.tokenize(messages=[{"role": "user", "content": "Hello, how are you?"}])
+
+        assert "tokens" in data
+        assert "model" in data
+        assert isinstance(data["tokens"], list)
+        assert len(data["tokens"]) > 0
+        assert all(isinstance(tok, int) for tok in data["tokens"])
+
+    @pytest.mark.xfail(reason="Importing `bitsandbytes` causes issues, see vllm-project/vllm#32793")
+    def test_logprobs_match_with_non_default_sampling(self):
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        # Use non-default sampling parameters (especially temperature) to ensure vLLM applies logprob processing. With
+        # default sampling, raw and processed logprobs are identical, so mismatches would not be detected.
+        temperature = 0.7
+        repetition_penalty = 1.05
+        top_p = 0.9
+        max_tokens = 8
+        seed = 1234
+
+        server_outputs = self.client.generate(
+            prompts,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            generation_kwargs={"seed": seed},
+        )
+        os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+        llm = LLM(
+            model=self.model_id,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.2,
+            max_model_len=128,
+            logprobs_mode="processed_logprobs",
+        )
+
+        sampling_params = SamplingParams(
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            logprobs=0,  # this is what's used in practice to get the logprobs of generated tokens
+            seed=seed,
+        )
+        colocate_outputs = llm.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
+        colocate_prompt_ids = [output.prompt_token_ids for output in colocate_outputs]
+        colocate_completion_ids = [
+            list(output.token_ids) for outputs in colocate_outputs for output in outputs.outputs
+        ]
+        colocate_logprobs = [
+            [next(iter(logprob.values())).logprob for logprob in output.logprobs]
+            for outputs in colocate_outputs
+            for output in outputs.outputs
+        ]
+
+        assert server_outputs["prompt_ids"] == colocate_prompt_ids
+        assert server_outputs["completion_ids"] == colocate_completion_ids
+        server_logprobs = server_outputs["logprobs"]
+        assert len(server_logprobs) == len(colocate_logprobs)
+        for server_seq, colocate_seq in zip(server_logprobs, colocate_logprobs, strict=True):
+            assert len(server_seq) == len(colocate_seq)
+            assert server_seq == pytest.approx(colocate_seq, rel=1e-6, abs=1e-6)
 
     @classmethod
     def teardown_class(cls):

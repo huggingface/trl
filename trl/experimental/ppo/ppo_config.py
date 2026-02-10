@@ -12,12 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from dataclasses import dataclass, field
 from typing import Literal
 
-import transformers
-from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -35,8 +32,6 @@ class PPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        run_name (`str`, *optional*):
-            Name of the run.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
@@ -84,8 +79,6 @@ class PPOConfig(TrainingArguments):
             Mini batch size across GPUs.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
-        exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[:-3]`):
-            Name of this experiment.
         reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the reward model.
         model_adapter_name (`str`, *optional*):
@@ -142,8 +135,8 @@ class PPOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -152,10 +145,6 @@ class PPOConfig(TrainingArguments):
         },
     )
 
-    run_name: str | None = field(
-        default=None,
-        metadata={"help": "Name of the run."},
-    )
     dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
@@ -247,10 +236,6 @@ class PPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to push the model to the Hub after training."},
     )
-    exp_name: str = field(
-        default=os.path.basename(__file__)[:-3],
-        metadata={"help": "Name of this experiment."},
-    )
     reward_model_path: str = field(
         default="EleutherAI/pythia-160m",
         metadata={"help": "Path to the reward model."},
@@ -315,13 +300,5 @@ class PPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
-        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
-        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
-        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
-            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__post_init__()

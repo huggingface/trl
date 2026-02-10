@@ -424,8 +424,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         )
 
         # Concatenate prompts and completions
-        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
-        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
+        prompt_ids, prompt_mask = processed_prompts["input_ids"], processed_prompts["attention_mask"]
+        completion_ids, completion_mask = processed_completions["input_ids"], processed_completions["attention_mask"]
         input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
         completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
@@ -606,7 +606,7 @@ class SFTTrainer(BaseTrainer):
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            if not Version(transformers.__version__) < Version("5.0.0.dev0"):
+            if Version(transformers.__version__) < Version("5.0.0"):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
@@ -723,6 +723,24 @@ class SFTTrainer(BaseTrainer):
         # Create PEFT model
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
+
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -880,6 +898,14 @@ class SFTTrainer(BaseTrainer):
             else:
                 raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -1001,9 +1027,10 @@ class SFTTrainer(BaseTrainer):
                                 completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
                                 prompt,
-                                tokenize=True,
-                                add_generation_prompt=True,
                                 tools=example.get("tools"),
+                                add_generation_prompt=True,
+                                tokenize=True,
+                                return_dict=False,
                                 **example.get("chat_template_kwargs", {}),
                             )
                             # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
@@ -1011,10 +1038,10 @@ class SFTTrainer(BaseTrainer):
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
                                 prompt + completion,
-                                return_dict=True,
-                                tokenize=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
+                                tokenize=True,
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
                                 **example.get("chat_template_kwargs", {}),
                             )
                             # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
@@ -1061,10 +1088,10 @@ class SFTTrainer(BaseTrainer):
                                 messages = example["messages"]
                             processed = processing_class.apply_chat_template(
                                 messages,
-                                return_dict=True,
-                                tokenize=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
+                                tokenize=True,
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
                                 **example.get("chat_template_kwargs", {}),
                             )
                             # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
