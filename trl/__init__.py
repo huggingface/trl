@@ -92,11 +92,12 @@ _import_structure = {
         "RLOOTrainer",
         "SFTConfig",
         "SFTTrainer",
+        "GenerativeSFTTrainer",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "WinRateCallback",  # deprecated import
-        "XPOConfig",  # deprecated import
-        "XPOTrainer",  # deprecated import
+        "WinRateCallback",
+        "XPOConfig",
+        "XPOTrainer",
         "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
@@ -170,11 +171,12 @@ if TYPE_CHECKING:
         RLOOTrainer,
         SFTConfig,
         SFTTrainer,
+        GenerativeSFTTrainer,
         SyncRefModelCallback,
         WeaveCallback,
-        WinRateCallback,  # deprecated import
-        XPOConfig,  # deprecated import
-        XPOTrainer,  # deprecated import
+        WinRateCallback,
+        XPOConfig,
+        XPOTrainer,
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,

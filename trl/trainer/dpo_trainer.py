@@ -1772,10 +1772,26 @@ class DPOTrainer(BaseTrainer):
         metrics = {}
 
         if self.args.use_liger_kernel:
+            # Avoid materializing full logits during eval unless explicitly needed
+            batch["skip_logits"] = (
+                self.model.training
+                or self.args.prediction_loss_only
+                or self.compute_metrics is None
+            )
             model_output = self._compute_loss_liger(model, batch)
             losses = model_output["loss"]
             chosen_rewards = model_output["chosen_rewards"]
             rejected_rewards = model_output["rejected_rewards"]
+
+            # Guard token accuracy aggregation (fix NoneType crash)
+            if getattr(model_output, "token_accuracy", None) is not None:
+                token_accuracy = (
+                    self.accelerator
+                    .gather_for_metrics(model_output.token_accuracy)
+                    .mean()
+                    .item()
+                )
+                metrics[f"{prefix}mean_token_accuracy"] = token_accuracy
         else:
             model_output = self.concatenated_forward(model, batch)
 
