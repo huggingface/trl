@@ -26,8 +26,6 @@ _import_structure = {
         "WeaveCallback",
         "WinRateCallback",  # deprecated import
     ],
-    "cpo_config": ["CPOConfig"],  # deprecated import
-    "cpo_trainer": ["CPOTrainer"],  # deprecated import
     "dpo_config": ["DPOConfig"],
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],  # deprecated import
@@ -73,8 +71,6 @@ if TYPE_CHECKING:
         WeaveCallback,
         WinRateCallback,  # deprecated import
     )
-    from .cpo_config import CPOConfig  # deprecated import
-    from .cpo_trainer import CPOTrainer  # deprecated import
     from .dpo_config import DPOConfig
     from .dpo_trainer import DPOTrainer
     from .gkd_config import GKDConfig  # deprecated import
