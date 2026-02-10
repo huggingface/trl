@@ -20,38 +20,6 @@ from typing import Any
 from transformers import TrainingArguments
 
 
-class FDivergenceType(Enum):
-    """
-    Types of f-divergence functions for DPO loss regularization.
-
-    <Deprecated version="0.28.0">
-
-    Using `FDivergenceType` for `f_divergence_type` in [`DPOConfig`] is deprecated and will be removed in version
-    0.29.0. Use a string instead.
-
-    </Deprecated>
-
-    Attributes:
-        REVERSE_KL: Reverse KL divergence.
-        JS_DIVERGENCE: Jensen-Shannon divergence.
-        ALPHA_DIVERGENCE: Alpha divergence.
-
-    Examples:
-        ```python
-        >>> from trl.trainer.dpo_config import DPOConfig, FDivergenceType
-
-        >>> config = DPOConfig(
-        ...     f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE,
-        ...     f_alpha_divergence_coef=0.5,  # used only with ALPHA_DIVERGENCE
-        ... )
-        ```
-    """
-
-    REVERSE_KL = "reverse_kl"
-    JS_DIVERGENCE = "js_divergence"
-    ALPHA_DIVERGENCE = "alpha_divergence"
-
-
 @dataclass
 class DPOConfig(TrainingArguments):
     r"""
@@ -370,14 +338,5 @@ class DPOConfig(TrainingArguments):
                 "`loss_weights` must have the same length as `loss_type` when combining multiple losses. "
                 f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
             )
-
-        if isinstance(self.f_divergence_type, FDivergenceType):
-            warnings.warn(
-                "`f_divergence_type` will require a string in 0.29.0; `FDivergenceType` is deprecated. Use one of: "
-                "`reverse_kl`, `forward_kl`, `js_divergence`, `alpha_divergence`.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            self.f_divergence_type = self.f_divergence_type.value
 
         super().__post_init__()

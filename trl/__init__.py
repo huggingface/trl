@@ -62,7 +62,6 @@ _import_structure = {
         "CPOTrainer",  # deprecated import
         "DPOConfig",
         "DPOTrainer",
-        "FDivergenceType",  # deprecated import
         "GKDConfig",  # deprecated import
         "GKDTrainer",  # deprecated import
         "GRPOConfig",
@@ -139,7 +138,6 @@ if TYPE_CHECKING:
         CPOTrainer,  # deprecated import
         DPOConfig,
         DPOTrainer,
-        FDivergenceType,  # deprecated import
         GKDConfig,  # deprecated import
         GKDTrainer,  # deprecated import
         GRPOConfig,
