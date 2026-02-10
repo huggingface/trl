@@ -321,6 +321,12 @@ class DPOTrainer(BaseTrainer):
                 )
         model_id = get_config_model_id(model.config)
         if isinstance(ref_model, str):
+            warnings.warn(
+                "Passing `ref_model` as a string is deprecated and will be removed in version 0.29.0. Usually, you "
+                "can just omit `ref_model` and we'll initialize it to a copy of `model` for you. If you really need "
+                "to load the reference model from a different path, you can still do so by passing `ref_model` as a "
+                "model instance."
+            )
             model_init_kwargs = args.ref_model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
