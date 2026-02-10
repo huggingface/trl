@@ -740,8 +740,7 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=3,
             )
-        else:
-            self.f_divergence_type = FDivergenceType(self.f_divergence_type)
+            self.f_divergence_type = self.f_divergence_type.value
 
         # Normalize loss_type to string format for internal use
         if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
