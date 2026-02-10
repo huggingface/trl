@@ -33,16 +33,6 @@ _import_structure = {
     "dpo_trainer": ["DPOTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
-    "judges": [
-        "AllTrueJudge",  # deprecated import
-        "BaseBinaryJudge",  # deprecated import
-        "BaseJudge",  # deprecated import
-        "BasePairwiseJudge",  # deprecated import
-        "BaseRankJudge",  # deprecated import
-        "HfPairwiseJudge",  # deprecated import
-        "OpenAIPairwiseJudge",  # deprecated import
-        "PairRMJudge",  # deprecated import
-    ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
@@ -91,16 +81,6 @@ if TYPE_CHECKING:
     from .dpo_trainer import DPOTrainer
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
-    from .judges import (
-        AllTrueJudge,  # deprecated import
-        BaseBinaryJudge,  # deprecated import
-        BaseJudge,  # deprecated import
-        BasePairwiseJudge,  # deprecated import
-        BaseRankJudge,  # deprecated import
-        HfPairwiseJudge,  # deprecated import
-        OpenAIPairwiseJudge,  # deprecated import
-        PairRMJudge,  # deprecated import
-    )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
