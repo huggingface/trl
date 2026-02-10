@@ -61,8 +61,6 @@ _import_structure = {
         "KTOTrainer",
         "LogCompletionsCallback",
         "ModelConfig",
-        "PPOConfig",  # deprecated import
-        "PPOTrainer",  # deprecated import
         "PRMConfig",  # deprecated import
         "PRMTrainer",  # deprecated import
         "RewardConfig",
@@ -118,8 +116,6 @@ if TYPE_CHECKING:
         KTOTrainer,
         LogCompletionsCallback,
         ModelConfig,
-        PPOConfig,  # deprecated import
-        PPOTrainer,  # deprecated import
         PRMConfig,  # deprecated import
         PRMTrainer,  # deprecated import
         RewardConfig,
