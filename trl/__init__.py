@@ -61,8 +61,6 @@ _import_structure = {
         "KTOTrainer",
         "LogCompletionsCallback",
         "ModelConfig",
-        "NashMDConfig",  # deprecated import
-        "NashMDTrainer",  # deprecated import
         "OnlineDPOConfig",  # deprecated import
         "OnlineDPOTrainer",  # deprecated import
         "ORPOConfig",  # deprecated import
@@ -124,8 +122,6 @@ if TYPE_CHECKING:
         KTOTrainer,
         LogCompletionsCallback,
         ModelConfig,
-        NashMDConfig,  # deprecated import
-        NashMDTrainer,  # deprecated import
         OnlineDPOConfig,  # deprecated import
         OnlineDPOTrainer,  # deprecated import
         ORPOConfig,  # deprecated import
