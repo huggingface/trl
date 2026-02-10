@@ -34,6 +34,50 @@ trainer = GRPOTrainer(
 )
 ```
 
+### DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2501.12948
+
+DeepSeek-R1 achieves reasoning performance comparable to OpenAI-o1 through a multi-stage pipeline that transitions from pure reinforcement learning (RL) to a refined, human-aligned model. Unlike its predecessor, DeepSeek-R1-Zero, which used pure RL on a base model, R1 follows a structured four-stage evolution:
+1. Cold Start: The base model is fine-tuned on a small set of high-quality, long Chain-of-Thought (CoT) data to provide a stable starting point.
+2. Reasoning-Oriented RL: Large-scale RL is applied to enhance performance in math, coding, and logic, using rule-based rewards and a language consistency reward to reduce language mixing.
+3. Rejection Sampling & SFT: The RL checkpoint generates 600k reasoning samples via rejection sampling, which are combined with 200k non-reasoning (general) samples to create a new dataset for a second round of Supervised Fine-Tuning.
+4. RL for all Scenarios: A final RL stage aligns the model with human preferences (helpfulness and harmlessness) across all domains while maintaining reasoning strength.
+
+Distillation: Empowering Small Models
+A key contribution of the paper is demonstrating that reasoning patterns can be distilled from a large model (DeepSeek-R1) into smaller dense models (e.g., Qwen and Llama series). Distillation was found to be more effective for small models than training them with pure RL from scratch.
+
+
+You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline. 
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+# Example configuration for a reasoning-oriented GRPO stage
+# Based on the Open-R1 recipe for Qwen-7B
+training_args = GRPOConfig(
+    model_name_or_path="open-r1/Qwen2.5-Math-7B-RoPE-300k",
+    dataset_name="open-r1/Mixture-of-Thoughts",
+    learning_rate=4.0e-5,
+    max_prompt_length=4096,
+    max_completion_length=32768, # Support for long Chain-of-Thought
+    num_generations=16,          # Sample 16 outputs per prompt for group relative advantage
+    beta=0.001,                  # KL coefficient
+    use_vllm=True,               # Use vLLM backend for accelerated rollout generation
+    vllm_device="cuda:1",        # Optional: colocate vLLM on a specific device
+    report_to="wandb",
+)
+
+trainer = GRPOTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    reward_funcs=[accuracy_reward, format_reward], # R1-Zero used rule-based rewards
+)
+
+trainer.train()
+```
+
+
 ### Group Sequence Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2507.18071
