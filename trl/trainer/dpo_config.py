@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
 from transformers import TrainingArguments
