@@ -1769,6 +1769,45 @@ class TestSFTTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
+    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        ],
+    )
+    def test_sft_trainer_transformers_mp(self, model_name, packing):
+        """
+        Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
+        precision.
+        """
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            logging_strategy="no",
+            report_to="none",
+            per_device_train_batch_size=2,
+            max_steps=10,
+            fp16=True,  # this is sufficient to enable amp
+            packing=packing,
+            max_length=self.max_length,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        trainer = SFTTrainer(
+            model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+        )
+
+        trainer.train()
+
+        release_memory(model, trainer)
+
     @pytest.mark.parametrize("device_map", [{"": 0}, "auto"])
     @pytest.mark.parametrize(
         "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
