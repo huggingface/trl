@@ -21,7 +21,15 @@ from transformers import TrainingArguments
 
 
 class FDivergenceType(Enum):
-    """Types of f-divergence functions for DPO loss regularization.
+    """
+    Types of f-divergence functions for DPO loss regularization.
+
+    <Deprecated version="0.28.0">
+
+    Using `FDivergenceType` for `f_divergence_type` in [`DPOConfig`] is deprecated and will be removed in version
+    0.29.0. Use a string instead.
+
+    </Deprecated>
 
     Attributes:
         REVERSE_KL: Reverse KL divergence.
@@ -136,7 +144,7 @@ class DPOConfig(TrainingArguments):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
             the [paper](https://huggingface.co/papers/2310.12036).
-        f_divergence_type ([`FDivergenceType`] or `str`, *optional*, defaults to `FDivergenceType.REVERSE_KL`):
+        f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
             Type of f-divergence regularization function to compute divergence between policy and reference model.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
             α coefficient in the α-divergence u^-α regularization function for DPO loss.
@@ -433,7 +441,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     f_divergence_type: FDivergenceType | str = field(
-        default=FDivergenceType.REVERSE_KL,
+        default="reverse_kl",
         metadata={
             "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
             "model."
@@ -725,7 +733,15 @@ class DPOConfig(TrainingArguments):
         else:  # keep the old default
             self.use_logits_to_keep = False
 
-        self.f_divergence_type = FDivergenceType(self.f_divergence_type)
+        if isinstance(self.f_divergence_type, FDivergenceType):
+            warnings.warn(
+                "`f_divergence_type` will require a string in 0.29.0; `FDivergenceType` is deprecated. Use one of: "
+                "`'reverse_kl'`, `'js_divergence'`, `'alpha_divergence'`.",
+                FutureWarning,
+                stacklevel=3,
+            )
+        else:
+            self.f_divergence_type = FDivergenceType(self.f_divergence_type)
 
         # Normalize loss_type to string format for internal use
         if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:

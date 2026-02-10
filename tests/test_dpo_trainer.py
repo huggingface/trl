@@ -789,7 +789,7 @@ class TestDPOTrainer(TrlTestCase):
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
-            f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
+            f_divergence_type="alpha_divergence",
             f_alpha_divergence_coef=0.5,
             report_to="none",
         )
@@ -831,7 +831,7 @@ class TestDPOTrainer(TrlTestCase):
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
-            f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
+            f_divergence_type="js_divergence",
             f_alpha_divergence_coef=0.5,
             report_to="none",
         )
@@ -1210,13 +1210,12 @@ class TestDPOVisionTrainer(TrlTestCase):
 
 
 class TestDPOConfig(TrlTestCase):
-    @pytest.mark.parametrize("as_string", [False, True])
-    @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
-    def test_f_divergence_type(self, f_divergence_type, as_string: bool):
+    @pytest.mark.parametrize("f_divergence_type", ["reverse_kl", "js_divergence", "alpha_divergence"])
+    def test_f_divergence_type(self, f_divergence_type):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            f_divergence_type=f_divergence_type.value if as_string else f_divergence_type,
+            f_divergence_type=f_divergence_type,
         )
 
         # Internal normalization: keep Enum member
