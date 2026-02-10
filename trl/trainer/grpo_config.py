@@ -15,8 +15,6 @@
 import warnings
 from dataclasses import dataclass, field
 
-import transformers
-from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -235,9 +233,13 @@ class GRPOConfig(TrainingArguments):
               losses are aggregated by normalizing with the number of active tokens in the global accumulated batch.
               This method was introduced in the [MiniMax-M1 paper](https://huggingface.co/papers/2506.13585).
             - `"sapo"`: Soft Adaptive Policy Optimization loss, as introduced in the [Soft Adaptive Policy Optimization
-              paper](https://huggingface.co/papers/2506.13585). Replaces hard clipping with a smooth,
+              paper](https://huggingface.co/papers/2511.20347). Replaces hard clipping with a smooth,
               temperature-controlled gate that adaptively attenuates off-policy updates while preserving useful
               learning signals.
+            - `"luspo"`: Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each
+              sequence's loss by its length. This is a modification of GSPO and requires
+              `importance_sampling_level="sequence"`. Introduced in the [LUSPO
+              paper](https://huggingface.co/papers/2602.05261).
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -310,6 +312,11 @@ class GRPOConfig(TrainingArguments):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+        log_completions_hub_repo (`str`, *optional*):
+            Hugging Face Hub repository to save the completions. Should be a complete repository name like
+            `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
+            created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -341,8 +348,8 @@ class GRPOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -698,11 +705,15 @@ class GRPOConfig(TrainingArguments):
             "The clipped weights are then multiplied with the advantages and policy model's log probs. "
             "Individual token losses are aggregated by normalizing with the number of active tokens in "
             "the global accumulated batch. This method was introduced in the "
-            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585)."
+            "[MiniMax-M1 paper](https://huggingface.co/papers/2506.13585). "
             "'sapo': Soft Adaptive Policy Optimization loss, as introduced in the "
-            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2506.13585). "
+            "[Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347). "
             "Replaces hard clipping with a smooth, temperature-controlled gate that adaptively attenuates "
             "off-policy updates while preserving useful learning signals."
+            "'luspo': Length-Unbiased Sequence Policy Optimization loss. A sequence-level loss that scales each "
+            "sequence's loss by its length. This is a modification of GSPO and requires "
+            "`importance_sampling_level='sequence'`. Introduced in the [LUSPO "
+            "paper](https://huggingface.co/papers/2602.05261)."
         },
     )
     mask_truncated_completions: bool = field(
@@ -841,21 +852,29 @@ class GRPOConfig(TrainingArguments):
             "prompts are logged."
         },
     )
+    log_completions_hub_repo: str | None = field(
+        default=None,
+        metadata={
+            "help": "Hugging Face Hub repository to save the completions. Should be a complete repository name like "
+            "`'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will "
+            "be created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be "
+            "public unless you set `hub_private_repo=True` or your organization's default is to create private "
+            "repositories."
+        },
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
-        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
-        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
-        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
-        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
-            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
-
         super().__post_init__()
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+
+        if self.log_completions_hub_repo is not None and not self.log_completions:
+            raise ValueError(
+                "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
+                "completions to the Hub, or unset log_completions_hub_repo."
+            )
 
         num_processes = self.world_size
         # The current default effective batch size

@@ -88,7 +88,7 @@ class VLLMClient:
         Use the client to generate completions and update model weights:
 
         ```python
-        >>> from trl.extras.vllm_client import VLLMClient
+        >>> from trl.generation.vllm_client import VLLMClient
 
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
@@ -206,7 +206,7 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
@@ -229,8 +229,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
@@ -294,7 +294,7 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
@@ -319,8 +319,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
@@ -512,6 +512,82 @@ class VLLMClient:
         url = f"{self.base_url}/reset_prefix_cache/"
         response = self.session.post(url)
         if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def chat_completions(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        max_tokens: int | None = None,
+        n: int = 1,
+        tools: list[dict] | None = None,
+        **kwargs,
+    ) -> dict:
+        """
+        OpenAI-compatible chat completions endpoint.
+
+        Args:
+            messages (`list[dict]`):
+                List of messages in OpenAI format with "role" and "content" keys.
+            model (`str`, *optional*):
+                Model name to use.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature for sampling.
+            top_p (`float`, *optional*, defaults to `1.0`):
+                Top-p sampling parameter.
+            max_tokens (`int`, *optional*):
+                Maximum number of tokens to generate.
+            n (`int`, *optional*, defaults to `1`):
+                Number of completions to generate.
+            tools (`list[dict]`, *optional*):
+                List of tool definitions for tool calling.
+            **kwargs:
+                Additional parameters to pass to the endpoint.
+
+        Returns:
+            `dict`:
+                OpenAI-compatible response with "choices", "usage", etc.
+        """
+        url = f"{self.base_url}/v1/chat/completions"
+        response = self.session.post(
+            url,
+            json={
+                "messages": messages,
+                "model": model,
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "n": n,
+                "tools": tools,
+                **kwargs,
+            },
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def tokenize(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """
+        Tokenize messages to get token IDs.
+
+        Args:
+            messages (`list[dict]`):
+                List of messages to tokenize.
+            tools (`list[dict]`, *optional*):
+                List of tool definitions.
+
+        Returns:
+            `dict`:
+                Dictionary with "tokens" (list of token IDs) and "model" keys.
+        """
+        url = f"{self.base_url}/tokenize"
+        response = self.session.post(url, json={"messages": messages, "tools": tools})
+        if response.status_code == 200:
+            return response.json()
+        else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):

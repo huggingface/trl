@@ -27,9 +27,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, concatenate_datasets
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
@@ -339,7 +341,7 @@ class KTOTrainer(BaseTrainer):
         # Model initialization
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
-            # Distributed training requires device_map=None ("auto" fails with DeepSpeed/FSDP)
+            # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
@@ -353,7 +355,7 @@ class KTOTrainer(BaseTrainer):
         # Reference model initialization
         if isinstance(ref_model, str):
             ref_model_init_kwargs = args.model_init_kwargs or {}
-            # Distributed training requires device_map=None
+            # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 ref_model_init_kwargs["device_map"] = None
             ref_model = create_model_from_path(ref_model, **ref_model_init_kwargs)
@@ -513,15 +515,6 @@ class KTOTrainer(BaseTrainer):
                 "loss.",
             )
 
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in KTO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys are "prompt_input_ids" and "completion_input_ids". As a result,
-        # the trainer issues the warning: "Could not estimate the number of tokens of the input, floating-point
-        # operations will not be computed." To suppress this warning, we set the "estimate_tokens" key in the model's
-        # "warnings_issued" dictionary to True. This acts as a flag to indicate that the warning has already been
-        # issued.
-        model.warnings_issued["estimate_tokens"] = True
-
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().main_process_first():
@@ -666,6 +659,14 @@ class KTOTrainer(BaseTrainer):
                         f"undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). "
                         "See the documentation on how to optimally set these weights.",
                     )
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -1112,11 +1113,7 @@ class KTOTrainer(BaseTrainer):
             model_kwargs["output_router_logits"] = True
 
         # skip the lm head and get the last hidden state
-        if hasattr(model, "get_decoder") and model.get_decoder() is not None:
-            base_model = model.get_decoder()
-        else:
-            base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
-            base_model = getattr(model, base_attr, model)
+        base_model = model.get_decoder()
         outputs = base_model(
             batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],
@@ -1125,11 +1122,7 @@ class KTOTrainer(BaseTrainer):
         )
 
         # reference model
-        if hasattr(self.ref_model, "get_decoder") and self.ref_model.get_decoder() is not None:
-            ref_base_model = self.ref_model.get_decoder()
-        else:
-            ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
-            ref_base_model = getattr(self.ref_model, ref_attr, self.ref_model)
+        ref_base_model = self.ref_model.get_decoder()
         ref_outputs = ref_base_model(
             batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],

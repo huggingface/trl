@@ -161,7 +161,7 @@ $$
 \end{cases}
 $$
 
-They recommends using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
+They recommend using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
 
 To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
 
@@ -693,7 +693,6 @@ accelerate launch \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
-  --gradient_checkpointing \
   --dtype bfloat16 \
   --max_completion_length 1024 \
   --use_vllm \

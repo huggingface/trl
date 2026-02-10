@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-import transformers
-from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -64,10 +62,6 @@ class KTOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
-        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
-            Name of the attribute in the model that contains the base model. This is used to get the base model from
-            the model when the model does not have a `get_decoder` method in the case when `use_liger_kernel` is
-            `True`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -99,8 +93,8 @@ class KTOConfig(TrainingArguments):
         },
     )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322, but the fix has not yet been released. We
-    # add a temporary workaround here, which can be removed once the fix is available—likely in Transformers 4.57.2.
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
     lr_scheduler_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -170,24 +164,8 @@ class KTOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    base_model_attribute_name: str = field(
-        default="model",
-        metadata={
-            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
-            "model from the model when the model does not have a `get_decoder` method in the case when "
-            "`use_liger_kernel` is `True`."
-        },
-    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
-        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
-        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
-        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
-            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__post_init__()

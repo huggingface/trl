@@ -44,7 +44,7 @@ if is_vision_available():
 class TestOnlineDPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -251,7 +251,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
                 pass  # Continue if cleanup fails
 
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -284,7 +284,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
     def test_training_with_vllm_colocate(self):
         """Test vLLM colocate mode with our refactored implementation"""
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -408,7 +408,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):
         if Version(transformers.__version__) < Version("4.57.0"):
-            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.57.0")
+            pytest.xfail("Bug in transformers solved in GH#40692, released in 4.57.0.")
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -490,7 +490,7 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         dataset = Dataset.from_dict(dataset_dict)
         dataset = dataset.cast_column("images", features.Sequence(features.Image()))
 
-        model = AutoModelForImageTextToText.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         reward_model = AutoModelForSequenceClassification.from_pretrained(
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
         )

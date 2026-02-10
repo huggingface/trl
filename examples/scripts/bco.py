@@ -36,17 +36,15 @@ python examples/scripts/bco.py \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
     --learning_rate 1e-6 \
-    --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir bco-aligned-model \
     --logging_first_step \
     --max_length 2048 \
-    --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
-    --warmup_ratio 0.1
+    --warmup_steps 0.1
 
 # QLoRA:
 python examples/scripts/bco.py \
@@ -57,18 +55,16 @@ python examples/scripts/bco.py \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
     --learning_rate 1e-6 \
-    --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir bco-aligned-model-lora \
     --logging_first_step \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --max_length 2048 \
-    --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules all-linear \

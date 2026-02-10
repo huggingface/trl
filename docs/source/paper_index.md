@@ -520,9 +520,26 @@ Note that this method only has an effect when training involve more than one rew
 
 The authors provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
 
+### Length-Unbiased Sequence Policy Optimization: Revealing and Controlling Response Length Variation in RLVR
+
+**📜 Paper**: https://huggingface.co/papers/2602.05261
+
+Length-Unbiased Sequence Policy Optimization (LUSPO) modifies GSPO by scaling each sequence's loss by its length. This corrects GSPO's gradient bias that penalizes longer responses. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="luspo",
+    importance_sampling_level="sequence",
+    epsilon=2e-3, # section 5.1 of the paper
+    epsilon_high=2.5e-3, # section 5.1 of the paper
+)
+```
+
 ## Direct Policy Optimization
 
-- Papers relating to the [`DPOTrainer`]
+Papers relating to the [`DPOTrainer`]
 
 ### Direct Preference Optimization: Your Language Model is Secretly a Reward Model
 
@@ -545,7 +562,7 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2310.12036
 
-A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
+A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
@@ -625,7 +642,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=16, #  batch size in Section B of the paper
     learning_rate=1e-3, # learning rate in Section B of the paper
     beta=0.01, # $\beta$ in Section B of the paper,
-    max_prompt_length=128, # max prompt length in Section B of the paper
     max_length=512, # max length in Section B of the paper
     label_smoothing=0.1 # label smoothing $\epsilon$ in section 6 of the paper
 
@@ -646,8 +662,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=128, #  batch size in Section C of the paper
     learning_rate=5e-7, # learning rate in Section C of the paper
     beta=0.01, # $\beta$ in Section C of the paper,
-    max_prompt_length=1536, # max prompt length in Section C of the paper
-    max_completion_length=512, # max completion length in Section C of the paper
 )
 ```
 
@@ -687,7 +701,7 @@ training_args = DPOConfig(
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="aot_pair", # Section 3 of the paper
+    loss_type="aot_unpaired", # Section 3 of the paper
 )
 ```
 
@@ -725,8 +739,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
     learning_rate=2e-7, # learning rate in Section 5.2 of the paper
     beta=0.1, # $\beta$ in Section 5.2 of the paper,
-    max_prompt_length=512, # prompt length in Section 5.2 of the paper
-    max_completion_length=512, # completion length in Section 5.2 of the paper
 )
 ```
 
@@ -738,8 +750,6 @@ training_args = DPOConfig(
     per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
     learning_rate=2e-7, # learning rate in Section 5.2 of the paper
     beta=0.1, # $\beta$ in Section 5.2 of the paper,
-    max_prompt_length=512, # prompt length in Section 5.2 of the paper
-    max_completion_length=512, # completion length in Section 5.2 of the paper
 )
 ```
 
@@ -885,6 +895,18 @@ trainer = SFTTrainer(
 )
 ```
 
+### DoRA: Weight-Decomposed Low-Rank Adaptation
+
+**📜 Paper**: https://huggingface.co/papers/2402.09353
+
+Weight-Decomposed Low-Rank Adaptation (DoRA) can improve the performance of LoRA, especially at low ranks. DoRA decomposes pre-trained weight into two component: magnitude and direction. Direction is handled by normal LoRA, and magnitude is learnable parameters. TRL integrate DoRA via the [PEFT library](https://huggingface.co/docs/peft/index) and can be easily enable through setting `use_dora=True` to the [`~peft.LoraConfig`].
+
+``` python
+from peft import LoraConfig
+
+config = LoraConfig(use_dora=True, ...)
+```
+
 ## Reinforce Leave-One-Out
 
 Papers relating to the [`RLOOTrainer`]
@@ -1008,6 +1030,47 @@ def add_margin(example):
     return {"margin": preference_to_margin[example["preference_label"]]}
 
 dataset = dataset.map(add_margin)
+```
+
+## Online Direct Preference Optimization
+
+Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
+
+### Direct Language Model Alignment from Online AI Feedback
+
+**📜 Paper**: https://huggingface.co/papers/2402.04792
+
+Online DPO improves direct alignment from preferences methods by providing real-time feedback from a model, outperforming both DPO and PPO methods.
+
+To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
+
+### The Perfect Blend: Redefining RLHF with Mixture of Judges
+
+**📜 Paper**: https://huggingface.co/papers/2409.20370
+
+This paper introduces Constrained Generative Policy Optimization (CGPO), a post-training RLHF paradigm for multi-task learning. Its core contribution is the Mixture of Judges (MoJ) framework, which aggregates multiple reward signals to mitigate reward hacking and achieve Pareto-optimal trade-offs across many objectives. CGPO outperforms common RLHF algorithms like PPO and DPO across general chat, STEM reasoning, instruction following, math, coding, and knowledge benchmarks.
+
+⚠️ Experimental: CGPO is not yet implemented as a TRL trainer. Users can experiment with multiple reward/judge aggregation using [`trl.experimental.judges.AllTrueJudge`].
+
+```python
+from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge
+
+# Example placeholder judges
+class RewardJudge(BaseBinaryJudge):
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
+        return [1 for _ in completions]
+
+class SafetyJudge(BaseBinaryJudge):
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
+        return [1 for _ in completions]
+
+moj = AllTrueJudge(judges=[RewardJudge(), SafetyJudge()])
+
+results = moj.judge(
+    prompts=["Explain gravity."],
+    completions=["Gravity is a fundamental force of nature."]
+)
+print(results)  
 ```
 
 ## Distillation

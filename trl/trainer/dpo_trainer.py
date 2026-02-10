@@ -15,6 +15,7 @@
 import inspect
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -26,9 +27,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
@@ -51,7 +54,7 @@ from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
+from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
 from ..models.utils import peft_module_casting_to_bf16, prepare_fsdp
 from .base_trainer import BaseTrainer
@@ -269,7 +272,7 @@ class DPOTrainer(BaseTrainer):
     def __init__(
         self,
         model: str | nn.Module | PreTrainedModel,
-        ref_model: PreTrainedModel | nn.Module | str | None = None,
+        ref_model: PreTrainedModel | nn.Module | None = None,
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,  # type: ignore
         train_dataset: Dataset | IterableDataset | None = None,
@@ -318,6 +321,14 @@ class DPOTrainer(BaseTrainer):
                 )
         model_id = get_config_model_id(model.config)
         if isinstance(ref_model, str):
+            warnings.warn(
+                "Passing `ref_model` as a string is deprecated and will be removed in version 0.29.0. Usually, you "
+                "can just omit `ref_model` and we'll initialize it to a copy of `model` for you. If you really need "
+                "to load the reference model from a different path, you can still do so by passing `ref_model` as a "
+                "model instance.",
+                FutureWarning,
+                stacklevel=2,
+            )
             model_init_kwargs = args.ref_model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
@@ -334,6 +345,11 @@ class DPOTrainer(BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
                 "same as `model`, you can simply omit the `ref_model` argument and it will be created for you."
             )
+
+        if args.force_use_ref_model is None:
+            self.force_use_ref_model = ref_model is not None
+        else:
+            self.force_use_ref_model = args.force_use_ref_model
 
         # Processing class
         if processing_class is None:
@@ -409,14 +425,6 @@ class DPOTrainer(BaseTrainer):
                 average_log_prob=False,
                 loss_type=args.loss_type,
             )
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
-        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
-        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
-        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
-        # that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
 
         # Data collator
         if data_collator is None:
@@ -496,6 +504,14 @@ class DPOTrainer(BaseTrainer):
                 }
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -580,10 +596,10 @@ class DPOTrainer(BaseTrainer):
                     "model along with the new `peft_config` to the trainer."
                 )
 
-            if ref_model is not None and not args.force_use_ref_model:
+            if ref_model is not None and not self.force_use_ref_model:
                 raise ValueError(
-                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
+                    "You passed a ref_model and a peft_config with `force_use_ref_model=False`. For training PEFT adapters with DPO there is no need to pass a reference"
+                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with in DPOTrainer's init, and unset force_use_ref_model"
                     " if you want to use a different ref_model."
                 )
 
@@ -653,6 +669,8 @@ class DPOTrainer(BaseTrainer):
                 map_kwargs["desc"] = f"Extracting prompt in {dataset_name} dataset"
             dataset = dataset.map(maybe_extract_prompt, **map_kwargs)
 
+            is_chat = is_conversational(next(iter(dataset)))
+
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
@@ -673,6 +691,7 @@ class DPOTrainer(BaseTrainer):
                     "max_completion_length": args.max_completion_length,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens": False,
+                    "is_chat": is_chat,
                 },
                 **map_kwargs,
             )
@@ -686,6 +705,7 @@ class DPOTrainer(BaseTrainer):
         max_prompt_length: int | None = None,
         max_completion_length: int | None = None,
         add_special_tokens: bool = True,
+        is_chat: bool = False,
     ) -> dict[str, list[int]]:
         """
         Tokenize a row of the dataset.
@@ -703,6 +723,9 @@ class DPOTrainer(BaseTrainer):
                 Whether to add special tokens to the sequences. Typically used for encoder-decoder models. If `True`,
                 the prompt sequence will have a bos token prepended and an eos token appended. In any case, the
                 completion sequences will have an eos token appended.
+            is_chat (`bool`):
+                Whether the data is conversational. If `True`, the completion sequences will not have an eos token
+                appended.
 
         Returns:
             `dict[str, list[int]]`:
@@ -732,8 +755,10 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        # For conversational data, the chat template already includes proper EOS tokens
+        if not is_chat:
+            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
@@ -755,10 +780,23 @@ class DPOTrainer(BaseTrainer):
         max_prompt_length: int | None = None,
         max_completion_length: int | None = None,
         add_special_tokens: bool = True,
+        is_chat: bool = False,
     ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
+
+        Note: Unlike `tokenize_row`, this method does not truncate prompts even if `max_prompt_length` is set. For
+        vision models, prompts contain image tokens that must exactly match the image features (pixel_values).
+        Truncating these tokens would cause a mismatch, leading to errors during the forward pass, like "Image features
+        and image tokens do not match". Users should filter their datasets to ensure prompts are an appropriate length
+        before training.
         """
+        if max_prompt_length is not None:
+            warnings.warn(
+                "max_prompt_length is not supported for vision models and will be ignored. "
+                "Truncating prompts would cause image token/feature mismatch errors.",
+                stacklevel=2,
+            )
         processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
@@ -773,12 +811,15 @@ class DPOTrainer(BaseTrainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        if not is_chat:
+            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+        # Truncate completion sequences only.
+        # Note: We do not truncate prompt_input_ids for vision models because the prompts contain image tokens
+        # that must exactly match the image features (pixel_values). Truncating would cause errors like
+        # "Image features and image tokens do not match: tokens: X, features: Y". Users should filter overlong
+        # prompts from their dataset before training (the recommended approach for the deprecated max_prompt_length).
         if max_completion_length is not None:
             chosen_input_ids = chosen_input_ids[:max_completion_length]
             rejected_input_ids = rejected_input_ids[:max_completion_length]
@@ -1053,8 +1094,8 @@ class DPOTrainer(BaseTrainer):
                 - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
                   paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
-                  paper.
+                - `"aot_unpaired"`: AOT loss for unpaired datasets from the
+                  [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
                   [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
@@ -1167,7 +1208,7 @@ class DPOTrainer(BaseTrainer):
                 - 0.5 * F.logsigmoid(-rejected_rewards)
             )
 
-        elif loss_type == "aot_pair":
+        elif loss_type == "aot_unpaired":
             chosen_logratios = chosen_logps - ref_chosen_logps
             rejected_logratios = rejected_logps - ref_rejected_logps
             chosen_logratios_sorted, _ = torch.sort(chosen_logratios, dim=0)
@@ -1232,7 +1273,7 @@ class DPOTrainer(BaseTrainer):
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', "
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'discopop', 'apo_zero', "
                 "'apo_down', 'sft']"
             )
 

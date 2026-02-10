@@ -26,9 +26,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import Accelerator, logging
-from accelerate.utils import broadcast, gather_object
+from accelerate.utils import gather_object
 from datasets import Dataset
+from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import (
     BaseImageProcessor,
@@ -366,6 +368,14 @@ class PPOTrainer(BaseTrainer):
         self.processing_class = processing_class
         self.policy_model = model
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         # Define the collator if not provided
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
@@ -455,9 +465,6 @@ class PPOTrainer(BaseTrainer):
         args.num_total_batches = math.ceil(
             args.total_episodes / args.batch_size
         )  # we may train for more than `total_episodes`
-        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
-        time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)

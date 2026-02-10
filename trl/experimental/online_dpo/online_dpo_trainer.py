@@ -53,7 +53,7 @@ from transformers.utils import is_flash_attn_2_available, is_peft_available, is_
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...extras.profiling import profiling_context
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
@@ -74,6 +74,10 @@ if is_sagemaker_mp_enabled():
 
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
+
+
+if Version(transformers.__version__) >= Version("5.2.0.dev0"):
+    from transformers.trainer_pt_utils import nested_gather
 
 
 if is_vllm_available():
@@ -399,13 +403,13 @@ class OnlineDPOTrainer(BaseTrainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=self.pad_token_id)
 
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
-        # the "input_ids" key. As a result, the trainer issues the warning: "Could not estimate the number of tokens
-        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
-        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
-        # that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -477,6 +481,7 @@ class OnlineDPOTrainer(BaseTrainer):
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
+                    "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     "quantization": vllm_quantization,
                 }
 
@@ -488,6 +493,8 @@ class OnlineDPOTrainer(BaseTrainer):
                 ensure_master_addr_port()
 
                 self.llm = LLM(**vllm_kwargs)
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
             # vLLM specific sampling arguments
@@ -776,6 +783,11 @@ class OnlineDPOTrainer(BaseTrainer):
 
     def _generate_vllm_colocate(self, prompts, images=None):
         """Generate completions using vLLM colocate mode"""
+        if self.args.vllm_enable_sleep_mode:
+            # wake up colocated vLLM instances if needed
+            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            self.llm.wake_up(tags=["weights"])
+
         # Update model weights if needed - only after gradient accumulation completes
         if self.state.global_step != self._last_loaded_step:
             self._move_model_to_vllm()
@@ -798,10 +810,15 @@ class OnlineDPOTrainer(BaseTrainer):
         else:
             vllm_inputs = prompts_text
 
+        if self.args.vllm_enable_sleep_mode:
+            self.llm.wake_up(tags=["kv_cache"])
+
         outputs = self.llm.generate(vllm_inputs, self.generation_config, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+        if self.args.vllm_enable_sleep_mode:
+            self.llm.sleep(level=2)
 
         return completion_ids, prompt_ids
 
@@ -1434,7 +1451,10 @@ class OnlineDPOTrainer(BaseTrainer):
             logs: dict[str, float] = {}
 
             # all_gather + mean() to get average loss over all processes
-            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+            if Version(transformers.__version__) >= Version("5.2.0.dev0"):
+                tr_loss_scalar = nested_gather(tr_loss, self.args.parallel_mode).mean().item()
+            else:
+                tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
 
             # reset tr_loss to zero
             tr_loss -= tr_loss

@@ -18,8 +18,6 @@ from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "bco_config": ["BCOConfig"],  # deprecated import
-    "bco_trainer": ["BCOTrainer"],  # deprecated import
     "callbacks": [
         "BEMACallback",
         "LogCompletionsCallback",
@@ -28,9 +26,11 @@ _import_structure = {
         "WeaveCallback",
         "WinRateCallback",  # deprecated import
     ],
-    "cpo_config": ["CPOConfig"],  # deprecated import
-    "cpo_trainer": ["CPOTrainer"],  # deprecated import
-    "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
+    "dpo_config": [
+        "DPOConfig",
+        "FDivergenceConstants",  # deprecated import
+        "FDivergenceType",  # deprecated import
+    ],
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],  # deprecated import
     "gkd_trainer": ["GKDTrainer"],  # deprecated import
@@ -79,8 +79,6 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
-    from .bco_config import BCOConfig  # deprecated import
-    from .bco_trainer import BCOTrainer  # deprecated import
     from .callbacks import (
         BEMACallback,
         LogCompletionsCallback,
@@ -89,9 +87,11 @@ if TYPE_CHECKING:
         WeaveCallback,
         WinRateCallback,  # deprecated import
     )
-    from .cpo_config import CPOConfig  # deprecated import
-    from .cpo_trainer import CPOTrainer  # deprecated import
-    from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
+    from .dpo_config import (
+        DPOConfig,
+        FDivergenceConstants,  # deprecated import
+        FDivergenceType,  # deprecated import
+    )
     from .dpo_trainer import DPOTrainer
     from .gkd_config import GKDConfig  # deprecated import
     from .gkd_trainer import GKDTrainer  # deprecated import

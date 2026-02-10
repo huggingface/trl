@@ -55,15 +55,11 @@ _import_structure = {
         "BaseJudge",  # deprecated import
         "BasePairwiseJudge",  # deprecated import
         "BaseRankJudge",  # deprecated import
-        "BCOConfig",  # deprecated import
-        "BCOTrainer",  # deprecated import
         "BEMACallback",
-        "CPOConfig",  # deprecated import
-        "CPOTrainer",  # deprecated import
         "DPOConfig",
         "DPOTrainer",
-        "FDivergenceConstants",
-        "FDivergenceType",
+        "FDivergenceConstants",  # deprecated import
+        "FDivergenceType",  # deprecated import
         "GKDConfig",  # deprecated import
         "GKDTrainer",  # deprecated import
         "GRPOConfig",
@@ -133,15 +129,11 @@ if TYPE_CHECKING:
         BaseJudge,  # deprecated import
         BasePairwiseJudge,  # deprecated import
         BaseRankJudge,  # deprecated import
-        BCOConfig,  # deprecated import
-        BCOTrainer,  # deprecated import
         BEMACallback,
-        CPOConfig,  # deprecated import
-        CPOTrainer,  # deprecated import
         DPOConfig,
         DPOTrainer,
-        FDivergenceConstants,
-        FDivergenceType,
+        FDivergenceConstants,  # deprecated import
+        FDivergenceType,  # deprecated import
         GKDConfig,  # deprecated import
         GKDTrainer,  # deprecated import
         GRPOConfig,

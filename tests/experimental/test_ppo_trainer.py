@@ -76,7 +76,7 @@ class TestBatchGeneration(TrlTestCase):
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id).to(self.device)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32").to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
         self.generation_config = GenerationConfig(
@@ -189,7 +189,7 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
-                    assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
+                    torch.testing.assert_close(model_from_save.state_dict()[key], model.state_dict()[key])
 
         def test_from_save_trl_sharded(self):
             """
@@ -204,7 +204,7 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
-                    assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
+                    torch.testing.assert_close(model_from_save.state_dict()[key], model.state_dict()[key])
 
         def test_from_save_transformers_sharded(self):
             """
@@ -222,7 +222,7 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
-                    assert torch.allclose(
+                    torch.testing.assert_close(
                         transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
                     )
 
@@ -243,7 +243,7 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
-                    assert torch.allclose(
+                    torch.testing.assert_close(
                         transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
                     )
 
@@ -253,7 +253,7 @@ class BaseTester:
                     if "v_head" not in key:
                         assert key in transformers_model.state_dict()
                         # check if the weights are the same
-                        assert torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key])
+                        torch.testing.assert_close(trl_model.state_dict()[key], transformers_model.state_dict()[key])
 
                 # check if they have the same modules
                 assert set(transformers_model_from_save.state_dict().keys()) == set(
@@ -369,8 +369,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
             assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), (
-                    f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+                (
+                    torch.testing.assert_close(param, model_from_pretrained.state_dict()[name]),
+                    (f"Parameter {name} is not the same after push_to_hub and from_pretrained"),
                 )
 
 
@@ -460,8 +461,9 @@ class TestSeq2SeqValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
             assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), (
-                    f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+                (
+                    torch.testing.assert_close(param, model_from_pretrained.state_dict()[name]),
+                    (f"Parameter {name} is not the same after push_to_hub and from_pretrained"),
                 )
 
     def test_transformers_bf16_kwargs(self):
@@ -615,7 +617,7 @@ class TestPeftModel(TrlTestCase):
 
         # check all the weights are the same
         for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
-            assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
+            torch.testing.assert_close(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
 
     def test_load_pretrained_peft(self):
         r"""
@@ -640,7 +642,7 @@ class TestPeftModel(TrlTestCase):
         # check all the weights are the same
         for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters(), strict=True):
             if p1[0] not in ["v_head.summary.weight", "v_head.summary.bias"]:
-                assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
+                torch.testing.assert_close(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
 
     def test_continue_training_peft_model(self):
         r"""
@@ -688,7 +690,7 @@ class TestPPOTrainer(TrlTestCase):
     def setup_method(self):
         # Set up the models and tokenizer using the test model
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
