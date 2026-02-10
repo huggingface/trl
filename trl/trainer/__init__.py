@@ -47,8 +47,6 @@ _import_structure = {
     "orpo_trainer": ["ORPOTrainer"],  # deprecated import
     "ppo_config": ["PPOConfig"],  # deprecated import
     "ppo_trainer": ["PPOTrainer"],  # deprecated import
-    "prm_config": ["PRMConfig"],  # deprecated import
-    "prm_trainer": ["PRMTrainer"],  # deprecated import
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
@@ -98,8 +96,6 @@ if TYPE_CHECKING:
     from .orpo_trainer import ORPOTrainer  # deprecated import
     from .ppo_config import PPOConfig  # deprecated import
     from .ppo_trainer import PPOTrainer  # deprecated import
-    from .prm_config import PRMConfig  # deprecated import
-    from .prm_trainer import PRMTrainer  # deprecated import
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig

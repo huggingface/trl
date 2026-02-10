@@ -71,8 +71,6 @@ _import_structure = {
         "ORPOTrainer",  # deprecated import
         "PPOConfig",  # deprecated import
         "PPOTrainer",  # deprecated import
-        "PRMConfig",  # deprecated import
-        "PRMTrainer",  # deprecated import
         "RewardConfig",
         "RewardTrainer",
         "RichProgressCallback",
@@ -137,8 +135,6 @@ if TYPE_CHECKING:
         ORPOTrainer,  # deprecated import
         PPOConfig,  # deprecated import
         PPOTrainer,  # deprecated import
-        PRMConfig,  # deprecated import
-        PRMTrainer,  # deprecated import
         RewardConfig,
         RewardTrainer,
         RichProgressCallback,
