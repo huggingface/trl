@@ -56,8 +56,6 @@ _import_structure = {
         "BasePairwiseJudge",  # deprecated import
         "BaseRankJudge",  # deprecated import
         "BEMACallback",
-        "CPOConfig",  # deprecated import
-        "CPOTrainer",  # deprecated import
         "DPOConfig",
         "DPOTrainer",
         "FDivergenceConstants",  # deprecated import
@@ -131,8 +129,6 @@ if TYPE_CHECKING:
         BasePairwiseJudge,  # deprecated import
         BaseRankJudge,  # deprecated import
         BEMACallback,
-        CPOConfig,  # deprecated import
-        CPOTrainer,  # deprecated import
         DPOConfig,
         DPOTrainer,
         FDivergenceConstants,  # deprecated import

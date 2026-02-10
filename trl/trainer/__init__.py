@@ -25,8 +25,6 @@ _import_structure = {
         "SyncRefModelCallback",
         "WeaveCallback",
     ],
-    "cpo_config": ["CPOConfig"],  # deprecated import
-    "cpo_trainer": ["CPOTrainer"],  # deprecated import
     "dpo_config": [
         "DPOConfig",
         "FDivergenceConstants",  # deprecated import
@@ -87,8 +85,6 @@ if TYPE_CHECKING:
         SyncRefModelCallback,
         WeaveCallback,
     )
-    from .cpo_config import CPOConfig  # deprecated import
-    from .cpo_trainer import CPOTrainer  # deprecated import
     from .dpo_config import (
         DPOConfig,
         FDivergenceConstants,  # deprecated import
