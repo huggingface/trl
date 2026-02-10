@@ -36,8 +36,8 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
-from ...trainer.judges import BasePairwiseJudge
 from ...trainer.utils import empty_cache, selective_log_softmax
+from ..judges import BasePairwiseJudge
 from ..online_dpo import OnlineDPOTrainer
 from ..utils import SIMPLE_CHAT_TEMPLATE, get_reward, truncate_right
 from .nash_md_config import NashMDConfig
@@ -121,7 +121,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         reward_funcs ([`~transformers.PreTrainedModel`]):
             The reward model to score completions with, preferably an
             [`~transformers.AutoModelForSequenceClassification`].
-        judge ([`BasePairwiseJudge`]):
+        judge ([`experimental.judges.BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         args ([`experimental.nash_md.NashMDConfig`]):
             The NashMD config arguments to use for training.

@@ -447,7 +447,7 @@ class AllTrueJudge(BaseBinaryJudge):
     Implements the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370).
 
     Args:
-        judges (`list[BaseBinaryJudge]`):
+        judges (`list` of [`experimental.judges.BaseBinaryJudge`]):
             A list of [`experimental.judges.BaseBinaryJudge`] instances whose decisions will be unified.
     """
 
