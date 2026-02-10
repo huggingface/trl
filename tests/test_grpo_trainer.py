@@ -16,6 +16,7 @@ import gc
 import os
 import warnings
 from collections.abc import Callable
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -38,7 +39,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
-from trl.trainer.utils import get_kbit_device_map
+from trl.trainer.utils import get_kbit_device_map, shutdown_event_loop_in_daemon, start_event_loop_in_daemon
 
 from .testing_utils import (
     TrlTestCase,
@@ -2285,6 +2286,113 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
+
+
+def test_string_prompt_not_passed_to_prepare_multimodal_messages():
+    from unittest.mock import MagicMock
+
+    from trl.data_utils import prepare_multimodal_messages
+
+    string_prompt = "<|im_start|>user\nWhat is this?<|im_end|>"
+    list_prompt = [{"role": "user", "content": "What is this?"}]
+    image = MagicMock()
+    prompts = [string_prompt, list_prompt]
+    images = [[image], [image]]
+
+    results = [
+        prepare_multimodal_messages(prompt, image_list) if isinstance(prompt, list) else prompt
+        for prompt, image_list in zip(prompts, images, strict=True)
+    ]
+
+    assert results[0] == string_prompt
+    assert isinstance(results[1], list)
+    assert results[1][0]["role"] == "user"
+
+
+def test_forward_kwargs_dtype_casting():
+    forward_kwargs = {
+        "pixel_values": torch.randn(1, 3, 224, 224, dtype=torch.float32),
+        "image_grid_thw": torch.tensor([[1, 14, 14]]),
+    }
+
+    for bf16, fp16, expected_dtype in [
+        (True, False, torch.bfloat16),
+        (False, True, torch.float16),
+        (False, False, None),
+    ]:
+        if bf16:
+            compute_dtype = torch.bfloat16
+        elif fp16:
+            compute_dtype = torch.float16
+        else:
+            compute_dtype = None
+
+        if compute_dtype is not None:
+            result = {
+                k: v.to(compute_dtype) if isinstance(v, torch.Tensor) and torch.is_floating_point(v) else v
+                for k, v in forward_kwargs.items()
+            }
+        else:
+            result = forward_kwargs
+
+        if expected_dtype is not None:
+            assert result["pixel_values"].dtype == expected_dtype
+        else:
+            assert result["pixel_values"].dtype == torch.float32
+        assert result["image_grid_thw"].dtype == torch.int64
+
+
+def _make_minimal_reward_trainer(reward_func):
+    trainer = GRPOTrainer.__new__(GRPOTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+    trainer.args = SimpleNamespace(report_to=[])
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer.reward_funcs = [reward_func]
+    trainer.reward_processing_classes = [None]
+    trainer.reward_func_names = ["test_reward"]
+    trainer.chat_template_kwargs = {}
+    return trainer
+
+
+def test_sync_reward_function_exception_returns_nan():
+    def failing_reward_func(prompts, completions, completion_ids, **kwargs):
+        raise ValueError("parse error")
+
+    trainer = _make_minimal_reward_trainer(failing_reward_func)
+    inputs = [{"prompt": "p1"}, {"prompt": "p2"}]
+    prompts = ["p1", "p2"]
+    completions = ["c1", "c2"]
+    completion_ids_list = [[1], [2]]
+
+    with patch("trl.trainer.grpo_trainer.gather", lambda x: x), patch("trl.trainer.grpo_trainer.logger.warning"):
+        rewards = GRPOTrainer._calculate_rewards(trainer, inputs, prompts, completions, completion_ids_list)
+
+    assert rewards.shape == (2, 1)
+    assert torch.isnan(rewards).all()
+
+
+def test_async_reward_function_exception_returns_nan():
+    async def failing_reward_func(prompts, completions, completion_ids, **kwargs):
+        raise ValueError("parse error")
+
+    trainer = _make_minimal_reward_trainer(failing_reward_func)
+    inputs = [{"prompt": "p1"}, {"prompt": "p2"}]
+    prompts = ["p1", "p2"]
+    completions = ["c1", "c2"]
+    completion_ids_list = [[1], [2]]
+
+    thread, loop, loop_ready_event = start_event_loop_in_daemon("test-grpo-reward-loop")
+    loop_ready_event.wait()
+    trainer.async_loop = loop
+
+    try:
+        with patch("trl.trainer.grpo_trainer.gather", lambda x: x), patch("trl.trainer.grpo_trainer.logger.warning"):
+            rewards = GRPOTrainer._calculate_rewards(trainer, inputs, prompts, completions, completion_ids_list)
+    finally:
+        shutdown_event_loop_in_daemon(thread, loop)
+
+    assert rewards.shape == (2, 1)
+    assert torch.isnan(rewards).all()
 
 
 @pytest.mark.slow

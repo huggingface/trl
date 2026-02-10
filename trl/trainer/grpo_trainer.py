@@ -1109,9 +1109,19 @@ class GRPOTrainer(BaseTrainer):
             else:
                 # Run synchronous reward function
                 with profiling_context(self, reward_func_name):
-                    output_reward_func = reward_func(
-                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
-                    )
+                    try:
+                        output_reward_func = reward_func(
+                            prompts=prompts,
+                            completions=completions,
+                            completion_ids=completion_ids_list,
+                            **reward_kwargs,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Reward function '{reward_func_name}' raised an exception: {e}. "
+                            "Assigning NaN rewards for this batch."
+                        )
+                        output_reward_func = [None] * len(prompts)
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
@@ -1121,9 +1131,19 @@ class GRPOTrainer(BaseTrainer):
 
             async def _invoke_async(index, func, func_name):
                 with profiling_context(self, func_name):
-                    output = await func(
-                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
-                    )
+                    try:
+                        output = await func(
+                            prompts=prompts,
+                            completions=completions,
+                            completion_ids=completion_ids_list,
+                            **reward_kwargs,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Async reward function '{func_name}' raised an exception: {e}. "
+                            "Assigning NaN rewards for this batch."
+                        )
+                        output = [None] * len(prompts)
                     output = [r if r is not None else torch.nan for r in output]
                     return index, output
 
@@ -1545,7 +1565,7 @@ class GRPOTrainer(BaseTrainer):
         # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
         if images is not None:
             prompts = [
-                prepare_multimodal_messages(prompt, image_list)
+                prepare_multimodal_messages(prompt, image_list) if isinstance(prompt, list) else prompt
                 for prompt, image_list in zip(prompts, images, strict=True)
             ]
 
@@ -1609,6 +1629,17 @@ class GRPOTrainer(BaseTrainer):
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
             forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+            if self.args.bf16:
+                compute_dtype = torch.bfloat16
+            elif self.args.fp16:
+                compute_dtype = torch.float16
+            else:
+                compute_dtype = None
+            if compute_dtype is not None:
+                forward_kwargs = {
+                    k: v.to(compute_dtype) if isinstance(v, torch.Tensor) and torch.is_floating_point(v) else v
+                    for k, v in forward_kwargs.items()
+                }
         else:
             forward_kwargs = {}
 
