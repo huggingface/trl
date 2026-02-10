@@ -1181,6 +1181,14 @@ class SFTTrainer(BaseTrainer):
 
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
+            # Avoid materializing full logits during eval unless explicitly needed.
+            # By default, liger kernel only skips logits during training (self.training=True).
+            # When only loss is needed for eval (no compute_metrics), we can safely skip logits
+            # to prevent massive vRAM spikes from the lm_head projection.
+            # See: https://github.com/huggingface/trl/issues/4679
+            inputs["skip_logits"] = (
+                self.model.training or self.args.prediction_loss_only or self.compute_metrics is None
+            )
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
