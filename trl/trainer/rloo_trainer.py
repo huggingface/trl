@@ -52,11 +52,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
-from ..data_utils import (
-    apply_chat_template,
-    is_conversational,
-    prepare_multimodal_messages
-)
+from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
