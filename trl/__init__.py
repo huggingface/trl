@@ -58,8 +58,6 @@ _import_structure = {
         "BCOConfig",  # deprecated import
         "BCOTrainer",  # deprecated import
         "BEMACallback",
-        "CPOConfig",  # deprecated import
-        "CPOTrainer",  # deprecated import
         "DPOConfig",
         "DPOTrainer",
         "FDivergenceConstants",  # deprecated import
@@ -136,8 +134,6 @@ if TYPE_CHECKING:
         BCOConfig,  # deprecated import
         BCOTrainer,  # deprecated import
         BEMACallback,
-        CPOConfig,  # deprecated import
-        CPOTrainer,  # deprecated import
         DPOConfig,
         DPOTrainer,
         FDivergenceConstants,  # deprecated import

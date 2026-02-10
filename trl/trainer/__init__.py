@@ -28,8 +28,6 @@ _import_structure = {
         "WeaveCallback",
         "WinRateCallback",  # deprecated import
     ],
-    "cpo_config": ["CPOConfig"],  # deprecated import
-    "cpo_trainer": ["CPOTrainer"],  # deprecated import
     "dpo_config": [
         "DPOConfig",
         "FDivergenceConstants",  # deprecated import
@@ -93,8 +91,6 @@ if TYPE_CHECKING:
         WeaveCallback,
         WinRateCallback,  # deprecated import
     )
-    from .cpo_config import CPOConfig  # deprecated import
-    from .cpo_trainer import CPOTrainer  # deprecated import
     from .dpo_config import (
         DPOConfig,
         FDivergenceConstants,  # deprecated import
