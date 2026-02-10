@@ -34,7 +34,7 @@ from transformers import (
 from transformers.testing_utils import backend_empty_cache, get_device_properties, torch_device
 from transformers.utils import is_peft_available
 
-from trl import DPOConfig, DPOTrainer  # , FDivergenceType
+from trl import DPOConfig, DPOTrainer
 
 from .testing_utils import (
     TrlTestCase,
@@ -894,7 +894,7 @@ class TestDPOTrainer(TrlTestCase):
     #     # We don't run the training, but at this stage, the dataset is supposed to be pre-processed. When
     #     # pre-processing, we expect the available tools to be explicitly mentioned in the system prompt. That's
     #     # what we're checking here
-    #     # assert "get_current_temperature" in tokenizer.decode(trainer.train_dataset["prompt_input_ids"][0])
+    #     assert "get_current_temperature" in tokenizer.decode(trainer.train_dataset["prompt_input_ids"][0])
 
     def test_padding_free(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
@@ -1209,22 +1209,18 @@ class TestDPOVisionTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
 
-# class TestDPOConfig(TrlTestCase):
-#     @pytest.mark.parametrize("f_divergence_type", ["reverse_kl", "js_divergence", "alpha_divergence"])
-#     def test_f_divergence_type(self, f_divergence_type):
-#         training_args = DPOConfig(
-#             output_dir=self.tmp_dir,
-#             report_to="none",
-#             f_divergence_type=f_divergence_type,
-#         )
-
-#         # Internal normalization: keep Enum member
-#         assert isinstance(training_args.f_divergence_type, FDivergenceType)
-#         assert training_args.f_divergence_type == f_divergence_type
-
-#         # Serialization: TrainingArguments.to_dict should yield the enum's string value
-#         configparser_dict = training_args.to_dict()
-#         assert configparser_dict["f_divergence_type"] == f_divergence_type.value
+class TestDPOConfig(TrlTestCase):
+    @pytest.mark.parametrize("f_divergence_type", ["reverse_kl", "js_divergence", "alpha_divergence"])
+    def test_f_divergence_type(self, f_divergence_type):
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            f_divergence_type=f_divergence_type,
+        )
+        assert training_args.f_divergence_type == f_divergence_type
+        # Serialization
+        configparser_dict = training_args.to_dict()
+        assert configparser_dict["f_divergence_type"] == f_divergence_type
 
 
 @pytest.mark.slow
