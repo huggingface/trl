@@ -742,8 +742,8 @@ class DPOConfig(TrainingArguments):
 
         if "aot_pair" in self.loss_type:
             warnings.warn(
-                "`loss_type='aot_pair'` is deprecated and will be removed in a version 0.29.0. Please use "
-                "`loss_type='aot_unpaired'` instead.",
+                "The loss type 'aot_pair' has been renamed to 'aot_unpaired' and is deprecated. "
+                "It will be removed in version 0.29.0. Please use 'aot_unpaired' in `loss_type` instead.",
                 FutureWarning,
                 stacklevel=3,
             )
