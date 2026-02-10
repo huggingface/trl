@@ -21,7 +21,7 @@ from transformers import TrainingArguments
 @dataclass
 class BCOConfig(TrainingArguments):
     r"""
-    Configuration class for the [`BCOTrainer`].
+    Configuration class for the [`experimental.bco.BCOTrainer`].
 
     This class includes only the parameters that are specific to BCO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
