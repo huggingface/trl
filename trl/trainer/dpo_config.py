@@ -747,6 +747,9 @@ class DPOConfig(TrainingArguments):
                 FutureWarning,
                 stacklevel=3,
             )
-            self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
+            if isinstance(self.loss_type, str):
+                self.loss_type = "aot_unpaired"
+            else:
+                self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
 
         super().__post_init__()
