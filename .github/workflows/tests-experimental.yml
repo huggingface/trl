@@ -2,10 +2,10 @@ name: Tests (experimental)
 
 on:
   pull_request:
-    paths:
-      # Run only when relevant files are modified
-      - "trl/experimental/**"
-      - "tests/experimental/**"
+#    paths:
+#      # Run only when relevant files are modified
+#      - "trl/experimental/**"
+#      - "tests/experimental/**"
 
 env:
   TQDM_DISABLE: 1
