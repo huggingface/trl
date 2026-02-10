@@ -50,11 +50,6 @@ _import_structure = {
     ],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
-        "AllTrueJudge",  # deprecated import
-        "BaseBinaryJudge",  # deprecated import
-        "BaseJudge",  # deprecated import
-        "BasePairwiseJudge",  # deprecated import
-        "BaseRankJudge",  # deprecated import
         "BEMACallback",
         "DPOConfig",
         "DPOTrainer",
@@ -64,7 +59,6 @@ _import_structure = {
         "GKDTrainer",  # deprecated import
         "GRPOConfig",
         "GRPOTrainer",
-        "HfPairwiseJudge",  # deprecated import
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
@@ -73,8 +67,6 @@ _import_structure = {
         "NashMDTrainer",  # deprecated import
         "OnlineDPOConfig",  # deprecated import
         "OnlineDPOTrainer",  # deprecated import
-        "OpenAIPairwiseJudge",  # deprecated import
-        "PairRMJudge",  # deprecated import
         "PPOConfig",  # deprecated import
         "PPOTrainer",  # deprecated import
         "PRMConfig",  # deprecated import
@@ -122,11 +114,6 @@ if TYPE_CHECKING:
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
-        AllTrueJudge,  # deprecated import
-        BaseBinaryJudge,  # deprecated import
-        BaseJudge,  # deprecated import
-        BasePairwiseJudge,  # deprecated import
-        BaseRankJudge,  # deprecated import
         BEMACallback,
         DPOConfig,
         DPOTrainer,
@@ -136,7 +123,6 @@ if TYPE_CHECKING:
         GKDTrainer,  # deprecated import
         GRPOConfig,
         GRPOTrainer,
-        HfPairwiseJudge,  # deprecated import
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
@@ -145,8 +131,6 @@ if TYPE_CHECKING:
         NashMDTrainer,  # deprecated import
         OnlineDPOConfig,  # deprecated import
         OnlineDPOTrainer,  # deprecated import
-        OpenAIPairwiseJudge,  # deprecated import
-        PairRMJudge,  # deprecated import
         PPOConfig,  # deprecated import
         PPOTrainer,  # deprecated import
         PRMConfig,  # deprecated import
