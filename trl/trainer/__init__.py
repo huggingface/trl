@@ -36,8 +36,6 @@ _import_structure = {
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
-    "prm_config": ["PRMConfig"],  # deprecated import
-    "prm_trainer": ["PRMTrainer"],  # deprecated import
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
@@ -76,8 +74,6 @@ if TYPE_CHECKING:
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
-    from .prm_config import PRMConfig  # deprecated import
-    from .prm_trainer import PRMTrainer  # deprecated import
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
