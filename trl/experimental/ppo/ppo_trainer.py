@@ -579,19 +579,20 @@ class PPOTrainer(BaseTrainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
-        backup_model = self.model
-        self.model = self.model.policy  # save only the policy
-
-        if self.is_deepspeed_enabled:
-            backup_deepspeed = self.deepspeed
-            self.deepspeed = self.model
+        if not _internal_call:
+            backup_model = self.model
+            if hasattr(self.model, "policy"):
+                self.model = self.model.policy  # save only the policy for inference
+            if self.is_deepspeed_enabled:
+                backup_deepspeed = self.deepspeed
+                self.deepspeed = self.model
 
         super().save_model(output_dir, _internal_call)
 
-        self.model = backup_model
-
-        if self.is_deepspeed_enabled:
-            self.deepspeed = backup_deepspeed
+        if not _internal_call:
+            self.model = backup_model
+            if self.is_deepspeed_enabled:
+                self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args
