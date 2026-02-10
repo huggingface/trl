@@ -35,7 +35,7 @@ trainer.train()
 
 ```python
 from post_training_toolkit import DiagnosticsCallback
-from trl import PPOTrainer
+from trl.experimental.ppo import PPOTrainer
 
 trainer = PPOTrainer(
     model=model,
