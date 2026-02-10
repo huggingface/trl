@@ -272,7 +272,7 @@ class DPOTrainer(BaseTrainer):
     def __init__(
         self,
         model: str | nn.Module | PreTrainedModel,
-        ref_model: PreTrainedModel | nn.Module | str | None = None,
+        ref_model: PreTrainedModel | nn.Module | None = None,
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,  # type: ignore
         train_dataset: Dataset | IterableDataset | None = None,
