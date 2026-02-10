@@ -74,8 +74,6 @@ _import_structure = {
         "OnlineDPOConfig",  # deprecated import
         "OnlineDPOTrainer",  # deprecated import
         "OpenAIPairwiseJudge",  # deprecated import
-        "ORPOConfig",  # deprecated import
-        "ORPOTrainer",  # deprecated import
         "PairRMJudge",  # deprecated import
         "PPOConfig",  # deprecated import
         "PPOTrainer",  # deprecated import
@@ -148,8 +146,6 @@ if TYPE_CHECKING:
         OnlineDPOConfig,  # deprecated import
         OnlineDPOTrainer,  # deprecated import
         OpenAIPairwiseJudge,  # deprecated import
-        ORPOConfig,  # deprecated import
-        ORPOTrainer,  # deprecated import
         PairRMJudge,  # deprecated import
         PPOConfig,  # deprecated import
         PPOTrainer,  # deprecated import

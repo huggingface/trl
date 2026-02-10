@@ -53,8 +53,6 @@ _import_structure = {
     "nash_md_trainer": ["NashMDTrainer"],  # deprecated import
     "online_dpo_config": ["OnlineDPOConfig"],  # deprecated import
     "online_dpo_trainer": ["OnlineDPOTrainer"],  # deprecated import
-    "orpo_config": ["ORPOConfig"],  # deprecated import
-    "orpo_trainer": ["ORPOTrainer"],  # deprecated import
     "ppo_config": ["PPOConfig"],  # deprecated import
     "ppo_trainer": ["PPOTrainer"],  # deprecated import
     "prm_config": ["PRMConfig"],  # deprecated import
@@ -114,8 +112,6 @@ if TYPE_CHECKING:
     from .nash_md_trainer import NashMDTrainer  # deprecated import
     from .online_dpo_config import OnlineDPOConfig  # deprecated import
     from .online_dpo_trainer import OnlineDPOTrainer  # deprecated import
-    from .orpo_config import ORPOConfig  # deprecated import
-    from .orpo_trainer import ORPOTrainer  # deprecated import
     from .ppo_config import PPOConfig  # deprecated import
     from .ppo_trainer import PPOTrainer  # deprecated import
     from .prm_config import PRMConfig  # deprecated import
