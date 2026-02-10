@@ -146,6 +146,10 @@ class DPOConfig(TrainingArguments):
             the [paper](https://huggingface.co/papers/2310.12036).
         f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
             Type of f-divergence regularization function to compute divergence between policy and reference model.
+            Supported values:
+                - `"reverse_kl"`: Reverse KL divergence.
+                - `"js_divergence"`: Jensen-Shannon divergence.
+                - `"alpha_divergence"`: Alpha divergence.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
             α coefficient in the α-divergence u^-α regularization function for DPO loss.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
