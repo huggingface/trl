@@ -302,6 +302,3 @@ dpo_trainer = DPOTrainer(
 
 [[autodoc]] trainer.dpo_trainer.DataCollatorForPreference
 
-## FDivergenceType
-
-[[autodoc]] trainer.dpo_trainer.FDivergenceType
