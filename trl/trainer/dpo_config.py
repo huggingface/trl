@@ -444,11 +444,12 @@ class DPOConfig(TrainingArguments):
             "Higher β means less deviation from the reference model."
         },
     )
-    f_divergence_type: FDivergenceType | str = field(
+    f_divergence_type: str = field(
         default="reverse_kl",
         metadata={
             "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
-            "model."
+            "model.",
+            "choices": ["reverse_kl", "js_divergence", "alpha_divergence"],
         },
     )
     f_alpha_divergence_coef: float = field(
