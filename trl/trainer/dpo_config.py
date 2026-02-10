@@ -121,8 +121,8 @@ class DPOConfig(TrainingArguments):
                 - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
                   paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
-                  paper.
+                - `"aot_unpaired"`: AOT loss for unpaired datasets from the
+                  [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
                   [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
@@ -419,7 +419,7 @@ class DPOConfig(TrainingArguments):
         default_factory=lambda: ["sigmoid"],
         metadata={
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
-            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_pair'`, `'discopop'`, "
+            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'discopop'`, "
             "`'apo_zero'`, `'apo_down'` and `'sft'`. Multiple loss types can be combined using comma separation "
             "(e.g., `['sigmoid', 'bco_pair', 'sft']` for MPO). The `loss_weights` parameter can be used to specify "
             "corresponding weights for each loss type."
@@ -739,5 +739,17 @@ class DPOConfig(TrainingArguments):
                     f"Length of loss_weights list ({self.loss_weights}) must match number of loss types "
                     f"({loss_types})."
                 )
+
+        if "aot_pair" in self.loss_type:
+            warnings.warn(
+                "The loss type 'aot_pair' has been renamed to 'aot_unpaired' and is deprecated. "
+                "It will be removed in version 0.29.0. Please use 'aot_unpaired' in `loss_type` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            if isinstance(self.loss_type, str):
+                self.loss_type = "aot_unpaired"
+            else:
+                self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
 
         super().__post_init__()
