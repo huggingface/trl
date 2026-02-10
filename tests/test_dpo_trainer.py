@@ -34,7 +34,7 @@ from transformers import (
 from transformers.testing_utils import backend_empty_cache, get_device_properties, torch_device
 from transformers.utils import is_peft_available
 
-from trl import DPOConfig, DPOTrainer, FDivergenceType
+from trl import DPOConfig, DPOTrainer
 
 from .testing_utils import (
     TrlTestCase,
@@ -1217,14 +1217,10 @@ class TestDPOConfig(TrlTestCase):
             report_to="none",
             f_divergence_type=f_divergence_type,
         )
-
-        # Internal normalization: keep Enum member
-        assert isinstance(training_args.f_divergence_type, FDivergenceType)
         assert training_args.f_divergence_type == f_divergence_type
-
-        # Serialization: TrainingArguments.to_dict should yield the enum's string value
+        # Serialization
         configparser_dict = training_args.to_dict()
-        assert configparser_dict["f_divergence_type"] == f_divergence_type.value
+        assert configparser_dict["f_divergence_type"] == f_divergence_type
 
 
 @pytest.mark.slow
