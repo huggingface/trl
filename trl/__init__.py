@@ -69,8 +69,6 @@ _import_structure = {
         "OnlineDPOTrainer",  # deprecated import
         "ORPOConfig",  # deprecated import
         "ORPOTrainer",  # deprecated import
-        "PPOConfig",  # deprecated import
-        "PPOTrainer",  # deprecated import
         "PRMConfig",  # deprecated import
         "PRMTrainer",  # deprecated import
         "RewardConfig",
@@ -135,8 +133,6 @@ if TYPE_CHECKING:
         OnlineDPOTrainer,  # deprecated import
         ORPOConfig,  # deprecated import
         ORPOTrainer,  # deprecated import
-        PPOConfig,  # deprecated import
-        PPOTrainer,  # deprecated import
         PRMConfig,  # deprecated import
         PRMTrainer,  # deprecated import
         RewardConfig,
