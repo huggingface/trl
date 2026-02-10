@@ -77,8 +77,6 @@ _import_structure = {
         "SyncRefModelCallback",
         "WeaveCallback",
         "WinRateCallback",  # deprecated import
-        "XPOConfig",  # deprecated import
-        "XPOTrainer",  # deprecated import
         "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
@@ -137,8 +135,6 @@ if TYPE_CHECKING:
         SyncRefModelCallback,
         WeaveCallback,
         WinRateCallback,  # deprecated import
-        XPOConfig,  # deprecated import
-        XPOTrainer,  # deprecated import
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,
