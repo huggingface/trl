@@ -97,7 +97,7 @@ It's a win!
 PRM requires a [stepwise supervision](dataset_formats#stepwise-supervision).
 The dataset should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
 
-The [`PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
+The [`experimental.prm.PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
 
 ## Example script
 
