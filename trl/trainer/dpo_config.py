@@ -337,4 +337,16 @@ class DPOConfig(TrainingArguments):
                 f"Got {len(self.loss_weights)} weights for {len(self.loss_type)} loss types."
             )
 
+        if "aot_pair" in self.loss_type:
+            warnings.warn(
+                "The loss type 'aot_pair' has been renamed to 'aot_unpaired' and is deprecated. "
+                "It will be removed in version 0.29.0. Please use 'aot_unpaired' in `loss_type` instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            if isinstance(self.loss_type, str):
+                self.loss_type = "aot_unpaired"
+            else:
+                self.loss_type = ["aot_unpaired" if lt == "aot_pair" else lt for lt in self.loss_type]
+
         super().__post_init__()

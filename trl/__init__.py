@@ -50,23 +50,13 @@ _import_structure = {
     ],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
-        "AllTrueJudge",  # deprecated import
-        "BaseBinaryJudge",  # deprecated import
-        "BaseJudge",  # deprecated import
-        "BasePairwiseJudge",  # deprecated import
-        "BaseRankJudge",  # deprecated import
-        "BCOConfig",  # deprecated import
-        "BCOTrainer",  # deprecated import
         "BEMACallback",
-        "CPOConfig",  # deprecated import
-        "CPOTrainer",  # deprecated import
         "DPOConfig",
         "DPOTrainer",
         "GKDConfig",  # deprecated import
         "GKDTrainer",  # deprecated import
         "GRPOConfig",
         "GRPOTrainer",
-        "HfPairwiseJudge",  # deprecated import
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
@@ -75,10 +65,8 @@ _import_structure = {
         "NashMDTrainer",  # deprecated import
         "OnlineDPOConfig",  # deprecated import
         "OnlineDPOTrainer",  # deprecated import
-        "OpenAIPairwiseJudge",  # deprecated import
         "ORPOConfig",  # deprecated import
         "ORPOTrainer",  # deprecated import
-        "PairRMJudge",  # deprecated import
         "PPOConfig",  # deprecated import
         "PPOTrainer",  # deprecated import
         "PRMConfig",  # deprecated import
@@ -126,23 +114,13 @@ if TYPE_CHECKING:
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
-        AllTrueJudge,  # deprecated import
-        BaseBinaryJudge,  # deprecated import
-        BaseJudge,  # deprecated import
-        BasePairwiseJudge,  # deprecated import
-        BaseRankJudge,  # deprecated import
-        BCOConfig,  # deprecated import
-        BCOTrainer,  # deprecated import
         BEMACallback,
-        CPOConfig,  # deprecated import
-        CPOTrainer,  # deprecated import
         DPOConfig,
         DPOTrainer,
         GKDConfig,  # deprecated import
         GKDTrainer,  # deprecated import
         GRPOConfig,
         GRPOTrainer,
-        HfPairwiseJudge,  # deprecated import
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
@@ -151,10 +129,8 @@ if TYPE_CHECKING:
         NashMDTrainer,  # deprecated import
         OnlineDPOConfig,  # deprecated import
         OnlineDPOTrainer,  # deprecated import
-        OpenAIPairwiseJudge,  # deprecated import
         ORPOConfig,  # deprecated import
         ORPOTrainer,  # deprecated import
-        PairRMJudge,  # deprecated import
         PPOConfig,  # deprecated import
         PPOTrainer,  # deprecated import
         PRMConfig,  # deprecated import

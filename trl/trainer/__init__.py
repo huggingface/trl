@@ -18,8 +18,6 @@ from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "bco_config": ["BCOConfig"],  # deprecated import
-    "bco_trainer": ["BCOTrainer"],  # deprecated import
     "callbacks": [
         "BEMACallback",
         "LogCompletionsCallback",
@@ -36,16 +34,6 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],  # deprecated import
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
-    "judges": [
-        "AllTrueJudge",  # deprecated import
-        "BaseBinaryJudge",  # deprecated import
-        "BaseJudge",  # deprecated import
-        "BasePairwiseJudge",  # deprecated import
-        "BaseRankJudge",  # deprecated import
-        "HfPairwiseJudge",  # deprecated import
-        "OpenAIPairwiseJudge",  # deprecated import
-        "PairRMJudge",  # deprecated import
-    ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
@@ -77,8 +65,6 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
-    from .bco_config import BCOConfig  # deprecated import
-    from .bco_trainer import BCOTrainer  # deprecated import
     from .callbacks import (
         BEMACallback,
         LogCompletionsCallback,
@@ -95,16 +81,6 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer  # deprecated import
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
-    from .judges import (
-        AllTrueJudge,  # deprecated import
-        BaseBinaryJudge,  # deprecated import
-        BaseJudge,  # deprecated import
-        BasePairwiseJudge,  # deprecated import
-        BaseRankJudge,  # deprecated import
-        HfPairwiseJudge,  # deprecated import
-        OpenAIPairwiseJudge,  # deprecated import
-        PairRMJudge,  # deprecated import
-    )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
