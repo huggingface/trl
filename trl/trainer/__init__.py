@@ -36,8 +36,6 @@ _import_structure = {
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
-    "orpo_config": ["ORPOConfig"],  # deprecated import
-    "orpo_trainer": ["ORPOTrainer"],  # deprecated import
     "ppo_config": ["PPOConfig"],  # deprecated import
     "ppo_trainer": ["PPOTrainer"],  # deprecated import
     "prm_config": ["PRMConfig"],  # deprecated import
@@ -80,8 +78,6 @@ if TYPE_CHECKING:
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
-    from .orpo_config import ORPOConfig  # deprecated import
-    from .orpo_trainer import ORPOTrainer  # deprecated import
     from .ppo_config import PPOConfig  # deprecated import
     from .ppo_trainer import PPOTrainer  # deprecated import
     from .prm_config import PRMConfig  # deprecated import
