@@ -1086,8 +1086,8 @@ class DPOTrainer(BaseTrainer):
                 - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
                   paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
-                  paper.
+                - `"aot_unpaired"`: AOT loss for unpaired datasets from the
+                  [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
                   [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
@@ -1200,7 +1200,7 @@ class DPOTrainer(BaseTrainer):
                 - 0.5 * F.logsigmoid(-rejected_rewards)
             )
 
-        elif loss_type == "aot_pair":
+        elif loss_type == "aot_unpaired":
             chosen_logratios = chosen_logps - ref_chosen_logps
             rejected_logratios = rejected_logps - ref_rejected_logps
             chosen_logratios_sorted, _ = torch.sort(chosen_logratios, dim=0)
@@ -1265,7 +1265,7 @@ class DPOTrainer(BaseTrainer):
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', "
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'discopop', 'apo_zero', "
                 "'apo_down', 'sft']"
             )
 
