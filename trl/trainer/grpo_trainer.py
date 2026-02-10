@@ -512,11 +512,6 @@ class GRPOTrainer(BaseTrainer):
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 
-        if args.loss_type == "sapo" and (args.sapo_temperature_neg is None or args.sapo_temperature_pos is None):
-            raise ValueError(
-                "When using `sapo` loss, both `sapo_temperature_neg` and `sapo_temperature_pos` must be set."
-            )
-
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
             logger.warning(
                 "When using `'luspo'` loss, `importance_sampling_level` should be set to `'sequence'` to mirror the "
