@@ -43,9 +43,6 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "models": [
-        "AutoModelForCausalLMWithValueHead",  # deprecated import
-        "AutoModelForSeq2SeqLMWithValueHead",  # deprecated import
-        "PreTrainedModelWrapper",  # deprecated import
         "create_reference_model",
     ],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
@@ -55,18 +52,12 @@ _import_structure = {
         "DPOTrainer",
         "FDivergenceConstants",  # deprecated import
         "FDivergenceType",  # deprecated import
-        "GKDConfig",  # deprecated import
-        "GKDTrainer",  # deprecated import
         "GRPOConfig",
         "GRPOTrainer",
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
         "ModelConfig",
-        "NashMDConfig",  # deprecated import
-        "NashMDTrainer",  # deprecated import
-        "OnlineDPOConfig",  # deprecated import
-        "OnlineDPOTrainer",  # deprecated import
         "RewardConfig",
         "RewardTrainer",
         "RichProgressCallback",
@@ -76,7 +67,6 @@ _import_structure = {
         "SFTTrainer",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "WinRateCallback",  # deprecated import
         "get_kbit_device_map",
         "get_peft_config",
         "get_quantization_config",
@@ -101,9 +91,6 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .models import (
-        AutoModelForCausalLMWithValueHead,  # deprecated import
-        AutoModelForSeq2SeqLMWithValueHead,  # deprecated import
-        PreTrainedModelWrapper,  # deprecated import
         create_reference_model,
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
@@ -113,18 +100,12 @@ if TYPE_CHECKING:
         DPOTrainer,
         FDivergenceConstants,  # deprecated import
         FDivergenceType,  # deprecated import
-        GKDConfig,  # deprecated import
-        GKDTrainer,  # deprecated import
         GRPOConfig,
         GRPOTrainer,
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
         ModelConfig,
-        NashMDConfig,  # deprecated import
-        NashMDTrainer,  # deprecated import
-        OnlineDPOConfig,  # deprecated import
-        OnlineDPOTrainer,  # deprecated import
         RewardConfig,
         RewardTrainer,
         RichProgressCallback,
@@ -134,7 +115,6 @@ if TYPE_CHECKING:
         SFTTrainer,
         SyncRefModelCallback,
         WeaveCallback,
-        WinRateCallback,  # deprecated import
         get_kbit_device_map,
         get_peft_config,
         get_quantization_config,

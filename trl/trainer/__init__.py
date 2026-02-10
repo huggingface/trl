@@ -24,7 +24,6 @@ _import_structure = {
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "WinRateCallback",  # deprecated import
     ],
     "dpo_config": [
         "DPOConfig",
@@ -32,17 +31,11 @@ _import_structure = {
         "FDivergenceType",  # deprecated import
     ],
     "dpo_trainer": ["DPOTrainer"],
-    "gkd_config": ["GKDConfig"],  # deprecated import
-    "gkd_trainer": ["GKDTrainer"],  # deprecated import
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
-    "nash_md_config": ["NashMDConfig"],  # deprecated import
-    "nash_md_trainer": ["NashMDTrainer"],  # deprecated import
-    "online_dpo_config": ["OnlineDPOConfig"],  # deprecated import
-    "online_dpo_trainer": ["OnlineDPOTrainer"],  # deprecated import
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
@@ -67,7 +60,6 @@ if TYPE_CHECKING:
         RichProgressCallback,
         SyncRefModelCallback,
         WeaveCallback,
-        WinRateCallback,  # deprecated import
     )
     from .dpo_config import (
         DPOConfig,
@@ -75,17 +67,11 @@ if TYPE_CHECKING:
         FDivergenceType,  # deprecated import
     )
     from .dpo_trainer import DPOTrainer
-    from .gkd_config import GKDConfig  # deprecated import
-    from .gkd_trainer import GKDTrainer  # deprecated import
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
-    from .nash_md_config import NashMDConfig  # deprecated import
-    from .nash_md_trainer import NashMDTrainer  # deprecated import
-    from .online_dpo_config import OnlineDPOConfig  # deprecated import
-    from .online_dpo_trainer import OnlineDPOTrainer  # deprecated import
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
