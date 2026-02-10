@@ -67,8 +67,6 @@ _import_structure = {
         "NashMDTrainer",  # deprecated import
         "OnlineDPOConfig",  # deprecated import
         "OnlineDPOTrainer",  # deprecated import
-        "ORPOConfig",  # deprecated import
-        "ORPOTrainer",  # deprecated import
         "PRMConfig",  # deprecated import
         "PRMTrainer",  # deprecated import
         "RewardConfig",
@@ -131,8 +129,6 @@ if TYPE_CHECKING:
         NashMDTrainer,  # deprecated import
         OnlineDPOConfig,  # deprecated import
         OnlineDPOTrainer,  # deprecated import
-        ORPOConfig,  # deprecated import
-        ORPOTrainer,  # deprecated import
         PRMConfig,  # deprecated import
         PRMTrainer,  # deprecated import
         RewardConfig,
