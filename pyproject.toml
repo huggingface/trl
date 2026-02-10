@@ -102,7 +102,6 @@ dev = [
     "joblib",
     # deepspeed
     "deepspeed>=0.14.4",
-    "transformers!=5.1.0",  # see transformers#43780
     # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
@@ -181,4 +180,15 @@ filterwarnings = [
     "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+
+    # PyTorch JIT deprecations (upstream, not actionable in TRL)
+    # Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/7835
+    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+
+    # PyTorch DataLoader pin_memory device argument deprecations
+    # Triggered internally by torch.utils.data, not by our code
+    # Upstream issue: https://github.com/pytorch/pytorch/issues/174546
+    "ignore:The argument 'device' of Tensor.pin_memory:DeprecationWarning",
+    "ignore:The argument 'device' of Tensor.is_pinned:DeprecationWarning",
 ]
