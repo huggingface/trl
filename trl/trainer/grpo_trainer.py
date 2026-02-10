@@ -517,6 +517,12 @@ class GRPOTrainer(BaseTrainer):
                 "When using `sapo` loss, both `sapo_temperature_neg` and `sapo_temperature_pos` must be set."
             )
 
+        if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
+            logger.warning(
+                "When using `'luspo'` loss, `importance_sampling_level` should be set to `'sequence'` to mirror the "
+                "paper's setup."
+            )
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
@@ -2030,7 +2036,7 @@ class GRPOTrainer(BaseTrainer):
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
-        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
             if self.args.delta is not None:
@@ -2074,6 +2080,11 @@ class GRPOTrainer(BaseTrainer):
         elif self.loss_type in ["cispo", "dapo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
+        elif self.loss_type == "luspo":
+            # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
+            loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            loss = loss / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -2093,7 +2104,7 @@ class GRPOTrainer(BaseTrainer):
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
