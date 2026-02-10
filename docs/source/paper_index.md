@@ -936,7 +936,6 @@ from trl import RLOOConfig
 
 training_args = RLOOConfig(
     normalize_advantages=True,  # global advantage normalization, core of REINFORCE++
-    num_generations=4,  # k=4 in Appendix B.2 of the paper for reasoning tasks
 )
 ```
 
