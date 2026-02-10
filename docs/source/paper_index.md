@@ -791,6 +791,23 @@ trainer.train()
 
 ```
 
+### Length Desensitization in Direct Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2409.06411
+
+LD-DPO desensitizes DPO to data length by decoupling explicit length preference from other implicit preferences, enabling more effective learning of intrinsic preferences and achieving more concise responses with a 10-40% reduction in length compared to DPO. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    ld_alpha=0.5,  # α in Table 1 of the paper, optimal values range from 0.3 to 0.6 depending on the model
+    beta=0.1,  # β in Table 1 of the paper
+    learning_rate=5e-7,  # Table 1 of the paper
+    per_device_train_batch_size=32,  # Table 1 of the paper
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
