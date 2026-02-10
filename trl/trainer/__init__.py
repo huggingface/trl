@@ -26,7 +26,6 @@ _import_structure = {
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "WinRateCallback",  # deprecated import
     ],
     "cpo_config": ["CPOConfig"],  # deprecated import
     "cpo_trainer": ["CPOTrainer"],  # deprecated import
@@ -91,7 +90,6 @@ if TYPE_CHECKING:
         RichProgressCallback,
         SyncRefModelCallback,
         WeaveCallback,
-        WinRateCallback,  # deprecated import
     )
     from .cpo_config import CPOConfig  # deprecated import
     from .cpo_trainer import CPOTrainer  # deprecated import

@@ -94,7 +94,6 @@ _import_structure = {
         "SFTTrainer",
         "SyncRefModelCallback",
         "WeaveCallback",
-        "WinRateCallback",  # deprecated import
         "XPOConfig",  # deprecated import
         "XPOTrainer",  # deprecated import
         "get_kbit_device_map",
@@ -172,7 +171,6 @@ if TYPE_CHECKING:
         SFTTrainer,
         SyncRefModelCallback,
         WeaveCallback,
-        WinRateCallback,  # deprecated import
         XPOConfig,  # deprecated import
         XPOTrainer,  # deprecated import
         get_kbit_device_map,
