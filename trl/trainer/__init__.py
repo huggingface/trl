@@ -31,8 +31,6 @@ _import_structure = {
         "FDivergenceType",  # deprecated import
     ],
     "dpo_trainer": ["DPOTrainer"],
-    "gkd_config": ["GKDConfig"],  # deprecated import
-    "gkd_trainer": ["GKDTrainer"],  # deprecated import
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
     "judges": [
@@ -91,8 +89,6 @@ if TYPE_CHECKING:
         FDivergenceType,  # deprecated import
     )
     from .dpo_trainer import DPOTrainer
-    from .gkd_config import GKDConfig  # deprecated import
-    from .gkd_trainer import GKDTrainer  # deprecated import
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
     from .judges import (

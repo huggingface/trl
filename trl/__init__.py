@@ -60,8 +60,6 @@ _import_structure = {
         "DPOTrainer",
         "FDivergenceConstants",  # deprecated import
         "FDivergenceType",  # deprecated import
-        "GKDConfig",  # deprecated import
-        "GKDTrainer",  # deprecated import
         "GRPOConfig",
         "GRPOTrainer",
         "HfPairwiseJudge",  # deprecated import
@@ -133,8 +131,6 @@ if TYPE_CHECKING:
         DPOTrainer,
         FDivergenceConstants,  # deprecated import
         FDivergenceType,  # deprecated import
-        GKDConfig,  # deprecated import
-        GKDTrainer,  # deprecated import
         GRPOConfig,
         GRPOTrainer,
         HfPairwiseJudge,  # deprecated import
