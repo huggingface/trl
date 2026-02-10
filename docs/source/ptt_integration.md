@@ -99,7 +99,7 @@ trainer.train()
 
 ```python
 from post_training_toolkit import DiagnosticsCallback
-from trl import CPOTrainer
+from trl.experimental.cpo import CPOTrainer
 
 trainer = CPOTrainer(
     model=model,
