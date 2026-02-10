@@ -925,6 +925,21 @@ training_args = RLOOConfig(
 )
 ```
 
+### REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2501.03262
+
+REINFORCE++ is an enhanced variant of the classical REINFORCE algorithm that incorporates key optimization techniques from PPO while eliminating the need for a critic network. It achieves simplicity, enhanced training stability, and reduced computational overhead through global advantage normalization across the entire batch. To approximate the paper's setting with the [`RLOOTrainer`], use this configuration:
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    normalize_advantages=True,  # global advantage normalization, core of REINFORCE++
+    num_generations=4,  # k=4 in Appendix B.2 of the paper for reasoning tasks
+)
+```
+
 ## Contrastive Preference Optimization
 
 Papers relating to the [`experimental.cpo.CPOTrainer`]
