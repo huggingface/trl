@@ -12,7 +12,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Secret Scanning
-      uses: trufflesecurity/trufflehog@116e7171542d2f1dad8810f00dcfacbe0b809183  # v3.92.5
+      uses: trufflesecurity/trufflehog@v3.93.1
       with:
         # exclude buggy postgres detector that is causing false positives and not relevant to our codebase
         extra_args: --results=verified,unknown --exclude-detectors=postgres
