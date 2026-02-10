@@ -284,7 +284,7 @@ class DPOConfig(TrainingArguments):
             <Deprecated version="0.28.0">
 
             This parameter is deprecated and will be removed in version 0.29.0. If you want a reference-free objective,
-            use [`CPOTrainer`] instead.
+            use [`experimental.cpo.CPOTrainer`] instead.
 
             </Deprecated>
         rpo_alpha (`float`, *optional*):
