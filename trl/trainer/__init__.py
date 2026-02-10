@@ -51,8 +51,6 @@ _import_structure = {
         "get_peft_config",
         "get_quantization_config",
     ],
-    "xpo_config": ["XPOConfig"],  # deprecated import
-    "xpo_trainer": ["XPOTrainer"],  # deprecated import
 }
 
 if TYPE_CHECKING:
@@ -89,8 +87,6 @@ if TYPE_CHECKING:
         get_peft_config,
         get_quantization_config,
     )
-    from .xpo_config import XPOConfig  # deprecated import
-    from .xpo_trainer import XPOTrainer  # deprecated import
 else:
     import sys
 
