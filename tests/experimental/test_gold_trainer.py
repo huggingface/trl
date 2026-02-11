@@ -323,7 +323,7 @@ def test_merge_probabilities_multiplies_split_tokens():
     expected = probs[0] * probs[1, 1]  # probs[1, 1] = 0.5
     # Expected unnormalized: [0.6 * 0.5, 0.3 * 0.5, 0.1 * 0.5] = [0.3, 0.15, 0.05]
 
-    assert torch.allclose(merged[0], expected, atol=1e-6)
+    torch.testing.assert_close(merged[0], expected)
 
 
 def test_initialize_vocabulary_mapping_contains_common_tokens(llama_tokenizer, qwen_tokenizer):
@@ -480,7 +480,7 @@ def test_generalized_jsd_loss_accepts_probability_inputs():
         logits_are_probs=True,
     )
 
-    assert torch.allclose(loss, expected, atol=1e-6)
+    torch.testing.assert_close(loss, expected)
 
 
 def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qwen_tokenizer):
@@ -640,4 +640,4 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
     assert loss_fn.last_unmatched_loss is not None
 
     expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
-    assert torch.allclose(loss, expected, atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)

@@ -16,10 +16,9 @@
 # dependencies = [
 #     "trl[vllm]",
 #     "peft",
-#     "trackio>=0.13.0",
+#     "trackio",
 #     "kernels",
-#     "openenv @ git+https://github.com/meta-pytorch/OpenEnv.git",
-#     "openenv_core",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/sergiopaniego/wordle",
 # ]
 # ///
 
@@ -27,10 +26,10 @@
 """
 Simple script to run GRPO training with OpenEnv's Wordle environment and vLLM.
 
-Setup:
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/burtenshaw/wordle
+uv pip install git+https://huggingface.co/spaces/sergiopaniego/wordle
 ```
 
 # Option 1: HF Spaces + Colocated vLLM (1 GPU required)
@@ -536,7 +535,7 @@ def main() -> None:
         top_p=args.top_p,
         vllm_gpu_memory_utilization=0.25,
         vllm_max_model_length=8192,
-        vllm_importance_sampling_correction=False,
+        vllm_importance_sampling_mode="token_truncate",  # Less aggressive than default sequence_mask
         optim="adamw_torch",
         max_grad_norm=1.0,  # Clip gradients to prevent explosion
     )
