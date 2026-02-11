@@ -738,6 +738,24 @@ training_args = DPOConfig(
 )
 ```
 
+### Provably Mitigating Overoptimization in RLHF: Your SFT Loss is Implicitly an Adversarial Regularizer
+
+**📜 Paper**: https://huggingface.co/papers/2405.16436
+
+Regularized Preference Optimization (RPO) mitigates overoptimization in RLHF by fusing the DPO loss with the SFT loss, provably preventing the policy from choosing actions with spurious high proxy rewards. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type=["sigmoid", "sft"],  # RPO loss = DPO + SFT (Section 5 of the paper)
+    loss_weights=[1.0, 0.005],  # η=0.005 SFT weight in Appendix E.1 of the paper
+    beta=0.01,  # β in Appendix E.1 of the paper
+    learning_rate=5e-7,  # learning rate in Appendix E.1 of the paper
+    num_train_epochs=1,  # Appendix E.1 of the paper
+)
+```
+
 ### Distributional Preference Alignment of LLMs via Optimal Transport
 
 **📜 Paper**: https://huggingface.co/papers/2406.05882
