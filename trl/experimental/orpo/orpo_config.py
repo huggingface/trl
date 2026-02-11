@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-import transformers
-from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -37,8 +35,6 @@ class ORPOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
@@ -108,13 +104,6 @@ class ORPOConfig(TrainingArguments):
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
     )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
     max_completion_length: int | None = field(
         default=None,
         metadata={
@@ -169,13 +158,5 @@ class ORPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
-        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
-        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
-        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
-            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__post_init__()

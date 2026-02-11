@@ -76,6 +76,10 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
+if Version(transformers.__version__) >= Version("5.2.0.dev0"):
+    from transformers.trainer_pt_utils import nested_gather
+
+
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -398,6 +402,14 @@ class OnlineDPOTrainer(BaseTrainer):
         # Define the collator if not provided
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=self.pad_token_id)
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,
@@ -1439,7 +1451,10 @@ class OnlineDPOTrainer(BaseTrainer):
             logs: dict[str, float] = {}
 
             # all_gather + mean() to get average loss over all processes
-            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+            if Version(transformers.__version__) >= Version("5.2.0.dev0"):
+                tr_loss_scalar = nested_gather(tr_loss, self.args.parallel_mode).mean().item()
+            else:
+                tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
 
             # reset tr_loss to zero
             tr_loss -= tr_loss

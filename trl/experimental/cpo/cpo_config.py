@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-import transformers
-from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -37,8 +35,6 @@ class CPOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
@@ -70,8 +66,6 @@ class CPOConfig(TrainingArguments):
             standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: `r = (1 - p^(-alpha))
             / alpha` from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). This parameter works with all
             loss types.
-        padding_value (`int`, *optional*):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`,*optional*,  defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
@@ -130,13 +124,6 @@ class CPOConfig(TrainingArguments):
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
     )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
     max_completion_length: int | None = field(
         default=None,
         metadata={
@@ -182,10 +169,6 @@ class CPOConfig(TrainingArguments):
             "`r = (1 - p^(-alpha)) / alpha` from the AlphaPO paper. This parameter works with all loss types."
         },
     )
-    padding_value: int | None = field(
-        default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
-    )
     truncation_mode: str = field(
         default="keep_end",
         metadata={
@@ -215,14 +198,6 @@ class CPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
-        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
-        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
-        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
-            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         # Syntactic sugar for AlphaPO: set loss_type to "simpo" and cpo_alpha to 0.0
         if self.loss_type == "alphapo":

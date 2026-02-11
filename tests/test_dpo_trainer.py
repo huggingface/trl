@@ -34,13 +34,12 @@ from transformers import (
 from transformers.testing_utils import backend_empty_cache, get_device_properties, torch_device
 from transformers.utils import is_peft_available
 
-from trl import DPOConfig, DPOTrainer, FDivergenceType
+from trl import DPOConfig, DPOTrainer
 
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
     require_liger_kernel,
-    require_no_wandb,
     require_peft,
     require_torch_accelerator,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
@@ -208,7 +207,7 @@ class TestDPOTrainer(TrlTestCase):
             "bco_pair",
             "sppo_hard",
             "aot",
-            "aot_pair",
+            "aot_unpaired",
             "discopop",
             "apo_zero",
             "apo_down",
@@ -349,45 +348,6 @@ class TestDPOTrainer(TrlTestCase):
                 loss_type=["sigmoid", "bco_pair"],
                 loss_weights=[1.0, 0.5, 0.1],  # Wrong length
             )
-
-    @pytest.mark.parametrize("rpo_alpha", [None, 0.5])
-    def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=4,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            precompute_ref_log_probs=True,
-            rpo_alpha=rpo_alpha,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        trainer = DPOTrainer(
-            model=self.model,
-            ref_model=None,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the parameters have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if param.sum() != 0:  # ignore 0 biases
-                assert not torch.equal(param, new_param)
 
     def test_dpo_trainer_with_ref_model_is_model(self):
         training_args = DPOConfig(
@@ -559,37 +519,6 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
-    @require_no_wandb
-    def test_dpo_trainer_generate_during_eval_no_wandb(self):
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            generate_during_eval=True,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        with pytest.raises(
-            ValueError,
-            match="`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
-            " Please install `wandb`, `mlflow` or `comet-ml` to resolve.",
-        ):
-            DPOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
-
     @require_bitsandbytes
     @require_peft
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
@@ -647,32 +576,20 @@ class TestDPOTrainer(TrlTestCase):
         trainer.save_model()
 
     @pytest.mark.parametrize(
-        "loss_type, pre_compute, gen_during_eval",
+        "loss_type, pre_compute",
         [
-            ("sigmoid", False, False),
-            ("sigmoid", False, True),
-            ("sigmoid", True, False),
-            ("sigmoid", True, True),
-            ("ipo", False, False),
-            ("ipo", False, True),
-            ("ipo", True, False),
-            ("ipo", True, True),
-            ("aot_pair", False, False),
-            ("aot_pair", False, True),
-            ("aot_pair", True, False),
-            ("aot_pair", True, True),
-            ("aot", False, False),
-            ("aot", False, True),
-            ("aot", True, False),
-            ("aot", True, True),
-            ("bco_pair", False, False),
-            ("bco_pair", False, True),
-            ("bco_pair", True, False),
-            ("bco_pair", True, True),
-            ("robust", False, False),
-            ("robust", False, True),
-            ("robust", True, False),
-            ("robust", True, True),
+            ("sigmoid", False),
+            ("sigmoid", True),
+            ("ipo", False),
+            ("ipo", True),
+            ("aot_unpaired", False),
+            ("aot_unpaired", True),
+            ("aot", False),
+            ("aot", True),
+            ("bco_pair", False),
+            ("bco_pair", True),
+            ("robust", False),
+            ("robust", True),
         ],
     )
     @require_bitsandbytes
@@ -681,7 +598,7 @@ class TestDPOTrainer(TrlTestCase):
         get_device_properties()[0] == "cuda" and get_device_properties()[1] < 8,
         reason="Skipping because bf16 not supported on CUDA GPU with capability < 8.0",
     )
-    def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
+    def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute):
         from peft import LoraConfig
         from transformers import BitsAndBytesConfig
 
@@ -708,7 +625,6 @@ class TestDPOTrainer(TrlTestCase):
             eval_strategy="steps",
             bf16=True,
             beta=0.1,
-            generate_during_eval=gen_during_eval,
             loss_type=loss_type,
             precompute_ref_log_probs=pre_compute,
             report_to="none",
@@ -822,13 +738,14 @@ class TestDPOTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             max_steps=1,
             model_init_kwargs={"dtype": "float16"},
-            ref_model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
+        # Instantiating the reference model explicitly and pass it via ref_model
+        ref_model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float16")
 
         trainer = DPOTrainer(
             model=self.model_id,
-            ref_model=self.model_id,
+            ref_model=ref_model,
             processing_class=self.tokenizer,
             args=training_args,
             train_dataset=dummy_dataset["train"],
@@ -858,28 +775,6 @@ class TestDPOTrainer(TrlTestCase):
                 train_dataset=dummy_dataset["train"],
             )
 
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=1,
-            ref_model_init_kwargs={"dtype": -1},
-            report_to="none",
-        )
-
-        with pytest.raises(
-            ValueError,
-            match=re.escape(
-                "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1."
-            ),
-        ):
-            _ = DPOTrainer(
-                model=self.model_id,
-                ref_model=self.model_id,
-                processing_class=self.tokenizer,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-            )
-
     def test_dpo_loss_alpha_div_f(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -894,7 +789,7 @@ class TestDPOTrainer(TrlTestCase):
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
-            f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
+            f_divergence_type="alpha_divergence",
             f_alpha_divergence_coef=0.5,
             report_to="none",
         )
@@ -936,7 +831,7 @@ class TestDPOTrainer(TrlTestCase):
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
-            f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
+            f_divergence_type="js_divergence",
             f_alpha_divergence_coef=0.5,
             report_to="none",
         )
@@ -963,85 +858,7 @@ class TestDPOTrainer(TrlTestCase):
         )
         assert torch.isfinite(losses).cpu().numpy().all()
 
-    def test_dpo_trainer_use_logits_to_keep(self):
-        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
-
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            use_logits_to_keep=True,
-            rpo_alpha=0.5,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        # dpo train lora model with a lora config
-        trainer = DPOTrainer(
-            model=model,
-            ref_model=None,
-            args=training_args,
-            processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        training_args.use_logits_to_keep = False
-        trainer2 = DPOTrainer(
-            model=model,
-            ref_model=None,
-            args=training_args,
-            processing_class=tokenizer,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-        )
-
-        # Fake batch
-        prompt_input_ids = torch.randint(1, 1000, (2, 10))
-        chosen_input_ids = torch.randint(1, 1000, (2, 5))
-        rejected_input_ids = torch.randint(1, 1000, (2, 7))
-        prompt_attention_mask = torch.ones_like(prompt_input_ids)
-        chosen_attention_mask = torch.ones_like(chosen_input_ids)
-        rejected_attention_mask = torch.ones_like(rejected_input_ids)
-
-        batch = {
-            "prompt_input_ids": prompt_input_ids.to(model.device),
-            "chosen_input_ids": chosen_input_ids.to(model.device),
-            "rejected_input_ids": rejected_input_ids.to(model.device),
-            "prompt_attention_mask": prompt_attention_mask.to(model.device),
-            "chosen_attention_mask": chosen_attention_mask.to(model.device),
-            "rejected_attention_mask": rejected_attention_mask.to(model.device),
-        }
-
-        output = trainer.concatenated_forward(model, batch)
-        output2 = trainer2.concatenated_forward(model, batch)
-
-        np.testing.assert_allclose(output["nll_loss"].item(), output2["nll_loss"].item(), atol=1e-5)
-        np.testing.assert_allclose(
-            output["mean_chosen_logits"].item(), output2["mean_chosen_logits"].item(), atol=1e-5
-        )
-        np.testing.assert_allclose(
-            output["mean_rejected_logits"].item(), output2["mean_rejected_logits"].item(), atol=1e-5
-        )
-
-        for i in range(output["chosen_logps"].shape[0]):
-            np.testing.assert_allclose(output["chosen_logps"][i].item(), output2["chosen_logps"][i].item(), atol=1e-5)
-            np.testing.assert_allclose(
-                output["rejected_logps"][i].item(), output2["rejected_logps"][i].item(), atol=1e-5
-            )
-
-        trainer.train()
-
+    @pytest.mark.filterwarnings("ignore:`tools` is deprecated:FutureWarning")
     def test_dpo_trainer_with_tools(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1300,6 +1117,7 @@ class TestDPOTrainer(TrlTestCase):
 
 @require_vision
 class TestDPOVisionTrainer(TrlTestCase):
+    @pytest.mark.filterwarnings("ignore:max_prompt_length is not supported for vision models:UserWarning")  # See #5023
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -1355,7 +1173,6 @@ class TestDPOVisionTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             remove_unused_columns=False,
             learning_rate=0.01,  # increase learning rate to speed up test
-            max_prompt_length=None,  # don't truncate to avoid issues with patch tokens
             max_length=None,
             report_to="none",
         )
@@ -1393,22 +1210,17 @@ class TestDPOVisionTrainer(TrlTestCase):
 
 
 class TestDPOConfig(TrlTestCase):
-    @pytest.mark.parametrize("as_string", [False, True])
-    @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
-    def test_f_divergence_type(self, f_divergence_type, as_string: bool):
+    @pytest.mark.parametrize("f_divergence_type", ["reverse_kl", "js_divergence", "alpha_divergence"])
+    def test_f_divergence_type(self, f_divergence_type):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            f_divergence_type=f_divergence_type.value if as_string else f_divergence_type,
+            f_divergence_type=f_divergence_type,
         )
-
-        # Internal normalization: keep Enum member
-        assert isinstance(training_args.f_divergence_type, FDivergenceType)
         assert training_args.f_divergence_type == f_divergence_type
-
-        # Serialization: TrainingArguments.to_dict should yield the enum's string value
+        # Serialization
         configparser_dict = training_args.to_dict()
-        assert configparser_dict["f_divergence_type"] == f_divergence_type.value
+        assert configparser_dict["f_divergence_type"] == f_divergence_type
 
 
 @pytest.mark.slow
@@ -1517,7 +1329,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             report_to="none",
             gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-            generate_during_eval=False,
             loss_type=loss_type,
             precompute_ref_log_probs=pre_compute_logits,
             beta=0.1,
@@ -1586,7 +1397,6 @@ class TestDPOTrainerSlow(TrlTestCase):
             gradient_checkpointing=True,  # default, here for clarity
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             beta=0.1,
-            generate_during_eval=False,
             loss_type=loss_type,
             precompute_ref_log_probs=pre_compute_logits,
             max_length=self.max_length,

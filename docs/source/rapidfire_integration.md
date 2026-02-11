@@ -207,8 +207,7 @@ from rapidfireai.automl import RFDPOConfig
 training_args = RFDPOConfig(
     beta=0.1,
     loss_type="sigmoid",
-    max_prompt_length=512,
-    max_completion_length=512,
+    max_length=1024,
     learning_rate=5e-4,
     # ... all other DPOConfig parameters supported
 )

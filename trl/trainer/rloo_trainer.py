@@ -29,9 +29,11 @@ import datasets
 import pandas as pd
 import torch
 import torch.utils.data
+import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -424,6 +426,14 @@ class RLOOTrainer(BaseTrainer):
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
         # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,

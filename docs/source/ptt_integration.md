@@ -35,7 +35,7 @@ trainer.train()
 
 ```python
 from post_training_toolkit import DiagnosticsCallback
-from trl import PPOTrainer
+from trl.experimental.ppo import PPOTrainer
 
 trainer = PPOTrainer(
     model=model,
@@ -67,7 +67,7 @@ trainer.train()
 
 ```python
 from post_training_toolkit import DiagnosticsCallback
-from trl import ORPOTrainer
+from trl.experimental.orpo import ORPOTrainer
 
 trainer = ORPOTrainer(
     model=model,
@@ -99,7 +99,7 @@ trainer.train()
 
 ```python
 from post_training_toolkit import DiagnosticsCallback
-from trl import CPOTrainer
+from trl.experimental.cpo import CPOTrainer
 
 trainer = CPOTrainer(
     model=model,
