@@ -27,7 +27,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import datasets
 import pandas as pd
@@ -119,6 +119,22 @@ RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
 
 
+def env_reward(env_rewards, **kwargs):
+    return env_rewards
+
+
+class Env(Protocol):
+    """
+    Minimal stateful text environment protocol used by `GRPOTrainer`.
+
+    `reset()` returns the initial observation string. `step(action)` returns `(observation, reward, done)`.
+    """
+
+    def reset(self) -> str: ...
+    def step(self, action: str) -> tuple[str, float, bool]: ...
+    def close(self) -> None: ...
+
+
 class GRPOTrainer(BaseTrainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -153,7 +169,7 @@ class GRPOTrainer(BaseTrainer):
               config) with the keyword arguments in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        reward_funcs (`RewardFunc | list[RewardFunc]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
 
@@ -178,6 +194,8 @@ class GRPOTrainer(BaseTrainer):
                   reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
+
+            If `env` is provided, this argument can be omitted (`None`).
         args ([`GRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -222,6 +240,10 @@ class GRPOTrainer(BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
+        env (`Env`, *optional*):
+            Stateful environment. When set, the trainer handles environment interactions directly during rollout: it
+            calls `env.reset()`, repeatedly generates actions and calls `env.step(action)`, and injects environment
+            observations in the completion stream with zero loss weight.
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
@@ -248,7 +270,7 @@ class GRPOTrainer(BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: GRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -259,6 +281,7 @@ class GRPOTrainer(BaseTrainer):
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
+        env: Env | None = None,
     ):
         # Args
         if args is None:
@@ -346,8 +369,19 @@ class GRPOTrainer(BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Reward functions
+        if reward_funcs is None:
+            reward_funcs = []
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+        if env is not None:
+            # Auto-inject environment reward function so env-only and env+custom rewards share the same code path.
+            reward_funcs = [env_reward] + reward_funcs
+            self._has_auto_env_reward_func = True
+        else:
+            self._has_auto_env_reward_func = False
+        if len(reward_funcs) == 0:
+            raise ValueError("At least one reward function is required. Provide `reward_funcs` or set `env`.")
+
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
@@ -366,12 +400,16 @@ class GRPOTrainer(BaseTrainer):
 
         # Reward weights
         if args.reward_weights is not None:
-            if len(args.reward_weights) != len(reward_funcs):
+            if self._has_auto_env_reward_func:
+                weights = [1.0] + args.reward_weights
+            else:
+                weights = args.reward_weights
+            if len(weights) != len(reward_funcs):
                 raise ValueError(
-                    f"Number of reward weights ({len(args.reward_weights)}) must match number of reward "
-                    f"functions ({len(reward_funcs)})"
+                    f"Number of reward weights ({len(weights)}) must match number of reward functions "
+                    f"({len(reward_funcs)})"
                 )
-            self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
+            self.reward_weights = torch.tensor(weights, dtype=torch.float32)
         else:
             self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
 
@@ -400,6 +438,16 @@ class GRPOTrainer(BaseTrainer):
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
+
+        # Custom rollout interfaces
+        if env is not None and rollout_func is not None:
+            raise ValueError("`env` and `rollout_func` are mutually exclusive. Please provide only one.")
+        if env is not None and tools:
+            raise ValueError("`env` and `tools` cannot be used together yet.")
+
+        self.env = env
+        self._env_closed = False
+        self._latest_env_rewards: list[float] | None = None
 
         # Rollout function
         if rollout_func is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
@@ -444,6 +492,8 @@ class GRPOTrainer(BaseTrainer):
             # wait until the event loop is running in the daemon thread
             self.async_loop_ready_event.wait()
             atexit.register(shutdown_event_loop_in_daemon, self.async_loop_thread, self.async_loop)
+        if self.env is not None:
+            atexit.register(self._close_env)
 
         # At the time of initial implementation, most tokenizers do not have built-in support for response schemas.
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
@@ -1264,6 +1314,127 @@ class GRPOTrainer(BaseTrainer):
 
         return prompt_ids, completion_ids, logprobs, extra_fields
 
+    def _encode_text_for_env(self, text: str) -> list[int]:
+        if isinstance(self.processing_class, ProcessorMixin):
+            return self.processing_class.tokenizer.encode(text, add_special_tokens=False)
+        return self.processing_class.encode(text, add_special_tokens=False)
+
+    def _decode_tokens_for_env(self, token_ids: list[int]) -> str:
+        if isinstance(self.processing_class, ProcessorMixin):
+            return self.processing_class.tokenizer.decode(token_ids, skip_special_tokens=True)
+        return self.processing_class.decode(token_ids, skip_special_tokens=True)
+
+    def _tokenize_prompt_for_generation(self, prompt: Any) -> list[int]:
+        if is_conversational({"prompt": prompt}):
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompt,
+                tools=self.tools,
+                chat_template=self.chat_template,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                **self.chat_template_kwargs,
+            )["input_ids"]
+            return tokenized
+        return self._encode_text_for_env(str(prompt))
+
+    def _build_env_turn_prompt(self, state: Any, observation: str) -> Any:
+        if is_conversational({"prompt": state}):
+            messages = copy.deepcopy(state)
+            if observation:
+                messages.append({"role": "user", "content": observation})
+            return messages
+        if observation:
+            return f"{state}\n{observation}"
+        return state
+
+    def _run_env_rollout(self, prompts: list[Any]):
+        if self.env is None:
+            raise RuntimeError("Internal error: _run_env_rollout called without an environment.")
+
+        prompt_ids_batch = []
+        completion_ids_batch = []
+        loss_mask_batch = []
+        logprobs_batch = []
+        env_rewards_batch = []
+
+        use_logprobs = self.use_vllm
+
+        for prompt in prompts:
+            state = copy.deepcopy(prompt)
+            observation = self.env.reset()
+            episode_prompt_ids = None
+            episode_completion_ids = []
+            episode_loss_mask = []
+            episode_logprobs = []
+            episode_rewards = []
+            done = False
+            step = 0
+
+            while not done and len(episode_completion_ids) < self.max_completion_length:
+                turn_prompt = self._build_env_turn_prompt(state, observation)
+                turn_prompt_ids, turn_completion_ids, turn_logprobs, _ = self._generate_single_turn([turn_prompt])
+                turn_prompt_ids = turn_prompt_ids[0]
+                turn_completion_ids = turn_completion_ids[0]
+                turn_logprobs = turn_logprobs[0] if turn_logprobs is not None else None
+
+                if episode_prompt_ids is None:
+                    episode_prompt_ids = turn_prompt_ids
+
+                remaining = self.max_completion_length - len(episode_completion_ids)
+                if remaining <= 0:
+                    break
+                if len(turn_completion_ids) > remaining:
+                    turn_completion_ids = turn_completion_ids[:remaining]
+                    if turn_logprobs is not None:
+                        turn_logprobs = turn_logprobs[:remaining]
+
+                episode_completion_ids.extend(turn_completion_ids)
+                episode_loss_mask.extend([1] * len(turn_completion_ids))
+                if use_logprobs:
+                    if turn_logprobs is None:
+                        episode_logprobs.extend([0.0] * len(turn_completion_ids))
+                    else:
+                        episode_logprobs.extend(turn_logprobs)
+
+                action_text = self._decode_tokens_for_env(turn_completion_ids)
+                observation, reward, done = self.env.step(action_text)
+                episode_rewards.append(reward)
+
+                remaining = self.max_completion_length - len(episode_completion_ids)
+                if remaining <= 0:
+                    break
+                env_observation_ids = self._encode_text_for_env(observation)
+                if len(env_observation_ids) > remaining:
+                    env_observation_ids = env_observation_ids[:remaining]
+
+                episode_completion_ids.extend(env_observation_ids)
+                episode_loss_mask.extend([0] * len(env_observation_ids))
+                if use_logprobs:
+                    episode_logprobs.extend([0.0] * len(env_observation_ids))
+
+                if is_conversational({"prompt": turn_prompt}):
+                    state = copy.deepcopy(turn_prompt)
+                    state.append({"role": "assistant", "content": action_text})
+                else:
+                    state = f"{turn_prompt}{action_text}"
+
+                step += 1
+
+            if episode_prompt_ids is None:
+                episode_prompt_ids = self._tokenize_prompt_for_generation(prompt)
+
+            prompt_ids_batch.append(episode_prompt_ids)
+            completion_ids_batch.append(episode_completion_ids)
+            loss_mask_batch.append(episode_loss_mask)
+            if use_logprobs:
+                logprobs_batch.append(episode_logprobs)
+            env_rewards_batch.append(episode_rewards[-1] if episode_rewards else 0.0)
+
+        self._latest_env_rewards = env_rewards_batch
+        sampling_logprobs = logprobs_batch if use_logprobs else None
+        return prompt_ids_batch, completion_ids_batch, sampling_logprobs, loss_mask_batch
+
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
@@ -1437,7 +1608,11 @@ class GRPOTrainer(BaseTrainer):
         # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+        if self.env is not None:
+            prompt_ids, completion_ids, logprobs, tool_mask = self._run_env_rollout(prompts)
+            extra_fields = {}
+        else:
+            prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
@@ -1719,6 +1894,11 @@ class GRPOTrainer(BaseTrainer):
                         inp[key] = values[i]
                     elif not isinstance(values, list):
                         inp[key] = values
+
+        if self.env is not None:
+            for i, inp in enumerate(inputs):
+                inp["env_reward"] = self._latest_env_rewards[i]
+            self._latest_env_rewards = None
 
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
