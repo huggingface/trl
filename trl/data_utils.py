@@ -642,7 +642,7 @@ class _SegmentTree:
         return self.tree[i]
 
 
-def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
+def _pack_bfd(examples: pa.Table, seq_length: int, requeue_truncated_sequences: bool = False) -> pa.Table:
     """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
     # Identify the list column and prepare all columns
     columns = []
@@ -669,6 +669,12 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
         length = row_end - row_start
         for split_start in range(0, length, seq_length):
             frag_len = min(seq_length, length - split_start)
+            # When requeue_truncated_sequences is False, only keep the first fragment (truncate overflow)
+            if not requeue_truncated_sequences and split_start > 0:
+                continue
+            # Clamp the first fragment to seq_length when not re-queuing
+            if not requeue_truncated_sequences and frag_len > seq_length:
+                frag_len = seq_length
             frag_lengths.append(frag_len)
             frag_info.append((row_idx, split_start, frag_len))
             expanded_indices.append(row_idx)
