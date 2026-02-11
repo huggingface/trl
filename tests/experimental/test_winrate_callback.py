@@ -49,7 +49,11 @@ class TrainerWithRefModel(Trainer):
             eval_dataset=eval_dataset,
             processing_class=processing_class,
         )
-        self.ref_model = ref_model
+        # Prepare ref_model like TRL trainers do (DPOTrainer, GRPOTrainer, etc.)
+        if ref_model is not None:
+            self.ref_model = self.accelerator.prepare_model(ref_model, evaluation_mode=True)
+        else:
+            self.ref_model = None
 
 
 class TestWinRateCallback(TrlTestCase):
