@@ -14,13 +14,13 @@
 
 import gc
 import pathlib
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from packaging.version import Version
 from packaging.version import parse as parse_version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
@@ -2047,3 +2047,133 @@ class TestSFTTrainerSlow(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)
+
+
+class TestSkipLogitsLogic(TrlTestCase):
+    """
+    Test that skip_logits is set correctly in SFTTrainer.compute_loss when use_liger_kernel=True.
+
+    Verifies the fix for https://github.com/huggingface/trl/issues/4679 — liger kernel defaults
+    skip_logits=False during eval, causing massive vRAM spikes from full logits materialization.
+
+    Does NOT require liger-kernel to be installed.
+    """
+
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+    def _build_trainer(self, prediction_loss_only=False, compute_metrics=None):
+        """
+        Create an SFTTrainer and flip use_liger_kernel=True after construction.
+
+        We cannot pass use_liger_kernel=True to the constructor because the base Trainer.__init__
+        checks for the liger-kernel package and raises ImportError if not installed. Setting the
+        flag after construction is sufficient to test the skip_logits logic in compute_loss.
+        """
+        args = SFTConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=False,
+            prediction_loss_only=prediction_loss_only,
+            report_to="none",
+            max_length=8,
+        )
+        dataset = Dataset.from_dict(
+            {
+                "input_ids": [[1, 2, 3, 4, 5]] * 4,
+                "labels": [[1, 2, 3, 4, 5]] * 4,
+                "attention_mask": [[1, 1, 1, 1, 1]] * 4,
+            }
+        )
+        model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        trainer = SFTTrainer(
+            model=model,
+            args=args,
+            train_dataset=dataset,
+            compute_metrics=compute_metrics,
+        )
+        trainer.args.use_liger_kernel = True
+        return trainer
+
+    def _capture_skip_logits(self, trainer, training_mode):
+        """Call compute_loss, intercept inputs before super() is called, return captured skip_logits."""
+        captured = {}
+
+        def mock_super_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
+            captured["skip_logits"] = inputs.get("skip_logits", "NOT_SET")
+            dummy_loss = torch.tensor(1.0, requires_grad=True)
+            dummy_outputs = MagicMock()
+            dummy_outputs.token_accuracy = None
+            dummy_outputs.logits = torch.randn(1, 5, trainer.model.config.vocab_size)
+            return (dummy_loss, dummy_outputs)
+
+        if training_mode:
+            trainer.model.train()
+        else:
+            trainer.model.eval()
+
+        inputs = {
+            "input_ids": torch.tensor([[1, 2, 3, 4, 5]]),
+            "labels": torch.tensor([[1, 2, 3, 4, 5]]),
+            "attention_mask": torch.tensor([[1, 1, 1, 1, 1]]),
+        }
+
+        with patch("trl.trainer.sft_trainer.BaseTrainer.compute_loss", side_effect=mock_super_compute_loss):
+            try:
+                trainer.compute_loss(trainer.model, inputs)
+            except Exception:
+                pass
+
+        return captured
+
+    def test_training_mode_skip_logits_true(self):
+        """During training, skip_logits should always be True."""
+        trainer = self._build_trainer()
+        result = self._capture_skip_logits(trainer, training_mode=True)
+        assert result["skip_logits"] is True
+
+    def test_eval_no_compute_metrics_skip_logits_true(self):
+        """During eval with no compute_metrics, skip_logits should be True."""
+        trainer = self._build_trainer(compute_metrics=None)
+        result = self._capture_skip_logits(trainer, training_mode=False)
+        assert result["skip_logits"] is True
+
+    def test_eval_prediction_loss_only_skip_logits_true(self):
+        """During eval with prediction_loss_only=True, skip_logits should be True."""
+        trainer = self._build_trainer(prediction_loss_only=True, compute_metrics=lambda x: {"acc": 0.5})
+        result = self._capture_skip_logits(trainer, training_mode=False)
+        assert result["skip_logits"] is True
+
+    def test_eval_with_compute_metrics_skip_logits_false(self):
+        """During eval with compute_metrics set, skip_logits must be False so logits are materialized."""
+        trainer = self._build_trainer(prediction_loss_only=False, compute_metrics=lambda x: {"acc": 0.5})
+        result = self._capture_skip_logits(trainer, training_mode=False)
+        assert result["skip_logits"] is False, (
+            "skip_logits should be False during eval when compute_metrics is set — logits are needed for metrics"
+        )
+
+    @pytest.mark.parametrize(
+        "training, prediction_loss_only, has_compute_metrics, expected_skip",
+        [
+            (True, False, False, True),
+            (True, False, True, True),
+            (True, True, True, True),
+            (False, False, False, True),
+            (False, True, False, True),
+            (False, True, True, True),
+            (False, False, True, False),
+        ],
+        ids=[
+            "train",
+            "train+metrics",
+            "train+loss_only+metrics",
+            "eval_no_metrics",
+            "eval_loss_only",
+            "eval_loss_only+metrics",
+            "eval+metrics_NEEDS_LOGITS",
+        ],
+    )
+    def test_skip_logits_truth_table(self, training, prediction_loss_only, has_compute_metrics, expected_skip):
+        """Exhaustive truth table for all skip_logits conditions."""
+        compute_metrics = (lambda x: {"acc": 0.5}) if has_compute_metrics else None
+        trainer = self._build_trainer(prediction_loss_only=prediction_loss_only, compute_metrics=compute_metrics)
+        result = self._capture_skip_logits(trainer, training_mode=training)
+        assert result["skip_logits"] is expected_skip
