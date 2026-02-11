@@ -1016,6 +1016,29 @@ training_args = RLOOConfig(
 )
 ```
 
+## Odds Ratio Preference Optimization
+
+Papers relating to the [`experimental.orpo.ORPOTrainer`]
+
+### ORPO: Monolithic Preference Optimization without Reference Model
+
+**📜 Paper**: https://huggingface.co/papers/2403.07691
+
+The introduction of a reference model-free monolithic odds ratio preference optimization algorithm (ORPO) enhances preference alignment during supervised fine-tuning, surpassing larger models in key evaluations. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.orpo import ORPOConfig
+
+training_args = ORPOConfig(
+    beta=0.1,  # λ odds ratio loss weight (Table 7 of the paper, Mistral-ORPO-β)
+    learning_rate=5e-6,  # learning rate (Appendix C of the paper)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (Appendix C of the paper)
+    num_train_epochs=5,  # Appendix C of the paper
+    warmup_steps=200,  # warm-up steps (Appendix C of the paper)
+    per_device_train_batch_size=8,  # batch size (Appendix C of the paper)
+)
+```
+
 ## Contrastive Preference Optimization
 
 Papers relating to the [`experimental.cpo.CPOTrainer`]
