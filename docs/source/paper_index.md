@@ -56,16 +56,12 @@ from trl import GRPOConfig, GRPOTrainer
 # Example configuration for a reasoning-oriented GRPO stage
 # Based on the Open-R1 recipe for Qwen-7B
 training_args = GRPOConfig(
-    model_name_or_path="open-r1/Qwen2.5-Math-7B-RoPE-300k",
-    dataset_name="open-r1/Mixture-of-Thoughts",
     learning_rate=4.0e-5,
     max_prompt_length=4096,
     max_completion_length=32768, # Support for long Chain-of-Thought
     num_generations=16,          # Sample 16 outputs per prompt for group relative advantage
     beta=0.001,                  # KL coefficient
     use_vllm=True,               # Use vLLM backend for accelerated rollout generation
-    vllm_device="cuda:1",        # Optional: colocate vLLM on a specific device
-    report_to="wandb",
 )
 
 trainer = GRPOTrainer(
