@@ -929,6 +929,25 @@ training_args = RLOOConfig(
 
 Papers relating to the [`experimental.cpo.CPOTrainer`]
 
+### SimPO: Simple Preference Optimization with a Reference-Free Reward
+
+**📜 Paper**: https://huggingface.co/papers/2405.14734
+
+SimPO is a simpler yet more effective preference optimization approach that uses the average log probability of a sequence as the implicit reward, eliminating the need for a reference model. It introduces a target reward margin to the Bradley-Terry objective to encourage a larger margin between winning and losing responses. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.cpo import CPOConfig
+
+training_args = CPOConfig(
+    loss_type="simpo",  # SimPO loss (Section 3 of the paper)
+    cpo_alpha=0.0,  # no BC regularizer for SimPO
+    beta=2.5,  # β in Appendix B of the paper
+    simpo_gamma=1.375,  # γ target reward margin, from γ/β=0.55 in Appendix B of the paper
+    learning_rate=1e-6,  # learning rate in Appendix B of the paper
+    num_train_epochs=1,  # Appendix B of the paper
+)
+```
+
 ### AlphaPO -- Reward shape matters for LLM alignment
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
