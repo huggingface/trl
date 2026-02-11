@@ -1187,12 +1187,17 @@ class SFTTrainer(BaseTrainer):
             # When only loss is needed for eval (no compute_metrics), we can safely skip logits.
             # prediction_step communicates whether logits are expected via `_prediction_loss_only`;
             # this prevents skipping logits during `predict()` where outputs are requested.
+            # Keep logits when preprocess_logits_for_metrics is set, even if compute_metrics is None.
             # to prevent massive vRAM spikes from the lm_head projection.
             # See: https://github.com/huggingface/trl/issues/4679
             inputs["skip_logits"] = (
                 self.model.training
                 or self.args.prediction_loss_only
-                or (self.compute_metrics is None and prediction_loss_only is not False)
+                or (
+                    self.compute_metrics is None
+                    and self.preprocess_logits_for_metrics is None
+                    and prediction_loss_only is not False
+                )
             )
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
