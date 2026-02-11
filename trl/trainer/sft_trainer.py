@@ -19,7 +19,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -482,6 +482,69 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
     return loss
 
+def eaft_loss_func(outputs, labels, num_items_in_batch=None, alpha=1.0):
+    """
+    EAFT loss function, as presented in [Entropy-Adaptive Fine-Tuning](https://huggingface.co/papers/2601.02151)
+    from https://github.com/ymxyll/LlamaFactory-EAFT/blob/feature/eaft/src/llamafactory/train/trainer_utils.py#L682
+    by ymxyll, 2026, Apache-2.0 license
+    """
+    logits = outputs.get("logits")
+    if logits is None:
+        return outputs.get("loss", torch.tensor(0.0))
+
+    logits = logits.float()
+    vocab_size = logits.size(-1)
+    labels = nn.functional.pad(labels, (0, 1), value=-100)
+    shift_labels = labels[..., 1:].contiguous()
+    logits = logits.view(-1, vocab_size)
+    shift_labels = shift_labels.view(-1)
+    shift_labels = shift_labels.to(logits.device)
+
+    loss = _eaft_cross_entropy(logits, shift_labels, num_items_in_batch, alpha)
+    return loss
+
+def _eaft_cross_entropy(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    num_items_in_batch: Optional[torch.Tensor] = None,
+    alpha: float = 1.0,
+    ignore_index: int = -100,
+) -> torch.Tensor:
+    """
+    EAFT cross-entropy loss function, as presented in [Entropy-Adaptive Fine-Tuning](https://huggingface.co/papers/2601.02151)
+    from https://github.com/ymxyll/LlamaFactory-EAFT/blob/feature/eaft/src/llamafactory/train/trainer_utils.py#L699
+    by ymxyll, 2026, Apache-2.0 license
+    """
+    per_token_loss = nn.functional.cross_entropy(source, target, ignore_index=ignore_index, reduction="none")
+    valid_mask = target != ignore_index
+    if not valid_mask.any():
+        return torch.tensor(0.0, device=source.device, dtype=source.dtype)
+
+    valid_losses = per_token_loss[valid_mask]
+
+    with torch.no_grad():
+        source_detached = source[valid_mask].detach()
+
+        topk_val, _ = torch.topk(source_detached, k=20, dim=-1)
+        logsumexp_topk = torch.logsumexp(topk_val, dim=-1, keepdim=True)
+        log_probs_topk = topk_val - logsumexp_topk
+        probs_topk = torch.exp(log_probs_topk)
+        entropy_approx = -(probs_topk * log_probs_topk).sum(dim=-1)
+
+        entropy_term = entropy_approx / 3.0
+        adaptive_weight = torch.pow(entropy_term, alpha)
+
+    weighted_losses = valid_losses * adaptive_weight
+
+    if num_items_in_batch is not None:
+        total_loss = weighted_losses.sum()
+        if torch.is_tensor(num_items_in_batch):
+            num_items_in_batch = num_items_in_batch.to(total_loss.device)
+        loss = total_loss / num_items_in_batch
+    else:
+        loss = weighted_losses.mean()
+    return loss
+
 
 class SFTTrainer(BaseTrainer):
     """
@@ -895,8 +958,18 @@ class SFTTrainer(BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
+            elif args.loss_type == "eaft":
+                if compute_loss_func is not None:
+                    raise ValueError(
+                        "You passed a `compute_loss_func` together with `loss_type='eaft'` to the `SFTTrainer`. "
+                        "When using `loss_type='eaft'`, the loss function is internally set to the EAFT loss, so "
+                        "passing a `compute_loss_func` is not allowed."
+                    )
+                compute_loss_func = lambda outputs, labels, num_items_in_batch=None: eaft_loss_func(
+                    outputs, labels, num_items_in_batch, args.eaft_alpha
+                )
             else:
-                raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+                raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft' and 'eaft'.")
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
