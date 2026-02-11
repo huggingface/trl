@@ -34,6 +34,47 @@ trainer = GRPOTrainer(
 )
 ```
 
+### DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2501.12948
+
+DeepSeek-R1 achieves reasoning performance comparable to OpenAI-o1 through a multi-stage pipeline that transitions from pure reinforcement learning (RL) to a refined, human-aligned model. Unlike its predecessor, DeepSeek-R1-Zero, which used pure RL on a base model, R1 follows a structured four-stage evolution:
+1. Cold Start: The base model is fine-tuned on a small set of high-quality, long Chain-of-Thought (CoT) data to provide a stable starting point.
+2. Reasoning-Oriented RL: Large-scale RL is applied to enhance performance in math, coding, and logic, using rule-based rewards and a language consistency reward to reduce language mixing.
+3. Rejection Sampling & SFT: The RL checkpoint generates 600k reasoning samples via rejection sampling, which are combined with 200k non-reasoning (general) samples to create a new dataset for a second round of Supervised Fine-Tuning.
+4. RL for all Scenarios: A final RL stage aligns the model with human preferences (helpfulness and harmlessness) across all domains while maintaining reasoning strength.
+
+Distillation: Empowering Small Models
+
+A key contribution of the paper is demonstrating that reasoning patterns can be distilled from a large model (DeepSeek-R1) into smaller dense models (e.g., Qwen and Llama series). Distillation was found to be more effective for small models than training them with pure RL from scratch.
+
+
+You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline. 
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+# Example configuration for a reasoning-oriented GRPO stage
+# Based on the Open-R1 recipe for Qwen-7B
+training_args = GRPOConfig(
+    learning_rate=4.0e-5,
+    max_prompt_length=4096,
+    max_completion_length=32768, # Support for long Chain-of-Thought
+    num_generations=16,          # Sample 16 outputs per prompt for group relative advantage
+    beta=0.001,                  # KL coefficient
+    use_vllm=True,               # Use vLLM backend for accelerated rollout generation
+)
+
+trainer = GRPOTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    reward_funcs=[accuracy_reward, format_reward], # R1-Zero used rule-based rewards
+)
+
+trainer.train()
+```
+
+
 ### Group Sequence Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2507.18071
@@ -533,6 +574,24 @@ training_args = GRPOConfig(
 )
 ```
 
+### INTELLECT-2: A Reasoning Model Trained Through Globally Decentralized Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2505.07291
+
+INTELLECT-2 is the first globally distributed reinforcement learning training run of a 32 billion parameter language model using fully asynchronous RL across a dynamic, heterogeneous swarm of permissionless compute contributors. The authors propose modifications to the standard GRPO training recipe, including two-sided GRPO clipping for increased training stability. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    delta=4,  # δ in section 4.1 of the paper
+    epsilon=0.2,  # ε in section 4.1 of the paper
+    beta=0.001,  # KL divergence coefficient in section 4.1 of the paper
+    num_generations=16,  # responses per prompt in section 4.1 of the paper
+    learning_rate=3e-7,  # section 4.1 of the paper
+)
+```
+
 ## Direct Policy Optimization
 
 Papers relating to the [`DPOTrainer`]
@@ -922,6 +981,20 @@ training_args = RLOOConfig(
     beta=0.03  # section C Training Detail of the paper
     num_generations=2,  # experiments of paper different num_generations={2,4}
     learning_rate=1e-6  # section C Training Detail of the paper
+)
+```
+
+### REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2501.03262
+
+REINFORCE++ is an enhanced variant of the classical REINFORCE algorithm that incorporates key optimization techniques from PPO while eliminating the need for a critic network. It achieves simplicity, enhanced training stability, and reduced computational overhead through global advantage normalization across the entire batch. To approximate the paper's setting with the [`RLOOTrainer`], use this configuration:
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    normalize_advantages=True,  # global advantage normalization, core of REINFORCE++
 )
 ```
 
