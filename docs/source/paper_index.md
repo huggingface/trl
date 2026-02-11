@@ -45,6 +45,7 @@ DeepSeek-R1 achieves reasoning performance comparable to OpenAI-o1 through a mul
 4. RL for all Scenarios: A final RL stage aligns the model with human preferences (helpfulness and harmlessness) across all domains while maintaining reasoning strength.
 
 Distillation: Empowering Small Models
+
 A key contribution of the paper is demonstrating that reasoning patterns can be distilled from a large model (DeepSeek-R1) into smaller dense models (e.g., Qwen and Llama series). Distillation was found to be more effective for small models than training them with pure RL from scratch.
 
 
