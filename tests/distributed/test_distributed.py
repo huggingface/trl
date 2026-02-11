@@ -214,7 +214,7 @@ class TestDistributed(
             [
                 "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/reward.py",
                 "--output_dir", self.tmp_dir,
-                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_implicit_prompt_preference",
             ],

@@ -34,6 +34,12 @@ from .scripts.vllm_serve import make_parser as make_vllm_serve_parser
 logger = logging.getLogger(__name__)
 
 
+def _launch_training_script(script_name: str, launch_args: list[str], training_script_args: list[str]) -> None:
+    training_script = resources.files("trl.scripts").joinpath(script_name)
+    args = launch_command_parser().parse_args(launch_args + [str(training_script)] + training_script_args)
+    launch_command(args)
+
+
 def main():
     parser = TrlParser(prog="TRL CLI", usage="trl", allow_abbrev=False)
 
@@ -83,63 +89,31 @@ def main():
         launch_args = ["--config_file", str(accelerate_config_path)] + launch_args
 
     if args.command == "dpo":
-        # Get the default args for the launch command
-        dpo_training_script = resources.files("trl.scripts").joinpath("dpo.py")
-        args = launch_command_parser().parse_args([str(dpo_training_script)])
-
-        # Feed the args to the launch command
-        args.training_script_args = sys.argv[2:]  # remove "trl" and "dpo"
-        launch_command(args)  # launch training
+        # This simulates running: `accelerate launch <launch args> dpo.py <training script args>`.
+        _launch_training_script("dpo.py", launch_args, sys.argv[2:])  # remove "trl" and "dpo"
 
     elif args.command == "env":
         print_env()
 
     elif args.command == "grpo":
-        # Get the default args for the launch command
-        grpo_training_script = resources.files("trl.scripts").joinpath("grpo.py")
-        args = launch_command_parser().parse_args([str(grpo_training_script)])
-
-        # Feed the args to the launch command
-        args.training_script_args = sys.argv[2:]  # remove "trl" and "grpo"
-        launch_command(args)  # launch training
+        # This simulates running: `accelerate launch <launch args> grpo.py <training script args>`.
+        _launch_training_script("grpo.py", launch_args, sys.argv[2:])  # remove "trl" and "grpo"
 
     elif args.command == "kto":
-        # Get the default args for the launch command
-        kto_training_script = resources.files("trl.scripts").joinpath("kto.py")
-        args = launch_command_parser().parse_args([str(kto_training_script)])
-
-        # Feed the args to the launch command
-        args.training_script_args = sys.argv[2:]  # remove "trl" and "kto"
-        launch_command(args)  # launch training
+        # This simulates running: `accelerate launch <launch args> kto.py <training script args>`.
+        _launch_training_script("kto.py", launch_args, sys.argv[2:])  # remove "trl" and "kto"
 
     elif args.command == "reward":
-        # Get the default args for the launch command
-        reward_training_script = resources.files("trl.scripts").joinpath("reward.py")
-        args = launch_command_parser().parse_args([str(reward_training_script)])
-
-        # Feed the args to the launch command
-        args.training_script_args = sys.argv[2:]  # remove "trl" and "reward"
-        launch_command(args)  # launch training
+        # This simulates running: `accelerate launch <launch args> reward.py <training script args>`.
+        _launch_training_script("reward.py", launch_args, sys.argv[2:])  # remove "trl" and "reward"
 
     elif args.command == "rloo":
-        # Get the default args for the launch command
-        rloo_training_script = resources.files("trl.scripts").joinpath("rloo.py")
-        args = launch_command_parser().parse_args([str(rloo_training_script)])
-
-        # Feed the args to the launch command
-        args.training_script_args = sys.argv[2:]  # remove "trl" and "rloo"
-        launch_command(args)  # launch training
+        # This simulates running: `accelerate launch <launch args> rloo.py <training script args>`.
+        _launch_training_script("rloo.py", launch_args, sys.argv[2:])  # remove "trl" and "rloo"
 
     elif args.command == "sft":
-        # Get the path to the training script
-        sft_training_script = resources.files("trl.scripts").joinpath("sft.py")
-
         # This simulates running: `accelerate launch <launch args> sft.py <training script args>`.
-        # Note that the training script args may include launch-related arguments (e.g., `--num_processes`),
-        # but we rely on the script to ignore any that don't apply to it.
-        training_script_args = sys.argv[2:]  # Remove "trl" and "sft"
-        args = launch_command_parser().parse_args(launch_args + [str(sft_training_script)] + training_script_args)
-        launch_command(args)  # launch training
+        _launch_training_script("sft.py", launch_args, sys.argv[2:])  # remove "trl" and "sft"
 
     elif args.command == "vllm-serve":
         (script_args,) = parser.parse_args_and_config()
