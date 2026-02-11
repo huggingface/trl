@@ -808,6 +808,40 @@ class TestSFTTrainer(TrlTestCase):
 
         assert captured["skip_logits"] is True
 
+    @require_torch_accelerator
+    @require_liger_kernel
+    def test_predict_does_not_skip_logits_with_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:1]")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=False,
+            report_to="none",
+            max_length=8,
+            bf16=False,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            compute_metrics=None,
+        )
+        trainer.args.use_liger_kernel = True
+        trainer.model.eval()
+
+        captured = {}
+
+        def mock_super_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
+            captured["skip_logits"] = inputs.get("skip_logits")
+            dummy_loss = torch.tensor(1.0, requires_grad=True)
+            dummy_outputs = (dummy_loss, torch.randn(1, 5, trainer.model.config.vocab_size))
+            return (dummy_loss, dummy_outputs)
+
+        with patch("trl.trainer.sft_trainer.BaseTrainer.compute_loss", side_effect=mock_super_compute_loss):
+            trainer.predict(trainer.train_dataset)
+
+        assert captured["skip_logits"] is False
+
     def test_train_with_non_chatml_conversational_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")

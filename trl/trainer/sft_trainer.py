@@ -1170,6 +1170,7 @@ class SFTTrainer(BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
+        prediction_loss_only = inputs.pop("_prediction_loss_only", None)
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
@@ -1183,11 +1184,15 @@ class SFTTrainer(BaseTrainer):
         if self.args.use_liger_kernel:
             # Avoid materializing full logits during eval unless explicitly needed.
             # By default, liger kernel only skips logits during training (self.training=True).
-            # When only loss is needed for eval (no compute_metrics), we can safely skip logits
+            # When only loss is needed for eval (no compute_metrics), we can safely skip logits.
+            # prediction_step communicates whether logits are expected via `_prediction_loss_only`;
+            # this prevents skipping logits during `predict()` where outputs are requested.
             # to prevent massive vRAM spikes from the lm_head projection.
             # See: https://github.com/huggingface/trl/issues/4679
             inputs["skip_logits"] = (
-                self.model.training or self.args.prediction_loss_only or self.compute_metrics is None
+                self.model.training
+                or self.args.prediction_loss_only
+                or (self.compute_metrics is None and prediction_loss_only is not False)
             )
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
@@ -1291,6 +1296,11 @@ class SFTTrainer(BaseTrainer):
             self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        # Preserve the eval loop intent so compute_loss can decide whether logits are needed.
+        inputs["_prediction_loss_only"] = prediction_loss_only
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
