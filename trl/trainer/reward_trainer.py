@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import contextlib
+import logging
 import os
+import re
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -61,6 +63,30 @@ logger = get_logger(__name__)
 # AutoModelForSequenceClassification adds a new classification head when loading a CausalLM. That head is randomly
 # initialized and triggers a harmless warning about uninitialized weights. We suppress just that specific warning to
 # avoid confusing users.
+
+
+# Old approach using logging filter (for transformers < 4.57.0)
+@contextmanager
+def suppress_from_pretrained_warning(logger: logging.Logger):
+    pattern = re.compile(
+        r"^Some weights of \S+ were not initialized from the model checkpoint at \S+ and are newly initialized: "
+        r"\[.*\]\nYou should probably TRAIN this model on a down-stream task to be able to use it for predictions and "
+        r"inference\.$"
+    )
+
+    class _Filter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return not pattern.search(record.getMessage())
+
+    f = _Filter()
+    logger.addFilter(f)
+    try:
+        yield
+    finally:
+        logger.removeFilter(f)
+
+
+# New approach using scoped override (for transformers >= 4.57.0)
 @contextmanager
 def ignore_seqcls_score_missing_key():
     # Scoped override: ignore only the expected seq-clf head key.
@@ -74,6 +100,21 @@ def ignore_seqcls_score_missing_key():
         yield
     finally:
         GenericForSequenceClassification._keys_to_ignore_on_load_missing = old
+
+
+# Version-aware wrapper that chooses the appropriate approach
+@contextmanager
+def suppress_seqcls_warning():
+    # Use the new approach for transformers >= 4.57.0, old approach for earlier versions
+    # The old approach is needed for 4.56.2 to avoid meta tensor issues with device_map=None
+    if Version(transformers.__version__) >= Version("4.57.0"):
+        with ignore_seqcls_score_missing_key():
+            yield
+    else:
+        # Get the transformers logger
+        transformers_logger = logging.getLogger("transformers.modeling_utils")
+        with suppress_from_pretrained_warning(transformers_logger):
+            yield
 
 
 def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
@@ -304,7 +345,7 @@ class RewardTrainer(BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
-            with ignore_seqcls_score_missing_key():
+            with suppress_seqcls_warning():
                 model = create_model_from_path(model, AutoModelForSequenceClassification, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
