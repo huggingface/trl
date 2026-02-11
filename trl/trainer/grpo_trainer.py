@@ -1888,12 +1888,15 @@ class GRPOTrainer(BaseTrainer):
             inputs.get("image_sizes"),
         )
 
-        # compute loss and metrics using liger grpo loss
+        # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
+        loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
+        # Compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
             _input=last_hidden_state,
             lin_weight=unwrapped_model.lm_head.weight,
             selected_token_ids=completion_ids,
-            attention_mask=completion_mask,
+            # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
+            attention_mask=loss_mask,
             advantages=inputs["advantages"],
             bias=unwrapped_model.lm_head.bias,
             old_per_token_logps=inputs.get("old_per_token_logps"),
