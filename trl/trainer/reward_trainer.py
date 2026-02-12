@@ -358,8 +358,8 @@ class RewardTrainer(BaseTrainer):
             if getattr(model.config, "num_labels", None) != 1:
                 raise ValueError(
                     f"The model has `num_labels={model.config.num_labels}`, but reward models require `num_labels=1` "
-                    "`num_labels=1` to output a single scalar reward per sequence. Please instantiate your model with "
-                    "`num_labels=1` or pass a model name as a string to have it configured automatically."
+                    "to output a single scalar reward per sequence. Please instantiate your model with `num_labels=1` "
+                    "or pass a model name as a string to have it configured automatically."
                 )
 
         # Processing class
