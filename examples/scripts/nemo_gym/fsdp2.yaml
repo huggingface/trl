@@ -1,5 +1,3 @@
-# Based on trl/accelerate_configs/fsdp2.yaml
-# Requires accelerate 1.7.0 or higher
 compute_environment: LOCAL_MACHINE
 debug: false
 distributed_type: FSDP
