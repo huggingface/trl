@@ -970,6 +970,21 @@ SFTConfig(
 )
 ```
 
+### Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer
+
+**📜 Paper**: https://huggingface.co/papers/1910.10683
+
+The T5 paper proposes a unified text-to-text framework for transfer learning and introduces **sequence packing** (Section 3.5.2): grouping multiple short sequences into fixed-length blocks to reduce padding and improve training efficiency. Packing is supported in TRL via [`SFTConfig`] with the [`SFTTrainer`]. To enable packing with TRL, use this configuration:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    packing=True,  # enable sequence packing (Section 3.5.2 of the paper)
+    max_length=512,  # packed sequence length (Section 3.5.2 of the paper)
+)
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
