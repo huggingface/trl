@@ -1059,7 +1059,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
             "seq_lengths": [[4], [4], [2, 1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
         assert dataset.to_dict() == expected_output
 
     def test_with_overlong_two_coluns(self):
@@ -1074,7 +1074,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
             "seq_lengths": [[4], [4], [3], [3], [2]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
         assert dataset.to_dict() == expected_output
 
     def test_with_non_power_of_2(self):
@@ -1086,6 +1086,21 @@ class TestPackDatasetBfd(TrlTestCase):
         expected_output = {
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
             "seq_lengths": [[5], [4, 1], [3]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        assert dataset.to_dict() == expected_output
+
+    def test_default_no_requeue(self):
+        """Test default 'bfd' strategy for SFT datasets (truncates overflow)."""
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        # With default 'bfd' strategy, overflow tokens are discarded
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
+            "seq_lengths": [[4], [4], [2, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
