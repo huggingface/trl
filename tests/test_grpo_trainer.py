@@ -1020,8 +1020,10 @@ class TestGRPOTrainer(TrlTestCase):
             result["importance_sampling_ratio"] = torch.full((B, T), 0.5, device=result["completion_ids"].device)
             return result
 
-        with patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio), \
-             patch.object(trainer.liger_grpo_loss, "forward", wraps=trainer.liger_grpo_loss.forward) as mock_forward:
+        with (
+            patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
+            patch.object(trainer.liger_grpo_loss, "forward", wraps=trainer.liger_grpo_loss.forward) as mock_forward,
+        ):
             trainer.train()
 
             # Verify vllm_is_ratio was passed in every call to liger_grpo_loss
