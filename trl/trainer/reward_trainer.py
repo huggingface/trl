@@ -354,6 +354,13 @@ class RewardTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+            # Validate that the model has num_labels = 1 (required for reward models)
+            if getattr(model.config, "num_labels", None) != 1:
+                raise ValueError(
+                    f"The model has `num_labels={model.config.num_labels}`, but reward models require `num_labels=1` "
+                    "`num_labels=1` to output a single scalar reward per sequence. Please instantiate your model with "
+                    "`num_labels=1` or pass a model name as a string to have it configured automatically."
+                )
 
         # Processing class
         if processing_class is None:
