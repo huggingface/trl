@@ -56,74 +56,35 @@ Complete these one-time setup steps before running training.
 
 ### Prepare a Dataset
 
-Many NeMo Gym datasets used to train Nemotron models are available on Hugging Face. Use `ng_prepare_data` to download and prepare datasets. This command:
+In this example we will train a model to play sudoku. Create a dataset for the mini sudoku environment using the reasoning gym integration in NeMo Gym:
 
-- Downloads the dataset from Hugging Face
-- Validates the format and computes metrics
-- Adds an `agent_ref` field to each example that tells NeMo Gym which agent server should handle that example
+```bash
+cd Gym
+source .venv/bin/activate
+uv add reasoning-gym
+cd resources_servers/reasoning_gym
+python scripts/create_dataset.py \
+    --task mini_sudoku \
+    --size 2000 \
+    --seed 42 \
+    --output data/reasoning_gym/train_mini_sudoku.jsonl
 
-1. **Set Hugging Face Token**
+python scripts/create_dataset.py \
+    --task mini_sudoku \
+    --size 50 \
+    --seed 24 \
+    --output data/reasoning_gym/val_mini_sudoku.jsonl
+```
 
-   Create `env.yaml` in `Gym/` with your HF token:
-
-   ```yaml
-   hf_token: <your_hf_token>
-   ```
-
-1. **Prepare Dataset**
-
-   ```bash
-   # Enter Gym and activate the venv
-   cd Gym
-   source .venv/bin/activate
-
-   # Set config paths
-   config_paths="responses_api_models/vllm_model/configs/vllm_model.yaml,\
-   resources_servers/workplace_assistant/configs/workplace_assistant.yaml"
-
-   # Download data and prep for training
-   ng_prepare_data "+config_paths=[${config_paths}]" \
-       +output_dirpath=data/workplace_assistant \
-       +mode=train_preparation \
-       +should_download=true \
-       +data_source=huggingface
-   ```
-
-   This creates `train.jsonl` and `validation.jsonl` files in `data/workplace_assistant/`.
-
-To create a new environment, refer to the [environment creation guide](https://docs.nvidia.com/nemo/gym/latest/contribute/environments/new-environment.html). We suggest running an existing one first!
+After running this example, check out the [environment creation guide](https://docs.nvidia.com/nemo/gym/latest/contribute/environments/new-environment.html) to build a new training environment!
 
 #### Dataset Format
 
-NeMo Gym datasets are stored as JSONL. Each line contains a task with input messages, tool definitions, metadata such as ground truth for verification, and an agent server reference. The following example shows the workplace dataset structure. Metadata fields can differ between datasets, as long as the corresponding resources server uses the fields appropriately.
-
-```json
-{
-  "responses_create_params": {
-    "input": [
-      {"role": "system", "content": "..."},
-      {"role": "user", "content": "Move any of jinsoo's tasks that are in review to completed"}
-    ],
-    "tools": [...],
-    "parallel_tool_calls": false,
-    "temperature": 1
-  },
-  "ground_truth": [
-    {"name": "project_management_update_task", "arguments": "{...}"},
-    ...
-  ],
-  "category": "workbench_project_management",
-  "environment_name": "workbench",
-  "agent_ref": {
-    "type": "responses_api_agents",
-    "name": "workplace_assistant_simple_agent"
-  }
-}
-```
+NeMo Gym datasets are stored as JSONL files. Each line contains a task with input messages, metadata such as ground truth for verification, and an agent server reference. Metadata fields can differ between datasets, as long as the corresponding resources server uses the fields appropriately.
 
 ## Interactive Training
 
-For development and testing on a single node.
+We will first launch training on a single node.
 
 ### Set Up
 
@@ -140,11 +101,33 @@ For development and testing on a single node.
 
 2. **Update Training Config**
 
-   Update `examples/scripts/nemo_gym/config.yaml` to point to the dataset generated above, and any other optional modifications.
+   Update `examples/scripts/nemo_gym/config.yaml` to point to the mini sudoku dataset:
+
+   ```yaml
+   model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+
+   dataset_path: "/path/to/Gym/resources_servers/reasoning_gym/data/reasoning_gym/train_mini_sudoku.jsonl"
+   eval_dataset_path: "/path/to/Gym/resources_servers/reasoning_gym/data/reasoning_gym/val_mini_sudoku.jsonl"
+
+   task: "mini-sudoku"
+   output_dir: "outputs/nemo_gym_sudoku"
+
+   # Training hyperparameters
+   learning_rate: 1.0e-5
+   num_generations: 16
+   per_device_train_batch_size: 8
+   gradient_accumulation_steps: 1
+   max_completion_length: 10000
+   vllm_importance_sampling_correction: true
+
+   # Inference sampling parameters
+   temperature: 1.0
+   top_p: 0.999
+   ```
 
 ###  Run Training
 
-The following steps run in 3 terminals. It can also be ran with processes in the background, or using tmux.
+The following steps can be run in 3 terminals, or with processes in the background, or using tmux.
 
 1. **Start NeMo Gym Servers** (Terminal 1)
 
@@ -152,7 +135,7 @@ The following steps run in 3 terminals. It can also be ran with processes in the
    cd Gym/
    source .venv/bin/activate
 
-   config_paths="resources_servers/workplace_assistant/configs/workplace_assistant.yaml,\
+   config_paths="resources_servers/reasoning_gym/configs/reasoning_gym.yaml,\
    responses_api_models/vllm_model/configs/vllm_model_for_training.yaml"
 
    ng_run "+config_paths=[${config_paths}]"
@@ -161,8 +144,7 @@ The following steps run in 3 terminals. It can also be ran with processes in the
    This starts:
    - **Agent server**: Orchestrates rollouts using resource servers and model servers
    - **Resources server**: Supports environment logic such as state-management, tool implementations, and task verification
-   - **Model server**: Adapts vLLM server requests to support NeMo Gym agents and on-policy RL training while ensuring OpenAI API compatibility
-   - **Head server**: Manages servers used in training enabling their discovery
+   - **Model server**: Adapts vLLM server requests to support NeMo Gym agents and on-policy RL training while ensuring OpenAI Responses API compatibility
 
 1. **Start TRL vLLM Server on GPU 0** (Terminal 2)
 
@@ -186,9 +168,17 @@ The following steps run in 3 terminals. It can also be ran with processes in the
    CUDA_VISIBLE_DEVICES=1 python train_multi_environment.py --config config.yaml
    ```
 
+### Results
+
+You should see training and evaluation reward curves like the following!
+
+![nemo_gym_sudoku_train](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/nemo_gym_sudoku_train.png)
+
+![nemo_gym_sudoku_eval](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/nemo_gym_sudoku_eval.png)
+
 ## Multi-Node Training with Slurm
 
-An example five-node training script is provided in `submit.sh`. Nodes one through four run the training algorithm, while node five runs vLLM inference for NeMo Gym agent rollouts.
+An example five-node training script is provided in `submit.sh`. Nodes one through four run the training backend, while node five runs vLLM inference for NeMo Gym agent rollouts.
 
 Before running the Slurm script, ensure you have completed the TRL and NeMo Gym installation steps above. The script assumes `.venv` directories exist for both TRL and Gym. If you use a container in the Slurm script, you should also create the virtual environments from the container in an interactive session or with a separate sbatch script.
 
@@ -212,29 +202,39 @@ Before running the Slurm script, ensure you have completed the TRL and NeMo Gym 
 
 ## Multi-Environment Training
 
-Train on multiple NeMo Gym environments simultaneously. This allows learning diverse capabilities, such as tool calling and math reasoning, in a single training run.
+NeMo Gym is deisgned to enable training on many environments simultaneously and at scale. This allows learning diverse capabilities, such as tool calling and reasoning, in a single training run. In this example, we add the workplace assistant environment to the mini sudoku setup above, which is a multi-step tool use environment for office tasks.
 
-1. **Prepare Individual Datasets**
+1. **Prepare Workplace Assistant Dataset**
 
-   Prepare datasets for each environment. The workplace assistant dataset was prepared above. Now lets create a dataset for the mini sudoku environment implemented by the reasoning gym resources server in NeMo Gym:
+   Many NeMo Gym datasets used to train Nemotron models are available on Hugging Face. Use `ng_prepare_data` to download and prepare datasets. This command:
+
+   - Downloads the dataset from Hugging Face
+   - Validates the format and computes metrics
+   - Adds an `agent_ref` field to each example that tells NeMo Gym which agent server should handle that example
+
+   First, create `env.yaml` in `Gym/` with your HF token (if not already done):
+
+   ```yaml
+   hf_token: <your_hf_token>
+   ```
+
+   Then prepare the dataset:
 
    ```bash
    cd Gym
    source .venv/bin/activate
-   uv add reasoning-gym
-   cd resources_servers/reasoning_gym
-   python scripts/create_dataset.py \
-       --task mini_sudoku \
-       --size 2000 \
-       --seed 42 \
-       --output data/reasoning_gym/train_mini_sudoku.jsonl
 
-   python scripts/create_dataset.py \
-       --task mini_sudoku \
-       --size 50 \
-       --seed 24 \
-       --output data/reasoning_gym/val_mini_sudoku.jsonl
+   config_paths="responses_api_models/vllm_model/configs/vllm_model.yaml,\
+   resources_servers/workplace_assistant/configs/workplace_assistant.yaml"
+
+   ng_prepare_data "+config_paths=[${config_paths}]" \
+       +output_dirpath=data/workplace_assistant \
+       +mode=train_preparation \
+       +should_download=true \
+       +data_source=huggingface
    ```
+
+   This creates `train.jsonl` and `validation.jsonl` files in `data/workplace_assistant/`.
 
 1. **Create Combined Dataset**
 
