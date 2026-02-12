@@ -217,6 +217,7 @@ class SFTConfig(TrainingArguments):
             "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
             "`'bfd-requeue'` (best-fit decreasing, re-queues overflow tokens), or `'wrapped'` (aggressive, cuts "
             "mid-sequence).",
+            "choices": ["bfd", "bfd-requeue", "wrapped"],
         },
     )
     padding_free: bool = field(
