@@ -1,5 +1,5 @@
 # Model
-model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+model_name: "Qwen/Qwen3-4B-Instruct-2507"
 
 # Data
 dataset_path: "/home/ubuntu/Gym/resources_servers/workplace_assistant/data/train.jsonl"
@@ -7,7 +7,7 @@ eval_dataset_path: "/home/ubuntu/Gym/resources_servers/workplace_assistant/data/
 
 # Logging
 output_dir: "outputs/nemo_gym"
-task: "workplace"                # just used in wandb run name 
+task: "workplace"
 report_to: "wandb"
 project_name: "trl-nemo-gym"
 log_completions: true
@@ -17,13 +17,14 @@ num_completions_to_print: 2
 learning_rate: 1.0e-5
 max_steps: 1000
 num_generations: 8
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 32
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 1
 max_completion_length: 16384
-warmup_steps: 5
+warmup_steps: 3
 lr_scheduler_type: "linear"
 optim: "adamw_torch_fused"
-weight_decay: 0.0
+weight_decay: 0.01
 vllm_importance_sampling_correction: true
 
 # Inference sampling parameters

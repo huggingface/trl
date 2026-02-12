@@ -39,6 +39,7 @@ Complete these one-time setup steps before running training.
    uv venv
    source .venv/bin/activate
    uv sync --extra vllm
+   uv pip install fastapi uvicorn accelerate deepspeed wandb omegaconf
    ```
 
 1. **Install NeMo Gym**
@@ -58,10 +59,8 @@ Complete these one-time setup steps before running training.
 Many NeMo Gym datasets used to train Nemotron models are available on Hugging Face. Use `ng_prepare_data` to download and prepare datasets. This command:
 
 - Downloads the dataset from Hugging Face
-- Validates the data format
+- Validates the format and computes metrics
 - Adds an `agent_ref` field to each example that tells NeMo Gym which agent server should handle that example
-
-> **Note**: `train_multi_environment.py` adds the `agent_ref` field when loading datasets, so this step is optional if datasets are created another way.
 
 1. **Set Hugging Face Token**
 
@@ -182,8 +181,7 @@ The following steps run in 3 terminals. It can also be ran with processes in the
    ```bash
    source trl/.venv/bin/activate
    cd trl/examples/scripts/nemo_gym
-   export WANDB_API_KEY=... 
-   uv add omegaconf 
+   export WANDB_API_KEY=...
 
    CUDA_VISIBLE_DEVICES=1 python train_multi_environment.py --config config.yaml
    ```
@@ -191,6 +189,8 @@ The following steps run in 3 terminals. It can also be ran with processes in the
 ## Multi-Node Training with Slurm
 
 An example five-node training script is provided in `submit.sh`. Nodes one through four run the training algorithm, while node five runs vLLM inference for NeMo Gym agent rollouts.
+
+Before running the Slurm script, ensure you have completed the TRL and NeMo Gym installation steps above. The script assumes `.venv` directories exist for both TRL and Gym. If you use a container in the Slurm script, you should also create the virtual environments from the container in an interactive session or with a separate sbatch script.
 
 1. **Configure the Script**
 

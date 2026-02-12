@@ -78,7 +78,6 @@ def reward_fn(completions: list[str], **kwargs) -> list[float]:
     assert env_rewards is not None, "env_reward not found in kwargs"
     return [float(r) for r in env_rewards]
 
-
 async def call_nemo_gym_agents(
     prompts: list[str],
     dataset_items: list[dict[str, Any]],
@@ -94,9 +93,7 @@ async def call_nemo_gym_agents(
             request_body = item.copy()
 
             if "responses_create_params" not in request_body:
-                request_body["responses_create_params"] = {
-                    "input": [{"role": "user", "content": prompt}],
-                }
+                raise ValueError(f"responses_create_params not found in dataset item: {item}")
 
             params = request_body["responses_create_params"]
             params.setdefault("max_output_tokens", max_completion_length)
@@ -138,31 +135,21 @@ async def call_nemo_gym_agents(
 
 def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
     is_eval = not trainer.model.training
-    num_generations = (
-        trainer.args.num_generations_eval
-        if is_eval and trainer.args.num_generations_eval
-        else trainer.args.num_generations
-    )
     dataset = trainer.eval_dataset if is_eval and trainer.eval_dataset is not None else trainer.train_dataset
 
-    expanded_prompts = []
-    expanded_dataset_items = []
-
+    dataset_items = []
     for idx_str in prompts:
         idx = int(idx_str)
         item = json.loads(dataset[idx]["metadata"])
-
-        for _ in range(num_generations):
-            expanded_prompts.append(idx_str)
-            expanded_dataset_items.append(dict(item))
+        dataset_items.append(dict(item))
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         responses = loop.run_until_complete(
             call_nemo_gym_agents(
-                expanded_prompts,
-                expanded_dataset_items,
+                prompts,
+                dataset_items,
                 trainer.args.agent_servers,
                 trainer.args.request_timeout,
                 trainer.args.max_completion_length,
@@ -280,10 +267,8 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
             }
         )
 
-    unique_prompt_ids = prompt_ids[::num_generations]
-
     return {
-        "prompt_ids": unique_prompt_ids,
+        "prompt_ids": prompt_ids,
         "completion_ids": completion_ids,
         "env_mask": env_mask,
         "logprobs": logprobs,
@@ -307,7 +292,6 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
                     }
                 )
     return Dataset.from_list(data)
-
 
 def main():
     parser = argparse.ArgumentParser(description="")
@@ -395,7 +379,6 @@ def main():
     )
 
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
-
 
 if __name__ == "__main__":
     main()

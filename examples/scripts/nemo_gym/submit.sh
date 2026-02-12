@@ -10,6 +10,15 @@
 #SBATCH --output=logs/%j/slurm.out
 #SBATCH --error=logs/%j/slurm.err
 
+# Before running this script, set up your Python virtual environments. This only needs to be done once.
+# This should be done in from the same container used here.
+#
+#    cd /path/to/trl
+#    uv venv && source .venv/bin/activate && uv sync && uv pip install -e .[vllm] && uv pip install fastapi uvicorn accelerate deepspeed wandb omegaconf
+#
+#    cd /path/to/Gym
+#    uv venv && source .venv/bin/activate && uv sync
+
 CONTAINER_IMAGE="nvcr.io/nvidia/pytorch:25.12-py3"
 MOUNTS="/path/to/mounts:/path/to/mounts"
 
@@ -31,8 +40,7 @@ mkdir -p ${LOG_DIR}
 echo "Starting ng_run and vLLM on ${VLLM_NODE}..."
 echo "Logs will be saved to: ${LOG_DIR}"
 
-# NOTE: If you have already set up your TRL venv, you can remove all of the pip installs and uv venv related commands below!
-
+# Start vLLM server and NeMo Gym servers on one node:
 srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     --container-image="${CONTAINER_IMAGE}" \
     --container-mounts="${MOUNTS}" \
@@ -41,18 +49,11 @@ srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     LOG_DIR=/path/to/logs
     mkdir -p \${LOG_DIR}
 
-    # Install uv if not already installed
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    source \$HOME/.local/bin/env
-
     # Start nemo gym servers
     (set -x && \
     export HOME=/path/to/user && \
-    export PATH=\$HOME/.local/bin:\$PATH && \
     cd /path/to/user/Gym && \
-    uv venv --python 3.12 && \
     source .venv/bin/activate && \
-    uv sync && \
     ray stop --force && \
     ng_run +config_paths=[responses_api_models/vllm_model/configs/vllm_model.yaml,resources_servers/workplace_assistant/configs/workplace_assistant.yaml] +head_server.host=0.0.0.0 +head_server.port=11000) > \${LOG_DIR}/ng_run.log 2>&1 &
 
@@ -63,7 +64,7 @@ srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
     export HOME=/path/to/user && \
     export HF_HOME=/path/to/user/hf_home && \
     cd /path/to/user/trl && \
-    rm -rf .venv && uv venv && source .venv/bin/activate && uv sync && uv pip install -e .[vllm] && uv pip install fastapi uvicorn && \
+    source .venv/bin/activate && \
     python -m trl.scripts.vllm_serve \
     --model Qwen/Qwen3-4B-Instruct-2507 \
     --host 0.0.0.0 \
@@ -79,10 +80,10 @@ srun --nodes=1 --ntasks=1 --nodelist="${VLLM_NODE}" \
 echo "Waiting for nemo gym and vllm to start..."
 sleep 120
 
-echo "Launching training on 4 nodes..."
 
 TRAIN_NODES_LIST="${TRAIN_NODE_0},${TRAIN_NODE_1},${TRAIN_NODE_2},${TRAIN_NODE_3}"
 
+# Launch training on 4 nodes:
 srun --nodes=4 --ntasks=4 --nodelist="${TRAIN_NODES_LIST}" \
     --container-image="${CONTAINER_IMAGE}" \
     --container-mounts="${MOUNTS}" \
@@ -92,11 +93,11 @@ srun --nodes=4 --ntasks=4 --nodelist="${TRAIN_NODES_LIST}" \
     export HOME=/path/to/user && \
     export HF_HOME=/path/to/user/hf_home && \
     cd /path/to/user/trl && \
-    source .venv/bin/activate && uv pip install accelerate deepspeed wandb omegaconf && \
+    source .venv/bin/activate && \
     cd examples/scripts/nemo_gym && \
     export WANDB_API_KEY=<your wandb api key> && \
     accelerate launch \
-    --config_file deepspeed_zero3.yaml \
+    --config_file fsdp2.yaml \
     --num_processes 32 \
     --num_machines 4 \
     --machine_rank \$SLURM_PROCID \
