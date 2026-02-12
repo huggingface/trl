@@ -1065,6 +1065,27 @@ training_args = ORPOConfig(
 
 Papers relating to the [`experimental.cpo.CPOTrainer`]
 
+### Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation
+
+**📜 Paper**: https://huggingface.co/papers/2401.08417
+
+Introduces Contrastive Preference Optimization (CPO), a preference-based method for machine translation that trains models to avoid adequate-but-imperfect translations instead of mimicking references as in SFT. The paper analyzes limitations of SFT on MT (including reference quality issues) and shows that applying CPO to ALMA with only 22K parallel sentences yields ALMA-R, which matches or exceeds WMT competition winners and GPT-4 on WMT'21–WMT'23. Used in TRL via [`experimental.cpo.CPOTrainer`]. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.cpo import CPOConfig
+
+training_args = CPOConfig(
+    loss_type="sigmoid",  # preference learning loss (Section 3 of the paper)
+    cpo_alpha=1.0,  # NLL regularizer weight (Section 3 of the paper)
+    beta=0.1,  # β temperature (Section 4.2 of the paper)
+    learning_rate=1e-4,  # learning rate (official code)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (official code)
+    num_train_epochs=1,  # Section 4.2 of the paper
+    warmup_ratio=0.01,  # warm-up ratio (Section 4.2 of the paper)
+    max_length=512,  # max sequence length (Section 4.2 of the paper)
+)
+```
+
 ### SimPO: Simple Preference Optimization with a Reference-Free Reward
 
 **📜 Paper**: https://huggingface.co/papers/2405.14734
