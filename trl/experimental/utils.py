@@ -30,7 +30,6 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
-from ..models.utils import peft_module_casting_to_bf16
 from ..trainer.utils import pad
 
 
@@ -545,3 +544,13 @@ def empty_cache() -> None:
         torch.npu.empty_cache()
     else:
         torch.cuda.empty_cache()
+
+
+def peft_module_casting_to_bf16(model):
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
+            module = module.to(torch.float32)
+        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+            if hasattr(module, "weight"):
+                if module.weight.dtype == torch.float32:
+                    module = module.to(torch.bfloat16)
