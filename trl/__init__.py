@@ -42,9 +42,6 @@ _import_structure = {
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "models": [
-        "create_reference_model",
-    ],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
         "BEMACallback",
@@ -87,9 +84,6 @@ if TYPE_CHECKING:
         prepare_multimodal_messages_vllm,
         truncate_dataset,
         unpair_preference_dataset,
-    )
-    from .models import (
-        create_reference_model,
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (

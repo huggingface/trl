@@ -44,7 +44,7 @@ trainer = DPOTrainer(..., optimizers=(optimizer, lr_scheduler))
 Another tool you can use for more memory efficient fine-tuning is to share layers between the reference model and the model you want to train.
 
 ```python
-from trl import create_reference_model
+from trl.experimental.utils import create_reference_model
 
 ref_model = create_reference_model(model, num_shared_layers=6)
 

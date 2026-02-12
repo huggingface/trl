@@ -19,13 +19,13 @@ from ..import_utils import _LazyModule
 
 _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
-    "utils": ["create_reference_model", "prepare_deepspeed", "prepare_fsdp", "unwrap_model_for_generation"],
+    "utils": ["prepare_deepspeed", "prepare_fsdp", "unwrap_model_for_generation"],
 }
 
 
 if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
-    from .utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+    from .utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 else:
     import sys
 
