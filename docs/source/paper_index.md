@@ -722,6 +722,28 @@ training_args = DPOConfig(
 
 For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
+### Learn Your Reference Model for Real Good Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2404.09656
+
+Trust Region DPO (TR-DPO) updates the reference policy during training, demonstrating effectiveness against DPO on the Anthropic HH and TLDR datasets, outperforming DPO by up to 19% measured by automatic evaluation with GPT-4, improving coherence, correctness, level of detail, helpfulness, and harmlessness. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    sync_ref_model=True,  # enable TR-DPO (Section 3 of the paper)
+    ref_model_mixup_alpha=0.6,  # α soft update weight (Table 1 of the paper)
+    ref_model_sync_steps=512,  # τ update frequency in steps (Table 1 of the paper)
+    beta=0.05,  # β temperature (Table 1 of the paper)
+    learning_rate=1e-6,  # learning rate (Table 2 of the paper)
+    num_train_epochs=1,  # Table 2 of the paper
+    max_length=1024,  # max tokens length (Table 2 of the paper)
+    max_grad_norm=2,  # max gradient norm (Table 2 of the paper)
+    warmup_steps=100,  # warm-up steps (Table 2 of the paper)
+)
+```
+
 ### Self-Play Preference Optimization for Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2405.00675
@@ -1016,9 +1038,53 @@ training_args = RLOOConfig(
 )
 ```
 
+## Odds Ratio Preference Optimization
+
+Papers relating to the [`experimental.orpo.ORPOTrainer`]
+
+### ORPO: Monolithic Preference Optimization without Reference Model
+
+**📜 Paper**: https://huggingface.co/papers/2403.07691
+
+The introduction of a reference model-free monolithic odds ratio preference optimization algorithm (ORPO) enhances preference alignment during supervised fine-tuning, surpassing larger models in key evaluations. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.orpo import ORPOConfig
+
+training_args = ORPOConfig(
+    beta=0.1,  # λ odds ratio loss weight (Table 7 of the paper, Mistral-ORPO-β)
+    learning_rate=5e-6,  # learning rate (Appendix C of the paper)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (Appendix C of the paper)
+    num_train_epochs=5,  # Appendix C of the paper
+    warmup_steps=200,  # warm-up steps (Appendix C of the paper)
+    per_device_train_batch_size=8,  # batch size (Appendix C of the paper)
+)
+```
+
 ## Contrastive Preference Optimization
 
 Papers relating to the [`experimental.cpo.CPOTrainer`]
+
+### Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation
+
+**📜 Paper**: https://huggingface.co/papers/2401.08417
+
+Introduces Contrastive Preference Optimization (CPO), a preference-based method for machine translation that trains models to avoid adequate-but-imperfect translations instead of mimicking references as in SFT. The paper analyzes limitations of SFT on MT (including reference quality issues) and shows that applying CPO to ALMA with only 22K parallel sentences yields ALMA-R, which matches or exceeds WMT competition winners and GPT-4 on WMT'21–WMT'23. Used in TRL via [`experimental.cpo.CPOTrainer`]. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.cpo import CPOConfig
+
+training_args = CPOConfig(
+    loss_type="sigmoid",  # preference learning loss (Section 3 of the paper)
+    cpo_alpha=1.0,  # NLL regularizer weight (Section 3 of the paper)
+    beta=0.1,  # β temperature (Section 4.2 of the paper)
+    learning_rate=1e-4,  # learning rate (official code)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (official code)
+    num_train_epochs=1,  # Section 4.2 of the paper
+    warmup_ratio=0.01,  # warm-up ratio (Section 4.2 of the paper)
+    max_length=512,  # max sequence length (Section 4.2 of the paper)
+)
+```
 
 ### SimPO: Simple Preference Optimization with a Reference-Free Reward
 
