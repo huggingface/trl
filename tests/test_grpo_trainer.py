@@ -989,11 +989,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
-    @pytest.mark.xfail(
-        not is_liger_kernel_available(min_version="0.6.6"),
-        reason="Requires vllm_is_ratio support in liger-kernel >= 0.6.6 (linkedin/Liger-Kernel#1088)",
-        strict=True,
-    )
     def test_compute_liger_loss_passes_vllm_is_ratio(self):
         """Test that importance_sampling_ratio from inputs is passed to liger_grpo_loss as vllm_is_ratio."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
