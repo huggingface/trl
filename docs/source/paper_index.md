@@ -722,6 +722,28 @@ training_args = DPOConfig(
 
 For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
+### Learn Your Reference Model for Real Good Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2404.09656
+
+Trust Region DPO (TR-DPO) updates the reference policy during training, demonstrating effectiveness against DPO on the Anthropic HH and TLDR datasets, outperforming DPO by up to 19% measured by automatic evaluation with GPT-4, improving coherence, correctness, level of detail, helpfulness, and harmlessness. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    sync_ref_model=True,  # enable TR-DPO (Section 3 of the paper)
+    ref_model_mixup_alpha=0.6,  # α soft update weight (Table 1 of the paper)
+    ref_model_sync_steps=512,  # τ update frequency in steps (Table 1 of the paper)
+    beta=0.05,  # β temperature (Table 1 of the paper)
+    learning_rate=1e-6,  # learning rate (Table 2 of the paper)
+    num_train_epochs=1,  # Table 2 of the paper
+    max_length=1024,  # max tokens length (Table 2 of the paper)
+    max_grad_norm=2,  # max gradient norm (Table 2 of the paper)
+    warmup_steps=100,  # warm-up steps (Table 2 of the paper)
+)
+```
+
 ### Self-Play Preference Optimization for Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2405.00675
@@ -1013,6 +1035,29 @@ from trl import RLOOConfig
 
 training_args = RLOOConfig(
     normalize_advantages=True,  # global advantage normalization, core of REINFORCE++
+)
+```
+
+## Odds Ratio Preference Optimization
+
+Papers relating to the [`experimental.orpo.ORPOTrainer`]
+
+### ORPO: Monolithic Preference Optimization without Reference Model
+
+**📜 Paper**: https://huggingface.co/papers/2403.07691
+
+The introduction of a reference model-free monolithic odds ratio preference optimization algorithm (ORPO) enhances preference alignment during supervised fine-tuning, surpassing larger models in key evaluations. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.orpo import ORPOConfig
+
+training_args = ORPOConfig(
+    beta=0.1,  # λ odds ratio loss weight (Table 7 of the paper, Mistral-ORPO-β)
+    learning_rate=5e-6,  # learning rate (Appendix C of the paper)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (Appendix C of the paper)
+    num_train_epochs=5,  # Appendix C of the paper
+    warmup_steps=200,  # warm-up steps (Appendix C of the paper)
+    per_device_train_batch_size=8,  # batch size (Appendix C of the paper)
 )
 ```
 
