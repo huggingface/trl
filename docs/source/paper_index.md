@@ -1090,7 +1090,24 @@ trainer.train()
 
 ## Reward Modeling
 
-Papers relating to the [`RewardTrainer`]
+Papers relating to the [`RewardTrainer`] and [`experimental.prm.PRMTrainer`]
+
+### Solving math word problems with process- and outcome-based feedback
+
+**📜 Paper**: https://huggingface.co/papers/2211.14275
+
+Recent work has shown that asking language models to generate reasoning steps improves performance on many reasoning tasks. When moving beyond prompting, this raises the question of how we should supervise such models: outcome-based approaches which supervise the final result, or process-based approaches which supervise the reasoning process itself? Differences between these approaches might naturally be expected not just in final-answer errors but also in reasoning errors, which can be difficult to detect and are problematic in many real-world domains such as education. We run the first comprehensive comparison between process- and outcome-based approaches trained on a natural language task, GSM8K. We find that pure outcome-based supervision produces similar final-answer error rates with less label supervision. However, for correct reasoning steps we find it necessary to use process-based supervision or supervision from learned reward models that emulate process-based feedback. In total, we improve the previous best results from 16.8% to 12.7% final-answer error and 14.0% to 3.4% reasoning error among final-answer-correct solutions. To train a PRM using TRL, use this configuration:
+
+```python
+from trl.experimental.prm import PRMConfig
+
+training_args = PRMConfig(
+    step_separator="\n",  # separator between reasoning steps (TRL implementation detail)
+    train_on_last_step_only=False,  # supervise all steps, not just the last one (TRL implementation detail)
+)
+```
+
+The paper does not specify training hyperparameters; it focuses on comparing process-based vs outcome-based supervision strategies.
 
 ### Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking
 
