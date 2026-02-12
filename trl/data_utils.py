@@ -785,7 +785,6 @@ def pack_dataset(
     dataset: DatasetType,
     seq_length: int,
     strategy: str = "bfd",
-    requeue_truncated_sequences: bool = False,
     map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
@@ -797,18 +796,16 @@ def pack_dataset(
         seq_length (`int`):
             Target sequence length to pack to.
         strategy (`str`, *optional*, defaults to `"bfd"`):
-            Packing strategy to use. Can be either:
+            Packing strategy to use. Can be one of:
 
-            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries inside each packed sample.
+            - `"bfd"` (Best Fit Decreasing): Preserves sequence boundaries and truncates sequences that exceed
+                `seq_length`, discarding overflow tokens. Ideal for SFT and conversational datasets where maintaining
+                conversation structure is important.
+            - `"bfd-requeue"`: Similar to `"bfd"` but re-queues truncated overflow tokens for packing into other
+                sequences. Prevents token loss for pre-training or long documents, but may break conversation structure
+                in SFT datasets.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
-        requeue_truncated_sequences (`bool`, *optional*, defaults to `False`):
-            Only applicable when `strategy="bfd"`. Controls behavior when sequences exceed `seq_length`:
-
-            - `False` (default): Truncates sequences to `seq_length` and discards overflow tokens. Preserves
-                conversation structure in SFT datasets.
-            - `True`: Splits long sequences into fragments and re-queues overflow for packing. Prevents token loss
-                for pre-training or long documents, but may break conversation structure.
         map_kwargs (`dict`, *optional*):
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
@@ -826,15 +823,15 @@ def pack_dataset(
     ...     "attention_mask": [[1, 1, 1, 0, 0], [1, 0], [1, 1, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
-    >>> # Default behavior (SFT-friendly): truncates long sequences
+    >>> # Default "bfd" strategy (SFT-friendly): truncates long sequences
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7]],
      'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 1], [1, 0]],
      'seq_lengths': [[4], [3, 1], [2]]}
 
-    >>> # With requeue_truncated_sequences=True: preserves all tokens
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd", requeue_truncated_sequences=True)
+    >>> # "bfd-requeue" strategy: preserves all tokens
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd-requeue")
     >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 5], [6, 7, 11]],
      'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 0], [1, 0, 1]],
@@ -849,13 +846,20 @@ def pack_dataset(
         dataset = dataset.map(
             _pack_bfd,
             batched=True,
-            fn_kwargs={"seq_length": seq_length, "requeue_truncated_sequences": requeue_truncated_sequences},
+            fn_kwargs={"seq_length": seq_length, "requeue_truncated_sequences": False},
+            **map_kwargs,
+        )
+    elif strategy == "bfd-requeue":
+        dataset = dataset.map(
+            _pack_bfd,
+            batched=True,
+            fn_kwargs={"seq_length": seq_length, "requeue_truncated_sequences": True},
             **map_kwargs,
         )
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd', 'bfd-requeue', or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 
