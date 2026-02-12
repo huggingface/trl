@@ -127,6 +127,8 @@
     title: PAPO
   - local: ppo_trainer
     title: PPO
+  - local: privileged_gkd_trainer
+    title: Privileged GKD
   - local: prm_trainer
     title: PRM
   - local: winrate_callback

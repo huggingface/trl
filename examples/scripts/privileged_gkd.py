@@ -1,0 +1,147 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# /// script
+# dependencies = [
+#     "trl",
+#     "peft",
+#     "trackio",
+#     "kernels",
+# ]
+# ///
+
+"""
+# 训练示例（teacher 可见 privileged_messages，student 不可见）
+python examples/scripts/privileged_gkd.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name your-org/your-dataset \
+    --dataset_train_split train \
+    --dataset_test_split test \
+    --output_dir privileged-gkd-model \
+    --lmbda 1.0 \
+    --share_student_as_teacher true \
+    --privileged_key privileged_messages \
+    --report_to none
+"""
+
+import os
+
+from datasets import DatasetDict, load_dataset
+from transformers import AutoTokenizer, GenerationConfig
+
+from trl import (
+    LogCompletionsCallback,
+    ModelConfig,
+    ScriptArguments,
+    TrlParser,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+)
+from trl.experimental.gkd import PrivilegedGKDConfig, PrivilegedSelfDistillTrainer
+
+
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
+def _validate_dataset_has_privileged_key(dataset, split_name: str, key: str):
+    if split_name not in dataset:
+        raise ValueError(f"数据集中不存在 split `{split_name}`。可用 split: {list(dataset.keys())}")
+    split_dataset = dataset[split_name]
+    if key not in split_dataset.column_names:
+        raise ValueError(
+            f"split `{split_name}` 缺少特权信息字段 `{key}`。当前字段: {split_dataset.column_names}。"
+        )
+
+
+if __name__ == "__main__":
+    parser = TrlParser((ScriptArguments, PrivilegedGKDConfig, ModelConfig))
+    script_args, training_args, model_args = parser.parse_args_and_config()
+
+    ################
+    # Model & Tokenizer
+    ################
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        dtype=model_args.dtype,
+        use_cache=False if training_args.gradient_checkpointing else True,
+    )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+    training_args.model_init_kwargs = model_kwargs
+
+    teacher_model_kwargs = dict(
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        dtype=model_args.dtype,
+        use_cache=True,
+    )
+    if quantization_config is not None:
+        teacher_model_kwargs["device_map"] = get_kbit_device_map()
+        teacher_model_kwargs["quantization_config"] = quantization_config
+    training_args.teacher_model_init_kwargs = teacher_model_kwargs
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path,
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        padding_side="left",
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    ################
+    # Dataset
+    ################
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    if not isinstance(dataset, DatasetDict):
+        raise ValueError("该脚本要求 load_dataset 返回 DatasetDict（需要包含 train/test split）。")
+
+    _validate_dataset_has_privileged_key(dataset, script_args.dataset_train_split, training_args.privileged_key)
+    if training_args.eval_strategy != "no":
+        _validate_dataset_has_privileged_key(dataset, script_args.dataset_test_split, training_args.privileged_key)
+
+    ################
+    # Training
+    ################
+    trainer = PrivilegedSelfDistillTrainer(
+        model=model_args.model_name_or_path,
+        teacher_model=training_args.teacher_model_name_or_path,
+        args=training_args,
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        processing_class=tokenizer,
+        peft_config=get_peft_config(model_args),
+    )
+
+    if training_args.eval_strategy != "no":
+        generation_config = GenerationConfig(
+            max_new_tokens=training_args.max_new_tokens,
+            do_sample=True,
+            temperature=training_args.temperature,
+        )
+        completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+        trainer.add_callback(completions_callback)
+
+    trainer.train()
+
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

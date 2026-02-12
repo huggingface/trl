@@ -50,6 +50,7 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 
 - [`GKDTrainer`](gkd_trainer) 🧪
 - [`MiniLLMTrainer`](minillm_trainer) 🧪
+- [`PrivilegedSelfDistillTrainer`](privileged_gkd_trainer) 🧪
 
 </div>
 </div>

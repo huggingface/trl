@@ -14,6 +14,14 @@
 
 from .gkd_config import GKDConfig
 from .gkd_trainer import GKDTrainer
+from .privileged_gkd_config import PrivilegedGKDConfig
+from .privileged_gkd_trainer import DataCollatorForPrivilegedGKD, PrivilegedSelfDistillTrainer
 
 
-__all__ = ["GKDConfig", "GKDTrainer"]
+__all__ = [
+    "GKDConfig",
+    "GKDTrainer",
+    "PrivilegedGKDConfig",
+    "DataCollatorForPrivilegedGKD",
+    "PrivilegedSelfDistillTrainer",
+]
