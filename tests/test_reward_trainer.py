@@ -176,6 +176,7 @@ class TestRewardTrainer(TrlTestCase):
         # Instantiate the model
         model = AutoModelForSequenceClassification.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            num_labels=1,  # required for reward models
             dtype="float32",
         )
 
@@ -341,7 +342,11 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_peft_model(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_id,
+            num_labels=1,  # required for reward models
+            dtype="float32",
+        )
 
         # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
