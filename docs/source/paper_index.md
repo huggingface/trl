@@ -890,6 +890,22 @@ trainer.train()
 
 ```
 
+### Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2411.10442
+
+Introduces Mixed Preference Optimization (MPO) to improve multimodal reasoning in MLLMs, addressing distribution shift and weak Chain-of-Thought (CoT) after standard pre-training and SFT. The paper contributes (1) MMPR, an automated pipeline for high-quality multimodal preference data, and (2) MPO, a combined preference objective (pairwise + BCO-style + SFT) that boosts CoT. InternVL2-8B-MPO reaches 67.0 on MathVista (+8.7 over InternVL2-8B), comparable to the 10× larger InternVL2-76B. Used in TRL via [`DPOConfig`] with composite loss. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type=["sigmoid", "bco_pair", "sft"],  # ℒ = w_p·ℒ_p + w_q·ℒ_q + w_g·ℒ_g (Section 3.2 of the paper)
+    loss_weights=[0.8, 0.2, 1.0],  # w_p, w_q, w_g loss weights (Section 7 of the paper)
+    learning_rate=5e-6,  # learning rate (Section 7 of the paper)
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
