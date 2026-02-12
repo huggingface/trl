@@ -974,7 +974,7 @@ SFTConfig(
 
 **📜 Paper**: https://huggingface.co/papers/1910.10683
 
-Transfer learning, where a model is first pre-trained on a data-rich task before being fine-tuned on a downstream task, has emerged as a powerful technique in natural language processing (NLP). The effectiveness of transfer learning has given rise to a diversity of approaches, methodology, and practice. In this paper, we explore the landscape of transfer learning techniques for NLP by introducing a unified framework that converts all text-based language problems into a text-to-text format. Our systematic study compares pre-training objectives, architectures, unlabeled data sets, transfer approaches, and other factors on dozens of language understanding tasks. By combining the insights from our exploration with scale and our new "Colossal Clean Crawled Corpus", we achieve state-of-the-art results on many benchmarks covering summarization, question answering, text classification, and more. To facilitate future work on transfer learning for NLP, we release our data set, pre-trained models, and code. The paper introduces the packing technique (Section 3.5.2), which groups multiple sequences into fixed-length blocks to reduce padding overhead and improve training efficiency. To enable packing with TRL, use this configuration:
+The T5 paper proposes a unified text-to-text framework for transfer learning and introduces **sequence packing** (Section 3.5.2): grouping multiple short sequences into fixed-length blocks to reduce padding and improve training efficiency. Packing is supported in TRL via [`SFTConfig`] with the [`SFTTrainer`]. To enable packing with TRL, use this configuration:
 
 ```python
 from trl import SFTConfig
