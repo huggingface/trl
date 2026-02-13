@@ -2155,6 +2155,7 @@ class TestGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_jmespath
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_training_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
