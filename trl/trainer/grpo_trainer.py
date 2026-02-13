@@ -231,7 +231,8 @@ class GRPOTrainer(BaseTrainer):
             A callable that creates and returns an environment instance. The environment class should define methods
             that can be invoked as tools during generation. Each method should comply with the same requirements as the
             `tools` described above. If `environment_factory` is provided, an instance of the environment is created
-            for each generation in the batch, allowing for parallel and independent interactions.
+            for each generation in the batch, allowing for parallel and independent interactions. The environment must
+            also implement a callable `reset` method that can be used to reset state between generations.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -419,12 +420,19 @@ class GRPOTrainer(BaseTrainer):
         self.rollout_func = rollout_func
 
         # Tools
-        if tools or environment_factory:
+        if tools:
             if not Version(transformers.__version__) >= Version("5.0.0"):
                 raise ImportError(
-                    "Using tools with GRPOTrainer requires transformers version 5.0.0 or higher. Please use "
-                    "transformers with `pip install --pre transformers` to use this feature."
+                    "Using tools with GRPOTrainer requires transformers version 5.0.0 or higher. Please upgrade "
+                    "transformers with `pip install --upgrade transformers` to use this feature."
                 )
+        if environment_factory:
+            if not Version(transformers.__version__) >= Version("5.2.0.dev0"):
+                raise ImportError(
+                    "Using `environment_factory` with GRPOTrainer requires transformers version 5.2.0.dev0 or higher. "
+                    "Please upgrade transformers with `pip install --upgrade transformers` to use this feature."
+                )
+        if tools or environment_factory:
             if not is_jmespath_available():
                 raise ImportError(
                     "Using tools with GRPOTrainer requires the jmespath library for response parsing. Please install "
@@ -433,7 +441,9 @@ class GRPOTrainer(BaseTrainer):
 
         # Create the environments and extract their methods to be used as tools. We create one environment per rollout
         generation_batch_size = args.per_device_train_batch_size * args.steps_per_generation
-        self.environments = [environment_factory() for _ in range(generation_batch_size)] if environment_factory is not None else []
+        self.environments = (
+            [environment_factory() for _ in range(generation_batch_size)] if environment_factory is not None else []
+        )
         environment_methods = [[] for _ in range(generation_batch_size)]
         for i, environment in enumerate(self.environments):
             has_reset = False

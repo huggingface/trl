@@ -1,9 +1,25 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # pip install git+https://github.com/huggingface/transformers.git@json-schema-support-methods
 
-from trl import GRPOTrainer, GRPOConfig
 from datasets import Dataset
 from echo_env import EchoEnv
 from echo_env.models import EchoAction
+
+from trl import GRPOConfig, GRPOTrainer
+
 
 dataset = Dataset.from_dict(
     {
@@ -24,7 +40,7 @@ def reward_func(completions, environments, **kwargs):
 
 class MyEchoEnv:
     def __init__(self):
-        self.env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
+        self.env = EchoEnv(base_url="https://qgallouedec-echo-env.hf.space")
 
     def reset(self) -> None:
         self._reward = None
@@ -57,7 +73,12 @@ trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
     train_dataset=dataset,
     reward_funcs=reward_func,
-    args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}, log_completions=True, logging_steps=2),
+    args=GRPOConfig(
+        chat_template_kwargs={"enable_thinking": False},
+        log_completions=True,
+        logging_steps=2,
+        num_completions_to_print=1,
+    ),
     environment_factory=MyEchoEnv,
 )
 trainer.train()
