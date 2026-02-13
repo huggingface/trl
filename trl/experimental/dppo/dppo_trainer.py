@@ -409,29 +409,17 @@ class DPPOTrainer(GRPOTrainer):
             token_type_ids=inputs.get("token_type_ids"),
         )
 
-        if self.top_entropy_quantile < 1.0:
-            entropy_mask = self.get_high_entropy_mask(entropies, mask, 1 - self.top_entropy_quantile)
-        else:
-            entropy_mask = None
-
         # Compute the loss
         advantages = inputs["advantages"]
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
 
         old_per_token_logps = inputs.get("old_per_token_logps")
-        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
-
-        # Off-policy mask (same as GRPO)
-        if self.off_policy_mask_threshold is not None:
-            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
-            off_policy_mask = self.get_off_policy_mask(
-                advantages=advantages,
-                per_token_logps=per_token_logps,
-                sampling_per_token_logps=sampling_per_token_logps,
-                mask=mask,
-                off_policy_threshold=self.off_policy_mask_threshold,
-            )
+        sampling_per_token_logps = inputs.get("sampling_per_token_logps")
+        if self.use_vllm and sampling_per_token_logps is not None:
+            old_per_token_logps = sampling_per_token_logps
+        elif old_per_token_logps is None:
+            old_per_token_logps = per_token_logps.detach()
 
         # KL divergence with reference model
         if self.beta != 0.0:
@@ -447,37 +435,12 @@ class DPPOTrainer(GRPOTrainer):
         # DPPO loss: -advantages * ratio * mask * log_prob
         per_token_loss = -advantages * ratio * divergence_mask * per_token_logps
 
-        if self.off_policy_mask_threshold is not None:
-            per_token_loss = per_token_loss * off_policy_mask
-
-        if entropy_mask is not None:
-            per_token_loss = per_token_loss * entropy_mask
-
-        if self.use_vllm and self.vllm_importance_sampling_correction:
-            per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
-
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        # Normalize loss (reuse GRPO's normalization branches)
         mode = "train" if self.model.training else "eval"
-        if self.loss_type in ["grpo", "sapo"]:
-            loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
-            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
-            loss = loss / normalizer
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
-            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
-            loss = loss / normalizer
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
-            loss = loss / normalizer
-        elif self.loss_type in ["cispo", "dapo"]:
-            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
-            loss = (per_token_loss * mask).sum() / normalizer
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+        normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+        loss = (per_token_loss * mask).sum() / normalizer
 
         # Log metrics
         completion_token_count = mask.sum().clamp(min=1.0)
@@ -504,12 +467,12 @@ class DPPOTrainer(GRPOTrainer):
         mask_ratio = masked_batch_mean(is_masked.float())
 
         gathered_mask_ratio_neg = self.accelerator.gather(mask_ratio_neg)
-        self._metrics[mode]["clip_ratio/low_mean"].append(gathered_mask_ratio_neg.nanmean().item())
-        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_mask_ratio_neg).item())
+        self._metrics[mode]["mask_ratio/low_mean"].append(gathered_mask_ratio_neg.nanmean().item())
+        self._metrics[mode]["mask_ratio/low_min"].append(nanmin(gathered_mask_ratio_neg).item())
         gathered_mask_ratio_pos = self.accelerator.gather(mask_ratio_pos)
-        self._metrics[mode]["clip_ratio/high_mean"].append(gathered_mask_ratio_pos.nanmean().item())
-        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_mask_ratio_pos).item())
+        self._metrics[mode]["mask_ratio/high_mean"].append(gathered_mask_ratio_pos.nanmean().item())
+        self._metrics[mode]["mask_ratio/high_max"].append(nanmax(gathered_mask_ratio_pos).item())
         gathered_mask_ratio = self.accelerator.gather(mask_ratio)
-        self._metrics[mode]["clip_ratio/region_mean"].append(gathered_mask_ratio.nanmean().item())
+        self._metrics[mode]["mask_ratio/region_mean"].append(gathered_mask_ratio.nanmean().item())
 
         return loss

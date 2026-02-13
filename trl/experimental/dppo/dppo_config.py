@@ -90,3 +90,15 @@ class DPPOConfig(GRPOConfig):
 
         if self.clip_ratio_c <= 0:
             raise ValueError(f"clip_ratio_c must be > 0, got {self.clip_ratio_c}")
+
+        if self.loss_type != "dapo":
+            raise ValueError("loss_type is not supported for DPPO")
+
+        if self.top_entropy_quantile != 1.0:
+            raise ValueError("top_entropy_quantile is not supported for DPPO")
+
+        if self.off_policy_mask_threshold is not None:
+            raise ValueError("off_policy_mask_threshold is not supported for DPPO")
+
+        if self.vllm_importance_sampling_correction:
+            raise ValueError("vllm_importance_sampling_correction is not supported for DPPO")
