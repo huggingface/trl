@@ -1,4 +1,4 @@
-# pip install a specific transformers branch: pip install git+https://github.com/huggingface/transformers.git@json-schema-support-methods
+# pip install git+https://github.com/huggingface/transformers.git@json-schema-support-methods
 
 from trl import GRPOTrainer, GRPOConfig
 from datasets import Dataset
