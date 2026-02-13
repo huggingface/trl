@@ -1340,6 +1340,8 @@ class GRPOTrainer(BaseTrainer):
                                 tool_call_results.append((name, sync_tool_dict[name](**function["arguments"])))
                             elif name in async_tool_dict:
                                 async_coros.append((name, async_tool_dict[name](**function["arguments"])))
+                            else:
+                                raise ValueError(f"Tool {name} not found.")
                         except Exception as e:
                             tool_failure_count += 1
                             result = {"error": str(e)}
