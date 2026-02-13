@@ -437,8 +437,8 @@ You can combine multi-node with DeepSpeed by setting `distributed_type: DEEPSPEE
 
 ### Further Reading
 
-- [Accelerate: Launching Multi-Node Training](https://huggingface.co/docs/accelerate/concept_guides/deferring_initialization)
-- [Accelerate: Using `accelerate launch`](https://huggingface.co/docs/accelerate/concept_guides/using_accelerate)
+- [Accelerate: Launching Scripts](https://huggingface.co/docs/accelerate/basic_tutorials/launch)
+- [Accelerate: Example Zoo](https://huggingface.co/docs/accelerate/usage_guides/training_zoo)
 - [SLURM Workload Manager Documentation](https://slurm.schedmd.com/) - For cluster job scheduling
 
 
