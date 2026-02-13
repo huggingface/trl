@@ -458,33 +458,34 @@ class GRPOTrainer(BaseTrainer):
 
         # Create the environments and extract their methods to be used as tools. We create one environment per rollout
         generation_batch_size = args.per_device_train_batch_size * args.steps_per_generation
-        self.environments = (
-            [environment_factory() for _ in range(generation_batch_size)] if environment_factory is not None else []
-        )
-        environment_methods = [[] for _ in range(generation_batch_size)]
-        for i, environment in enumerate(self.environments):
-            has_reset = False
-            for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
-                if name == "reset":
-                    has_reset = True
-                elif not name.startswith("_"):
-                    environment_methods[i].append(member)
-            if not has_reset:
-                raise ValueError(
-                    "Each environment instance returned by `environment_factory` must define a callable `reset` "
-                )
+        if environment_factory is not None:
+            self.environments = [environment_factory() for _ in range(generation_batch_size)]
+            environment_methods = [[] for _ in range(generation_batch_size)]
+            for i, environment in enumerate(self.environments):
+                has_reset = False
+                for name, member in inspect.getmembers(environment, predicate=inspect.ismethod):
+                    if name == "reset":
+                        has_reset = True
+                    elif not name.startswith("_"):
+                        environment_methods[i].append(member)
+                if not has_reset:
+                    raise ValueError(
+                        "Each environment instance returned by `environment_factory` must define a callable `reset` "
+                    )
+        else:
+            self.environments = None
 
         tools = tools or []
         self._sync_tool_dicts = [{} for _ in range(generation_batch_size)]
         self._async_tool_dicts = [{} for _ in range(generation_batch_size)]
         for i in range(generation_batch_size):
-            for tool in tools + environment_methods[i]:
+            for tool in tools + (environment_methods[i] if self.environments is not None else []):
                 if asyncio.iscoroutinefunction(tool):
                     self._async_tool_dicts[i][tool.__name__] = tool
                 else:
                     self._sync_tool_dicts[i][tool.__name__] = tool
 
-        self.tools = tools + environment_methods[0]  # we assume all environment instances have the same methods
+        self.tools = tools + (environment_methods[0] if self.environments is not None else [])
 
         # Check for async functions to start an event loop on a daemon thread
         self._has_async_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
@@ -1335,7 +1336,8 @@ class GRPOTrainer(BaseTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 tool_call_list = tool_calls[idx]
                 prompt_completion_tool = prompt_completion_tools[idx]
-                sync_tool_dict, async_tool_dict = self._sync_tool_dicts[idx], self._async_tool_dicts[idx]
+                sync_tool_dict = self._sync_tool_dicts[idx_with_tool]
+                async_tool_dict = self._async_tool_dicts[idx_with_tool]
                 # Append the last assistant message (which triggered tool_calls) to the prompt
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
                 async_coros = []
