@@ -644,8 +644,7 @@ trainer = GRPOTrainer(
 )
 ```
 
-You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment
-instance per rollout and exposes the environment's public methods as tools.
+You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
 
 > [!IMPORTANT]
 > `environment_factory` requires `transformers>=5.2.0.dev0`.
