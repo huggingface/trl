@@ -679,7 +679,6 @@ class IncrementEnv:
         self.counter += step
         return self.counter
 
-
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
     args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
