@@ -107,6 +107,18 @@ class TestDataCollatorForPreference(TrlTestCase):
 
 
 class TestRewardTrainer(TrlTestCase):
+    def test_raises_error_when_model_num_labels_not_one(self):
+        """Test that RewardTrainer raises ValueError when model doesn't have num_labels=1."""
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            dtype="float32",
+            # num_labels=2,  # Defaults to 2 num_labels for causal models
+        )
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match=r"reward models require `num_labels=1`"):
+            RewardTrainer(model=model, args=training_args)
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -176,6 +188,7 @@ class TestRewardTrainer(TrlTestCase):
         # Instantiate the model
         model = AutoModelForSequenceClassification.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            num_labels=1,  # required for reward models
             dtype="float32",
         )
 
@@ -341,7 +354,11 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_peft_model(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_id,
+            num_labels=1,  # required for reward models
+            dtype="float32",
+        )
 
         # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
