@@ -446,7 +446,8 @@ class GRPOTrainer(BaseTrainer):
             if not Version(transformers.__version__) >= Version("5.2.0.dev0"):
                 raise ImportError(
                     "Using `environment_factory` with GRPOTrainer requires transformers version 5.2.0.dev0 or higher. "
-                    "Please upgrade transformers with `pip install --upgrade transformers` to use this feature."
+                    "Please install transformers from the main branch with `pip install "
+                    "git+https://github.com/huggingface/transformers.git@main` to use this feature."
                 )
         if tools or environment_factory:
             if not is_jmespath_available():
