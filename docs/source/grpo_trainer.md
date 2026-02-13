@@ -644,6 +644,55 @@ trainer = GRPOTrainer(
 )
 ```
 
+You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment
+instance per rollout and exposes the environment's public methods as tools.
+
+> [!IMPORTANT]
+> `environment_factory` requires `transformers>=5.2.0.dev0`.
+
+The following is a minimal example of using `environment_factory` to define a simple environment with an `increment` method, which is exposed as a tool to the agent:
+
+```python
+from datasets import Dataset
+from trl import GRPOConfig, GRPOTrainer
+
+instructions = [f"Increment the counter by {i}." for i in range(1, 7)]
+dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": instruction}] for instruction in instructions]})
+
+def reward_func(environments, **kwargs):
+    return [environment.reward for environment in environments]
+
+class IncrementEnv:
+    def reset(self) -> None:
+        """Reset the environment state between generations."""
+        self._value = 0
+        self.reward = 0
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self._value += step
+        self.reward += 1
+        return self._value
+
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
+    train_dataset=dataset,
+    reward_funcs=reward_func,
+    environment_factory=IncrementEnv,
+)
+trainer.train()
+```
+
 ### Supported Models
 
 Tested with:
