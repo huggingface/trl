@@ -659,16 +659,14 @@ from trl import GRPOConfig, GRPOTrainer
 instructions = [f"Increment the counter by {i}." for i in range(1, 7)]
 dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": instruction}] for instruction in instructions]})
 
-def reward_func(environments, **kwargs):
-    return [environment.reward for environment in environments]
+def reward_func(environments, **kwargs):  # dummy reward: the reward is the current value of the counter
+    return [environment.counter for environment in environments]
 
 class IncrementEnv:
-    def reset(self) -> None:
-        """Reset the environment state between generations."""
-        self._value = 0
-        self.reward = 0
+    def reset(self) -> None:  # the only required method for the environment is `reset`
+        self.counter = 0
 
-    def increment(self, step: int) -> int:
+    def increment(self, step: int) -> int:  # the other public methods of the environment are exposed as tools
         """
         Increment the internal counter.
 
@@ -678,9 +676,8 @@ class IncrementEnv:
         Returns:
             The updated counter value.
         """
-        self._value += step
-        self.reward += 1
-        return self._value
+        self.counter += step
+        return self.counter
 
 
 trainer = GRPOTrainer(
