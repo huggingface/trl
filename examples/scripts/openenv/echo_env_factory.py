@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# pip install git+https://github.com/huggingface/transformers.git@json-schema-support-methods
+# pip install git+https://github.com/huggingface/transformers.git@main
 
 from datasets import Dataset
 from echo_env import EchoEnv

@@ -239,7 +239,8 @@ class GRPOTrainer(BaseTrainer):
             that can be invoked as tools during generation. Each method should comply with the same requirements as the
             `tools` described above. If `environment_factory` is provided, an instance of the environment is created
             for each generation in the batch, allowing for parallel and independent interactions. The environment must
-            also implement a callable `reset` method that can be used to reset state between generations.
+            also implement a callable `reset` method that can be used to reset state between generations. This feature
+            is experimental and may change or be removed at any time without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -418,13 +419,21 @@ class GRPOTrainer(BaseTrainer):
         # Rollout function
         if rollout_func is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
             warnings.warn(
-                "You are importing from 'rollout_func', which is an experimental feature. This API may change or be "
-                "removed at any time without prior notice. Silence this warning by setting environment variable "
+                "You are using 'rollout_func', which is an experimental feature. This API may change or be removed at "
+                "any time without prior notice. Silence this warning by setting environment variable "
                 "TRL_EXPERIMENTAL_SILENCE=1.",
                 UserWarning,
                 stacklevel=2,
             )
         self.rollout_func = rollout_func
+        if environment_factory is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
+            warnings.warn(
+                "You are using 'environment_factory', which is an experimental feature. This API may change or be "
+                "removed at any time without prior notice. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Tools
         if tools:
