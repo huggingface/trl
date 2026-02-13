@@ -374,7 +374,7 @@ This command automatically:
 
 ## Multi-Node Training
 
-When a single machine doesn't have enough GPUs, TRL can scale training across multiple machines (nodes) using [🤗 Accelerate](https://huggingface.co/docs/accelerate/usage_guides/distributed_inference).
+When a single machine doesn't have enough GPUs, TRL can scale training across multiple machines (nodes) using [🤗 Accelerate](https://huggingface.co/docs/accelerate/basic_tutorials/launch#multi-node-training).
 
 ### Accelerate Configuration
 Create an `accelerate` config file (e.g., `multi_node.yaml`) for multi-node training. Key fields:
@@ -418,7 +418,7 @@ For clusters using SLURM job scheduler, create a job script (e.g., `slurm_job.sh
 #SBATCH --gpus-per-node=8
 #SBATCH --job-name=trl_multi
 
-srun accelerate launch --config_file multi_node.yaml --machine_rank $SLURM_NODEID train.py
+srun accelerate launch --config_file multi_node.yaml train.py
 ```
 
 Then submit the job:
@@ -426,7 +426,7 @@ Then submit the job:
 sbatch slurm_job.sh
 ```
 
-SLURM automatically distributes the training across all requested nodes and GPUs. The `$SLURM_NODEID` variable is automatically replaced with each node's rank (0, 1, etc.).
+SLURM automatically distributes the training across all requested nodes and GPUs, and `srun` configures the necessary environment variables for multi-node communication.
 
 **Key SLURM directives:**
 - `--nodes=2`: Request 2 compute nodes
