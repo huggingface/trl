@@ -27,7 +27,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import datasets
 import pandas as pd
@@ -117,6 +117,13 @@ RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
 # fields. Any extra fields (per-completion) are forwarded to the reward functions.
 RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
+
+
+class _SupportsReset(Protocol):
+    def reset(self) -> Any: ...
+
+
+EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 class GRPOTrainer(BaseTrainer):
@@ -227,7 +234,7 @@ class GRPOTrainer(BaseTrainer):
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
             `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
             and may change or be removed at any time without prior notice.
-        environment_factory (`type`, *optional*):
+        environment_factory (`EnvironmentFactory`, *optional*):
             A callable that creates and returns an environment instance. The environment class should define methods
             that can be invoked as tools during generation. Each method should comply with the same requirements as the
             `tools` described above. If `environment_factory` is provided, an instance of the environment is created
@@ -265,7 +272,7 @@ class GRPOTrainer(BaseTrainer):
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         rollout_func: RolloutFunc | None = None,
-        environment_factory: type | None = None,
+        environment_factory: EnvironmentFactory | None = None,
     ):
         # Args
         if args is None:
