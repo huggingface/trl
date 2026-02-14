@@ -42,6 +42,7 @@ from transformers import (
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
+    is_trackio_available,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
@@ -438,6 +439,7 @@ def generate_model_card(
     dataset_name: str | None,
     tags: list[str],
     wandb_url: str | None,
+    trackio_url: str | None,
     trainer_name: str,
     trainer_citation: str | None = None,
     template_file: str | None = None,
@@ -461,6 +463,8 @@ def generate_model_card(
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        trackio_url (`str` or `None`):
+            Trackio Space URL.
         comet_url (`str` or `None`):
             Comet experiment URL.
         trainer_name (`str`):
@@ -495,6 +499,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        trackio_url=trackio_url,
         comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
@@ -520,6 +525,26 @@ def get_comet_experiment_url() -> str | None:
         return comet_ml.get_running_experiment().url
 
     return None
+
+
+def get_trackio_space_url() -> str | None:
+    """
+    If Trackio integration is enabled, return the URL of the current Trackio Space; otherwise, return `None`.
+    """
+    if not is_trackio_available():
+        return None
+
+    from trackio import context_vars
+
+    run = context_vars.current_run.get()
+    space_id = run._space_id
+    if space_id is None:
+        return None
+    space_id = space_id.replace("/", "-")
+    project = run.project
+    name = run.name
+    url = f"https://{space_id}.hf.space?project={project}&runs={name}&sidebar=collapsed"
+    return url
 
 
 def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
