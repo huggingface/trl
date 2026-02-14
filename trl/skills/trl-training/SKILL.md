@@ -1,6 +1,6 @@
 ---
 name: trl-training
-description: Train and fine-tune transformer language models using TRL (Transformer Reinforcement Learning). Supports SFT, DPO, GRPO, KTO, RLOO and Reward Model training via CLI commands.
+description: Train and fine-tune transformer language models using TRL (Transformers Reinforcement Learning). Supports SFT, DPO, GRPO, KTO, RLOO and Reward Model training via CLI commands.
 license: Apache-2.0
 metadata:
   version: "1.0.0"
@@ -28,7 +28,7 @@ metadata:
 
 # TRL Training Skill
 
-You are an expert at using the TRL (Transformer Reinforcement Learning) library to train and fine-tune large language models.
+You are an expert at using the TRL (Transformers Reinforcement Learning) library to train and fine-tune large language models.
 
 ## Overview
 
@@ -36,9 +36,9 @@ TRL provides CLI commands for post-training foundation models using state-of-the
 
 - **SFT** (Supervised Fine-Tuning): Fine-tune models on instruction-following or conversational datasets
 - **DPO** (Direct Preference Optimization): Align models using preference data without a reward model
-- **GRPO** (Group Relative Policy Optimization): Train models using LLM-as-a-judge for feedback
+- **GRPO** (Group Relative Policy Optimization):Train models by ranking multiple sampled outputs relative to each other and optimizing based on their comparative rewards.
 - **KTO** (Kahneman-Tversky Optimization): Align models using binary feedback (good/bad)
-- **RLOO** (Reinforcement Learning with Language Model Objectives): Online RL training with generation-based rewards
+- **RLOO** (Reinforce Leave One Out): Online RL training with generation-based rewards
 - **Reward Model Training**: Train reward models for RLHF
 
 TRL is built on top of Hugging Face Transformers and Accelerate, providing seamless integration with the Hugging Face ecosystem.
@@ -115,11 +115,11 @@ trl grpo \
 
 - `--model_name_or_path`: Model to train
 - `--dataset_name`: Training dataset with prompts
-- `--judge_model`: Judge model for scoring (e.g., "gpt-4", "claude-3-opus")
-- `--num_generations`: Number of generations per prompt (default: 4)
+- `--reward_funcs`: Reward functions, one or more of "accuracy_reward", "reasoning_accuracy_reward", "think_format_reward", "get_soft_overlong_punishment"
+- `--num_generations`: Number of generations per prompt (default: 8)
 - `--learning_rate`: Learning rate (default: 1.0e-6)
 
-**Dataset format:** Requires "prompt" column. Generations are scored by the judge model.
+**Dataset format:** Requires "prompt" column. Generations are scored by the reward function
 
 ### trl kto - Kahneman-Tversky Optimization
 
@@ -278,7 +278,7 @@ trl sft --config sft_config.yaml --accelerate_config zero3
 
 **Completion format:**
 ```json
-{"prompt": "Translate to French: Hello", "completion": "Bonjour"}
+{"prompt": "The translation to French of Hello is", "completion": " Bonjour."}
 ```
 
 ### DPO/Reward Datasets
@@ -296,14 +296,14 @@ trl sft --config sft_config.yaml --accelerate_config zero3
 
 **Binary feedback format:**
 ```json
-{"prompt": "Explain gravity", "completion": "Gravity is...", "label": true}
+{"prompt": [{"role": "user", "content": "Explain gravity."}], "completion": [{"role": "assistant", "content": "Gravity is..."}], "label": true}
 ```
 
 ### GRPO/RLOO Datasets
 
 **Prompt-only format:**
 ```json
-{"prompt": "Solve: 2+2=?"}
+{"prompt": [{"role": "user", "content": "Solve: 2+2=?"}], "solution": "4"}
 ```
 
 Datasets can be:
@@ -335,7 +335,7 @@ trl sft \
   --model_name_or_path meta-llama/Llama-3.2-1B \
   --dataset_name trl-lib/Capybara \
   --output_dir ./llama-lora \
-  --use_peft true \
+  --use_peft \
   --lora_r 64 \
   --lora_alpha 64 \
   --lora_target_modules q_proj v_proj k_proj o_proj \
@@ -363,8 +363,8 @@ trl dpo \
 # Train with LLM judge feedback
 trl grpo \
   --model_name_or_path ./llama-sft \
-  --dataset_name trl-lib/gsm8k \
-  --judge_model gpt-4o \
+  --dataset_name trl-lib/DeepMath-103K \
+  --reward_funcs accuracy_reward \
   --output_dir ./llama-grpo \
   --num_generations 8 \
   --learning_rate 1.0e-6
@@ -374,8 +374,7 @@ trl grpo \
 
 ### CUDA Out of Memory
 
-- Reduce `--per_device_train_batch_size`
-- Increase `--gradient_accumulation_steps`
+- Reduce `--per_device_train_batch_size` and increase `--gradient_accumulation_steps`
 - Enable `--use_peft` for LoRA training
 - Use `--gradient_checkpointing` to save memory
 - Try smaller model or longer sequence truncation
@@ -406,8 +405,7 @@ trl grpo \
 
 - Check prompt format in dataset
 - Adjust `--temperature` and `--top_p` for generation
-- Verify judge model has API access (for GRPO)
-- Check reward model compatibility (for RLOO)
+- Verify the reward function (for GRPO/RLOO)
 
 ## Additional Resources
 
