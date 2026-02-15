@@ -222,6 +222,25 @@ training_args = GRPOConfig(
 )
 ```
 
+### DGPO: Difficulty-Aware Group Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2601.20614
+
+DGPO extends GRPO with difficulty-aware mechanisms: DGAE (difficulty-balanced group advantage estimation using MAD instead of std) and DQW (difficulty-aware question-level weighting). To use DGPO in TRL, enable the corresponding options in [`GRPOConfig`]:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    ...,
+    use_dgpo_dgae=True,
+    use_dgpo_dqw=True,
+    dgpo_dqw_temp=2.0,
+    dgpo_dqw_acc_reward_index=0,
+)
+trainer = GRPOTrainer(..., args=training_args, reward_funcs=[...], train_dataset=...)
+```
+
 ### Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)
 
 **📜 Paper**: https://huggingface.co/papers/2508.08221

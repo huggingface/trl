@@ -292,6 +292,24 @@ class GRPOConfig(TrainingArguments):
             Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
             [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
+        use_dgpo_dgae (`bool`, *optional*, defaults to `False`):
+            Whether to use difficulty-balanced group advantage estimation (DGAE). When `True`, the denominator when
+            scaling advantages uses the Mean Absolute Deviation (MAD) of rewards instead of the standard deviation, i.e.
+            advantage = (reward - mean) / (MAD + eps) with MAD = mean(|reward - mean|). Introduced in the [MathForge
+            paper](https://huggingface.co/papers/2601.20614) (ICLR 2026).
+        use_dgpo_dqw (`bool`, *optional*, defaults to `False`):
+            Whether to use difficulty-aware question-level weighting (DQW). When `True`, question weights (softmax over
+            negative mean accuracy reward at `dgpo_dqw_acc_reward_index`) are multiplied directly onto the advantages,
+            so harder questions get larger effective advantages. Introduced in the [MathForge
+            paper](https://huggingface.co/papers/2601.20614) (ICLR 2026).
+        dgpo_dqw_temp (`float`, *optional*, defaults to `2.0`):
+            Temperature for the DQW softmax over negative mean (accuracy) reward. Higher values make the weighting more
+            uniform; lower values concentrate weight on harder questions. Introduced in the [MathForge
+            paper](https://huggingface.co/papers/2601.20614) (ICLR 2026).
+        dgpo_dqw_acc_reward_index (`int`, *optional*, defaults to `0`):
+            Index of the accuracy reward in `reward_funcs` used by DQW for difficulty measure. The mean reward at this
+            index (per question) is used to compute question weights: lower mean accuracy means harder question.
+            Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026).
 
         > Parameters that control the logging
 
@@ -802,6 +820,37 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
             "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
             "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
+        },
+    )
+
+    use_dgpo_dgae: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use difficulty-balanced group advantage estimation (DGAE). When True, the denominator "
+            "when scaling advantages uses the Mean Absolute Deviation (MAD) of rewards instead of the standard "
+            "deviation. Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026)."
+        },
+    )
+    use_dgpo_dqw: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use difficulty-aware question-level weighting (DQW). When True, question weights are "
+            "multiplied directly onto the advantages. Introduced in the [MathForge paper](https://huggingface.co/"
+            "papers/2601.20614) (ICLR 2026)."
+        },
+    )
+    dgpo_dqw_temp: float = field(
+        default=2.0,
+        metadata={
+            "help": "Temperature for the DQW softmax over negative mean (accuracy) reward. Introduced in the "
+            "[MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026)."
+        },
+    )
+    dgpo_dqw_acc_reward_index: int = field(
+        default=0,
+        metadata={
+            "help": "Index of the accuracy reward in reward_funcs used by DQW for difficulty measure. Introduced in "
+            "the [MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026)."
         },
     )
 
