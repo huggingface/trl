@@ -78,8 +78,8 @@ def reward_fn(completions: list[str], **kwargs) -> list[float]:
     assert env_rewards is not None, "env_reward not found in kwargs"
     return [float(r) for r in env_rewards]
 
+
 async def call_nemo_gym_agents(
-    prompts: list[str],
     dataset_items: list[dict[str, Any]],
     agent_servers: dict[str, str],
     timeout: float,
@@ -89,7 +89,7 @@ async def call_nemo_gym_agents(
 ) -> list[dict[str, Any]]:
     async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
         tasks = []
-        for prompt, item in zip(prompts, dataset_items, strict=False):
+        for item in dataset_items:
             request_body = item.copy()
 
             if "responses_create_params" not in request_body:
@@ -150,7 +150,6 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
     try:
         responses = loop.run_until_complete(
             call_nemo_gym_agents(
-                prompts,
                 dataset_items,
                 trainer.args.agent_servers,
                 trainer.args.request_timeout,
@@ -295,6 +294,7 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
                 )
     return Dataset.from_list(data)
 
+
 def main():
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--config", required=True, help="Path to config YAML file")
@@ -381,6 +381,7 @@ def main():
     )
 
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+
 
 if __name__ == "__main__":
     main()
