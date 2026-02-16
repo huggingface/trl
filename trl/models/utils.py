@@ -19,16 +19,22 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
+import accelerate
 import torch
 import torch.nn as nn
 import transformers
+from accelerate import Accelerator
 from packaging.version import Version
+from torch.distributed.fsdp import FSDPModule
+from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig, PreTrainedModel
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
 
+if Version(accelerate.__version__) >= Version("1.11.0"):
+    from accelerate.utils.fsdp_utils import get_parameters_from_modules
+
 if TYPE_CHECKING:
-    from accelerate import Accelerator
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
@@ -252,27 +258,11 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
     return model
 
 
-def prepare_fsdp(model, accelerator):
-    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
-    from torch.distributed.fsdp import FSDPModule
-    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
-    fsdp_plugin = accelerator.state.fsdp_plugin
-    #check if using fsdp2
-    use_fsdp2 = getattr(fsdp_plugin, "fsdp_version", 1) == 2
-    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
-    # don't wrap it again
-    if not (isinstance(model, FSDP) or isinstance(model, FSDPModule)):
-        if use_fsdp2:
-            from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, OffloadPolicy, fully_shard
-            fully_shard(
-                model,
-                mesh=getattr(fsdp_plugin, "mesh",  None),
-                reshard_after_forward=fsdp_plugin.reshard_after_forward not in ("NO_SHARD", "SHARD_GRAD_OP") if isinstance(fsdp_plugin.reshard_after_forward, str) else fsdp_plugin.reshard_after_forward,
-                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
-                offload_policy=CPUOffloadPolicy() if fsdp_plugin.cpu_offload is True or getattr(fsdp_plugin.cpu_offload, "offload_params", False) else OffloadPolicy(),
-                ignored_params={p for m in fsdp_plugin.ignored_modules for p in m.parameters()} if fsdp_plugin.ignored_modules else None
-            )
-        else:
+def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
+    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so, don't wrap it again
+    if not isinstance(model, (FSDP, FSDPModule)):
+        fsdp_plugin = accelerator.state.fsdp_plugin
+        if fsdp_plugin.fsdp_version == 1:
             accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
             kwargs = {
                 "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
@@ -289,6 +279,29 @@ def prepare_fsdp(model, accelerator):
                 "device_id": accelerator.device,
             }
             model = FSDP(model, **kwargs)
+        elif fsdp_plugin.fsdp_version == 2:
+            from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+            mesh = getattr(accelerator, "torch_device_mesh", None)
+            if Version(accelerate.__version__) >= Version("1.11.0"):
+                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
+            else:
+                logging.warning(
+                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
+                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
+                )
+                ignored_params = None
+            fully_shard(
+                model,
+                reshard_after_forward=fsdp_plugin.reshard_after_forward,
+                offload_policy=fsdp_plugin.cpu_offload,
+                # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
+                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                mesh=mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+                ignored_params=ignored_params,
+            )
+        else:
+            raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()
     return model
 
