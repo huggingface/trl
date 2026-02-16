@@ -20,6 +20,7 @@ from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient
+from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
@@ -221,6 +222,7 @@ class TestVLLMClientServer(TrlTestCase):
         top_p = 0.9
         max_tokens = 8
         seed = 1234
+        num_logprobs = 5
 
         server_outputs = self.client.generate(
             prompts,
@@ -228,6 +230,7 @@ class TestVLLMClientServer(TrlTestCase):
             repetition_penalty=repetition_penalty,
             top_p=top_p,
             max_tokens=max_tokens,
+            logprobs=num_logprobs,
             generation_kwargs={"seed": seed},
         )
         os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -244,7 +247,7 @@ class TestVLLMClientServer(TrlTestCase):
             repetition_penalty=repetition_penalty,
             top_p=top_p,
             max_tokens=max_tokens,
-            logprobs=0,  # this is what's used in practice to get the logprobs of generated tokens
+            logprobs=num_logprobs,
             seed=seed,
         )
         colocate_outputs = llm.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
@@ -252,19 +255,43 @@ class TestVLLMClientServer(TrlTestCase):
         colocate_completion_ids = [
             list(output.token_ids) for outputs in colocate_outputs for output in outputs.outputs
         ]
-        colocate_logprobs = [
-            [next(iter(logprob.values())).logprob for logprob in output.logprobs]
-            for outputs in colocate_outputs
-            for output in outputs.outputs
-        ]
+        colocate_logprobs, colocate_logprob_token_ids = extract_logprobs(colocate_outputs)
 
+        # Generation correctness: prompt and completion IDs match between server and colocate
         assert server_outputs["prompt_ids"] == colocate_prompt_ids
         assert server_outputs["completion_ids"] == colocate_completion_ids
+
         server_logprobs = server_outputs["logprobs"]
-        assert len(server_logprobs) == len(colocate_logprobs)
+        server_logprob_token_ids = server_outputs["logprob_token_ids"]
+
+        # Shape: both should be (num_sequences, seq_len, num_logprobs) with multiple logprobs per token
+        assert len(server_logprobs) == len(prompts)
+        assert len(server_logprob_token_ids) == len(prompts)
+        for seq_lps in server_logprobs:
+            for token_lps in seq_lps:
+                assert len(token_lps) > 1, "Expected multiple logprobs per token when logprobs > 0"
+
+        # Value correctness: server extraction matches colocate extraction via extract_logprobs
+        assert server_logprob_token_ids == colocate_logprob_token_ids
         for server_seq, colocate_seq in zip(server_logprobs, colocate_logprobs, strict=True):
             assert len(server_seq) == len(colocate_seq)
-            assert server_seq == pytest.approx(colocate_seq, rel=1e-6, abs=1e-6)
+            for server_token_lps, colocate_token_lps in zip(server_seq, colocate_seq, strict=True):
+                assert server_token_lps == pytest.approx(colocate_token_lps, rel=1e-6, abs=1e-6)
+
+        # Ordering: logprobs at each position should be sorted descending
+        for seq_lps in server_logprobs:
+            for token_lps in seq_lps:
+                assert token_lps == sorted(token_lps, reverse=True), "Logprobs should be sorted descending"
+
+        # Sampled token presence: the actual completion token should appear in the logprob token IDs
+        for seq_idx, (completion_seq, token_ids_seq) in enumerate(
+            zip(server_outputs["completion_ids"], server_logprob_token_ids, strict=True)
+        ):
+            for pos, (sampled_id, lp_ids) in enumerate(zip(completion_seq, token_ids_seq, strict=True)):
+                assert sampled_id in lp_ids, (
+                    f"Sampled token {sampled_id} not found in logprob token IDs {lp_ids} "
+                    f"at sequence {seq_idx}, position {pos}"
+                )
 
     @classmethod
     def teardown_class(cls):
