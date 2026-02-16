@@ -1833,15 +1833,14 @@ class GRPOTrainer(BaseTrainer):
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
-        # Compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
-            _input=last_hidden_state,
-            lin_weight=unwrapped_model.lm_head.weight,
-            selected_token_ids=completion_ids,
-            # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
-            attention_mask=loss_mask,
-            advantages=inputs["advantages"],
-            completion_mask=completion_mask,
+        # Compute loss and metrics using triton grpo loss
+        loss, metrics = triton_grpo_loss(
+            model(**model_inputs).logits,
+            inputs.get("old_per_token_logps"),
+            inputs.get("ref_per_token_logps"),
+            completion_ids,
+            inputs["advantages"],
+            completion_mask=loss_mask,
             temperature=self.temperature,
             beta=self.beta,
             eps_low=self.epsilon_low,
@@ -1851,9 +1850,6 @@ class GRPOTrainer(BaseTrainer):
             max_completion_length=self.max_completion_length,
             importance_sampling_level=self.importance_sampling_level,
             reduce=True,
-            bias=unwrapped_model.lm_head.bias,
-            old_per_token_logps=inputs.get("old_per_token_logps"),
-            ref_per_token_logps=inputs.get("ref_per_token_logps"),
             vllm_is_ratio=inputs.get("importance_sampling_ratio"),
         )
 
