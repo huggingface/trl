@@ -131,6 +131,8 @@ def main():
             else:
                 print("Error: Unknown skills command")
                 return 1
+        skills_parser.print_help()
+        return 0
 
     elif args.command == "vllm-serve":
         (script_args,) = parser.parse_args_and_config()
