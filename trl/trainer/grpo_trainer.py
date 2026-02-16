@@ -1908,6 +1908,7 @@ class GRPOTrainer(BaseTrainer):
             bias=unwrapped_model.lm_head.bias,
             old_per_token_logps=inputs.get("old_per_token_logps"),
             ref_per_token_logps=inputs.get("ref_per_token_logps"),
+            vllm_is_ratio=inputs.get("importance_sampling_ratio"),
         )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
