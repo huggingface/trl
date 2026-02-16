@@ -1851,6 +1851,9 @@ class GRPOTrainer(BaseTrainer):
             max_completion_length=self.max_completion_length,
             importance_sampling_level=self.importance_sampling_level,
             reduce=True,
+            bias=unwrapped_model.lm_head.bias,
+            old_per_token_logps=inputs.get("old_per_token_logps"),
+            ref_per_token_logps=inputs.get("ref_per_token_logps"),
             vllm_is_ratio=inputs.get("importance_sampling_ratio"),
         )
 
