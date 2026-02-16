@@ -1,7 +1,6 @@
 # Paper Index
 
-> [!WARNING]
-> Section under construction. Feel free to contribute! See https://github.com/huggingface/trl/issues/4407.
+<!-- Within sections, papers are sorted by publish dates -->
 
 ## Group Relative Policy Optimization
 
@@ -612,8 +611,6 @@ training_args = DPOConfig(
     beta=0.1, # β in Appendix B of the paper
 )
 ```
-
-<!-- DPO loss types are sorted by publish dates -->
 
 ### SLiC-HF: Sequence Likelihood Calibration with Human Feedback
 
