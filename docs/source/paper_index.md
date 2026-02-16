@@ -722,6 +722,28 @@ training_args = DPOConfig(
 
 For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
+### Learn Your Reference Model for Real Good Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2404.09656
+
+Trust Region DPO (TR-DPO) updates the reference policy during training, demonstrating effectiveness against DPO on the Anthropic HH and TLDR datasets, outperforming DPO by up to 19% measured by automatic evaluation with GPT-4, improving coherence, correctness, level of detail, helpfulness, and harmlessness. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    sync_ref_model=True,  # enable TR-DPO (Section 3 of the paper)
+    ref_model_mixup_alpha=0.6,  # α soft update weight (Table 1 of the paper)
+    ref_model_sync_steps=512,  # τ update frequency in steps (Table 1 of the paper)
+    beta=0.05,  # β temperature (Table 1 of the paper)
+    learning_rate=1e-6,  # learning rate (Table 2 of the paper)
+    num_train_epochs=1,  # Table 2 of the paper
+    max_length=1024,  # max tokens length (Table 2 of the paper)
+    max_grad_norm=2,  # max gradient norm (Table 2 of the paper)
+    warmup_steps=100,  # warm-up steps (Table 2 of the paper)
+)
+```
+
 ### Self-Play Preference Optimization for Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2405.00675
@@ -868,6 +890,22 @@ trainer.train()
 
 ```
 
+### Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2411.10442
+
+Introduces Mixed Preference Optimization (MPO) to improve multimodal reasoning in MLLMs, addressing distribution shift and weak Chain-of-Thought (CoT) after standard pre-training and SFT. The paper contributes (1) MMPR, an automated pipeline for high-quality multimodal preference data, and (2) MPO, a combined preference objective (pairwise + BCO-style + SFT) that boosts CoT. InternVL2-8B-MPO reaches 67.0 on MathVista (+8.7 over InternVL2-8B), comparable to the 10× larger InternVL2-76B. Used in TRL via [`DPOConfig`] with composite loss. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type=["sigmoid", "bco_pair", "sft"],  # ℒ = w_p·ℒ_p + w_q·ℒ_q + w_g·ℒ_g (Section 3.2 of the paper)
+    loss_weights=[0.8, 0.2, 1.0],  # w_p, w_q, w_g loss weights (Section 7 of the paper)
+    learning_rate=5e-6,  # learning rate (Section 7 of the paper)
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
@@ -948,6 +986,21 @@ SFTConfig(
 )
 ```
 
+### Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer
+
+**📜 Paper**: https://huggingface.co/papers/1910.10683
+
+The T5 paper proposes a unified text-to-text framework for transfer learning and introduces **sequence packing** (Section 3.5.2): grouping multiple short sequences into fixed-length blocks to reduce padding and improve training efficiency. Packing is supported in TRL via [`SFTConfig`] with the [`SFTTrainer`]. To enable packing with TRL, use this configuration:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    packing=True,  # enable sequence packing (Section 3.5.2 of the paper)
+    max_length=512,  # packed sequence length (Section 3.5.2 of the paper)
+)
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
@@ -1016,9 +1069,53 @@ training_args = RLOOConfig(
 )
 ```
 
+## Odds Ratio Preference Optimization
+
+Papers relating to the [`experimental.orpo.ORPOTrainer`]
+
+### ORPO: Monolithic Preference Optimization without Reference Model
+
+**📜 Paper**: https://huggingface.co/papers/2403.07691
+
+The introduction of a reference model-free monolithic odds ratio preference optimization algorithm (ORPO) enhances preference alignment during supervised fine-tuning, surpassing larger models in key evaluations. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.orpo import ORPOConfig
+
+training_args = ORPOConfig(
+    beta=0.1,  # λ odds ratio loss weight (Table 7 of the paper, Mistral-ORPO-β)
+    learning_rate=5e-6,  # learning rate (Appendix C of the paper)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (Appendix C of the paper)
+    num_train_epochs=5,  # Appendix C of the paper
+    warmup_steps=200,  # warm-up steps (Appendix C of the paper)
+    per_device_train_batch_size=8,  # batch size (Appendix C of the paper)
+)
+```
+
 ## Contrastive Preference Optimization
 
 Papers relating to the [`experimental.cpo.CPOTrainer`]
+
+### Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation
+
+**📜 Paper**: https://huggingface.co/papers/2401.08417
+
+Introduces Contrastive Preference Optimization (CPO), a preference-based method for machine translation that trains models to avoid adequate-but-imperfect translations instead of mimicking references as in SFT. The paper analyzes limitations of SFT on MT (including reference quality issues) and shows that applying CPO to ALMA with only 22K parallel sentences yields ALMA-R, which matches or exceeds WMT competition winners and GPT-4 on WMT'21–WMT'23. Used in TRL via [`experimental.cpo.CPOTrainer`]. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.cpo import CPOConfig
+
+training_args = CPOConfig(
+    loss_type="sigmoid",  # preference learning loss (Section 3 of the paper)
+    cpo_alpha=1.0,  # NLL regularizer weight (Section 3 of the paper)
+    beta=0.1,  # β temperature (Section 4.2 of the paper)
+    learning_rate=1e-4,  # learning rate (official code)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (official code)
+    num_train_epochs=1,  # Section 4.2 of the paper
+    warmup_ratio=0.01,  # warm-up ratio (Section 4.2 of the paper)
+    max_length=512,  # max sequence length (Section 4.2 of the paper)
+)
+```
 
 ### SimPO: Simple Preference Optimization with a Reference-Free Reward
 
@@ -1090,7 +1187,24 @@ trainer.train()
 
 ## Reward Modeling
 
-Papers relating to the [`RewardTrainer`]
+Papers relating to the [`RewardTrainer`] and [`experimental.prm.PRMTrainer`]
+
+### Solving math word problems with process- and outcome-based feedback
+
+**📜 Paper**: https://huggingface.co/papers/2211.14275
+
+Compares process-based supervision (per-step reasoning feedback) and outcome-based supervision (final-answer only) for math reasoning on GSM8K. Outcome-based training yields similar final-answer error with less labeling, but process-based supervision or learned process reward models (PRMs) are needed to reduce reasoning-step errors. The paper improves prior best from 16.8% to 12.7% final-answer error and 14.0% to 3.4% reasoning error among correct-answer solutions. Used in TRL via [`experimental.prm.PRMTrainer`]. To train a PRM using TRL, use this configuration:
+
+```python
+from trl.experimental.prm import PRMConfig
+
+training_args = PRMConfig(
+    step_separator="\n",  # separator between reasoning steps (TRL implementation detail)
+    train_on_last_step_only=False,  # supervise all steps, not just the last one (TRL implementation detail)
+)
+```
+
+The paper does not specify training hyperparameters; it focuses on comparing process-based vs outcome-based supervision strategies.
 
 ### Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking
 
@@ -1198,6 +1312,28 @@ training_args = XPOConfig(
 
 Papers relating to training a student model with the help of a teacher model.
 
+### On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes
+
+**📜 Paper**: https://huggingface.co/papers/2306.13649
+
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.gkd import GKDConfig
+
+# XSum summarization task (Table A.1 of the paper)
+training_args = GKDConfig(
+    lmbda=0.5,  # λ student data fraction (Section 3 of the paper)
+    beta=0.5,  # β Generalized JSD interpolation, 0=KL, 1=reverse KL (Section 3 of the paper)
+    temperature=1.0,  # student training temperature (Appendix A of the paper)
+    max_steps=40000,  # training steps (Table A.1 of the paper)
+    learning_rate=3e-4,  # learning rate (Table A.1 of the paper)
+    per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
+    warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
+    max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
+)
+```
+
 ### On-Policy Distillation
 
 **📰 Blog**: https://thinkingmachines.ai/blog/on-policy-distillation/
@@ -1288,4 +1424,27 @@ and launch the training script using `accelerate launch --config_file config_fil
 
 ```sh
 accelerate launch --config_file config.yaml train.py
+```
+
+## Proximal Policy Optimization
+
+Papers relating to the [`experimental.ppo.PPOTrainer`]
+
+### Proximal Policy Optimization Algorithms
+
+**📜 Paper**: https://huggingface.co/papers/1707.06347
+
+Introduces Proximal Policy Optimization (PPO): policy gradient methods that alternate between collecting rollouts and optimizing a clipped surrogate objective over multiple minibatch epochs. PPO retains benefits of trust-region methods (e.g. TRPO) with simpler implementation and strong empirical sample efficiency, and was validated on robotics and Atari benchmarks. Used in TRL via [`experimental.ppo.PPOTrainer`]. To use PPO with TRL, use this configuration:
+
+```python
+from trl.experimental.ppo import PPOConfig
+
+training_args = PPOConfig(
+    cliprange=0.2,  # ε clipping range (Section 3 and Table 3 of the paper, Mujoco setting)
+    num_ppo_epochs=4,  # K epochs of minibatch updates (TRL default; paper uses K=10 Mujoco, K=3 Atari)
+    gamma=1.0,  # γ discount factor (TRL default for LLM tasks; paper uses γ=0.99)
+    lam=0.95,  # λ GAE parameter (Table 3 of the paper, Mujoco setting)
+    kl_coef=0.05,  # KL penalty coefficient (Section 4 of the paper discusses adaptive KL)
+    vf_coef=0.1,  # c₁ value function loss weight (Equation 9 of the paper)
+)
 ```
