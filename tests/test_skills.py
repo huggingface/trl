@@ -12,4 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .skills import get_skills_dir, list_skills
+from pathlib import Path
+
+from trl.skills import get_skills_dir, list_skills
+
+
+def test_get_skills_dir():
+    """Test that get_skills_dir() returns a valid directory path."""
+    skills_dir = get_skills_dir()
+
+    assert isinstance(skills_dir, Path)
+    assert skills_dir.exists(), f"Skills directory does not exist: {skills_dir}"
+    assert skills_dir.is_dir(), f"Skills path is not a directory: {skills_dir}"
+
+
+def test_list_skills():
+    """Test that list_skills() returns expected skills."""
+    skills = list_skills()
+
+    assert isinstance(skills, list)
+    assert skills == ["trl-training"]
