@@ -656,18 +656,20 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
 class TestSelectiveLogSoftmax(TrlTestCase):
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
-    def test_selective_log_softmax(self, dtype):
-        """Test selective_log_softmax with logits of different dtypes"""
+    @pytest.mark.parametrize("k", [1, 8])
+    def test_selective_log_softmax(self, dtype, k):
+        """Test selective_log_softmax with logits of different dtypes and index widths"""
         vocab_size = 1024
         batch_size = 4
         seq_len = 32
 
-        input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
+        index = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len, k))
         logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
 
-        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
-        actual_output = selective_log_softmax(logits, input_ids)
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
+        actual_output = selective_log_softmax(logits, index)
 
+        assert actual_output.shape == (batch_size, seq_len, k)
         if dtype in [torch.float16, torch.bfloat16]:
             # half-precision dtypes fall back to an exact method
             assert torch.equal(actual_output, expected_output)
