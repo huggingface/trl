@@ -2,29 +2,7 @@
 
 NVIDIA NeMo Gym is a library for building RL environments for large language models. This integration enables training models in NeMo Gym environments using TRL's GRPOTrainer with vLLM server mode.
 
-The integration supports multi-step and multi-turn rollouts, multi-environment training, and any NeMo Gym environment (thoroughly tested: workplace assistant, reasoning gym, MCQA, and math with judge).
-
-## Why NeMo Gym
-
-- **Production-Ready Scale**: Tested for frontier model training with diverse environments running in parallel across math, coding, tool use, reasoning, and more.
-- **Multi-Verifier Training**: Supports algorithmic verification, LLM-as-a-judge, and custom verification logic in a single training run.
-- **Decoupled Architecture**: Build agents and environments independently from the training loop—no RL framework expertise required.
-- **OpenAI-Compatible API**: All environments use the standardized OpenAI Responses API for seamless integration with vLLM, OpenAI models, and other endpoints.
-
-## Available Environments
-
-NeMo Gym provides training-ready environments across multiple domains, including but not limited to:
-
-| Environment | Domain | Description |
-|-------------|--------|-------------|
-| Workplace Assistant | Agent | Multi-step tool calling in common office scenarios (calendar, email, and more) |
-| Math with Judge | Math | Math problems with algorithmic or judge-based verification |
-| Code Gen | Coding | Competitive programming problems with code execution |
-| MCQA | Knowledge | Multiple-choice question answering |
-| Instruction Following | Instruction Following | IFEval/IFBench style tasks |
-| Reasoning Gym | Multiple | Single-step procedurally generated verifiable tasks across domains |
-
-For a complete list of available training environments, refer to the [NeMo Gym repository](https://github.com/NVIDIA-NeMo/Gym#-available-resource-servers).
+The integration supports multi-step and multi-turn rollouts, multi-environment training, and any NeMo Gym environment.
 
 ## Before You Start
 
@@ -76,15 +54,11 @@ python scripts/create_dataset.py \
     --output data/reasoning_gym/val_mini_sudoku.jsonl
 ```
 
-After running this example, check out the [environment creation guide](https://docs.nvidia.com/nemo/gym/latest/contribute/environments/new-environment.html) to build a new training environment!
-
 #### Dataset Format
 
 NeMo Gym datasets are stored as JSONL files. Each line contains a task with input messages, metadata such as ground truth for verification, and an agent server reference. Metadata fields can differ between datasets, as long as the corresponding resources server uses the fields appropriately.
 
 ## Interactive Training
-
-We will first launch training on a single node.
 
 ### Set Up
 
@@ -127,8 +101,6 @@ We will first launch training on a single node.
 
 ###  Run Training
 
-The following steps can be run in 3 terminals, or with processes in the background, or using tmux.
-
 1. **Start NeMo Gym Servers** (Terminal 1)
 
    ```bash
@@ -140,11 +112,6 @@ The following steps can be run in 3 terminals, or with processes in the backgrou
 
    ng_run "+config_paths=[${config_paths}]"
    ```
-
-   This starts:
-   - **Agent server**: Orchestrates rollouts using resource servers and model servers
-   - **Resources server**: Supports environment logic such as state-management, tool implementations, and task verification
-   - **Model server**: Adapts vLLM server requests to support NeMo Gym agents and on-policy RL training while ensuring OpenAI Responses API compatibility
 
 1. **Start TRL vLLM Server on GPU 0** (Terminal 2)
 
@@ -163,7 +130,6 @@ The following steps can be run in 3 terminals, or with processes in the backgrou
    ```bash
    source trl/.venv/bin/activate
    cd trl/examples/scripts/nemo_gym
-   export WANDB_API_KEY=...
 
    CUDA_VISIBLE_DEVICES=1 python train.py --config config.yaml
    ```
@@ -232,7 +198,7 @@ NeMo Gym is deisgned to enable training on many environments simultaneously and 
    dataset_path: "/path/to/data/train_multi_env.jsonl"
    eval_dataset_path: "/path/to/data/val_multi_env.jsonl"
 
-   task: "workplace-sudoku"                    # used in wandb run name
+   task: "workplace-sudoku"
    output_dir: "outputs/nemo_gym_multi_env"
 
    # ... rest of config same
@@ -240,7 +206,7 @@ NeMo Gym is deisgned to enable training on many environments simultaneously and 
 
 1. **Update ng_run**
 
-   Whether training interactively or via Slurm, update the `ng_run` command to include config files from each resources server:
+   Update the `ng_run` command to include config files from each resources server:
 
    ```bash
    cd Gym
@@ -257,9 +223,7 @@ NeMo Gym is deisgned to enable training on many environments simultaneously and 
 
 1. **Run Training**
 
-   Update the Slurm submission script to use the new training config and both `ng_run` resources server configs, then submit the job as before.
-
-   The training script reads `agent_ref` from each example's metadata, routes requests to the correct NeMo Gym agent server, and handles different agents and environments in the same batch.
+   Now run training as before, and watch as both environments are used in training!
 
 ## Resources
 
