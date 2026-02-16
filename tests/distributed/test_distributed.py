@@ -79,7 +79,27 @@ class TestDistributed(
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
     def test_dpo(self, config, get_config_path):
         # fmt: off
         run_command(
