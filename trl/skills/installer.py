@@ -21,15 +21,7 @@ installation methods.
 
 import os
 import shutil
-from enum import Enum
 from pathlib import Path
-
-
-class InstallMethod(Enum):
-    """Method for installing skills."""
-
-    COPY = "copy"
-    SYMLINK = "symlink"
 
 
 class SkillInstaller:
@@ -50,7 +42,6 @@ class SkillInstaller:
         self,
         skill_name: str,
         target_dir: Path,
-        method: InstallMethod = InstallMethod.COPY,
         force: bool = False,
         create_dirs: bool = True,
     ) -> bool:
@@ -60,7 +51,6 @@ class SkillInstaller:
         Args:
             skill_name: Name of skill to install.
             target_dir: Directory to install to.
-            method: Installation method (copy or symlink).
             force: Overwrite if exists.
             create_dirs: Create target directory if it doesn't exist.
 
@@ -104,13 +94,9 @@ class SkillInstaller:
             else:
                 shutil.rmtree(target_skill)
 
-        # Install based on method
+        # Install
         try:
-            if method == InstallMethod.SYMLINK:
-                # Create absolute symlink
-                os.symlink(source_skill.resolve(), target_skill)
-            else:  # COPY
-                shutil.copytree(source_skill, target_skill)
+            shutil.copytree(source_skill, target_skill)
         except OSError as e:
             raise OSError(f"Failed to install skill: {e}") from e
 
@@ -206,6 +192,5 @@ class SkillInstaller:
 
 
 __all__ = [
-    "InstallMethod",
     "SkillInstaller",
 ]
