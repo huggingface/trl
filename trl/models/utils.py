@@ -13,13 +13,13 @@
 # limitations under the License.
 
 import itertools
+import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import accelerate
-import torch
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
@@ -284,7 +284,7 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             if Version(accelerate.__version__) >= Version("1.11.0"):
                 ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
             else:
-                logging.warning(
+                warnings.warn(
                     "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
                     "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
                 )
