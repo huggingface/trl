@@ -115,15 +115,6 @@ def resolve_target(args) -> tuple[Path, str]:
         return path, str(path)
 
 
-def format_size(size_bytes: int) -> str:
-    """Format size in bytes to human-readable string."""
-    for unit in ["B", "KB", "MB", "GB"]:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f} TB"
-
-
 def cmd_install(args):
     """Handle 'trl skills install' command."""
     # Check skill argument
@@ -273,9 +264,6 @@ def cmd_list_installed(args):
         method_str = skill["method"]
         if skill["method"] == "symlink":
             method_str = f"symlink → {skill['source']}"
-        elif skill["size"]:
-            size_str = format_size(skill["size"])
-            method_str = f"copy ({size_str})"
 
         print(f"  {skill['name']}")
         print(f"    Method: {method_str}")
