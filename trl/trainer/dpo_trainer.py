@@ -1277,8 +1277,9 @@ class DPOTrainer(BaseTrainer):
                 "'apo_down', 'sft']"
             )
 
-        chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
-        rejected_rewards = self.beta * (rejected_logps.to(device) - ref_rejected_logps.to(device)).detach()
+        if loss_type != "sft":
+            chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
+            rejected_rewards = self.beta * (rejected_logps.to(device) - ref_rejected_logps.to(device)).detach()
 
         return losses, chosen_rewards, rejected_rewards
 
