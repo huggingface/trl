@@ -648,9 +648,8 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         logits (`torch.Tensor`):
             Logits tensor of shape `(..., num_classes)`.
         index (`torch.Tensor`):
-            Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the
-            log-softmax output. When the last case is used, `K` log-probabilities are gathered per position
-            (e.g. for top-K)
+            Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the log-softmax
+            output. When the last case is used, `K` log-probabilities are gathered per position (e.g. for top-K)
 
     Returns:
         `torch.Tensor`:
