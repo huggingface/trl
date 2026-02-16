@@ -839,6 +839,28 @@ training_args = DPOConfig(
 
 For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
+### Learn Your Reference Model for Real Good Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2404.09656
+
+Trust Region DPO (TR-DPO) updates the reference policy during training, demonstrating effectiveness against DPO on the Anthropic HH and TLDR datasets, outperforming DPO by up to 19% measured by automatic evaluation with GPT-4, improving coherence, correctness, level of detail, helpfulness, and harmlessness. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    sync_ref_model=True,  # enable TR-DPO (Section 3 of the paper)
+    ref_model_mixup_alpha=0.6,  # α soft update weight (Table 1 of the paper)
+    ref_model_sync_steps=512,  # τ update frequency in steps (Table 1 of the paper)
+    beta=0.05,  # β temperature (Table 1 of the paper)
+    learning_rate=1e-6,  # learning rate (Table 2 of the paper)
+    num_train_epochs=1,  # Table 2 of the paper
+    max_length=1024,  # max tokens length (Table 2 of the paper)
+    max_grad_norm=2,  # max gradient norm (Table 2 of the paper)
+    warmup_steps=100,  # warm-up steps (Table 2 of the paper)
+)
+```
+
 ### Iterative Reasoning Preference Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2404.19733
@@ -861,28 +883,6 @@ trainer = DPOTrainer(
 ```
 
 Note that the paper uses an iterative loop: each iteration regenerates CoT candidates with the current model, then retrains on fresh preference pairs. TRL does not automate that loop for you.
-
-### Learn Your Reference Model for Real Good Alignment
-
-**📜 Paper**: https://huggingface.co/papers/2404.09656
-
-Trust Region DPO (TR-DPO) updates the reference policy during training, demonstrating effectiveness against DPO on the Anthropic HH and TLDR datasets, outperforming DPO by up to 19% measured by automatic evaluation with GPT-4, improving coherence, correctness, level of detail, helpfulness, and harmlessness. To reproduce the paper's setting, use this configuration:
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    sync_ref_model=True,  # enable TR-DPO (Section 3 of the paper)
-    ref_model_mixup_alpha=0.6,  # α soft update weight (Table 1 of the paper)
-    ref_model_sync_steps=512,  # τ update frequency in steps (Table 1 of the paper)
-    beta=0.05,  # β temperature (Table 1 of the paper)
-    learning_rate=1e-6,  # learning rate (Table 2 of the paper)
-    num_train_epochs=1,  # Table 2 of the paper
-    max_length=1024,  # max tokens length (Table 2 of the paper)
-    max_grad_norm=2,  # max gradient norm (Table 2 of the paper)
-    warmup_steps=100,  # warm-up steps (Table 2 of the paper)
-)
-```
 
 ### Self-Play Preference Optimization for Language Model Alignment
 
@@ -948,36 +948,6 @@ training_args = DPOConfig(
 
 There is no additional hyperparameter in the paper.
 
-### Anchored Preference Optimization and Contrastive Revisions: Addressing Underspecification in Alignment
-
-**📜 Paper**: https://huggingface.co/papers/2408.06266
-
-CLAIR and APO enhance LLM alignment through more contrastive preference pairs and controlled alignment objectives, improving model performance close to GPT4-turbo. To reproduce the paper's setting, use this configuration:
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    loss_type="apo_zero",  # Section 4 of the paper
-    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
-    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
-    beta=0.1,  # β in Section 5.2 of the paper,
-)
-```
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    loss_type="apo_down",  # Section 4 of the paper
-    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
-    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
-    beta=0.1,  # β in Section 5.2 of the paper,
-)
-```
-
-These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
-
 ### Discovering Preference Optimization Algorithms with and for Large Language Models
 
 **📜 Paper**: https://huggingface.co/papers/2406.08414
@@ -1023,6 +993,36 @@ training_args = DPOConfig(
     use_weighting=True,
 )
 ```
+
+### Anchored Preference Optimization and Contrastive Revisions: Addressing Underspecification in Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2408.06266
+
+CLAIR and APO enhance LLM alignment through more contrastive preference pairs and controlled alignment objectives, improving model performance close to GPT4-turbo. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="apo_zero",  # Section 4 of the paper
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
+    beta=0.1,  # β in Section 5.2 of the paper,
+)
+```
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="apo_down",  # Section 4 of the paper
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
+    beta=0.1,  # β in Section 5.2 of the paper,
+)
+```
+
+These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
 ### Length Desensitization in Direct Preference Optimization
 
