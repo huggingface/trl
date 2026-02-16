@@ -989,6 +989,57 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_liger_kernel
+    def test_compute_liger_loss_passes_vllm_is_ratio(self):
+        """Test that importance_sampling_ratio from inputs is passed to liger_grpo_loss as vllm_is_ratio."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Mock _generate_and_score_completions to inject importance_sampling_ratio
+        original_gen = trainer._generate_and_score_completions
+
+        def gen_with_is_ratio(*args, **kwargs):
+            result = original_gen(*args, **kwargs)
+            B, T = result["completion_ids"].shape
+            result["importance_sampling_ratio"] = torch.full((B, T), 0.5, device=result["completion_ids"].device)
+            return result
+
+        with (
+            patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
+            patch.object(trainer.liger_grpo_loss, "forward", wraps=trainer.liger_grpo_loss.forward) as mock_forward,
+        ):
+            trainer.train()
+
+            # Verify vllm_is_ratio was passed in every call to liger_grpo_loss
+            assert mock_forward.call_count > 0, "liger_grpo_loss.forward was never called"
+            for call in mock_forward.call_args_list:
+                vllm_is_ratio = call.kwargs.get("vllm_is_ratio")
+                assert vllm_is_ratio is not None, (
+                    "vllm_is_ratio should not be None when importance_sampling_ratio is present"
+                )
+                assert (vllm_is_ratio == 0.5).all(), (
+                    "vllm_is_ratio values should match the injected importance_sampling_ratio"
+                )
+
+        release_memory(trainer.model, trainer)
+
     def test_training_with_bias_correction_kl(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -1519,6 +1570,17 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_dataloader_workers(self):
+        # Pytest/CI often starts background threads before tests run. With Python 3.12, using the default "fork" start
+        # method in a multi-threaded process emits a DeprecationWarning and may deadlock.
+        #
+        # We force "spawn" here to make multiprocessing safe under pytest when DataLoader workers are enabled. This is
+        # test-environment–specific and not required by the training logic itself.
+        #
+        # This means the test does not cover "fork". However, "spawn" is stricter (requires full picklability and clean
+        # state) and avoids fork-after-threads issues that pytest cannot reliably test anyway. Fork-specific behavior,
+        # if needed, should be tested in a clean process outside pytest.
+        torch.multiprocessing.set_start_method("spawn", force=True)
+
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(

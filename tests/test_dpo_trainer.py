@@ -34,7 +34,7 @@ from transformers import (
 from transformers.testing_utils import backend_empty_cache, get_device_properties, torch_device
 from transformers.utils import is_peft_available
 
-from trl import DPOConfig, DPOTrainer, FDivergenceType
+from trl import DPOConfig, DPOTrainer
 
 from .testing_utils import (
     TrlTestCase,
@@ -207,7 +207,7 @@ class TestDPOTrainer(TrlTestCase):
             "bco_pair",
             "sppo_hard",
             "aot",
-            "aot_pair",
+            "aot_unpaired",
             "discopop",
             "apo_zero",
             "apo_down",
@@ -582,8 +582,8 @@ class TestDPOTrainer(TrlTestCase):
             ("sigmoid", True),
             ("ipo", False),
             ("ipo", True),
-            ("aot_pair", False),
-            ("aot_pair", True),
+            ("aot_unpaired", False),
+            ("aot_unpaired", True),
             ("aot", False),
             ("aot", True),
             ("bco_pair", False),
@@ -789,7 +789,7 @@ class TestDPOTrainer(TrlTestCase):
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
-            f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
+            f_divergence_type="alpha_divergence",
             f_alpha_divergence_coef=0.5,
             report_to="none",
         )
@@ -831,7 +831,7 @@ class TestDPOTrainer(TrlTestCase):
             gradient_accumulation_steps=4,
             learning_rate=9e-1,
             eval_strategy="steps",
-            f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
+            f_divergence_type="js_divergence",
             f_alpha_divergence_coef=0.5,
             report_to="none",
         )
@@ -1210,22 +1210,17 @@ class TestDPOVisionTrainer(TrlTestCase):
 
 
 class TestDPOConfig(TrlTestCase):
-    @pytest.mark.parametrize("as_string", [False, True])
-    @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
-    def test_f_divergence_type(self, f_divergence_type, as_string: bool):
+    @pytest.mark.parametrize("f_divergence_type", ["reverse_kl", "js_divergence", "alpha_divergence"])
+    def test_f_divergence_type(self, f_divergence_type):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            f_divergence_type=f_divergence_type.value if as_string else f_divergence_type,
+            f_divergence_type=f_divergence_type,
         )
-
-        # Internal normalization: keep Enum member
-        assert isinstance(training_args.f_divergence_type, FDivergenceType)
         assert training_args.f_divergence_type == f_divergence_type
-
-        # Serialization: TrainingArguments.to_dict should yield the enum's string value
+        # Serialization
         configparser_dict = training_args.to_dict()
-        assert configparser_dict["f_divergence_type"] == f_divergence_type.value
+        assert configparser_dict["f_divergence_type"] == f_divergence_type
 
 
 @pytest.mark.slow

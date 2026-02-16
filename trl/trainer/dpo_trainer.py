@@ -272,7 +272,7 @@ class DPOTrainer(BaseTrainer):
     def __init__(
         self,
         model: str | nn.Module | PreTrainedModel,
-        ref_model: PreTrainedModel | nn.Module | str | None = None,
+        ref_model: PreTrainedModel | nn.Module | None = None,
         args: DPOConfig | None = None,
         data_collator: DataCollator | None = None,  # type: ignore
         train_dataset: Dataset | IterableDataset | None = None,
@@ -321,6 +321,14 @@ class DPOTrainer(BaseTrainer):
                 )
         model_id = get_config_model_id(model.config)
         if isinstance(ref_model, str):
+            warnings.warn(
+                "Passing `ref_model` as a string is deprecated and will be removed in version 0.29.0. Usually, you "
+                "can just omit `ref_model` and we'll initialize it to a copy of `model` for you. If you really need "
+                "to load the reference model from a different path, you can still do so by passing `ref_model` as a "
+                "model instance.",
+                FutureWarning,
+                stacklevel=2,
+            )
             model_init_kwargs = args.ref_model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
@@ -1086,8 +1094,8 @@ class DPOTrainer(BaseTrainer):
                 - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
                   paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
-                  paper.
+                - `"aot_unpaired"`: AOT loss for unpaired datasets from the
+                  [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
                   [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
@@ -1200,7 +1208,7 @@ class DPOTrainer(BaseTrainer):
                 - 0.5 * F.logsigmoid(-rejected_rewards)
             )
 
-        elif loss_type == "aot_pair":
+        elif loss_type == "aot_unpaired":
             chosen_logratios = chosen_logps - ref_chosen_logps
             rejected_logratios = rejected_logps - ref_rejected_logps
             chosen_logratios_sorted, _ = torch.sort(chosen_logratios, dim=0)
@@ -1265,7 +1273,7 @@ class DPOTrainer(BaseTrainer):
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', "
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'discopop', 'apo_zero', "
                 "'apo_down', 'sft']"
             )
 
