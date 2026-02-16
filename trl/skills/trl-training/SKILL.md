@@ -35,9 +35,8 @@ You are an expert at using the TRL (Transformers Reinforcement Learning) library
 TRL provides CLI commands for post-training foundation models using state-of-the-art techniques:
 
 - **SFT** (Supervised Fine-Tuning): Fine-tune models on instruction-following or conversational datasets
-- **DPO** (Direct Preference Optimization): Align models using preference data without a reward model
-- **GRPO** (Group Relative Policy Optimization):Train models by ranking multiple sampled outputs relative to each other and optimizing based on their comparative rewards.
-- **KTO** (Kahneman-Tversky Optimization): Align models using binary feedback (good/bad)
+- **DPO** (Direct Preference Optimization): Align models using preference data
+- **GRPO** (Group Relative Policy Optimization): Train models by ranking multiple sampled outputs relative to each other and optimizing based on their comparative rewards.
 - **RLOO** (Reinforce Leave One Out): Online RL training with generation-based rewards
 - **Reward Model Training**: Train reward models for RLHF
 
@@ -49,57 +48,89 @@ TRL is built on top of Hugging Face Transformers and Accelerate, providing seaml
 
 Fine-tune language models on instruction-following or conversational datasets.
 
-**Basic usage:**
+**Full training:**
 
 ```bash
 trl sft \
-  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --model_name_or_path Qwen/Qwen2-0.5B \
   --dataset_name trl-lib/Capybara \
-  --output_dir ./sft_output
+  --learning_rate 2.0e-5 \
+  --num_train_epochs 1 \
+  --packing \
+  --per_device_train_batch_size 2 \
+  --gradient_accumulation_steps 8 \
+  --eos_token '<|im_end|>' \
+  --eval_strategy steps \
+  --eval_steps 100 \
+  --output_dir Qwen2-0.5B-SFT \
+  --push_to_hub
 ```
 
-**Key parameters:**
+**Train with LoRA adapters:**
 
-- `--model_name_or_path`: HuggingFace model ID or local path
-- `--dataset_name`: Dataset from HuggingFace Hub or local path
-- `--dataset_config`: Dataset configuration name (if applicable)
-- `--learning_rate`: Learning rate (default: 2.0e-5)
-- `--num_train_epochs`: Number of training epochs (default: 1)
-- `--per_device_train_batch_size`: Batch size per device (default: 8)
-- `--gradient_accumulation_steps`: Gradient accumulation steps (default: 1)
-- `--use_peft`: Enable LoRA/QLoRA training
-- `--lora_r`: LoRA rank (default: 16)
-- `--lora_alpha`: LoRA alpha (default: 16)
-- `--packing`: Enable dataset packing for efficiency
-
-**Dataset format:** Expects "messages" column with chat format (system, user, assistant) or "prompt"/"completion" columns.
+```bash
+trl sft \
+  --model_name_or_path Qwen/Qwen2-0.5B \
+  --dataset_name trl-lib/Capybara \
+  --learning_rate 2.0e-4 \
+  --num_train_epochs 1 \
+  --packing \
+  --per_device_train_batch_size 2 \
+  --gradient_accumulation_steps 8 \
+  --eos_token '<|im_end|>' \
+  --eval_strategy steps \
+  --eval_steps 100 \
+  --use_peft \
+  --lora_r 32 \
+  --lora_alpha 16 \
+  --output_dir Qwen2-0.5B-SFT \
+  --push_to_hub
+```
 
 ### trl dpo - Direct Preference Optimization
 
-Align models using preference data (chosen/rejected pairs) without requiring a reward model.
+Align models using preference data (chosen/rejected pairs).
 
-**Basic usage:**
+**Full training:**
 
 ```bash
 trl dpo \
-  --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name trl-lib/ultrafeedback_binarized \
-  --output_dir ./dpo_output
+  --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+  --learning_rate 5.0e-7 \
+  --num_train_epochs 1 \
+  --per_device_train_batch_size 2 \
+  --max_steps 1000 \
+  --gradient_accumulation_steps 8 \
+  --eval_strategy steps \
+  --eval_steps 50 \
+  --output_dir Qwen2-0.5B-DPO \
+  --no_remove_unused_columns
 ```
 
-**Key parameters:**
+**Train with LoRA adapters:**
 
-- `--model_name_or_path`: Pre-trained or SFT model to align
-- `--dataset_name`: Preference dataset
-- `--learning_rate`: Learning rate (default: 5.0e-7)
-- `--beta`: DPO temperature parameter (default: 0.1)
-- `--loss_type`: Loss function (default: "sigmoid"; options: "sigmoid", "hinge", "ipo", "bco_pair")
-
-**Dataset format:** Requires "prompt", "chosen", and "rejected" columns.
+```bash
+trl dpo \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+  --learning_rate 5.0e-6 \
+  --num_train_epochs 1 \
+  --per_device_train_batch_size 2 \
+  --max_steps 1000 \
+  --gradient_accumulation_steps 8 \
+  --eval_strategy steps \
+  --eval_steps 50 \
+  --output_dir Qwen2-0.5B-DPO \
+  --no_remove_unused_columns \
+  --use_peft \
+  --lora_r 32 \
+  --lora_alpha 16
+```
 
 ### trl grpo - Group Relative Policy Optimization
 
-Train models using LLM-as-a-judge for evaluating generations and providing rewards.
+Train models using reward functions or LLM-as-a-judge for evaluating generations and providing rewards.
 
 **Basic usage:**
 
@@ -107,43 +138,12 @@ Train models using LLM-as-a-judge for evaluating generations and providing rewar
 trl grpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name trl-lib/gsm8k \
-  --judge_model gpt-4 \
-  --output_dir ./grpo_output
+  --reward_funcs accuracy_reward \
+  --output_dir Qwen2-0.5B-GRPO \
+  --push_to_hub
 ```
 
-**Key parameters:**
-
-- `--model_name_or_path`: Model to train
-- `--dataset_name`: Training dataset with prompts
-- `--reward_funcs`: Reward functions, one or more of "accuracy_reward", "reasoning_accuracy_reward", "think_format_reward", "get_soft_overlong_punishment"
-- `--num_generations`: Number of generations per prompt (default: 8)
-- `--learning_rate`: Learning rate (default: 1.0e-6)
-
-**Dataset format:** Requires "prompt" column. Generations are scored by the reward function
-
-### trl kto - Kahneman-Tversky Optimization
-
-Align models using binary feedback (thumbs up/down) without paired preferences.
-
-**Basic usage:**
-
-```bash
-trl kto \
-  --model_name_or_path Qwen/Qwen2.5-0.5B \
-  --dataset_name trl-lib/kto_mix \
-  --output_dir ./kto_output
-```
-
-**Key parameters:**
-
-- `--model_name_or_path`: Pre-trained or SFT model
-- `--dataset_name`: Dataset with binary labels
-- `--learning_rate`: Learning rate (default: 5.0e-7)
-- `--beta`: KTO temperature parameter (default: 0.1)
-
-**Dataset format:** Requires "prompt", "completion", and "label" columns (label: True/False or 1/0).
-
-### trl rloo - Reinforcement Learning with Language Objectives
+### trl rloo - Reinforce Leave One Out
 
 Online RL training where the model generates text and receives rewards based on custom criteria.
 
@@ -154,39 +154,47 @@ trl rloo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name trl-lib/tldr \
   --reward_model_name_or_path sentiment-analysis:nlptown/bert-base-multilingual-uncased-sentiment \
-  --output_dir ./rloo_output
+  --output_dir Qwen2-0.5B-RLOO \
+  --push_to_hub
 ```
-
-**Key parameters:**
-
-- `--model_name_or_path`: Policy model to train
-- `--dataset_name`: Dataset with prompts
-- `--reward_model_name_or_path`: Reward model or pipeline (format: "task:model")
-- `--learning_rate`: Learning rate (default: 1.0e-6)
-- `--num_ppo_epochs`: PPO epochs per batch (default: 4)
 
 ### trl reward - Reward Model Training
 
 Train a reward model to score text quality for RLHF.
 
-**Basic usage:**
+**Full training:**
 
 ```bash
 trl reward \
-  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
   --dataset_name trl-lib/ultrafeedback_binarized \
-  --output_dir ./reward_model
+  --output_dir Qwen2-0.5B-Reward \
+  --per_device_train_batch_size 8 \
+  --num_train_epochs 1 \
+  --learning_rate 1.0e-5 \
+  --eval_strategy steps \
+  --eval_steps 50 \
+  --max_length 2048
 ```
 
-**Key parameters:**
+**Train with LoRA adapters:**
 
-- `--model_name_or_path`: Base model (will add classification head)
-- `--dataset_name`: Preference dataset
-- `--learning_rate`: Learning rate (default: 1.0e-5)
-
-**Dataset format:** Requires "prompt", "chosen", and "rejected" columns.
-
-**Output:** Model with classification head that outputs scalar reward scores.
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --output_dir Qwen2-0.5B-Reward-LoRA \
+  --per_device_train_batch_size 8 \
+  --num_train_epochs 1 \
+  --learning_rate 1.0e-4 \
+  --eval_strategy steps \
+  --eval_steps 50 \
+  --max_length 2048 \
+  --use_peft \
+  --lora_task_type SEQ_CLS \
+  --lora_r 32 \
+  --lora_alpha 16
+```
 
 ## Configuration Files
 
@@ -205,7 +213,7 @@ output_dir: ./sft_output
 use_peft: true
 lora_r: 16
 lora_alpha: 16
-report_to: wandb
+report_to: trackio
 ```
 
 **Launch with config:**
@@ -264,112 +272,6 @@ trl sft --config sft_config.yaml --accelerate_config fsdp2
 trl sft --config sft_config.yaml --accelerate_config zero3
 ```
 
-## Dataset Requirements
-
-### SFT Datasets
-
-**Chat format:**
-```json
-{"messages": [
-  {"role": "user", "content": "Hello!"},
-  {"role": "assistant", "content": "Hi! How can I help?"}
-]}
-```
-
-**Completion format:**
-```json
-{"prompt": "The translation to French of Hello is", "completion": " Bonjour."}
-```
-
-### DPO/Reward Datasets
-
-**Preference format:**
-```json
-{
-  "prompt": "Write a poem about AI",
-  "chosen": "Silicon dreams...",
-  "rejected": "Beep boop robot..."
-}
-```
-
-### KTO Datasets
-
-**Binary feedback format:**
-```json
-{"prompt": [{"role": "user", "content": "Explain gravity."}], "completion": [{"role": "assistant", "content": "Gravity is..."}], "label": true}
-```
-
-### GRPO/RLOO Datasets
-
-**Prompt-only format:**
-```json
-{"prompt": [{"role": "user", "content": "Solve: 2+2=?"}], "solution": "4"}
-```
-
-Datasets can be:
-- From Hugging Face Hub: `--dataset_name username/dataset-name`
-- Local files: `--dataset_name ./path/to/dataset`
-- Local directories: `--dataset_name ./path/to/dataset_dir`
-
-## Common Workflows
-
-### 1. Standard SFT Training
-
-```bash
-# Train on instruction dataset
-trl sft \
-  --model_name_or_path meta-llama/Llama-3.2-1B \
-  --dataset_name trl-lib/Capybara \
-  --output_dir ./llama-sft \
-  --num_train_epochs 3 \
-  --per_device_train_batch_size 4 \
-  --gradient_accumulation_steps 4 \
-  --learning_rate 2.0e-5
-```
-
-### 2. LoRA Fine-Tuning (Memory Efficient)
-
-```bash
-# Train with LoRA adapters
-trl sft \
-  --model_name_or_path meta-llama/Llama-3.2-1B \
-  --dataset_name trl-lib/Capybara \
-  --output_dir ./llama-lora \
-  --use_peft \
-  --lora_r 64 \
-  --lora_alpha 64 \
-  --lora_target_modules q_proj v_proj k_proj o_proj \
-  --num_train_epochs 3
-```
-
-### 3. DPO Alignment After SFT
-
-```bash
-# Step 1: SFT (as above)
-
-# Step 2: DPO alignment on preferences
-trl dpo \
-  --model_name_or_path ./llama-sft \
-  --dataset_name trl-lib/ultrafeedback_binarized \
-  --output_dir ./llama-dpo \
-  --learning_rate 5.0e-7 \
-  --beta 0.1 \
-  --num_train_epochs 1
-```
-
-### 4. GRPO with Custom Judge
-
-```bash
-# Train with LLM judge feedback
-trl grpo \
-  --model_name_or_path ./llama-sft \
-  --dataset_name trl-lib/DeepMath-103K \
-  --reward_funcs accuracy_reward \
-  --output_dir ./llama-grpo \
-  --num_generations 8 \
-  --learning_rate 1.0e-6
-```
-
 ## Troubleshooting
 
 ### CUDA Out of Memory
@@ -389,7 +291,7 @@ trl grpo \
 ### Model Loading Issues
 
 - Verify model exists on Hugging Face Hub
-- Check if gated model requires authentication: `huggingface-cli login`
+- Check if gated model requires authentication: `hf auth login`
 - For local models, provide absolute path
 - Ensure sufficient disk space and memory
 
