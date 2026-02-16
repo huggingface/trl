@@ -31,4 +31,4 @@ def test_list_skills():
     skills = list_skills()
 
     assert isinstance(skills, list)
-    assert skills == []  # TODO: Update once #5096 is merged
+    assert skills == ["trl-training"]
