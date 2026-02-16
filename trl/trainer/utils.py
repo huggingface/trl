@@ -683,13 +683,18 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         logits (`torch.Tensor`):
             Logits tensor of shape `(..., num_classes)`.
         index (`torch.Tensor`):
-            Index tensor of shape `(..., K)`, specifying K positions to gather from the log-softmax output
-            per position. Use K=1 for a single token per position.
+            Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the
+            log-softmax output. When the last case is used, `K` log-probabilities are gathered per position
+            (e.g. for top-K)
 
     Returns:
         `torch.Tensor`:
-            Gathered log probabilities with shape `(..., K)`.
+            Gathered log probabilities with the same shape as `index`.
     """
+    squeeze = index.ndim == logits.ndim - 1
+    if squeeze:
+        index = index.unsqueeze(-1)
+
     if logits.dtype in [torch.float32, torch.float64]:
         selected_logits = torch.gather(logits, dim=-1, index=index)
         # loop to reduce peak mem consumption
@@ -703,6 +708,10 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
             row_per_token_logps = row_logps.gather(dim=-1, index=row_labels)
             per_token_logps.append(row_per_token_logps)
         per_token_logps = torch.stack(per_token_logps)
+
+    if squeeze:
+        per_token_logps = per_token_logps.squeeze(-1)
+
     return per_token_logps
 
 
