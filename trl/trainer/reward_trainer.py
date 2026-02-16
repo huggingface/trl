@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,9 +25,12 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import PartialState
 from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -35,8 +38,10 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.modeling_layers import GenericForSequenceClassification
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -58,6 +63,9 @@ logger = get_logger(__name__)
 # AutoModelForSequenceClassification adds a new classification head when loading a CausalLM. That head is randomly
 # initialized and triggers a harmless warning about uninitialized weights. We suppress just that specific warning to
 # avoid confusing users.
+
+
+# Old approach using logging filter (for transformers < 4.57.0)
 @contextmanager
 def suppress_from_pretrained_warning(logger: logging.Logger):
     pattern = re.compile(
@@ -76,6 +84,37 @@ def suppress_from_pretrained_warning(logger: logging.Logger):
         yield
     finally:
         logger.removeFilter(f)
+
+
+# New approach using scoped override (for transformers >= 4.57.0)
+@contextmanager
+def ignore_seqcls_score_missing_key():
+    # Scoped override: ignore only the expected seq-clf head key.
+    old = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_missing", None)
+    merged = list(old) if old is not None else []
+    pattern = r"^score\.weight$"
+    if pattern not in merged:
+        merged.append(pattern)
+    GenericForSequenceClassification._keys_to_ignore_on_load_missing = merged
+    try:
+        yield
+    finally:
+        GenericForSequenceClassification._keys_to_ignore_on_load_missing = old
+
+
+# Version-aware wrapper that chooses the appropriate approach
+@contextmanager
+def suppress_seqcls_warning():
+    # Use the new approach for transformers >= 4.57.0, old approach for earlier versions
+    # The old approach is needed for 4.56.2 to avoid meta tensor issues with device_map=None
+    if Version(transformers.__version__) >= Version("4.57.0"):
+        with ignore_seqcls_score_missing_key():
+            yield
+    else:
+        # Get the transformers logger
+        transformers_logger = logging.getLogger("transformers.modeling_utils")
+        with suppress_from_pretrained_warning(transformers_logger):
+            yield
 
 
 def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
@@ -195,7 +234,7 @@ class RewardTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`str | PreTrainedModel`):
+        model (`str` or [`~transformers.PreTrainedModel`] or [`~peft.PeftModel`]):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -204,6 +243,7 @@ class RewardTrainer(BaseTrainer):
               using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
               `args.model_init_kwargs`.
             - A sequence classification [`~transformers.PreTrainedModel`] object.
+            - A sequence classification [`~peft.PeftModel`] object.
         args ([`RewardConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
@@ -266,7 +306,7 @@ class RewardTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: "str | PreTrainedModel | PeftModel",
         args: RewardConfig | None = None,
         data_collator: DataCollator | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -285,18 +325,41 @@ class RewardTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = RewardConfig(f"{model_name}-Reward")
 
+        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+        # batches from multiple processes, leading to mismatch errors.
+        if isinstance(train_dataset, IterableDataset):
+            if args.accelerator_config.dispatch_batches is True:
+                logger.warning(
+                    "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
+                    "is forced to `False` when using an `IterableDataset`. To remove this warning, unset "
+                    "`dispatch_batches` in `RewardConfig` or set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+
         # Model
+        # As AutoModelForSequenceClassification.from_pretrained() will add a random head for the model, set_seed must
+        # be done before loading the model to ensure reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
-            # Special case for DeepSpeed: requires device_map=None ("auto" fails)
-            if args.distributed_state.distributed_type == "DEEPSPEED":
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
-            model = create_model_from_path(model, AutoModelForSequenceClassification, **model_init_kwargs)
+            model_init_kwargs["num_labels"] = 1  # the only output of the model is the reward score
+            with suppress_seqcls_warning():
+                model = create_model_from_path(model, AutoModelForSequenceClassification, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
+                )
+            # Validate that the model has num_labels = 1 (required for reward models)
+            if getattr(model.config, "num_labels", None) != 1:
+                raise ValueError(
+                    f"The model has `num_labels={model.config.num_labels}`, but reward models require `num_labels=1` "
+                    "to output a single scalar reward per sequence. Please instantiate your model with `num_labels=1` "
+                    "or pass a model name as a string to have it configured automatically."
                 )
 
         # Processing class
@@ -352,7 +415,7 @@ class RewardTrainer(BaseTrainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        if is_peft_available() and isinstance(model, PeftModel) and peft_config is not None:
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
             raise ValueError(
                 "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
                 "and unload the existing adapter, save the resulting base model, and then pass that base model along "
@@ -365,7 +428,7 @@ class RewardTrainer(BaseTrainer):
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_available() and isinstance(model, PeftModel) and args.gradient_checkpointing:
+        if is_peft_available() and is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -413,6 +476,14 @@ class RewardTrainer(BaseTrainer):
                 }
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,

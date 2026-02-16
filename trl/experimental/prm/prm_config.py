@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,8 +33,6 @@ class PRMConfig(TrainingArguments):
     Parameters:
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) used for truncation.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt used for truncation.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -77,10 +75,6 @@ class PRMConfig(TrainingArguments):
     max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) used for truncation."},
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={"help": "Maximum length of the prompt used for truncation."},
     )
     max_completion_length: int | None = field(
         default=None,

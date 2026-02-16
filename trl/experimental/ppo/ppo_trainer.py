@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,9 +26,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import Accelerator, logging
-from accelerate.utils import broadcast, gather_object
+from accelerate.utils import gather_object
 from datasets import Dataset
+from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import (
     BaseImageProcessor,
@@ -46,14 +48,13 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
-from ...models.utils import create_reference_model, unwrap_model_for_generation
+from ...models.utils import create_reference_model, peft_module_casting_to_bf16, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     empty_cache,
     log_table_to_comet_experiment,
     pad,
-    peft_module_casting_to_bf16,
     prepare_deepspeed,
     selective_log_softmax,
 )
@@ -367,6 +368,14 @@ class PPOTrainer(BaseTrainer):
         self.processing_class = processing_class
         self.policy_model = model
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         # Define the collator if not provided
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
@@ -456,9 +465,6 @@ class PPOTrainer(BaseTrainer):
         args.num_total_batches = math.ceil(
             args.total_episodes / args.batch_size
         )  # we may train for more than `total_episodes`
-        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
-        time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
@@ -573,19 +579,20 @@ class PPOTrainer(BaseTrainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
-        backup_model = self.model
-        self.model = self.model.policy  # save only the policy
-
-        if self.is_deepspeed_enabled:
-            backup_deepspeed = self.deepspeed
-            self.deepspeed = self.model
+        if not _internal_call:
+            backup_model = self.model
+            if hasattr(self.model, "policy"):
+                self.model = self.model.policy  # save only the policy for inference
+            if self.is_deepspeed_enabled:
+                backup_deepspeed = self.deepspeed
+                self.deepspeed = self.model
 
         super().save_model(output_dir, _internal_call)
 
-        self.model = backup_model
-
-        if self.is_deepspeed_enabled:
-            self.deepspeed = backup_deepspeed
+        if not _internal_call:
+            self.model = backup_model
+            if self.is_deepspeed_enabled:
+                self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args
@@ -934,6 +941,8 @@ class PPOTrainer(BaseTrainer):
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
+        if self.eval_dataset is None:
+            return  # no eval set to sample from (pass eval_dataset and eval_strategy != "no" for sample generations)
         args = self.args
         processing_class = self.processing_class
         generation_kwargs = {

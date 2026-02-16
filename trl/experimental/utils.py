@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,12 +20,13 @@ from typing import Any
 
 import torch
 from accelerate.utils import is_peft_model
-from packaging import version
+from packaging.version import Version
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainingArguments
 from transformers.utils import is_peft_available
 
-from ..trainer.utils import pad, peft_module_casting_to_bf16
+from ..models.utils import peft_module_casting_to_bf16
+from ..trainer.utils import pad
 
 
 if is_peft_available():
@@ -41,14 +42,11 @@ class DPODataCollatorWithPadding:
     Args:
         pad_token_id (`int` defaults to 0):
             The tokenizer's pad_token_id.
-        label_pad_token_id (`int`, defaults to -100):
-            The label used for masking.
         is_encoder_decoder (`bool` or `None`, `optional`, defaults to `None`):
             Whether you model has an encoder_decoder architecture.
     """
 
     pad_token_id: int = 0
-    label_pad_token_id: int = -100
     is_encoder_decoder: bool | None = False
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
@@ -70,7 +68,7 @@ class DPODataCollatorWithPadding:
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
                     elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
-                        padding_value = self.label_pad_token_id
+                        padding_value = -100
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
                     padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
@@ -85,7 +83,7 @@ class DPODataCollatorWithPadding:
                             )
                         padding_value = self.pad_token_id
                     elif k.endswith("_labels"):
-                        padding_value = self.label_pad_token_id
+                        padding_value = -100
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
                     elif k.endswith("_pixel_values"):
@@ -148,13 +146,13 @@ class DataCollatorForChatML:
             if formatted_prompt is None:
                 prompt = example[self.messages_key][:-1]
                 formatted_prompt = self.tokenizer.apply_chat_template(
-                    prompt, tokenize=False, add_generation_prompt=True
+                    prompt, add_generation_prompt=True, tokenize=False
                 )
 
             if "input_ids" not in example:
                 message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=False
+                    message, add_generation_prompt=False, tokenize=False
                 )
 
                 tokenized_message = self.tokenizer(
@@ -496,7 +494,7 @@ def prepare_peft_model(
     # Create PEFT model
     if peft_config is not None:
         if (
-            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
+            Version(peft.__version__) >= Version("0.12")  # autocast_adapter_dtype introduced in 0.12
             and getattr(model, "is_loaded_in_4bit", False)
             and is_sharded_qlora
         ):

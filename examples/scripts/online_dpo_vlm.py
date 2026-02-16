@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,7 +35,6 @@ accelerate launch \
     --reward_model_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir online-dpo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
-    --gradient_checkpointing \
     --dtype bfloat16 \
     --max_length 1536 \
     --max_new_tokens 1024 \

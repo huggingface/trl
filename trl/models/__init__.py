@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,16 +19,12 @@ from ..import_utils import _LazyModule
 
 _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
-    "modeling_base": ["PreTrainedModelWrapper"],
-    "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
     "utils": ["create_reference_model", "prepare_deepspeed", "prepare_fsdp", "unwrap_model_for_generation"],
 }
 
 
 if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
-    from .modeling_base import PreTrainedModelWrapper
-    from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 else:
     import sys

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,9 +15,10 @@
 
 import torch
 
-from trl import AutoModelForCausalLMWithValueHead, create_reference_model
+from trl import create_reference_model
+from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
 
-from .testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase
 
 
 class TestReferenceModel(TrlTestCase):

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,8 +35,8 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import is_conversational, maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
-from ...trainer.judges import BasePairwiseJudge
 from ...trainer.utils import empty_cache, selective_log_softmax
+from ..judges import BasePairwiseJudge
 from ..online_dpo import OnlineDPOTrainer
 from ..utils import SIMPLE_CHAT_TEMPLATE, get_reward, truncate_right
 from .xpo_config import XPOConfig

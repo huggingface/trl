@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ from trl.chat_template_utils import (
     parse_response,
 )
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_jmespath
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -110,9 +110,10 @@ class TestCloneChatTemplate(TrlTestCase):
         assert modified_tokenizer.eos_token == "<|im_end|>"
 
 
+@require_jmespath
 class TestAddResponseSchema:
     @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+        condition=Version(transformers.__version__) < Version("5.0.0"),
         reason="Response parsing is not supported in transformers versions below 5.0.0",
         strict=True,
     )
@@ -209,10 +210,11 @@ class TestGetTrainingChatTemplate:
 
 
 @pytest.mark.xfail(
-    condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
+    condition=Version(transformers.__version__) < Version("5.0.0"),
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
+@require_jmespath
 class TestParseResponse:
     def test_parse_response(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")

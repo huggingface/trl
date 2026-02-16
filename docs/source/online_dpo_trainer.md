@@ -126,7 +126,7 @@ python examples/scripts/dpo_online.py \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
     --output_dir Qwen2.5-0.5B-Online-DPO-PairRM \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --push_to_hub
 ```
 
@@ -167,7 +167,7 @@ accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
     --gradient_accumulation_steps 2 \
     --num_train_epochs 3 \
     --max_new_tokens 53 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --save_steps 0.1 \
     --push_to_hub
@@ -185,7 +185,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --gradient_accumulation_steps 2 \
     --num_train_epochs 3 \
     --max_new_tokens 53 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --save_steps 0.1 \
     --push_to_hub
@@ -203,9 +203,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --gradient_accumulation_steps 4 \
     --num_train_epochs 3 \
     --max_new_tokens 53 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
-    --gradient_checkpointing \
     --save_steps 0.1 \
     --push_to_hub
 ```

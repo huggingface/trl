@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,8 +23,10 @@ from urllib.parse import urlparse
 
 import torch
 import torch.distributed.distributed_c10d as c10d
+from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers import is_torch_xpu_available
+from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -86,7 +88,7 @@ class VLLMClient:
         Use the client to generate completions and update model weights:
 
         ```python
-        >>> from trl.extras.vllm_client import VLLMClient
+        >>> from trl.generation.vllm_client import VLLMClient
 
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
@@ -128,6 +130,24 @@ class VLLMClient:
             raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
+
+        # Configure retries for HTTP requests made through this session.
+        # This is not strictly required for correctness, but it helps make training more robust to rare, transient
+        # failures (network hiccups, temporary 5xx errors, overloaded servers). Without this, such failures could cause
+        # an otherwise healthy training run to fail.
+        retry_strategy = Retry(
+            total=5,  # global cap on the total number of retries across all failure types
+            connect=5,  # retry connection-level failures (DNS issues, refused connections, etc)
+            read=5,  # retry failures while reading the response after the connection was successfully established
+            status=3,  # retry a limited number of times when we receive certain HTTP error responses from the server
+            status_forcelist=[500, 502, 503],  # only retry on server-side errors that are usually temporary
+            backoff_factor=2,  # exponential backoff between retries (2s, 4s, 8s, ...)
+            allowed_methods=["POST", "GET"],  # allow POST as well, even though we're not sure it's safe here
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         if base_url is not None:
             # Parse the base_url to extract host and port
@@ -186,11 +206,11 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
-        guided_decoding_regex: str | None = None,
+        structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
         """
@@ -209,8 +229,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
@@ -219,7 +239,7 @@ class VLLMClient:
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
                 disabled.
-            guided_decoding_regex (`str`, *optional*):
+            structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
@@ -253,7 +273,7 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
+                "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
             },
         )
@@ -274,11 +294,11 @@ class VLLMClient:
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        top_k: int = -1,
+        top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
         truncate_prompt_tokens: int | None = None,
-        guided_decoding_regex: str | None = None,
+        structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
@@ -299,8 +319,8 @@ class VLLMClient:
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
                 Top-p sampling parameter.`1.0` means no truncation.
-            top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+            top_k (`int`, *optional*, defaults to `0`):
+                Top-k sampling parameter. `0` means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
@@ -309,7 +329,7 @@ class VLLMClient:
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
                 disabled.
-            guided_decoding_regex (`str`, *optional*):
+            structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
@@ -360,7 +380,7 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
+                "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
                 "chat_template_kwargs": chat_template_kwargs or {},
             },
@@ -431,10 +451,12 @@ class VLLMClient:
                 host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
             )
             prefixed_store = c10d.PrefixStore("client2server", store)
+            xccl_options = c10d.ProcessGroupXCCL.Options()
             pg = c10d.ProcessGroupXCCL(
                 store=prefixed_store,
                 rank=self.rank,
                 size=world_size,
+                options=xccl_options,
             )
             self.communicator = pg
         else:
@@ -490,6 +512,82 @@ class VLLMClient:
         url = f"{self.base_url}/reset_prefix_cache/"
         response = self.session.post(url)
         if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def chat_completions(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        max_tokens: int | None = None,
+        n: int = 1,
+        tools: list[dict] | None = None,
+        **kwargs,
+    ) -> dict:
+        """
+        OpenAI-compatible chat completions endpoint.
+
+        Args:
+            messages (`list[dict]`):
+                List of messages in OpenAI format with "role" and "content" keys.
+            model (`str`, *optional*):
+                Model name to use.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature for sampling.
+            top_p (`float`, *optional*, defaults to `1.0`):
+                Top-p sampling parameter.
+            max_tokens (`int`, *optional*):
+                Maximum number of tokens to generate.
+            n (`int`, *optional*, defaults to `1`):
+                Number of completions to generate.
+            tools (`list[dict]`, *optional*):
+                List of tool definitions for tool calling.
+            **kwargs:
+                Additional parameters to pass to the endpoint.
+
+        Returns:
+            `dict`:
+                OpenAI-compatible response with "choices", "usage", etc.
+        """
+        url = f"{self.base_url}/v1/chat/completions"
+        response = self.session.post(
+            url,
+            json={
+                "messages": messages,
+                "model": model,
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "n": n,
+                "tools": tools,
+                **kwargs,
+            },
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def tokenize(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """
+        Tokenize messages to get token IDs.
+
+        Args:
+            messages (`list[dict]`):
+                List of messages to tokenize.
+            tools (`list[dict]`, *optional*):
+                List of tool definitions.
+
+        Returns:
+            `dict`:
+                Dictionary with "tokens" (list of token IDs) and "model" keys.
+        """
+        url = f"{self.base_url}/tokenize"
+        response = self.session.post(url, json={"messages": messages, "tools": tools})
+        if response.status_code == 200:
+            return response.json()
+        else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):

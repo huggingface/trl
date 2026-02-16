@@ -2,7 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - ci-*
   pull_request:
     paths:
       # Run only when relevant files are modified
@@ -239,7 +241,7 @@ jobs:
           uv pip install ".[dev]"
           uv pip install accelerate==1.4.0
           uv pip install datasets==3.0.0
-          uv pip install transformers==4.56.1
+          uv pip install transformers==4.56.2
 
       - name: Test with pytest
         run: |
@@ -252,5 +254,59 @@ jobs:
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Results with Python 3.12 and minimum dependencies versions
+          status: ${{ job.status }}
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  distributed_smoke:
+    name: Distributed smoke tests
+    runs-on:
+      group: aws-g5-12xlarge-cache
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    if: github.event.pull_request.draft == false
+    env:
+      CUDA_VISIBLE_DEVICES: "0,1"
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install ".[dev]"
+
+      - name: Run distributed smoke tests
+        run: |
+          source .venv/bin/activate
+          pytest -v tests/distributed/test_distributed.py
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
+        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Results of distributed smoke tests
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
