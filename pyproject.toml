@@ -159,6 +159,7 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 # Allow prints in auxiliary scripts
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
+"trl/skills/**.py" = ["T201"]
 # Ignore import violations in all `__init__.py` files.
 "__init__.py" = ["F401"]
 
