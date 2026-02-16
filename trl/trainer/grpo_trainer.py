@@ -512,9 +512,10 @@ class GRPOTrainer(BaseTrainer):
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 
-        if args.loss_type == "sapo" and (args.sapo_temperature_neg is None or args.sapo_temperature_pos is None):
-            raise ValueError(
-                "When using `sapo` loss, both `sapo_temperature_neg` and `sapo_temperature_pos` must be set."
+        if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
+            logger.warning(
+                "When using `'luspo'` loss, `importance_sampling_level` should be set to `'sequence'` to mirror the "
+                "paper's setup."
             )
 
         # Multi-step
@@ -1887,12 +1888,15 @@ class GRPOTrainer(BaseTrainer):
             inputs.get("image_sizes"),
         )
 
-        # compute loss and metrics using liger grpo loss
+        # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
+        loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
+        # Compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
             _input=last_hidden_state,
             lin_weight=unwrapped_model.lm_head.weight,
             selected_token_ids=completion_ids,
-            attention_mask=completion_mask,
+            # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
+            attention_mask=loss_mask,
             advantages=inputs["advantages"],
             bias=unwrapped_model.lm_head.bias,
             old_per_token_logps=inputs.get("old_per_token_logps"),
@@ -2031,7 +2035,7 @@ class GRPOTrainer(BaseTrainer):
         if self.loss_type == "cispo":
             clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
             per_token_loss = -clamped_ratios * advantages * per_token_logps
-        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+        elif self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
             if self.args.delta is not None:
@@ -2075,6 +2079,11 @@ class GRPOTrainer(BaseTrainer):
         elif self.loss_type in ["cispo", "dapo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
+        elif self.loss_type == "luspo":
+            # Unless importance_sampling_level="token" (not recommended here), per_token_loss is expected to be (B, 1)
+            loss = (per_token_loss * mask.sum(1, keepdim=True)).mean()
+            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+            loss = loss / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -2094,7 +2103,7 @@ class GRPOTrainer(BaseTrainer):
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "dapo", "luspo"]:
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)

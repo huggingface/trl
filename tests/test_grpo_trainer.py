@@ -198,12 +198,13 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo"])
+    @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo"])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
+            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1569,6 +1570,17 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_dataloader_workers(self):
+        # Pytest/CI often starts background threads before tests run. With Python 3.12, using the default "fork" start
+        # method in a multi-threaded process emits a DeprecationWarning and may deadlock.
+        #
+        # We force "spawn" here to make multiprocessing safe under pytest when DataLoader workers are enabled. This is
+        # test-environment–specific and not required by the training logic itself.
+        #
+        # This means the test does not cover "fork". However, "spawn" is stricter (requires full picklability and clean
+        # state) and avoids fork-after-threads issues that pytest cannot reliably test anyway. Fork-specific behavior,
+        # if needed, should be tested in a clean process outside pytest.
+        torch.multiprocessing.set_start_method("spawn", force=True)
+
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(

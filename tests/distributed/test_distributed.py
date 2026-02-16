@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import transformers
 from packaging.version import Version
 
 from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
@@ -40,8 +41,30 @@ def get_config_path(lazy_shared_datadir):
 
 
 @require_torch_multi_accelerator
-class TestDistributed(TrlTestCase):
-    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
+class TestDistributed(
+    TrlTestCase
+):  # pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899"))
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
     def test_sft(self, config, get_config_path):
         # fmt: off
         run_command(
@@ -60,9 +83,21 @@ class TestDistributed(TrlTestCase):
         "config",
         [
             "ddp",
-            "zero2",
-            "zero3",
-            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see see #4812")),
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see #4812")),
         ],
     )
     def test_dpo(self, config, get_config_path):
@@ -79,7 +114,27 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
     def test_sft_dataset_streaming(self, config, get_config_path):
         # fmt: off
         run_command(
@@ -132,14 +187,34 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @pytest.mark.parametrize("config", ["ddp", "zero2", "zero3", "fsdp2"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
     def test_reward(self, config, get_config_path):
         # fmt: off
         run_command(
             [
                 "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/reward.py",
                 "--output_dir", self.tmp_dir,
-                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_implicit_prompt_preference",
             ],
@@ -151,7 +226,13 @@ class TestDistributed(TrlTestCase):
         "config",
         [
             "ddp",
-            "zero2",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
             pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
             pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 RLOO is currently failing, see #4854")),
         ],
@@ -175,7 +256,13 @@ class TestDistributed(TrlTestCase):
         "config",
         [
             "ddp",
-            "zero2",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
             pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
             "fsdp2",
         ],

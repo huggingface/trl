@@ -34,6 +34,47 @@ trainer = GRPOTrainer(
 )
 ```
 
+### DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2501.12948
+
+DeepSeek-R1 achieves reasoning performance comparable to OpenAI-o1 through a multi-stage pipeline that transitions from pure reinforcement learning (RL) to a refined, human-aligned model. Unlike its predecessor, DeepSeek-R1-Zero, which used pure RL on a base model, R1 follows a structured four-stage evolution:
+1. Cold Start: The base model is fine-tuned on a small set of high-quality, long Chain-of-Thought (CoT) data to provide a stable starting point.
+2. Reasoning-Oriented RL: Large-scale RL is applied to enhance performance in math, coding, and logic, using rule-based rewards and a language consistency reward to reduce language mixing.
+3. Rejection Sampling & SFT: The RL checkpoint generates 600k reasoning samples via rejection sampling, which are combined with 200k non-reasoning (general) samples to create a new dataset for a second round of Supervised Fine-Tuning.
+4. RL for all Scenarios: A final RL stage aligns the model with human preferences (helpfulness and harmlessness) across all domains while maintaining reasoning strength.
+
+Distillation: Empowering Small Models
+
+A key contribution of the paper is demonstrating that reasoning patterns can be distilled from a large model (DeepSeek-R1) into smaller dense models (e.g., Qwen and Llama series). Distillation was found to be more effective for small models than training them with pure RL from scratch.
+
+
+You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline. 
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+# Example configuration for a reasoning-oriented GRPO stage
+# Based on the Open-R1 recipe for Qwen-7B
+training_args = GRPOConfig(
+    learning_rate=4.0e-5,
+    max_prompt_length=4096,
+    max_completion_length=32768, # Support for long Chain-of-Thought
+    num_generations=16,          # Sample 16 outputs per prompt for group relative advantage
+    beta=0.001,                  # KL coefficient
+    use_vllm=True,               # Use vLLM backend for accelerated rollout generation
+)
+
+trainer = GRPOTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    reward_funcs=[accuracy_reward, format_reward], # R1-Zero used rule-based rewards
+)
+
+trainer.train()
+```
+
+
 ### Group Sequence Policy Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2507.18071
@@ -516,9 +557,44 @@ Note that this method only has an effect when training involve more than one rew
 
 The authors provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
 
+### Length-Unbiased Sequence Policy Optimization: Revealing and Controlling Response Length Variation in RLVR
+
+**📜 Paper**: https://huggingface.co/papers/2602.05261
+
+Length-Unbiased Sequence Policy Optimization (LUSPO) modifies GSPO by scaling each sequence's loss by its length. This corrects GSPO's gradient bias that penalizes longer responses. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="luspo",
+    importance_sampling_level="sequence",
+    epsilon=2e-3, # section 5.1 of the paper
+    epsilon_high=2.5e-3, # section 5.1 of the paper
+)
+```
+
+### INTELLECT-2: A Reasoning Model Trained Through Globally Decentralized Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2505.07291
+
+INTELLECT-2 is the first globally distributed reinforcement learning training run of a 32 billion parameter language model using fully asynchronous RL across a dynamic, heterogeneous swarm of permissionless compute contributors. The authors propose modifications to the standard GRPO training recipe, including two-sided GRPO clipping for increased training stability. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    delta=4,  # δ in section 4.1 of the paper
+    epsilon=0.2,  # ε in section 4.1 of the paper
+    beta=0.001,  # KL divergence coefficient in section 4.1 of the paper
+    num_generations=16,  # responses per prompt in section 4.1 of the paper
+    learning_rate=3e-7,  # section 4.1 of the paper
+)
+```
+
 ## Direct Policy Optimization
 
-- Papers relating to the [`DPOTrainer`]
+Papers relating to the [`DPOTrainer`]
 
 ### Direct Preference Optimization: Your Language Model is Secretly a Reward Model
 
@@ -541,7 +617,7 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2310.12036
 
-A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
+A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
@@ -646,6 +722,28 @@ training_args = DPOConfig(
 
 For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
 
+### Learn Your Reference Model for Real Good Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2404.09656
+
+Trust Region DPO (TR-DPO) updates the reference policy during training, demonstrating effectiveness against DPO on the Anthropic HH and TLDR datasets, outperforming DPO by up to 19% measured by automatic evaluation with GPT-4, improving coherence, correctness, level of detail, helpfulness, and harmlessness. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    sync_ref_model=True,  # enable TR-DPO (Section 3 of the paper)
+    ref_model_mixup_alpha=0.6,  # α soft update weight (Table 1 of the paper)
+    ref_model_sync_steps=512,  # τ update frequency in steps (Table 1 of the paper)
+    beta=0.05,  # β temperature (Table 1 of the paper)
+    learning_rate=1e-6,  # learning rate (Table 2 of the paper)
+    num_train_epochs=1,  # Table 2 of the paper
+    max_length=1024,  # max tokens length (Table 2 of the paper)
+    max_grad_norm=2,  # max gradient norm (Table 2 of the paper)
+    warmup_steps=100,  # warm-up steps (Table 2 of the paper)
+)
+```
+
 ### Self-Play Preference Optimization for Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2405.00675
@@ -659,6 +757,24 @@ training_args = DPOConfig(
     loss_type="sppo_hard", # Section 3 of the paper
     per_device_train_batch_size=64, #  batch size in Section C of the paper
     learning_rate=5e-7, # learning rate in Section C of the paper
+)
+```
+
+### Provably Mitigating Overoptimization in RLHF: Your SFT Loss is Implicitly an Adversarial Regularizer
+
+**📜 Paper**: https://huggingface.co/papers/2405.16436
+
+Regularized Preference Optimization (RPO) mitigates overoptimization in RLHF by fusing the DPO loss with the SFT loss, provably preventing the policy from choosing actions with spurious high proxy rewards. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type=["sigmoid", "sft"],  # RPO loss = DPO + SFT (Section 5 of the paper)
+    loss_weights=[1.0, 0.005],  # η=0.005 SFT weight in Appendix E.1 of the paper
+    beta=0.01,  # β in Appendix E.1 of the paper
+    learning_rate=5e-7,  # learning rate in Appendix E.1 of the paper
+    num_train_epochs=1,  # Appendix E.1 of the paper
 )
 ```
 
@@ -680,7 +796,7 @@ training_args = DPOConfig(
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="aot_pair", # Section 3 of the paper
+    loss_type="aot_unpaired", # Section 3 of the paper
 )
 ```
 
@@ -774,6 +890,22 @@ trainer.train()
 
 ```
 
+### Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2411.10442
+
+Introduces Mixed Preference Optimization (MPO) to improve multimodal reasoning in MLLMs, addressing distribution shift and weak Chain-of-Thought (CoT) after standard pre-training and SFT. The paper contributes (1) MMPR, an automated pipeline for high-quality multimodal preference data, and (2) MPO, a combined preference objective (pairwise + BCO-style + SFT) that boosts CoT. InternVL2-8B-MPO reaches 67.0 on MathVista (+8.7 over InternVL2-8B), comparable to the 10× larger InternVL2-76B. Used in TRL via [`DPOConfig`] with composite loss. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type=["sigmoid", "bco_pair", "sft"],  # ℒ = w_p·ℒ_p + w_q·ℒ_q + w_g·ℒ_g (Section 3.2 of the paper)
+    loss_weights=[0.8, 0.2, 1.0],  # w_p, w_q, w_g loss weights (Section 7 of the paper)
+    learning_rate=5e-6,  # learning rate (Section 7 of the paper)
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`experimental.kto.KTOTrainer`]
@@ -854,6 +986,21 @@ SFTConfig(
 )
 ```
 
+### Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer
+
+**📜 Paper**: https://huggingface.co/papers/1910.10683
+
+The T5 paper proposes a unified text-to-text framework for transfer learning and introduces **sequence packing** (Section 3.5.2): grouping multiple short sequences into fixed-length blocks to reduce padding and improve training efficiency. Packing is supported in TRL via [`SFTConfig`] with the [`SFTTrainer`]. To enable packing with TRL, use this configuration:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    packing=True,  # enable sequence packing (Section 3.5.2 of the paper)
+    max_length=512,  # packed sequence length (Section 3.5.2 of the paper)
+)
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
@@ -908,9 +1055,86 @@ training_args = RLOOConfig(
 )
 ```
 
+### REINFORCE++: A Simple and Efficient Approach for Aligning Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2501.03262
+
+REINFORCE++ is an enhanced variant of the classical REINFORCE algorithm that incorporates key optimization techniques from PPO while eliminating the need for a critic network. It achieves simplicity, enhanced training stability, and reduced computational overhead through global advantage normalization across the entire batch. To approximate the paper's setting with the [`RLOOTrainer`], use this configuration:
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    normalize_advantages=True,  # global advantage normalization, core of REINFORCE++
+)
+```
+
+## Odds Ratio Preference Optimization
+
+Papers relating to the [`experimental.orpo.ORPOTrainer`]
+
+### ORPO: Monolithic Preference Optimization without Reference Model
+
+**📜 Paper**: https://huggingface.co/papers/2403.07691
+
+The introduction of a reference model-free monolithic odds ratio preference optimization algorithm (ORPO) enhances preference alignment during supervised fine-tuning, surpassing larger models in key evaluations. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.orpo import ORPOConfig
+
+training_args = ORPOConfig(
+    beta=0.1,  # λ odds ratio loss weight (Table 7 of the paper, Mistral-ORPO-β)
+    learning_rate=5e-6,  # learning rate (Appendix C of the paper)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (Appendix C of the paper)
+    num_train_epochs=5,  # Appendix C of the paper
+    warmup_steps=200,  # warm-up steps (Appendix C of the paper)
+    per_device_train_batch_size=8,  # batch size (Appendix C of the paper)
+)
+```
+
 ## Contrastive Preference Optimization
 
 Papers relating to the [`experimental.cpo.CPOTrainer`]
+
+### Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation
+
+**📜 Paper**: https://huggingface.co/papers/2401.08417
+
+Introduces Contrastive Preference Optimization (CPO), a preference-based method for machine translation that trains models to avoid adequate-but-imperfect translations instead of mimicking references as in SFT. The paper analyzes limitations of SFT on MT (including reference quality issues) and shows that applying CPO to ALMA with only 22K parallel sentences yields ALMA-R, which matches or exceeds WMT competition winners and GPT-4 on WMT'21–WMT'23. Used in TRL via [`experimental.cpo.CPOTrainer`]. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.cpo import CPOConfig
+
+training_args = CPOConfig(
+    loss_type="sigmoid",  # preference learning loss (Section 3 of the paper)
+    cpo_alpha=1.0,  # NLL regularizer weight (Section 3 of the paper)
+    beta=0.1,  # β temperature (Section 4.2 of the paper)
+    learning_rate=1e-4,  # learning rate (official code)
+    lr_scheduler_type="inverse_sqrt",  # scheduler (official code)
+    num_train_epochs=1,  # Section 4.2 of the paper
+    warmup_ratio=0.01,  # warm-up ratio (Section 4.2 of the paper)
+    max_length=512,  # max sequence length (Section 4.2 of the paper)
+)
+```
+
+### SimPO: Simple Preference Optimization with a Reference-Free Reward
+
+**📜 Paper**: https://huggingface.co/papers/2405.14734
+
+SimPO is a simpler yet more effective preference optimization approach that uses the average log probability of a sequence as the implicit reward, eliminating the need for a reference model. It introduces a target reward margin to the Bradley-Terry objective to encourage a larger margin between winning and losing responses. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.cpo import CPOConfig
+
+training_args = CPOConfig(
+    loss_type="simpo",  # SimPO loss (Section 3 of the paper)
+    cpo_alpha=0.0,  # no BC regularizer for SimPO
+    beta=2.5,  # β in Appendix B of the paper
+    simpo_gamma=1.375,  # γ target reward margin, from γ/β=0.55 in Appendix B of the paper
+    learning_rate=1e-6,  # learning rate in Appendix B of the paper
+    num_train_epochs=1,  # Appendix B of the paper
+)
+```
 
 ### AlphaPO -- Reward shape matters for LLM alignment
 
@@ -963,7 +1187,24 @@ trainer.train()
 
 ## Reward Modeling
 
-Papers relating to the [`RewardTrainer`]
+Papers relating to the [`RewardTrainer`] and [`experimental.prm.PRMTrainer`]
+
+### Solving math word problems with process- and outcome-based feedback
+
+**📜 Paper**: https://huggingface.co/papers/2211.14275
+
+Compares process-based supervision (per-step reasoning feedback) and outcome-based supervision (final-answer only) for math reasoning on GSM8K. Outcome-based training yields similar final-answer error with less labeling, but process-based supervision or learned process reward models (PRMs) are needed to reduce reasoning-step errors. The paper improves prior best from 16.8% to 12.7% final-answer error and 14.0% to 3.4% reasoning error among correct-answer solutions. Used in TRL via [`experimental.prm.PRMTrainer`]. To train a PRM using TRL, use this configuration:
+
+```python
+from trl.experimental.prm import PRMConfig
+
+training_args = PRMConfig(
+    step_separator="\n",  # separator between reasoning steps (TRL implementation detail)
+    train_on_last_step_only=False,  # supervise all steps, not just the last one (TRL implementation detail)
+)
+```
+
+The paper does not specify training hyperparameters; it focuses on comparing process-based vs outcome-based supervision strategies.
 
 ### Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking
 
@@ -1011,6 +1252,18 @@ def add_margin(example):
 dataset = dataset.map(add_margin)
 ```
 
+## Online Direct Preference Optimization
+
+Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
+
+### Direct Language Model Alignment from Online AI Feedback
+
+**📜 Paper**: https://huggingface.co/papers/2402.04792
+
+Online DPO improves direct alignment from preferences methods by providing real-time feedback from a model, outperforming both DPO and PPO methods.
+
+To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
+
 ### The Perfect Blend: Redefining RLHF with Mixture of Judges
 
 **📜 Paper**: https://huggingface.co/papers/2409.20370
@@ -1018,7 +1271,6 @@ dataset = dataset.map(add_margin)
 This paper introduces Constrained Generative Policy Optimization (CGPO), a post-training RLHF paradigm for multi-task learning. Its core contribution is the Mixture of Judges (MoJ) framework, which aggregates multiple reward signals to mitigate reward hacking and achieve Pareto-optimal trade-offs across many objectives. CGPO outperforms common RLHF algorithms like PPO and DPO across general chat, STEM reasoning, instruction following, math, coding, and knowledge benchmarks.
 
 ⚠️ Experimental: CGPO is not yet implemented as a TRL trainer. Users can experiment with multiple reward/judge aggregation using [`trl.experimental.judges.AllTrueJudge`].
-
 
 ```python
 from trl.experimental.judges import AllTrueJudge, BaseBinaryJudge
@@ -1041,9 +1293,46 @@ results = moj.judge(
 print(results)  
 ```
 
+### Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF
+
+**📜 Paper**: https://huggingface.co/papers/2405.21046
+
+XPO augments the DPO objective with a novel and principled exploration bonus, empowering the algorithm to explore outside the support of the initial model and human feedback data. It is a one-line change to online DPO that is provably sample-efficient and converges to a near-optimal language model policy. The paper defines α > 0 (optimism coefficient) and β > 0 (KL regularization) in Algorithm 1 but does not specify numerical values. The following configuration uses TRL defaults:
+
+```python
+from trl.experimental.xpo import XPOConfig
+
+training_args = XPOConfig(
+    alpha=1e-5,  # α exploration bonus weight, α ≥ 0 where α=0 reduces to online DPO (TRL default)
+    beta=0.1,  # β KL regularization coefficient (TRL default)
+)
+```
+
 ## Distillation
 
 Papers relating to training a student model with the help of a teacher model.
+
+### On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes
+
+**📜 Paper**: https://huggingface.co/papers/2306.13649
+
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl.experimental.gkd import GKDConfig
+
+# XSum summarization task (Table A.1 of the paper)
+training_args = GKDConfig(
+    lmbda=0.5,  # λ student data fraction (Section 3 of the paper)
+    beta=0.5,  # β Generalized JSD interpolation, 0=KL, 1=reverse KL (Section 3 of the paper)
+    temperature=1.0,  # student training temperature (Appendix A of the paper)
+    max_steps=40000,  # training steps (Table A.1 of the paper)
+    learning_rate=3e-4,  # learning rate (Table A.1 of the paper)
+    per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
+    warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
+    max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
+)
+```
 
 ### On-Policy Distillation
 
@@ -1135,4 +1424,27 @@ and launch the training script using `accelerate launch --config_file config_fil
 
 ```sh
 accelerate launch --config_file config.yaml train.py
+```
+
+## Proximal Policy Optimization
+
+Papers relating to the [`experimental.ppo.PPOTrainer`]
+
+### Proximal Policy Optimization Algorithms
+
+**📜 Paper**: https://huggingface.co/papers/1707.06347
+
+Introduces Proximal Policy Optimization (PPO): policy gradient methods that alternate between collecting rollouts and optimizing a clipped surrogate objective over multiple minibatch epochs. PPO retains benefits of trust-region methods (e.g. TRPO) with simpler implementation and strong empirical sample efficiency, and was validated on robotics and Atari benchmarks. Used in TRL via [`experimental.ppo.PPOTrainer`]. To use PPO with TRL, use this configuration:
+
+```python
+from trl.experimental.ppo import PPOConfig
+
+training_args = PPOConfig(
+    cliprange=0.2,  # ε clipping range (Section 3 and Table 3 of the paper, Mujoco setting)
+    num_ppo_epochs=4,  # K epochs of minibatch updates (TRL default; paper uses K=10 Mujoco, K=3 Atari)
+    gamma=1.0,  # γ discount factor (TRL default for LLM tasks; paper uses γ=0.99)
+    lam=0.95,  # λ GAE parameter (Table 3 of the paper, Mujoco setting)
+    kl_coef=0.05,  # KL penalty coefficient (Section 4 of the paper discusses adaptive KL)
+    vf_coef=0.1,  # c₁ value function loss weight (Equation 9 of the paper)
+)
 ```
