@@ -16,16 +16,18 @@
 Agent Skills.
 
 This module:
-- provides utilities for discovering and accessing TRL skills that can be used by AI agents to learn how to use the TRL CLI
+- provides utilities for discovering and accessing TRL skills that can be used by AI agents to learn how to use the TRL
+  CLI
 - handles installation, uninstallation, and management of TRL skills
-- defines where different AI agents and coding tools look for skills, enabling easy installation of TRL skills to the appropriate directories
+- defines where different AI agents and coding tools look for skills, enabling easy installation of TRL skills to the
+  appropriate directories
 
 Agent Skills are folders of instructions, scripts, and resources that agents can discover and use to perform tasks more
 accurately and efficiently. Learn more at https://agentskills.io
 """
 
-import shutil
 import importlib.resources as resources
+import shutil
 from pathlib import Path
 
 
@@ -45,14 +47,14 @@ AGENT_PATHS = {
 }
 
 
-def get_skills_dir() -> Path:
+def _get_skills_dir() -> Path:
     """
     Get the path to the TRL skills directory.
 
     This function works in both development and installed package environments.
 
     Returns:
-        Path to the skills directory.
+        `Path`: TRL skills directory.
 
     Example:
         ```python
@@ -75,7 +77,7 @@ def list_skills(skills_dir: Path | None = None) -> list[str]:
         skills_dir (`Path`, *optional*): Skills directory. If `None`, it defaults to TRL skills directory.
 
     Returns:
-        Sorted list of skill names (directory names containing SKILL.md).
+        `list[str]`: Skill names (directory names containing SKILL.md).
 
     Example:
         ```python
@@ -85,7 +87,7 @@ def list_skills(skills_dir: Path | None = None) -> list[str]:
         print(skills)  # ['trl-training']
         ```
     """
-    # skills_dir = skills_dir or get_skills_dir()  # TODO: Uncomment once #5097 merged
+    skills_dir = skills_dir or _get_skills_dir()
     if not skills_dir.exists():
         return []
     skills = []
@@ -111,7 +113,7 @@ def install_skill(
         force: Overwrite if exists.
 
     Returns:
-        True if installed successfully.
+        `bool`: True if installed successfully.
 
     Raises:
         FileNotFoundError: If skill doesn't exist in TRL. FileExistsError: If skill already installed and not force.
@@ -163,7 +165,7 @@ def uninstall_skill(skill_name: str, target_dir: Path) -> bool:
         target_dir: Directory skill is installed in.
 
     Returns:
-        True if uninstalled successfully.
+        `bool`: True if uninstalled successfully.
 
     Raises:
         FileNotFoundError: If skill not installed. PermissionError: If no permission to remove.

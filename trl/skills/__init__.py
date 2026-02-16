@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .skills import get_skills_dir, list_skills
+from .skills import _get_skills_dir, list_skills

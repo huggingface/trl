@@ -14,12 +14,12 @@
 
 from pathlib import Path
 
-from trl.skills import get_skills_dir, list_skills
+from trl.skills import _get_skills_dir, list_skills
 
 
 def test_get_skills_dir():
     """Test that get_skills_dir() returns a valid directory path."""
-    skills_dir = get_skills_dir()
+    skills_dir = _get_skills_dir()
 
     assert isinstance(skills_dir, Path)
     assert skills_dir.exists(), f"Skills directory does not exist: {skills_dir}"
