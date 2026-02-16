@@ -641,8 +641,10 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
 
     This function is equivalent to the following naive implementation:
     ```python
-    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index.unsqueeze(-1)).squeeze(-1)  # for index with shape (...)
-    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index)  # for index with shape (..., K)
+    # for index with shape (...):
+    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+    # for index with shape (..., K):
+    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
     ```
 
     Args:
