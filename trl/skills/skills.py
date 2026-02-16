@@ -32,6 +32,36 @@ AGENT_PATHS = {
 }
 
 
+def list_skills(skills_dir: Path | None = None) -> list[str]:
+    """
+    List skills in skills directory.
+
+    A skill is a directory containing a SKILL.md file.
+
+    Args:
+        skills_dir (`Path`, *optional*): Skills directory. If `None`, it defaults to TRL skills directory.
+
+    Returns:
+        Sorted list of skill names (directory names containing SKILL.md).
+
+    Example:
+        ```python
+        from trl.skills import list_skills
+
+        skills = list_skills()
+        print(skills)  # ['trl-training']
+        ```
+    """
+    # skills_dir = skills_dir or get_skills_dir()  # TODO: Uncomment once #5097 merged
+    if not skills_dir.exists():
+        return []
+    skills = []
+    for item in skills_dir.iterdir():
+        if item.is_dir() and (item / "SKILL.md").exists():
+            skills.append(item.name)
+    return sorted(skills)
+
+
 def install_skill(
     skill_name: str,
     source_dir: Path,
@@ -58,9 +88,7 @@ def install_skill(
 
     # Check if source skill exists
     if not source_skill.exists():
-        raise FileNotFoundError(
-            f"Skill '{skill_name}' not found in TRL. Available skills: {', '.join(_list_source_skills())}"
-        )
+        raise FileNotFoundError(f"Skill '{skill_name}' not found in TRL. Available skills: {', '.join(list_skills())}")
 
     if not source_skill.is_dir():
         raise ValueError(f"Skill '{skill_name}' is not a directory")
@@ -119,52 +147,3 @@ def uninstall_skill(skill_name: str, target_dir: Path) -> bool:
         raise PermissionError(f"Cannot remove skill: {e}") from e
 
     return True
-
-
-def list_installed_skills(target_dir: Path) -> list[dict]:
-    """
-    List skills installed in target directory.
-
-    Args:
-        target_dir: Directory to check
-
-    Returns:
-        List of dicts with skill info:
-        - name: Skill name.
-        - path: Absolute path to installed skill.
-    """
-    if not target_dir.exists():
-        return []
-
-    installed = []
-    try:
-        for item in target_dir.iterdir():
-            if not item.is_dir():
-                continue
-            # Check if it's a valid skill (has SKILL.md)
-            if not (item / "SKILL.md").exists():
-                continue
-            installed.append(
-                {
-                    "name": item.name,
-                    "path": str(item.resolve()),
-                }
-            )
-    except PermissionError:
-        # If we can't read the directory, return empty list
-        return []
-
-    return sorted(installed, key=lambda x: x["name"])
-
-
-def _list_source_skills(source_skills_dir: Path) -> list[str]:
-    """List available skills in source directory.
-
-    Args:
-        source_skills_dir: Path to TRL skills directory (from get_skills_dir()).
-    """
-    skills = []
-    for item in source_skills_dir.iterdir():
-        if item.is_dir() and (item / "SKILL.md").exists():
-            skills.append(item.name)
-    return sorted(skills)
