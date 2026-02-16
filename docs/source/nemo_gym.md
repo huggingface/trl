@@ -10,7 +10,7 @@ Complete these one-time setup steps before running training.
 
 ### Install TRL and NeMo Gym
 
-1. **Install TRL with vLLM extras**
+1. **Install TRL**
 
    ```bash
    cd trl/
@@ -34,12 +34,12 @@ Complete these one-time setup steps before running training.
 
 ### Prepare a Dataset
 
-In this example we will train a model to play sudoku. Create a dataset for the mini sudoku environment using the reasoning gym integration in NeMo Gym:
+In this example we will train a model to play sudoku. Create a dataset for the mini sudoku environment using the reasoning gym integration in NeMo Gym. Note m that many NeMo Gym datasets are available on Huggingface to download. Please refer to the NeMo Gym documentation! 
 
 ```bash
 cd Gym
 source .venv/bin/activate
-uv add reasoning-gym
+uv pip install reasoning-gym
 cd resources_servers/reasoning_gym
 python scripts/create_dataset.py \
     --task mini_sudoku \
@@ -79,29 +79,25 @@ NeMo Gym datasets are stored as JSONL files. Each line contains a task with inpu
 
    ```yaml
    model_name: "Qwen/Qwen2.5-1.5B-Instruct"
-
    dataset_path: "/path/to/Gym/resources_servers/reasoning_gym/data/reasoning_gym/train_mini_sudoku.jsonl"
    eval_dataset_path: "/path/to/Gym/resources_servers/reasoning_gym/data/reasoning_gym/val_mini_sudoku.jsonl"
-
    task: "mini-sudoku"
    output_dir: "outputs/nemo_gym_sudoku"
-
-   # Training hyperparameters
    learning_rate: 1.0e-5
    num_generations: 16
    per_device_train_batch_size: 8
    gradient_accumulation_steps: 1
    max_completion_length: 10000
    vllm_importance_sampling_correction: true
-
-   # Inference sampling parameters
    temperature: 1.0
    top_p: 0.999
    ```
 
 ###  Run Training
 
-1. **Start NeMo Gym Servers** (Terminal 1)
+Training can be run directly on a workstation, no Slurm required. A minimum of 2 GPUs is required to leverage TRL's vLLM server mode. Co-located training and inference with NeMo Gym and TRL is currently not supported. 
+
+1. **Start NeMo Gym Servers**
 
    ```bash
    cd Gym/
@@ -113,7 +109,7 @@ NeMo Gym datasets are stored as JSONL files. Each line contains a task with inpu
    ng_run "+config_paths=[${config_paths}]"
    ```
 
-1. **Start TRL vLLM Server on GPU 0** (Terminal 2)
+1. **Start TRL vLLM Server on GPU 0**
 
    ```bash
    cd trl/
@@ -125,7 +121,7 @@ NeMo Gym datasets are stored as JSONL files. Each line contains a task with inpu
      --port 8000
    ```
 
-1. **Run Training on GPU 1** (Terminal 3)
+1. **Run Training on GPU 1**
 
    ```bash
    source trl/.venv/bin/activate
@@ -201,7 +197,7 @@ NeMo Gym is deisgned to enable training on many environments simultaneously and 
    task: "workplace-sudoku"
    output_dir: "outputs/nemo_gym_multi_env"
 
-   # ... rest of config same
+   # ... rest of config stays the same
    ```
 
 1. **Update ng_run**

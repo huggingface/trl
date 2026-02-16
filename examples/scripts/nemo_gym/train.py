@@ -137,6 +137,8 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
     is_eval = not trainer.model.training
     dataset = trainer.eval_dataset if is_eval and trainer.eval_dataset is not None else trainer.train_dataset
 
+    # Note we are using the prompts as task indices in this integration as NeMo Gym datasets can have different fields
+    # and huggingface datasets did not seem to allow this for multi-environment training.
     dataset_items = []
     for idx_str in prompts:
         idx = int(idx_str)
