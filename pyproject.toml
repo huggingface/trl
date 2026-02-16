@@ -59,7 +59,7 @@ kernels = [
     "kernels"
 ]
 liger = [
-    "liger-kernel>=0.6.4"
+    "liger-kernel>=0.7.0"
 ]
 peft = [
     "peft>=0.8.0"
@@ -108,7 +108,7 @@ dev = [
     # kernels
     "kernels",
     # liger
-    "liger-kernel>=0.6.4",
+    "liger-kernel>=0.7.0",
     # peft
     "peft>=0.8.0",
     # quality
