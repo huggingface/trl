@@ -165,7 +165,7 @@ The following steps can be run in 3 terminals, or with processes in the backgrou
    cd trl/examples/scripts/nemo_gym
    export WANDB_API_KEY=...
 
-   CUDA_VISIBLE_DEVICES=1 python train_multi_environment.py --config config.yaml
+   CUDA_VISIBLE_DEVICES=1 python train.py --config config.yaml
    ```
 
 ### Results
@@ -175,30 +175,6 @@ You should see training and evaluation reward curves like the following!
 ![nemo_gym_sudoku_train](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/nemo_gym_sudoku_train.png)
 
 ![nemo_gym_sudoku_eval](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/nemo_gym_sudoku_eval.png)
-
-## Multi-Node Training with Slurm
-
-An example five-node training script is provided in `submit.sh`. Nodes one through four run the training backend, while node five runs vLLM inference for NeMo Gym agent rollouts.
-
-Before running the Slurm script, ensure you have completed the TRL and NeMo Gym installation steps above. The script assumes `.venv` directories exist for both TRL and Gym. If you use a container in the Slurm script, you should also create the virtual environments from the container in an interactive session or with a separate sbatch script.
-
-1. **Configure the Script**
-
-   Update `submit.sh` with your Slurm account, partition, paths to your project directory, and updated training configs.
-
-1. **Submit the Job**
-
-   ```bash
-   sbatch submit.sh
-   ```
-
-1. **Monitor Training**
-
-   ```bash
-   tail -f logs/<job_id>/*
-   ```
-
-> **Tip**: Set up wandb logging for detailed training metrics. For more details on TRL's vLLM integration, refer to the vLLM integration page.
 
 ## Multi-Environment Training
 
@@ -289,5 +265,5 @@ NeMo Gym is deisgned to enable training on many environments simultaneously and 
 
 - [NeMo Gym GitHub](https://github.com/NVIDIA-NeMo/Gym)
 - [NeMo Gym Documentation](https://docs.nvidia.com/nemo/gym/latest/)
-- [Training Script](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/train_multi_environment.py)
+- [Training Script](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/train.py)
 - [TRL GRPO Trainer](grpo_trainer)
