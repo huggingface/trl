@@ -1967,6 +1967,7 @@ class GRPOTrainer(_BaseTrainer):
             "pixel_attention_mask",
             "image_sizes",
             "token_type_ids",
+            "mm_token_type_ids",
         ]
         for key in optional_keys:
             if key in inputs:
