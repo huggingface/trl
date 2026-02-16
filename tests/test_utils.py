@@ -248,6 +248,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name="username/my_dataset",
             tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            trackio_url="https://huggingface.co/spaces/username/space_id",
             comet_url="https://www.comet.com/username/project_id/experiment_id",
             trainer_name="My Trainer",
             trainer_citation="@article{my_trainer, ...}",
@@ -260,6 +261,7 @@ class TestGenerateModelCard(TrlTestCase):
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "](https://huggingface.co/spaces/username/space_id)" in card_text
         assert "](https://www.comet.com/username/project_id/experiment_id" in card_text
         assert "My Trainer" in card_text
         assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
@@ -273,6 +275,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name=None,
             tags=[],
             wandb_url=None,
+            trackio_url=None,
             comet_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,

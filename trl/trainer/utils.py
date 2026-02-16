@@ -543,8 +543,7 @@ def get_trackio_space_url() -> str | None:
     space_id = space_id.replace("/", "-")
     project = run.project
     name = run.name
-    url = f"https://{space_id}.hf.space?project={project}&runs={name}&sidebar=collapsed"
-    return url
+    return f"https://{space_id}.hf.space?project={project}&runs={name}&sidebar=collapsed"
 
 
 def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
