@@ -1854,6 +1854,7 @@ class GRPOTrainer(BaseTrainer):
             sapo_temperature_pos=self.args.sapo_temperature_pos,
             sapo_temperature_neg=self.args.sapo_temperature_neg,
             delta=self.args.delta,
+            use_bias_correction_kl=self.args.use_bias_correction_kl,
         )
 
         mode = "train" if self.model.training else "eval"
