@@ -42,8 +42,6 @@ from ...models.utils import disable_gradient_checkpointing
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
 from ...trainer.utils import (
     entropy_from_logits,
-    nanmax,
-    nanmin,
     nanstd,
     pad,
     selective_log_softmax,
@@ -716,9 +714,8 @@ class DPPOTrainer(GRPOTrainer):
                     entropies = entropy_from_logits(logits)
                 all_entropies.append(entropies)
 
-            # Evaluate current policy at rollout's top-K token IDs (no gradients needed for mask)
             with torch.no_grad():
-                topk_logps = selective_log_softmax(logits.detach(), topk_token_ids[start:end])
+                topk_logps = selective_log_softmax(logits, topk_token_ids[start:end])
             all_topk_logps.append(topk_logps)
 
         logps = torch.cat(all_logps, dim=0)
@@ -1167,12 +1164,10 @@ class DPPOTrainer(GRPOTrainer):
         self._metrics[mode]["prob_diff/mean"].append(
             self.accelerator.gather(masked_batch_mean(prob_diff)).nanmean().item()
         )
-        prob_diff_masked = prob_diff.clone()
-        prob_diff_masked[mask == 0] = float("nan")
-        per_seq_max = torch.stack([nanmax(row) for row in prob_diff_masked], dim=0)
-        per_seq_min = torch.stack([nanmin(row) for row in prob_diff_masked], dim=0)
-        self._metrics[mode]["prob_diff/max"].append(nanmax(self.accelerator.gather(per_seq_max)).item())
-        self._metrics[mode]["prob_diff/min"].append(nanmin(self.accelerator.gather(per_seq_min)).item())
+        per_seq_max = prob_diff.masked_fill(mask == 0, float("-inf")).max(dim=1).values
+        per_seq_min = prob_diff.masked_fill(mask == 0, float("inf")).min(dim=1).values
+        self._metrics[mode]["prob_diff/max"].append(self.accelerator.gather(per_seq_max).max().item())
+        self._metrics[mode]["prob_diff/min"].append(self.accelerator.gather(per_seq_min).min().item())
 
         self._metrics[mode]["advantages/mean"].append(advantages.mean().item())
         self._metrics[mode]["advantages/std"].append(advantages.std().item())
