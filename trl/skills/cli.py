@@ -19,9 +19,8 @@ This module provides command-line interface for installing TRL skills to various
 """
 
 import argparse
-from pathlib import Path
 
-from .skills import install_skill, list_agent_names, list_skills, uninstall_skill
+from .skills import install_skill, list_agent_names, list_skills, resolve_target_path, uninstall_skill
 
 
 def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
@@ -77,33 +76,6 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
         description="Show skills installed in an agent's directory",
     )
     list_installed_parser.set_defaults(func=cmd_list_installed)
-
-
-def resolve_target(args) -> Path:
-    """
-    Resolve target directory from args.
-
-    Args:
-        args: Parsed arguments with 'target' and 'scope' attributes
-
-    Returns:
-        `Path`: Taget path.
-
-    Raises:
-        `ValueError`: If agent name is not recognized FileNotFoundError: If custom path doesn't exist
-    """
-    # Check if it's a predefined agent
-    if args.target in AGENT_PATHS:
-        agent_paths = AGENT_PATHS[args.target]
-        try:
-            agent_path = agent_paths[args.scope]
-            return agent_path
-        except ValueError as e:
-            raise ValueError(str(e)) from e
-    else:
-        # Custom path
-        path = Path(args.target).expanduser().resolve()
-        return path
 
 
 def cmd_install(args):

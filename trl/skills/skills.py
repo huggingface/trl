@@ -65,16 +65,50 @@ def _get_trl_skills_dir() -> Path:
 
     Returns:
         `Path`: TRL skills directory.
+    """
+    return Path(str(resources.files("trl.skills")))
+
+
+def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
+    """
+    Resolve target to a concrete directory path.
+
+    Converts semantic agent names (e.g., 'claude') with scope to actual filesystem paths, or normalizes provided paths.
+
+    Args:
+        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        scope (`str`, defaults to `"project"`):
+            Scope for agent names: 'global' (user-level like ~/.agent/skills/) or 'project' (./agent/skills/).
+
+    Returns:
+        `Path`: Resolved absolute path.
+
+    Raises:
+        `ValueError`: If agent name is not recognized.
 
     Example:
         ```python
-        from trl.skills import get_skills_dir
+        from trl.skills import resolve_target_path
 
-        skills_dir = get_skills_dir()
-        print(skills_dir)  # /path/to/site-packages/trl/skills
+        # Resolve agent name with scope
+        path = resolve_target_path("claude", "global")
+        print(path)  # /home/user/.claude/skills
+
+        # Resolve custom path
+        path = resolve_target_path("/custom/skills")
+        print(path)  # /custom/skills
         ```
     """
-    return Path(str(resources.files("trl.skills")))
+    if isinstance(target, Path):
+        return target.expanduser().resolve()
+
+    # Check if it's a predefined agent
+    if target in AGENT_PATHS:
+        agent_path = AGENT_PATHS[target][scope]
+        return agent_path.expanduser().resolve()
+
+    # Treat as custom path string
+    return Path(target).expanduser().resolve()
 
 
 def list_skills(skills_dir: Path | None = None) -> list[str]:
