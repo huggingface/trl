@@ -21,9 +21,7 @@ This module provides command-line interface for installing TRL skills to various
 import argparse
 from pathlib import Path
 
-from .agents import AGENT_REGISTRY, get_agent_target, list_agent_names
-from .installer import SkillInstaller
-from .skills import get_skills_dir, list_skills
+from .skills import AGENT_PATHS, install_skill, list_skills, uninstall_skill
 
 
 def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
@@ -40,12 +38,12 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
     target_parser.add_argument(
         "--target",
         required=True,
-        help=f"Installation target: agent name ({', '.join(list_agent_names())}) or directory path",
+        help=f"Installation target: agent name ({', '.join(AGENT_PATHS.keys())}) or directory path",
     )
     target_parser.add_argument(
         "--scope",
         choices=["global", "project"],
-        default="global",
+        default="project",
         help="Scope for predefined agents: global (user-level like ~/.agent/skills/) or project (./agent/skills/)",
     )
 
@@ -81,7 +79,7 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
     list_installed_parser.set_defaults(func=cmd_list_installed)
 
 
-def resolve_target(args) -> tuple[Path, str]:
+def resolve_target(args) -> Path:
     """
     Resolve target directory from args.
 
@@ -89,24 +87,23 @@ def resolve_target(args) -> tuple[Path, str]:
         args: Parsed arguments with 'target' and 'scope' attributes
 
     Returns:
-        Tuple of (target_path, display_name)
+        `Path`: Taget path.
 
     Raises:
-        ValueError: If agent name is not recognized FileNotFoundError: If custom path doesn't exist
+        `ValueError`: If agent name is not recognized FileNotFoundError: If custom path doesn't exist
     """
     # Check if it's a predefined agent
-    if args.target in AGENT_REGISTRY:
-        agent = get_agent_target(args.target)
+    if args.target in AGENT_PATHS:
+        agent_paths = AGENT_PATHS[args.target]
         try:
-            path = agent.get_path(args.scope)
-            display_name = f"{agent.display_name} ({path})"
-            return path, display_name
+            agent_path = agent_paths[args.scope]
+            return agent_path
         except ValueError as e:
             raise ValueError(str(e)) from e
     else:
         # Custom path
         path = Path(args.target).expanduser().resolve()
-        return path, str(path)
+        return path
 
 
 def cmd_install(args):
@@ -124,7 +121,7 @@ def cmd_install(args):
 
     # Resolve target
     try:
-        target_dir, display_name = resolve_target(args)
+        target_dir = resolve_target(args)
     except (ValueError, FileNotFoundError) as e:
         print(f"Error: {e}")
         return 1
@@ -135,23 +132,19 @@ def cmd_install(args):
         if not skills_to_install:
             print("No skills available to install")
             return 1
-        print(f"Installing {len(skills_to_install)} skills to {display_name}")
+        print(f"Installing {len(skills_to_install)} skills to {args.target}")
     else:
         skills_to_install = [args.skill]
-
-    # Create installer
-    installer = SkillInstaller(get_skills_dir())
 
     # Install each skill
     success_count = 0
     for skill_name in skills_to_install:
         try:
             print(f"Installing '{skill_name}'...", end=" ")
-            installer.install_skill(
+            install_skill(
                 skill_name=skill_name,
                 target_dir=target_dir,
                 force=args.force,
-                create_dirs=True,
             )
             print("✓ (file copied)")
             success_count += 1
@@ -182,7 +175,7 @@ def cmd_uninstall(args):
     """Handle 'trl skills uninstall' command."""
     # Resolve target
     try:
-        target_dir, display_name = resolve_target(args)
+        target_dir = resolve_target(args)
     except (ValueError, FileNotFoundError) as e:
         print(f"Error: {e}")
         return 1
@@ -191,13 +184,10 @@ def cmd_uninstall(args):
         print(f"Target directory doesn't exist: {target_dir}")
         return 1
 
-    # Create installer
-    installer = SkillInstaller(get_skills_dir())
-
     # Uninstall
     try:
-        print(f"Uninstalling '{args.skill}' from {display_name}...", end=" ")
-        installer.uninstall_skill(args.skill, target_dir)
+        print(f"Uninstalling '{args.skill}' from {args.target}...", end=" ")
+        uninstall_skill(args.skill, target_dir)
         print("✓")
         print(f"\nSkill '{args.skill}' has been removed")
         return 0
@@ -220,7 +210,7 @@ def cmd_list_installed(args):
     """Handle 'trl skills list-installed' command."""
     # Resolve target
     try:
-        target_dir, display_name = resolve_target(args)
+        target_dir = resolve_target(args)
     except (ValueError, FileNotFoundError) as e:
         print(f"Error: {e}")
         return 1
@@ -230,20 +220,17 @@ def cmd_list_installed(args):
         print("No skills installed")
         return 0
 
-    # Create installer
-    installer = SkillInstaller(get_skills_dir())
-
     # List installed
-    installed = installer.list_installed_skills(target_dir)
+    installed = list_skills(target_dir)
 
     if not installed:
-        print(f"No skills installed in {display_name}")
+        print(f"No skills installed in {args.target}")
         return 0
 
-    print(f"\nInstalled skills in {display_name}:\n")
+    print(f"\nInstalled skills in {args.target}:\n")
 
     for skill in installed:
-        print(f"  {skill['name']}")
+        print(f"  {skill}")
 
     print(f"Total: {len(installed)} skill(s)")
     return 0
