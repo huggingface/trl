@@ -111,27 +111,18 @@ def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
     return Path(target).expanduser().resolve()
 
 
-def list_skills(skills_dir: Path | None = None) -> list[str]:
+def _list_skills_in_dir(skills_dir: Path) -> list[str]:
     """
-    List skills in skills directory.
+    List skills in directory.
 
     A skill is a directory containing a SKILL.md file.
 
     Args:
-        skills_dir (`Path`, *optional*): Skills directory. If `None`, it defaults to TRL skills directory.
+        skills_dir (`Path`): Skills directory to scan.
 
     Returns:
         `list[str]`: Skill names (directory names containing SKILL.md).
-
-    Example:
-        ```python
-        from trl.skills import list_skills
-
-        skills = list_skills()
-        print(skills)  # ['trl-training']
-        ```
     """
-    skills_dir = skills_dir or _get_trl_skills_dir()
     if not skills_dir.exists():
         return []
     skills = []
@@ -141,10 +132,50 @@ def list_skills(skills_dir: Path | None = None) -> list[str]:
     return sorted(skills)
 
 
-def install_skill(
+def list_skills(target: str | Path | None = None, scope: str = "project") -> list[str]:
+    """
+    List skills.
+
+    A skill is a directory containing a SKILL.md file.
+
+    Args:
+        target (`str | Path`, *optional*):
+            Agent name (e.g., 'claude'), directory path, or `None` for TRL's built-in skills.
+        scope (`str`, defaults to `"project"`):
+            For agent names: 'global' (user-level) or 'project' (current directory).
+
+    Returns:
+        `list[str]`: Skill names (directory names containing SKILL.md).
+
+    Example:
+        ```python
+        from trl.skills import list_skills
+
+        # List TRL's built-in skills
+        skills = list_skills()
+        print(skills)  # ['trl-training']
+
+        # List skills installed for Claude globally
+        installed = list_skills(target="claude", scope="global")
+        print(installed)  # ['trl-training', 'custom-skill']
+
+        # List skills in custom directory
+        custom = list_skills(target="/path/to/skills")
+        print(custom)  # [...]
+        ```
+    """
+    if target is None:
+        # List TRL's built-in skills
+        return _list_skills_in_dir(_get_trl_skills_dir())
+
+    target_dir = resolve_target_path(target, scope)
+    return _list_skills_in_dir(target_dir)
+
+
+def _install_skill_to_dir(
     skill_name: str,
     target_dir: Path,
-    source_dir: Path | None = None,
+    source_dir: Path,
     force: bool = False,
 ) -> bool:
     """
@@ -153,15 +184,14 @@ def install_skill(
     Args:
         skill_name (`str`): Name of skill to install.
         target_dir (`Path`): Target installation directory.
-        source_dir (`Path`, *optional*):
-            Source directory containing skills. If `None`, it defaults to TRL skills directory.
+        source_dir (`Path`): Source directory containing skills.
         force (`bool`, defaults to `False`): Whether to overwrite if exists.
 
     Returns:
         `bool`: True if installed successfully.
 
     Raises:
-        - `FileNotFoundError`: If skill doesn't exist in TRL.
+        - `FileNotFoundError`: If skill doesn't exist in source.
         - `FileExistsError`: If skill already installed and not force.
         - `PermissionError`: If no permission to write to target.
     """
@@ -203,7 +233,54 @@ def install_skill(
     return True
 
 
-def uninstall_skill(skill_name: str, target_dir: Path) -> bool:
+def install_skill(
+    skill_name: str,
+    target: str | Path,
+    scope: str = "project",
+    source: str | Path | None = None,
+    force: bool = False,
+) -> bool:
+    """
+    Install a skill.
+
+    Args:
+        skill_name (`str`): Name of skill to install.
+        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        scope (`str`, defaults to `"project"`):
+            Scope for agent names: 'global' (user-level) or 'project' (current directory).
+        source (`str | Path`, *optional*):
+            Source directory containing skills. If `None`, defaults to TRL skills directory.
+        force (`bool`, defaults to `False`): Whether to overwrite if skill already exists.
+
+    Returns:
+        `bool`: True if installed successfully.
+
+    Raises:
+        - `FileNotFoundError`: If skill doesn't exist in source.
+        - `FileExistsError`: If skill already installed and not force.
+        - `PermissionError`: If no permission to write to target.
+        - `ValueError`: If agent name is not recognized.
+
+    Example:
+        ```python
+        from trl.skills import install_skill
+
+        # Install to Claude's global skills directory
+        install_skill("trl-training", target="claude", scope="global")
+
+        # Install to custom directory
+        install_skill("trl-training", target="/path/to/skills")
+
+        # Overwrite existing installation
+        install_skill("trl-training", target="claude", force=True)
+        ```
+    """
+    target_dir = resolve_target_path(target, scope)
+    source_dir = Path(source).expanduser().resolve() if source else _get_trl_skills_dir()
+    return _install_skill_to_dir(skill_name, target_dir, source_dir, force)
+
+
+def _uninstall_skill_from_dir(skill_name: str, target_dir: Path) -> bool:
     """
     Uninstall a skill from target directory.
 
@@ -215,7 +292,8 @@ def uninstall_skill(skill_name: str, target_dir: Path) -> bool:
         `bool`: True if uninstalled successfully.
 
     Raises:
-        `FileNotFoundError`: If skill not installed. PermissionError: If no permission to remove.
+        - `FileNotFoundError`: If skill not installed.
+        - `PermissionError`: If no permission to remove.
     """
     target_skill = target_dir / skill_name
 
@@ -229,3 +307,36 @@ def uninstall_skill(skill_name: str, target_dir: Path) -> bool:
         raise PermissionError(f"Cannot remove skill: {e}") from e
 
     return True
+
+
+def uninstall_skill(skill_name: str, target: str | Path, scope: str = "project") -> bool:
+    """
+    Uninstall a skill.
+
+    Args:
+        skill_name (`str`): Name of skill to uninstall.
+        target (`str | Path`): Agent name (e.g., 'claude', 'codex') or directory path.
+        scope (`str`, defaults to `"project"`):
+            Scope for agent names: 'global' (user-level) or 'project' (current directory).
+
+    Returns:
+        `bool`: True if uninstalled successfully.
+
+    Raises:
+        - `FileNotFoundError`: If skill not installed.
+        - `PermissionError`: If no permission to remove.
+        - `ValueError`: If agent name is not recognized.
+
+    Example:
+        ```python
+        from trl.skills import uninstall_skill
+
+        # Uninstall from Claude's global directory
+        uninstall_skill("trl-training", target="claude", scope="global")
+
+        # Uninstall from custom directory
+        uninstall_skill("trl-training", target="/path/to/skills")
+        ```
+    """
+    target_dir = resolve_target_path(target, scope)
+    return _uninstall_skill_from_dir(skill_name, target_dir)
