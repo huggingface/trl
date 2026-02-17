@@ -225,7 +225,7 @@ def main(test_size, push_to_hub, repo_id):
     })
     language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
-        language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling", create_pr=True)
+        language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling")
 
     preference_dataset = Dataset.from_dict({
         "prompt": [
@@ -331,7 +331,7 @@ def main(test_size, push_to_hub, repo_id):
     })
     preference_dataset = preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
-        preference_dataset.push_to_hub(repo_id, config_name="preference", create_pr=True)
+        preference_dataset.push_to_hub(repo_id, config_name="preference")
     # fmt: on
 
 
