@@ -109,7 +109,8 @@ def install_skill(
     Args:
         skill_name (`str`): Name of skill to install.
         target_dir (`Path`): Target installation directory.
-        source_dir (`Path`, *optional*): Source directory containing skills. If `None`, it defaults to TRL skills directory.
+        source_dir (`Path`, *optional*):
+            Source directory containing skills. If `None`, it defaults to TRL skills directory.
         force (`bool`, defaults to `False`): Whether to overwrite if exists.
 
     Returns:
