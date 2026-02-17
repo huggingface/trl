@@ -116,8 +116,9 @@ def install_skill(
         `bool`: True if installed successfully.
 
     Raises:
-        FileNotFoundError: If skill doesn't exist in TRL. FileExistsError: If skill already installed and not force.
-        PermissionError: If no permission to write to target.
+        - `FileNotFoundError`: If skill doesn't exist in TRL.
+        - `FileExistsError`: If skill already installed and not force.
+        - `PermissionError`: If no permission to write to target.
     """
     source_skill = source_dir / skill_name
 
