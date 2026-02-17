@@ -1170,6 +1170,8 @@ class GRPOTrainer(BaseTrainer):
             prompt_ids, completion_ids, logprobs, _, extra_fields = self.vllm_generation.generate(
                 prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
+            # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
+            logprobs = [[lp[0] for lp in seq] for seq in logprobs]
 
         elif self.use_transformers_paged:
             if is_conversational({"prompt": prompts[0]}):
