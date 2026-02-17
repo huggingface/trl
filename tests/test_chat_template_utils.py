@@ -204,10 +204,25 @@ class TestIsChatTemplatePrefixPreserving:
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gpt-oss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
     ],
 )
 class TestGetTrainingChatTemplate:
+    @staticmethod
+    def _replace_end(text: str, old: str, new: str) -> str:
+        if text.endswith(old):
+            return text[: -len(old)] + new
+        return text
+
+    def _assert_equal(self, tokenizer_name: str, before: str, after: str) -> None:
+        # Same as `before == after` but with a special case for GPT-OSS.
+        # For GPT-OSS, the training template replaces the final <|return|> with <|end|> to ensure prefix preservation,
+        # so we expect a difference in the output.
+        if tokenizer_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+            before = self._replace_end(before, "<|return|>", "<|end|>")
+        assert before == after
+
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         assert is_chat_template_prefix_preserving(tokenizer) is False
@@ -220,7 +235,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_single_user_with_generation_prompt(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -233,7 +248,7 @@ class TestGetTrainingChatTemplate:
             add_generation_prompt=True,
             chat_template=new_chat_template,
         )
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_single_user_and_final_assistant_plain_content(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -244,7 +259,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -259,7 +274,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -273,7 +288,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -288,7 +303,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_assistant_with_tool_calls_with_string_arguments(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -303,7 +318,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -328,7 +343,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_with_tools_with_system_message(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -353,7 +368,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_generation_prompt_with_enable_thinking_false(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -369,7 +384,7 @@ class TestGetTrainingChatTemplate:
             enable_thinking=False,
             chat_template=new_chat_template,
         )
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
 
 @pytest.mark.xfail(
