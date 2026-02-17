@@ -14,8 +14,7 @@ env:
 jobs:
   tests:
     name: Tests latest TRL release with dev dependencies
-    runs-on:
-      group: aws-g4dn-2xlarge
+    runs-on: ubuntu-latest
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
