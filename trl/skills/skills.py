@@ -99,8 +99,8 @@ def list_skills(skills_dir: Path | None = None) -> list[str]:
 
 def install_skill(
     skill_name: str,
-    source_dir: Path,
     target_dir: Path,
+    source_dir: Path | None = None,
     force: bool = False,
 ) -> bool:
     """
@@ -108,8 +108,8 @@ def install_skill(
 
     Args:
         skill_name: Name of skill to install.
-        source_dir: Path to TRL skills directory (from get_skills_dir()).
-        target_dir: Directory to install to.
+        target_dir: Target installation directory.
+        source_dir: Source directory containing skills. If `None`, it defaults to TRL skills directory.
         force: Overwrite if exists.
 
     Returns:
@@ -120,6 +120,7 @@ def install_skill(
         - `FileExistsError`: If skill already installed and not force.
         - `PermissionError`: If no permission to write to target.
     """
+    source_dir = source_dir or _get_trl_skills_dir()
     source_skill = source_dir / skill_name
 
     # Check if source skill exists
