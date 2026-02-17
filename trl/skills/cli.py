@@ -22,7 +22,7 @@ import argparse
 from pathlib import Path
 
 from .agents import AGENT_REGISTRY, get_agent_target, list_agent_names
-from .installer import InstallMethod, SkillInstaller
+from .installer import SkillInstaller
 from .skills import get_skills_dir, list_skills
 
 
@@ -58,12 +58,6 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
     )
     install_parser.add_argument("skill", nargs="?", help="Skill name to install (omit to use --all)")
     install_parser.add_argument("--all", action="store_true", help="Install all available TRL skills")
-    install_parser.add_argument(
-        "--method",
-        choices=["copy", "symlink"],
-        default="copy",
-        help="Installation method: copy (independent files, default) or symlink (stay synced with TRL updates)",
-    )
     install_parser.add_argument("--force", action="store_true", help="Overwrite if skill already exists")
     install_parser.set_defaults(func=cmd_install)
 
@@ -145,14 +139,8 @@ def cmd_install(args):
     else:
         skills_to_install = [args.skill]
 
-    # Warn about symlinks
-    if args.method == "symlink":
-        print("\n⚠️  Warning: Symlinked skills will break if TRL is uninstalled or moved.")
-        print("   Use --method copy if you want skills to survive TRL updates/uninstalls.\n")
-
     # Create installer
     installer = SkillInstaller(get_skills_dir())
-    method = InstallMethod.SYMLINK if args.method == "symlink" else InstallMethod.COPY
 
     # Install each skill
     success_count = 0
@@ -162,16 +150,10 @@ def cmd_install(args):
             installer.install_skill(
                 skill_name=skill_name,
                 target_dir=target_dir,
-                method=method,
                 force=args.force,
                 create_dirs=True,
             )
-
-            if method == InstallMethod.SYMLINK:
-                print("✓ (symlink created)")
-            else:
-                print("✓ (file copied)")
-
+            print("✓ (file copied)")
             success_count += 1
 
         except FileNotFoundError as e:
@@ -261,12 +243,7 @@ def cmd_list_installed(args):
     print(f"\nInstalled skills in {display_name}:\n")
 
     for skill in installed:
-        method_str = skill["method"]
-        if skill["method"] == "symlink":
-            method_str = f"symlink → {skill['source']}"
-
         print(f"  {skill['name']}")
-        print(f"    Method: {method_str}")
         print(f"    Path:   {skill['path']}")
         print()
 
