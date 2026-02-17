@@ -46,12 +46,21 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
         help="Scope for predefined agents: project (./agent/skills/) or global (user-level like ~/.agent/skills/)",
     )
 
+    # trl skills list
+    list_parser = subparsers.add_parser(
+        "list",
+        parents=[target_parser],
+        help="List skills",
+        description="Show skills in target",
+    )
+    list_parser.set_defaults(func=cmd_list)
+
     # trl skills install
     install_parser = subparsers.add_parser(
         "install",
         parents=[target_parser],
-        help="Install skill to agent directory",
-        description="Install a TRL skill to an AI agent's skills directory",
+        help="Install skill",
+        description="Install TRL skill to to target",
     )
     install_parser.add_argument("skill", nargs="?", help="Skill name to install (omit to use --all)")
     install_parser.add_argument("--all", action="store_true", help="Install all available TRL skills")
@@ -62,20 +71,11 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
     uninstall_parser = subparsers.add_parser(
         "uninstall",
         parents=[target_parser],
-        help="Uninstall skill from agent directory",
+        help="Uninstall skill from target",
         description="Remove a TRL skill from an AI agent's skills directory",
     )
     uninstall_parser.add_argument("skill", help="Skill name to uninstall")
     uninstall_parser.set_defaults(func=cmd_uninstall)
-
-    # trl skills list-installed
-    list_installed_parser = subparsers.add_parser(
-        "list-installed",
-        parents=[target_parser],
-        help="List installed skills",
-        description="Show skills installed in an agent's directory",
-    )
-    list_installed_parser.set_defaults(func=cmd_list_installed)
 
 
 def cmd_install(args):
@@ -168,22 +168,22 @@ def cmd_uninstall(args):
         return 1
 
 
-def cmd_list_installed(args):
-    """Handle 'trl skills list-installed' command."""
+def cmd_list(args):
+    """Handle 'trl skills list' command."""
     try:
-        # List installed skills
-        installed = list_skills(target=args.target, scope=args.scope)
+        # List skills
+        skills = list_skills(target=args.target, scope=args.scope)
 
-        if not installed:
-            print(f"No skills installed in {args.target}")
+        if not skills:
+            print(f"No skills in {args.target}")
             return 0
 
-        print(f"\nInstalled skills in {args.target}:\n")
+        print(f"\nSkills in {args.target}:\n")
 
-        for skill in installed:
+        for skill in skills:
             print(f"  {skill}")
 
-        print(f"\nTotal: {len(installed)} skill(s)")
+        print(f"\nTotal: {len(skills)} skill(s)")
         return 0
 
     except ValueError as e:
