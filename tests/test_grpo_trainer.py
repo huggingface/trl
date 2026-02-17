@@ -38,10 +38,6 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
-
-
-if is_liger_kernel_available():
-    from liger_kernel.transformers.grpo_loss import triton_grpo_loss
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -58,6 +54,9 @@ from .testing_utils import (
 )
 
 
+if is_liger_kernel_available():
+    from liger_kernel.transformers.grpo_loss import triton_grpo_loss
+    
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
 
@@ -1915,12 +1914,6 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.xfail(
-        Version(transformers.__version__) >= Version("5.0.0") and not is_liger_kernel_available(min_version="0.6.5"),
-        reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
-        "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
-        strict=True,
-    )
     @pytest.mark.parametrize(
         "model_id",
         [

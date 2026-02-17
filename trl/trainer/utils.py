@@ -42,6 +42,7 @@ from transformers import (
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
+    is_trackio_available,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
@@ -438,6 +439,7 @@ def generate_model_card(
     dataset_name: str | None,
     tags: list[str],
     wandb_url: str | None,
+    trackio_url: str | None,
     trainer_name: str,
     trainer_citation: str | None = None,
     template_file: str | None = None,
@@ -461,6 +463,8 @@ def generate_model_card(
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        trackio_url (`str` or `None`):
+            Trackio Space URL.
         comet_url (`str` or `None`):
             Comet experiment URL.
         trainer_name (`str`):
@@ -495,6 +499,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        trackio_url=trackio_url,
         comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
@@ -520,6 +525,25 @@ def get_comet_experiment_url() -> str | None:
         return comet_ml.get_running_experiment().url
 
     return None
+
+
+def get_trackio_space_url() -> str | None:
+    """
+    If Trackio integration is enabled, return the URL of the current Trackio Space; otherwise, return `None`.
+    """
+    if not is_trackio_available():
+        return None
+
+    from trackio import context_vars
+
+    run = context_vars.current_run.get()
+    space_id = run._space_id
+    if space_id is None:
+        return None
+    space_id = space_id.replace("/", "-")
+    project = run.project
+    name = run.name
+    return f"https://{space_id}.hf.space?project={project}&runs={name}&sidebar=collapsed"
 
 
 def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
@@ -641,32 +665,44 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
 
     This function is equivalent to the following naive implementation:
     ```python
+    # for index with shape (...):
     logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+    # for index with shape (..., K):
+    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
     ```
 
     Args:
         logits (`torch.Tensor`):
             Logits tensor of shape `(..., num_classes)`.
         index (`torch.Tensor`):
-            Index tensor of shape `(...)`, specifying the positions to gather from the log-softmax output.
+            Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the log-softmax
+            output. When the last case is used, `K` log-probabilities are gathered per position (e.g. for top-K)
 
     Returns:
         `torch.Tensor`:
             Gathered log probabilities with the same shape as `index`.
     """
+    squeeze = index.ndim == logits.ndim - 1
+    if squeeze:
+        index = index.unsqueeze(-1)
+
     if logits.dtype in [torch.float32, torch.float64]:
-        selected_logits = torch.gather(logits, dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+        selected_logits = torch.gather(logits, dim=-1, index=index)
         # loop to reduce peak mem consumption
         logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
-        per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
+        per_token_logps = selected_logits - logsumexp_values.unsqueeze(-1)  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
         # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
         for row_logits, row_labels in zip(logits, index, strict=True):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
-            row_per_token_logps = row_logps.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
+            row_per_token_logps = row_logps.gather(dim=-1, index=row_labels)
             per_token_logps.append(row_per_token_logps)
         per_token_logps = torch.stack(per_token_logps)
+
+    if squeeze:
+        per_token_logps = per_token_logps.squeeze(-1)
+
     return per_token_logps
 
 
