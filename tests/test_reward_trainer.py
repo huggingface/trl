@@ -692,9 +692,10 @@ class TestRewardTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_toolcall_data_as_json(self):
-        # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures. If `tools` is
-        # stored as a list of dicts and examples use different schemas, nulls may be introduced. This test ensures
-        # `tools` is also supported when provided as a JSON string.
+        # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures.
+        # If `tools` is stored as a list of dicts and examples use different dict schemas, nulls may
+        # be introduced and break tool processing. This test ensures we also support `tools` provided
+        # as a list of dicts.
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train", revision="refs/pr/3")
 
         def convert_to_json(example):

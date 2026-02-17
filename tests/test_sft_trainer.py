@@ -1333,7 +1333,7 @@ class TestSFTTrainer(TrlTestCase):
         # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures.
         # If `tools` is stored as a list of dicts and examples use different dict schemas, nulls may
         # be introduced and break tool processing. This test ensures we also support `tools` provided
-        # as a JSON string, which avoids that schema-alignment issue.
+        # as a list of dicts.
         # Get the dataset
         dataset = load_dataset(
             "trl-internal-testing/toolcall", "language_modeling", split="train", revision="refs/pr/2"
