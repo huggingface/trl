@@ -1851,6 +1851,8 @@ class GRPOTrainer(BaseTrainer):
             importance_sampling_level=self.importance_sampling_level,
             reduce=True,
             vllm_is_ratio=inputs.get("importance_sampling_ratio"),
+            sapo_temperature_pos=self.args.sapo_temperature_pos,
+            sapo_temperature_neg=self.args.sapo_temperature_neg,
         )
 
         mode = "train" if self.model.training else "eval"
