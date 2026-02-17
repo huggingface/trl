@@ -22,30 +22,30 @@ def main():
     dataset = load_dataset("trl-lib/DeepMath-103K", split="train[:100]")
 
     config = DPPOConfig(
-        output_dir="Qwen2-0.5B-DPPO-single-4090",
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=8,
+        output_dir="dppo-testing",
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=4,
         # DPPO-specific trust-region settings (paper-inspired sanity run)
-        divergence_type="binary_tv",
+        divergence_type="topk_kl",
+        divergence_topk=20,
+        # use_vllm=True,
+        # vllm_mode="colocate",
+        vllm_max_model_length=512,
         epsilon=0.2,
         epsilon_high=0.28,
         clip_ratio_c=3.0,
-        loss_type="dapo",
-        num_generations=4,
-        max_prompt_length=256,
+        num_generations=2,
         max_completion_length=256,
         learning_rate=1e-6,
         bf16=True,
-        tf32=True,
-        gradient_checkpointing=True,
+        # gradient_checkpointing=True,
         logging_steps=1,
-        save_steps=50,
-        save_total_limit=2,
         report_to="none",
+        max_steps=1,
     )
 
     trainer = DPPOTrainer(
-        model="Qwen/Qwen2-0.5B-Instruct",
+        model="Qwen/Qwen3-1.7B",
         reward_funcs=accuracy_reward,
         args=config,
         train_dataset=dataset,

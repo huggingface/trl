@@ -34,7 +34,7 @@ from packaging.version import Version
 from transformers import AutoTokenizer, is_torch_xpu_available, is_vision_available
 
 from trl import TrlParser
-from trl.generation.vllm_generation import sanitize_logprob
+from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import (
     is_fastapi_available,
     is_pydantic_available,
@@ -578,6 +578,7 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        logprobs: int = 0
         truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
@@ -585,7 +586,8 @@ def main(script_args: ScriptArguments):
     class GenerateResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[float]]
+        logprobs: list[list[list[float]]]
+        logprob_token_ids: list[list[list[int]]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -609,6 +611,9 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
+                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
+                  descending probability.
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
@@ -622,8 +627,10 @@ def main(script_args: ScriptArguments):
             `GenerateResponse`:
                 - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
-                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
-                  generated completions.
+                - `logprobs` (list of list of list of `float`): Per-token logprobs of shape
+                  (num_sequences, seq_len, num_logprobs), sorted by descending probability.
+                - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob,
+                  same shape as `logprobs`.
 
         Example request:
         ```json
@@ -635,7 +642,8 @@ def main(script_args: ScriptArguments):
         {
           "prompt_ids": [[101, 102], [201, 202]],
           "completion_ids": [[103, 104, 105], [203, 204, 205]],
-          "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]
+          "logprobs": [[[-0.1], [-0.2], [-0.3]], [[-0.4], [-0.5], [-0.6]]],
+          "logprob_token_ids": [[[103], [104], [105]], [[203], [204], [205]]]
         }
         ```
         """
@@ -671,7 +679,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
+            "logprobs": request.logprobs,
         }
         generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
@@ -700,12 +708,14 @@ def main(script_args: ScriptArguments):
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         prompt_ids = [output.prompt_token_ids for output in all_outputs]
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        logprobs: list[list[float]] = [
-            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
-            for outputs in all_outputs
-            for output in outputs.outputs
-        ]
-        return {"prompt_ids": prompt_ids, "completion_ids": completion_ids, "logprobs": logprobs}
+        logprobs, logprob_token_ids = extract_logprobs(all_outputs)
+
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
 
     class ChatRequest(BaseModel):
         messages: list[list[dict]]
@@ -716,6 +726,7 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        logprobs: int = 0
         truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
@@ -725,7 +736,8 @@ def main(script_args: ScriptArguments):
     class ChatResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[float]]
+        logprobs: list[list[list[float]]]
+        logprob_token_ids: list[list[list[int]]]
 
     @app.post("/chat/", response_model=ChatResponse)
     async def chat(request: ChatRequest):
@@ -748,6 +760,9 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
+                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
+                  descending probability.
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
@@ -763,8 +778,10 @@ def main(script_args: ScriptArguments):
             `ChatResponse`:
                 - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
-                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
-                  generated completions.
+                - `logprobs` (list of list of list of `float`): Per-token logprobs of shape
+                  (num_sequences, seq_len, num_logprobs), sorted by descending probability.
+                - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob,
+                  same shape as `logprobs`.
 
         Example request:
         ```bash
@@ -777,8 +794,9 @@ def main(script_args: ScriptArguments):
         ```json
         {
             "prompt_ids": [[151644, 872, 198, 9707, 0, 151645, 198, 151644, 77091, 198]],
-            "completion_ids":[[151667, 198, 32313, 11, 279, 1196, 1101, 1053, 330, 9707, 8958, 773, 358, 1184, 311, 5889]],
-            "logprobs": [[-0.00029404606902971864, -3.576278118089249e-07, -0.09024181962013245, -6.389413465512916e-05, -0.038671817630529404, -0.00013314791431184858, -0.5868351459503174, -0.09682723134756088, -0.06609706580638885, -0.00023803261865396053, -0.02242819033563137, -0.8185162544250488, -0.04954879730939865, -0.3169460594654083, -4.887569048150908e-06, -0.006023705471307039]]
+            "completion_ids": [[151667, 198, 32313, 11, 279]],
+            "logprobs": [[[-0.0003], [-3.58e-07], [-0.0902], [-6.39e-05], [-0.0387]]],
+            "logprob_token_ids": [[[151667], [198], [32313], [11], [279]]]
         }
         ```
         """
@@ -813,7 +831,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
+            "logprobs": request.logprobs,
         }
         generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
@@ -848,12 +866,14 @@ def main(script_args: ScriptArguments):
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         prompt_ids = [output.prompt_token_ids for output in all_outputs]
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        logprobs: list[list[float]] = [
-            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
-            for outputs in all_outputs
-            for output in outputs.outputs
-        ]
-        return {"prompt_ids": prompt_ids, "completion_ids": completion_ids, "logprobs": logprobs}
+        logprobs, logprob_token_ids = extract_logprobs(all_outputs)
+
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
 
     class InitCommunicatorRequest(BaseModel):
         host: str

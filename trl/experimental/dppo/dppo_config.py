@@ -100,5 +100,8 @@ class DPPOConfig(GRPOConfig):
         if self.off_policy_mask_threshold is not None:
             raise ValueError("off_policy_mask_threshold is not supported for DPPO")
 
-        if self.vllm_importance_sampling_correction:
-            raise ValueError("vllm_importance_sampling_correction is not supported for DPPO")
+        if self.divergence_type.startswith("topk_") and self.use_transformers_paged:
+            raise ValueError(
+                "Top-K divergence types require vLLM or regular transformers generation. "
+                "Transformers paged (`use_transformers_paged=True`) does not support top-K logprob extraction."
+            )
