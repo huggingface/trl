@@ -37,7 +37,6 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -989,6 +988,57 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_liger_kernel
+    def test_compute_liger_loss_passes_vllm_is_ratio(self):
+        """Test that importance_sampling_ratio from inputs is passed to liger_grpo_loss as vllm_is_ratio."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Mock _generate_and_score_completions to inject importance_sampling_ratio
+        original_gen = trainer._generate_and_score_completions
+
+        def gen_with_is_ratio(*args, **kwargs):
+            result = original_gen(*args, **kwargs)
+            B, T = result["completion_ids"].shape
+            result["importance_sampling_ratio"] = torch.full((B, T), 0.5, device=result["completion_ids"].device)
+            return result
+
+        with (
+            patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
+            patch.object(trainer.liger_grpo_loss, "forward", wraps=trainer.liger_grpo_loss.forward) as mock_forward,
+        ):
+            trainer.train()
+
+            # Verify vllm_is_ratio was passed in every call to liger_grpo_loss
+            assert mock_forward.call_count > 0, "liger_grpo_loss.forward was never called"
+            for call in mock_forward.call_args_list:
+                vllm_is_ratio = call.kwargs.get("vllm_is_ratio")
+                assert vllm_is_ratio is not None, (
+                    "vllm_is_ratio should not be None when importance_sampling_ratio is present"
+                )
+                assert (vllm_is_ratio == 0.5).all(), (
+                    "vllm_is_ratio values should match the injected importance_sampling_ratio"
+                )
+
+        release_memory(trainer.model, trainer)
+
     def test_training_with_bias_correction_kl(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -1860,12 +1910,6 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.xfail(
-        Version(transformers.__version__) >= Version("5.0.0") and not is_liger_kernel_available(min_version="0.6.5"),
-        reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
-        "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
-        strict=True,
-    )
     @pytest.mark.parametrize(
         "model_id",
         [
