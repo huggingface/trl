@@ -258,7 +258,7 @@ class MaxRLTrainer(GRPOTrainer):
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
-        from .utils import disable_gradient_checkpointing
+        from ..models.utils import disable_gradient_checkpointing
 
         # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
         # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
