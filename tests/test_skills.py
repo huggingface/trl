@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from trl.skills.skills import _get_trl_skills_dir, install_skill, list_skills, uninstall_skill
+from trl.skills import install_skill, list_skills, uninstall_skill
+from trl.skills.skills import _get_trl_skills_dir
 
 
 class TestGetSkillsDir:
