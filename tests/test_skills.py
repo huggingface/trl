@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from trl.skills import install_skill, list_skills, uninstall_skill
+from trl.skills import install_skill, list_agent_names, list_skills, resolve_target_path, uninstall_skill
 from trl.skills.skills import _get_trl_skills_dir
 
 
@@ -189,7 +189,7 @@ class TestInstallSkill:
         (source_dir / "fake-skill").write_text("not a directory")
 
         with pytest.raises(ValueError, match="is not a directory"):
-            install_skill("fake-skill", target_dir, source_dir=source_dir)
+            install_skill("fake-skill", target_dir, source=source_dir)
 
     def test_preserves_directory_structure(self, tmp_path):
         """Test that install_skill preserves the skill's directory structure."""
@@ -203,7 +203,7 @@ class TestInstallSkill:
         (skill_dir / "subdir").mkdir()
         (skill_dir / "subdir" / "file.txt").write_text("content")
 
-        install_skill("test-skill", target_dir, source_dir=source_dir)
+        install_skill("test-skill", target_dir, source=source_dir)
 
         assert (target_dir / "test-skill" / "SKILL.md").exists()
         assert (target_dir / "test-skill" / "subdir" / "file.txt").exists()
@@ -221,7 +221,7 @@ class TestInstallSkill:
 
         # Try to install to same directory (should fail with exists error)
         with pytest.raises(FileExistsError):
-            install_skill("test-skill", source_dir, source_dir=source_dir, force=False)
+            install_skill("test-skill", source_dir, source=source_dir, force=False)
 
 
 class TestUninstallSkill:
@@ -270,7 +270,7 @@ class TestUninstallSkill:
         (skill_dir / "subdir" / "file2.txt").write_text("content2")
 
         # Install and uninstall
-        install_skill("test-skill", target_dir, source_dir=source_dir)
+        install_skill("test-skill", target_dir, source=source_dir)
         uninstall_skill("test-skill", target_dir)
 
         assert not (target_dir / "test-skill").exists()
@@ -289,8 +289,8 @@ class TestUninstallSkill:
             (skill_dir / "SKILL.md").write_text(f"# {skill_name}")
 
         # Install both
-        install_skill("skill1", target_dir, source_dir=source_dir)
-        install_skill("skill2", target_dir, source_dir=source_dir)
+        install_skill("skill1", target_dir, source=source_dir)
+        install_skill("skill2", target_dir, source=source_dir)
 
         # Uninstall one
         uninstall_skill("skill1", target_dir)
@@ -315,12 +315,12 @@ class TestIntegration:
             (skill_dir / "SKILL.md").write_text(f"# Skill {i}")
 
         # List available skills
-        available = list_skills(source_dir)
+        available = list_skills(target=source_dir)
         assert available == ["skill0", "skill1", "skill2"]
 
         # Install skills
         for skill in available:
-            install_skill(skill, target_dir, source_dir=source_dir)
+            install_skill(skill, target_dir, source=source_dir)
 
         # List installed skills
         installed_dirs = [d.name for d in target_dir.iterdir() if d.is_dir()]
@@ -345,7 +345,7 @@ class TestIntegration:
 
         # Install -> Uninstall -> Install -> Uninstall
         for _ in range(2):
-            install_skill("test-skill", target_dir, source_dir=source_dir)
+            install_skill("test-skill", target_dir, source=source_dir)
             assert (target_dir / "test-skill").exists()
 
             uninstall_skill("test-skill", target_dir)
@@ -362,14 +362,14 @@ class TestIntegration:
         (skill_dir / "SKILL.md").write_text("# Version 1")
 
         # Install
-        install_skill("test-skill", target_dir, source_dir=source_dir)
+        install_skill("test-skill", target_dir, source=source_dir)
         assert (target_dir / "test-skill" / "SKILL.md").read_text() == "# Version 1"
 
         # Update source skill
         (skill_dir / "SKILL.md").write_text("# Version 2")
 
         # Force reinstall
-        install_skill("test-skill", target_dir, source_dir=source_dir, force=True)
+        install_skill("test-skill", target_dir, source=source_dir, force=True)
         assert (target_dir / "test-skill" / "SKILL.md").read_text() == "# Version 2"
 
 
@@ -388,7 +388,7 @@ class TestEdgeCases:
         (skill_dir / "SKILL.md").write_text("# Test")
 
         # Should work fine
-        install_skill(skill_name, target_dir, source_dir=source_dir)
+        install_skill(skill_name, target_dir, source=source_dir)
         assert (target_dir / skill_name).exists()
 
         uninstall_skill(skill_name, target_dir)
@@ -403,7 +403,7 @@ class TestEdgeCases:
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Minimal")
 
-        install_skill("minimal-skill", target_dir, source_dir=source_dir)
+        install_skill("minimal-skill", target_dir, source=source_dir)
 
         assert (target_dir / "minimal-skill" / "SKILL.md").exists()
         # Should only contain SKILL.md
@@ -421,7 +421,7 @@ class TestEdgeCases:
         (skill_dir / "SKILL.md").write_text("# Test")
         (skill_dir / ".hidden").write_text("hidden content")
 
-        install_skill("test-skill", target_dir, source_dir=source_dir)
+        install_skill("test-skill", target_dir, source=source_dir)
 
         assert (target_dir / "test-skill" / ".hidden").exists()
         assert (target_dir / "test-skill" / ".hidden").read_text() == "hidden content"
@@ -441,5 +441,139 @@ class TestEdgeCases:
         (skills_dir / "linked-skill").symlink_to(skill_dir)
 
         # list_skills should include symlinked skills if they have SKILL.md
-        skills = list_skills(skills_dir)
+        skills = list_skills(target=skills_dir)
         assert "linked-skill" in skills
+
+
+class TestListAgentNames:
+    """Tests for list_agent_names function."""
+
+    def test_returns_list(self):
+        """Test that list_agent_names returns a list."""
+        agents = list_agent_names()
+        assert isinstance(agents, list)
+
+    def test_contains_expected_agents(self):
+        """Test that list includes expected agent names."""
+        agents = list_agent_names()
+        assert "claude" in agents
+        assert "codex" in agents
+        assert "opencode" in agents
+
+    def test_agents_are_sorted(self):
+        """Test that agent names are sorted."""
+        agents = list_agent_names()
+        assert agents == sorted(agents)
+
+
+class TestResolveTargetPath:
+    """Tests for resolve_target_path function."""
+
+    def test_resolve_agent_name_project_scope(self):
+        """Test resolving agent name with project scope."""
+        path = resolve_target_path("claude", "project")
+        assert path == Path("./.claude/skills").expanduser().resolve()
+
+    def test_resolve_agent_name_global_scope(self):
+        """Test resolving agent name with global scope."""
+        path = resolve_target_path("claude", "global")
+        assert path == Path("~/.claude/skills").expanduser().resolve()
+
+    def test_resolve_custom_path_string(self):
+        """Test resolving custom path as string."""
+        path = resolve_target_path("/custom/path", "project")
+        assert path == Path("/custom/path").resolve()
+
+    def test_resolve_custom_path_object(self):
+        """Test resolving Path object."""
+        custom = Path("/custom/path")
+        path = resolve_target_path(custom, "project")
+        assert path == Path("/custom/path").resolve()
+
+    def test_resolve_path_with_tilde(self):
+        """Test that tilde expansion works."""
+        path = resolve_target_path("~/my/skills", "project")
+        assert path == Path("~/my/skills").expanduser().resolve()
+        assert "~" not in str(path)
+
+    def test_all_predefined_agents(self):
+        """Test that all predefined agents can be resolved."""
+        for agent in list_agent_names():
+            for scope in ["project", "global"]:
+                path = resolve_target_path(agent, scope)
+                assert isinstance(path, Path)
+                assert path.is_absolute()
+
+
+class TestHighLevelAPI:
+    """Tests for the new high-level API (target/scope instead of Path)."""
+
+    def test_list_skills_with_target_string(self, tmp_path):
+        """Test list_skills with target as string (custom path)."""
+        # Create skills in target
+        (tmp_path / "skill1").mkdir()
+        (tmp_path / "skill1" / "SKILL.md").write_text("# Skill 1")
+
+        skills = list_skills(target=str(tmp_path), scope="project")
+        assert skills == ["skill1"]
+
+    def test_list_skills_with_target_path(self, tmp_path):
+        """Test list_skills with target as Path object."""
+        (tmp_path / "skill1").mkdir()
+        (tmp_path / "skill1" / "SKILL.md").write_text("# Skill 1")
+
+        skills = list_skills(target=tmp_path, scope="project")
+        assert skills == ["skill1"]
+
+    def test_list_skills_without_target(self):
+        """Test list_skills without target lists TRL's built-in skills."""
+        skills = list_skills()
+        assert isinstance(skills, list)
+        assert "trl-training" in skills
+
+    def test_install_skill_with_target_string(self, tmp_path):
+        """Test install_skill with target as string."""
+        result = install_skill("trl-training", target=str(tmp_path), scope="project")
+        assert result is True
+        assert (tmp_path / "trl-training").exists()
+
+    def test_install_skill_with_target_path(self, tmp_path):
+        """Test install_skill with target as Path object."""
+        result = install_skill("trl-training", target=tmp_path, scope="project")
+        assert result is True
+        assert (tmp_path / "trl-training").exists()
+
+    def test_install_skill_with_force(self, tmp_path):
+        """Test install_skill with force parameter."""
+        install_skill("trl-training", target=tmp_path)
+        # Install again with force
+        result = install_skill("trl-training", target=tmp_path, force=True)
+        assert result is True
+
+    def test_uninstall_skill_with_target_string(self, tmp_path):
+        """Test uninstall_skill with target as string."""
+        install_skill("trl-training", target=tmp_path)
+        result = uninstall_skill("trl-training", target=str(tmp_path), scope="project")
+        assert result is True
+        assert not (tmp_path / "trl-training").exists()
+
+    def test_uninstall_skill_with_target_path(self, tmp_path):
+        """Test uninstall_skill with target as Path object."""
+        install_skill("trl-training", target=tmp_path)
+        result = uninstall_skill("trl-training", target=tmp_path, scope="project")
+        assert result is True
+        assert not (tmp_path / "trl-training").exists()
+
+    def test_install_with_custom_source(self, tmp_path):
+        """Test install_skill with custom source parameter."""
+        source_dir = tmp_path / "source"
+        target_dir = tmp_path / "target"
+
+        # Create custom skill
+        skill_dir = source_dir / "custom-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# Custom")
+
+        result = install_skill("custom-skill", target=target_dir, source=source_dir)
+        assert result is True
+        assert (target_dir / "custom-skill").exists()
