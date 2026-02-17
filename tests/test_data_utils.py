@@ -45,12 +45,6 @@ if is_vision_available():
     from PIL import Image
 
 
-requires_transformers_5_for_glm4 = pytest.mark.skipif(
-    Version(transformers.__version__) < Version("5.0.0"),
-    reason="GLM4 tokenizer requires transformers>=5.0.0",
-)
-
-
 @require_vision
 class TestPrepareMultimodalMessages:
     def test_basic_user_assistant_conversation(self):
@@ -473,7 +467,10 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-GptOssForCausalLM",
         pytest.param(
             "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-            marks=requires_transformers_5_for_glm4,
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="GLM4 tokenizer requires transformers>=5.0.0",
+            ),
         ),
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
