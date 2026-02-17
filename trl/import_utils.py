@@ -24,7 +24,7 @@ from packaging.version import Version
 from transformers.utils.import_utils import _is_package_available
 
 
-LIGER_KERNEL_MIN_VERSION = "0.6.4"
+LIGER_KERNEL_MIN_VERSION = "0.7.0"
 
 
 def is_deepspeed_available() -> bool:

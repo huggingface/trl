@@ -248,6 +248,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name="username/my_dataset",
             tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            trackio_url="https://huggingface.co/spaces/username/space_id",
             comet_url="https://www.comet.com/username/project_id/experiment_id",
             trainer_name="My Trainer",
             trainer_citation="@article{my_trainer, ...}",
@@ -260,6 +261,7 @@ class TestGenerateModelCard(TrlTestCase):
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "](https://huggingface.co/spaces/username/space_id)" in card_text
         assert "](https://www.comet.com/username/project_id/experiment_id" in card_text
         assert "My Trainer" in card_text
         assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
@@ -273,6 +275,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name=None,
             tags=[],
             wandb_url=None,
+            trackio_url=None,
             comet_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,
@@ -668,6 +671,27 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
         actual_output = selective_log_softmax(logits, input_ids)
 
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            assert torch.equal(actual_output, expected_output)
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("k", [1, 8])
+    def test_selective_log_softmax_multi_index(self, dtype, k):
+        """Test selective_log_softmax with logits of different dtypes and index widths"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        index = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len, k))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
+        actual_output = selective_log_softmax(logits, index)
+
+        assert actual_output.shape == (batch_size, seq_len, k)
         if dtype in [torch.float16, torch.bfloat16]:
             # half-precision dtypes fall back to an exact method
             assert torch.equal(actual_output, expected_output)

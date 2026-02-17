@@ -97,7 +97,7 @@ class TestDistributed(
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see #4812")),
+            "fsdp2",
         ],
     )
     def test_dpo(self, config, get_config_path):
@@ -234,7 +234,7 @@ class TestDistributed(
                 ),
             ),
             pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
-            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 RLOO is currently failing, see #4854")),
+            "fsdp2",
         ],
     )
     def test_rloo(self, config, get_config_path):

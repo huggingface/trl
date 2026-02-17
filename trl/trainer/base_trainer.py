@@ -16,7 +16,7 @@ import os
 
 from transformers import Trainer, is_wandb_available
 
-from .utils import generate_model_card, get_comet_experiment_url, get_config_model_id
+from .utils import generate_model_card, get_comet_experiment_url, get_config_model_id, get_trackio_space_url
 
 
 if is_wandb_available():
@@ -67,6 +67,15 @@ class BaseTrainer(Trainer):
         if "JOB_ID" in os.environ:
             tags.add("hf_jobs")
         tags.update(self._tag_names)
+
+        trackio_url = get_trackio_space_url()
+        # Pop existing Trackio tag and re-add the one with the proper url parameters
+        if trackio_url is not None:
+            for tag in list(tags):
+                if tag.startswith("trackio:"):
+                    tags.remove(tag)
+            tags.add(f"trackio:{trackio_url}")
+
         tags = list(tags)
 
         model_card = generate_model_card(
@@ -76,6 +85,7 @@ class BaseTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
+            trackio_url=trackio_url,
             comet_url=get_comet_experiment_url(),
             trainer_name=self._name,
             trainer_citation=self._paper.get("citation"),

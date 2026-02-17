@@ -3,5 +3,6 @@ include CONTRIBUTING.md
 include README.md
 include trl/accelerate_configs/*.yaml
 include trl/templates/*.md
+include trl/skills/**/*.md
 recursive-exclude * __pycache__
 prune tests
