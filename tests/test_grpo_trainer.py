@@ -56,7 +56,7 @@ from .testing_utils import (
 
 if is_liger_kernel_available():
     from liger_kernel.transformers.grpo_loss import triton_grpo_loss
-    
+
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
 
