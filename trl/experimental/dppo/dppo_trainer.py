@@ -42,6 +42,8 @@ from ...models.utils import disable_gradient_checkpointing
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
 from ...trainer.utils import (
     entropy_from_logits,
+    nanmax,
+    nanmin,
     nanstd,
     pad,
     selective_log_softmax,
@@ -225,18 +227,15 @@ class DPPOTrainer(GRPOTrainer):
             self.vllm_generation.logprobs = self.divergence_topk
 
     def _generate_single_turn(self, prompts: list):
-        """Generate completions and extract top-K logprob data when using topk divergence.
+        """Generate completions, always extracting sampled token logprobs.
 
         Returns:
             6-tuple of (prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids, extra_fields).
             topk_logprobs and topk_token_ids are None when divergence_type is not topk.
         """
-        if not self.divergence_type.startswith("topk_"):
-            prompt_ids, completion_ids, logprobs, extra_fields = super()._generate_single_turn(prompts)
-            return prompt_ids, completion_ids, logprobs, None, None, extra_fields
-
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
+        needs_topk = self.divergence_type.startswith("topk_")
         K = self.divergence_topk
 
         if self.use_vllm:
@@ -250,18 +249,23 @@ class DPPOTrainer(GRPOTrainer):
                 prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
 
-            # vLLM returns up to K+1 entries sorted by rank (most probable first).
-            # The sampled token is always included but may be at any position.
-            # Truncate to K for topk; find the sampled token's logprob for the standard return.
-            topk_logprobs = [[lp[:K] for lp in seq] for seq in logprobs]
-            topk_token_ids = [[tid[:K] for tid in seq] for seq in logprob_token_ids]
-            sampled_logprobs = []
-            for seq_lps, seq_tids, seq_cids in zip(logprobs, logprob_token_ids, completion_ids, strict=True):
-                seq_sampled = []
-                for step_lps, step_tids, sampled_tid in zip(seq_lps, seq_tids, seq_cids, strict=True):
-                    idx = step_tids.index(sampled_tid)
-                    seq_sampled.append(step_lps[idx])
-                sampled_logprobs.append(seq_sampled)
+            if needs_topk:
+                # vLLM returns up to K+1 entries sorted by rank (most probable first).
+                # The sampled token is always included but may be at any position.
+                # Truncate to K for topk; find the sampled token's logprob for the standard return.
+                topk_logprobs = [[lp[:K] for lp in seq] for seq in logprobs]
+                topk_token_ids = [[tid[:K] for tid in seq] for seq in logprob_token_ids]
+                sampled_logprobs = []
+                for seq_lps, seq_tids, seq_cids in zip(logprobs, logprob_token_ids, completion_ids, strict=True):
+                    seq_sampled = []
+                    for step_lps, step_tids, sampled_tid in zip(seq_lps, seq_tids, seq_cids, strict=True):
+                        idx = step_tids.index(sampled_tid)
+                        seq_sampled.append(step_lps[idx])
+                    sampled_logprobs.append(seq_sampled)
+            else:
+                sampled_logprobs = [[step_lps[0] for step_lps in seq_lps] for seq_lps in logprobs]
+                topk_logprobs = None
+                topk_token_ids = None
 
             return prompt_ids, completion_ids, sampled_logprobs, topk_logprobs, topk_token_ids, extra_fields
         else:
@@ -313,7 +317,10 @@ class DPPOTrainer(GRPOTrainer):
             all_log_probs = all_logits.log_softmax(dim=-1)
 
             sampled_logprobs = all_log_probs.gather(-1, completion_ids.unsqueeze(-1)).squeeze(-1)
-            topk_logps, topk_ids = torch.topk(all_log_probs, k=K, dim=-1)
+            if needs_topk:
+                topk_logps, topk_ids = torch.topk(all_log_probs, k=K, dim=-1)
+            else:
+                topk_logps, topk_ids = None, None
 
             # Mask everything after the first EOS token
             is_eos = completion_ids == self.eos_token_id
@@ -325,8 +332,12 @@ class DPPOTrainer(GRPOTrainer):
             prompt_ids_out = _strip_padding(prompt_ids, prompt_mask)
             completion_ids_out = _strip_padding(completion_ids, completion_mask)
             logprobs_out = _strip_padding(sampled_logprobs, completion_mask)
-            topk_logprobs = _strip_padding(topk_logps, completion_mask)
-            topk_token_ids = _strip_padding(topk_ids, completion_mask)
+            if needs_topk:
+                topk_logprobs = _strip_padding(topk_logps, completion_mask)
+                topk_token_ids = _strip_padding(topk_ids, completion_mask)
+            else:
+                topk_logprobs = None
+                topk_token_ids = None
 
             extra_fields = {}
             return prompt_ids_out, completion_ids_out, logprobs_out, topk_logprobs, topk_token_ids, extra_fields
@@ -763,11 +774,8 @@ class DPPOTrainer(GRPOTrainer):
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
-        if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps, device=device) for logps in sampling_per_token_logps_list]
-            sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
-        else:
-            sampling_per_token_logps = None
+        sampling_per_token_logps = [torch.tensor(logps, device=device) for logps in sampling_per_token_logps_list]
+        sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
         if tool_mask_list is not None:
             tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
             tool_mask = pad(tool_mask, padding_value=1, padding_side="right")
@@ -958,9 +966,8 @@ class DPPOTrainer(GRPOTrainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
             "num_items_in_batch": num_items_in_batch,
+            "sampling_per_token_logps": sampling_per_token_logps,
         }
-        if sampling_per_token_logps is not None:
-            output["sampling_per_token_logps"] = sampling_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in forward_kwargs:
@@ -1162,10 +1169,10 @@ class DPPOTrainer(GRPOTrainer):
         )
         prob_diff_masked = prob_diff.clone()
         prob_diff_masked[mask == 0] = float("nan")
-        per_seq_max = prob_diff_masked.nanmax(dim=1).values
-        per_seq_min = prob_diff_masked.nanmin(dim=1).values
-        self._metrics[mode]["prob_diff/max"].append(self.accelerator.gather(per_seq_max).nanmean().item())
-        self._metrics[mode]["prob_diff/min"].append(self.accelerator.gather(per_seq_min).nanmean().item())
+        per_seq_max = torch.stack([nanmax(row) for row in prob_diff_masked], dim=0)
+        per_seq_min = torch.stack([nanmin(row) for row in prob_diff_masked], dim=0)
+        self._metrics[mode]["prob_diff/max"].append(nanmax(self.accelerator.gather(per_seq_max)).item())
+        self._metrics[mode]["prob_diff/min"].append(nanmin(self.accelerator.gather(per_seq_min)).item())
 
         self._metrics[mode]["advantages/mean"].append(advantages.mean().item())
         self._metrics[mode]["advantages/std"].append(advantages.std().item())
