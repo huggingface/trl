@@ -41,9 +41,9 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
     )
     target_parser.add_argument(
         "--scope",
-        choices=["global", "project"],
+        choices=["project", "global"],
         default="project",
-        help="Scope for predefined agents: global (user-level like ~/.agent/skills/) or project (./agent/skills/)",
+        help="Scope for predefined agents: project (./agent/skills/) or global (user-level like ~/.agent/skills/)",
     )
 
     # trl skills install
@@ -80,7 +80,7 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
 
 def cmd_install(args):
     """Handle 'trl skills install' command."""
-    # Check skill argument
+    # Validate arguments
     if not args.skill and not args.all:
         print("Error: Either provide a skill name or use --all to install all skills")
         print("Usage: trl skills install <skill> --target <target>")
@@ -91,14 +91,7 @@ def cmd_install(args):
         print("Error: Cannot specify both a skill name and --all")
         return 1
 
-    # Resolve target
-    try:
-        target_dir = resolve_target(args)
-    except (ValueError, FileNotFoundError) as e:
-        print(f"Error: {e}")
-        return 1
-
-    # Get skills to install
+    # Determine skills to install
     if args.all:
         skills_to_install = list_skills()
         if not skills_to_install:
@@ -115,10 +108,11 @@ def cmd_install(args):
             print(f"Installing '{skill_name}'...", end=" ")
             install_skill(
                 skill_name=skill_name,
-                target_dir=target_dir,
+                target=args.target,
+                scope=args.scope,
                 force=args.force,
             )
-            print("✓ (file copied)")
+            print("✓")
             success_count += 1
 
         except FileNotFoundError as e:
@@ -129,6 +123,9 @@ def cmd_install(args):
             print(f"  Error: {e}")
             if not args.force:
                 print("  Use --force to overwrite")
+        except ValueError as e:
+            print("✗")
+            print(f"  Error: {e}")
         except Exception as e:
             print("✗")
             print(f"  Error: {e}")
@@ -137,7 +134,8 @@ def cmd_install(args):
     print(f"\n{success_count}/{len(skills_to_install)} skills installed successfully")
 
     if success_count > 0:
-        print(f"\nSkills are now available at: {target_dir}")
+        target_path = resolve_target_path(args.target, args.scope)
+        print(f"\nSkills are now available at: {target_path}")
         print("You may need to restart your AI agent to use the new skills.")
 
     return 0 if success_count == len(skills_to_install) else 1
@@ -145,21 +143,9 @@ def cmd_install(args):
 
 def cmd_uninstall(args):
     """Handle 'trl skills uninstall' command."""
-    # Resolve target
-    try:
-        target_dir = resolve_target(args)
-    except (ValueError, FileNotFoundError) as e:
-        print(f"Error: {e}")
-        return 1
-
-    if not target_dir.exists():
-        print(f"Target directory doesn't exist: {target_dir}")
-        return 1
-
-    # Uninstall
     try:
         print(f"Uninstalling '{args.skill}' from {args.target}...", end=" ")
-        uninstall_skill(args.skill, target_dir)
+        uninstall_skill(args.skill, target=args.target, scope=args.scope)
         print("✓")
         print(f"\nSkill '{args.skill}' has been removed")
         return 0
@@ -172,6 +158,10 @@ def cmd_uninstall(args):
         print("✗")
         print(f"Error: {e}")
         return 1
+    except ValueError as e:
+        print("✗")
+        print(f"Error: {e}")
+        return 1
     except Exception as e:
         print("✗")
         print(f"Error: {e}")
@@ -180,32 +170,28 @@ def cmd_uninstall(args):
 
 def cmd_list_installed(args):
     """Handle 'trl skills list-installed' command."""
-    # Resolve target
     try:
-        target_dir = resolve_target(args)
-    except (ValueError, FileNotFoundError) as e:
+        # List installed skills
+        installed = list_skills(target=args.target, scope=args.scope)
+
+        if not installed:
+            print(f"No skills installed in {args.target}")
+            return 0
+
+        print(f"\nInstalled skills in {args.target}:\n")
+
+        for skill in installed:
+            print(f"  {skill}")
+
+        print(f"\nTotal: {len(installed)} skill(s)")
+        return 0
+
+    except ValueError as e:
         print(f"Error: {e}")
         return 1
-
-    if not target_dir.exists():
-        print(f"Target directory doesn't exist: {target_dir}")
-        print("No skills installed")
-        return 0
-
-    # List installed
-    installed = list_skills(target_dir)
-
-    if not installed:
-        print(f"No skills installed in {args.target}")
-        return 0
-
-    print(f"\nInstalled skills in {args.target}:\n")
-
-    for skill in installed:
-        print(f"  {skill}")
-
-    print(f"Total: {len(installed)} skill(s)")
-    return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
 
 
 __all__ = [
