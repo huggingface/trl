@@ -143,6 +143,7 @@ qwen3_schema = {
     },
 }
 
+# docstyle-ignore
 gpt_oss_chat_template = r"""{#-
   In addition to the normal inputs of `messages` and `tools`, this template also accepts the
   following kwargs:
