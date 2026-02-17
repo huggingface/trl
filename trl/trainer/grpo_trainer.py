@@ -512,11 +512,6 @@ class GRPOTrainer(BaseTrainer):
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
             )
 
-        if args.loss_type == "sapo" and (args.sapo_temperature_neg is None or args.sapo_temperature_pos is None):
-            raise ValueError(
-                "When using `sapo` loss, both `sapo_temperature_neg` and `sapo_temperature_pos` must be set."
-            )
-
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
             logger.warning(
                 "When using `'luspo'` loss, `importance_sampling_level` should be set to `'sequence'` to mirror the "
@@ -1893,16 +1888,20 @@ class GRPOTrainer(BaseTrainer):
             inputs.get("image_sizes"),
         )
 
-        # compute loss and metrics using liger grpo loss
+        # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
+        loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
+        # Compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
             _input=last_hidden_state,
             lin_weight=unwrapped_model.lm_head.weight,
             selected_token_ids=completion_ids,
-            attention_mask=completion_mask,
+            # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
+            attention_mask=loss_mask,
             advantages=inputs["advantages"],
             bias=unwrapped_model.lm_head.bias,
             old_per_token_logps=inputs.get("old_per_token_logps"),
             ref_per_token_logps=inputs.get("ref_per_token_logps"),
+            vllm_is_ratio=inputs.get("importance_sampling_ratio"),
         )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero

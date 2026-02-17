@@ -59,7 +59,7 @@ kernels = [
     "kernels"
 ]
 liger = [
-    "liger-kernel>=0.6.4"
+    "liger-kernel>=0.7.0"
 ]
 peft = [
     "peft>=0.8.0"
@@ -102,14 +102,13 @@ dev = [
     "joblib",
     # deepspeed
     "deepspeed>=0.14.4",
-    "transformers!=5.1.0",  # see transformers#43780
     # judges
     "openai>=1.23.2",
     "llm-blender>=0.0.2",
     # kernels
     "kernels",
     # liger
-    "liger-kernel>=0.6.4",
+    "liger-kernel>=0.7.0",
     # peft
     "peft>=0.8.0",
     # quality
