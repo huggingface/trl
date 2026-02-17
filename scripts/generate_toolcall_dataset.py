@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from dataclasses import dataclass, field
 
 from datasets import Dataset
@@ -212,19 +213,19 @@ def main(test_size, push_to_hub, repo_id):
             ]
         ],
         "tools": [
-            [start_timer, create_reminder],
-            [get_current_time],
-            [get_air_quality_index, get_weather_forecast, get_wind_conditions],
-            [play_music, control_light],
-            [get_weather_forecast, get_wind_conditions],
-            [control_light],
-            [start_timer, create_reminder],
-            [get_weather_forecast, get_wind_conditions],
+            json.dumps([start_timer, create_reminder]),
+            json.dumps([get_current_time]),
+            json.dumps([get_air_quality_index, get_weather_forecast, get_wind_conditions]),
+            json.dumps([play_music, control_light]),
+            json.dumps([get_weather_forecast, get_wind_conditions]),
+            json.dumps([control_light]),
+            json.dumps([start_timer, create_reminder]),
+            json.dumps([get_weather_forecast, get_wind_conditions]),
         ]
     })
     language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
-        language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling")
+        language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling", create_pr=True)
 
     preference_dataset = Dataset.from_dict({
         "prompt": [
@@ -318,19 +319,19 @@ def main(test_size, push_to_hub, repo_id):
             ],
         ],
         "tools": [
-            [start_timer],
-            [get_current_time],
-            [get_air_quality_index],
-            [play_music],
-            [get_weather_forecast],
-            [control_light],
-            [create_reminder],
-            [get_wind_conditions],
+            json.dumps([start_timer]),
+            json.dumps([get_current_time]),
+            json.dumps([get_air_quality_index]),
+            json.dumps([play_music]),
+            json.dumps([get_weather_forecast]),
+            json.dumps([control_light]),
+            json.dumps([create_reminder]),
+            json.dumps([get_wind_conditions]),
         ],
     })
     preference_dataset = preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
-        preference_dataset.push_to_hub(repo_id, config_name="preference")
+        preference_dataset.push_to_hub(repo_id, config_name="preference", create_pr=True)
     # fmt: on
 
 

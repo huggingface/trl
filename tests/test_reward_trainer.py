@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import pathlib
 
 import pytest
@@ -666,7 +667,40 @@ class TestRewardTrainer(TrlTestCase):
 
     def test_train_toolcall_data(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
+        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train", revision="refs/pr/3")
+
+        # Initialize the trainer
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    def test_train_toolcall_data_as_json(self):
+        # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures. If `tools` is
+        # stored as a list of dicts and examples use different schemas, nulls may be introduced. This test ensures
+        # `tools` is also supported when provided as a JSON string.
+        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train", revision="refs/pr/3")
+
+        def convert_to_json(example):
+            return {"tools": json.loads(example["tools"])}
+
+        dataset = dataset.map(convert_to_json)
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
