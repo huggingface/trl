@@ -43,15 +43,24 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
         "--scope",
         choices=["project", "global"],
         default="project",
-        help="Scope for predefined agents: project (./agent/skills/) or global (user-level like ~/.agent/skills/)",
+        help="Scope when using --target with agent name: project (./agent/skills/) or global (user-level like ~/.agent/skills/)",
     )
 
-    # trl skills list
+    # trl skills list (no target required - lists TRL's built-in skills by default)
     list_parser = subparsers.add_parser(
         "list",
-        parents=[target_parser],
-        help="List skills",
-        description="Show skills in target",
+        help="List available TRL skills or installed skills in a target",
+        description="Show TRL skills available for installation, or if --target is specified, show installed skills",
+    )
+    list_parser.add_argument(
+        "--target",
+        help="Optional: show installed skills in target (agent name or directory path)",
+    )
+    list_parser.add_argument(
+        "--scope",
+        choices=["project", "global"],
+        default="project",
+        help="Scope when using --target with agent name: project (./agent/skills/) or global (user-level like ~/.agent/skills/)",
     )
     list_parser.set_defaults(func=cmd_list)
 
@@ -171,19 +180,31 @@ def cmd_uninstall(args):
 def cmd_list(args):
     """Handle 'trl skills list' command."""
     try:
-        # List skills
-        skills = list_skills(target=args.target, scope=args.scope)
+        # List skills - if no target specified, list TRL's built-in skills
+        if args.target:
+            skills = list_skills(target=args.target, scope=args.scope)
+            location = args.target
+        else:
+            skills = list_skills()
+            location = "TRL (available for installation)"
 
         if not skills:
-            print(f"No skills in {args.target}")
+            if args.target:
+                print(f"No skills installed in {args.target}")
+            else:
+                print("No TRL skills available")
             return 0
 
-        print(f"\nSkills in {args.target}:\n")
+        print(f"\nSkills in {location}:\n")
 
         for skill in skills:
             print(f"  {skill}")
 
         print(f"\nTotal: {len(skills)} skill(s)")
+
+        if not args.target:
+            print("\nUse 'trl skills install <skill> --target <target>' to install a skill")
+
         return 0
 
     except ValueError as e:
