@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 def extract_logprobs(all_outputs):
     """Extract logprobs and token IDs from vLLM generation outputs.
 
-    Returns logprobs and token IDs sorted by descending logprob. Each returned list has shape
+    Returns logprobs and token IDs sorted by rank (most probable first). Each returned list has shape
     (num_sequences, seq_len, num_logprobs), where num_logprobs is determined by the `logprobs`
     parameter passed to vLLM (1 when `logprobs=0`, up to N+1 when `logprobs=N`). NaN logprob
     values are replaced with `None`.
@@ -57,7 +57,7 @@ def extract_logprobs(all_outputs):
             seq_logprobs = []
             seq_token_ids = []
             for lp in output.logprobs:
-                sorted_items = sorted(lp.items(), key=lambda x: x[1].logprob, reverse=True)
+                sorted_items = sorted(lp.items(), key=lambda x: x[1].rank)
                 seq_token_ids.append([token_id for token_id, _ in sorted_items])
                 seq_logprobs.append([None if math.isnan(item.logprob) else item.logprob for _, item in sorted_items])
             all_logprobs.append(seq_logprobs)
@@ -177,7 +177,9 @@ class VLLMGeneration:
             Maximum number of tokens to generate for each prompt.
         logprobs (`int`, *optional*, defaults to `0`):
             Number of top logprobs to return per token. When 0 (default), only the sampled token's logprob is
-            returned. When N>0, returns the top-N logprobs sorted by descending probability.
+            returned (inner dimension = 1). When N>0, returns up to N+1 logprobs sorted by descending probability,
+            because vLLM always includes the sampled token's logprob alongside the top-N (the sampled token may or
+            may not already be in the top-N).
         generation_kwargs (`dict`, *optional*):
             Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
@@ -518,6 +520,15 @@ class VLLMGeneration:
 
         Returns:
             Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields).
+
+            - `prompt_ids`: `list[list[int]]` of shape `(batch_size, prompt_len)`.
+            - `completion_ids`: `list[list[int]]` of shape `(batch_size, completion_len)`.
+            - `logprobs`: `list[list[list[float | None]]]` of shape `(batch_size, completion_len, num_logprobs)`.
+            - `logprob_token_ids`: `list[list[list[int]]]` of shape `(batch_size, completion_len, num_logprobs)`.
+            - `extra_fields`: `dict` of additional per-completion fields from a custom `rollout_func`.
+
+            `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always
+            included and may fall outside the top-N).
         """
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
