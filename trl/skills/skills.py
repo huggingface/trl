@@ -47,6 +47,16 @@ AGENT_PATHS = {
 }
 
 
+def list_agent_names() -> list[str]:
+    """
+    List available predefined agent names.
+
+    Returns:
+        `list[str]`: Sorted list of agent names (e.g., ['claude', 'codex', 'opencode']).
+    """
+    return sorted(AGENT_PATHS.keys())
+
+
 def _get_trl_skills_dir() -> Path:
     """
     Get the path to the TRL skills directory.

@@ -21,7 +21,7 @@ This module provides command-line interface for installing TRL skills to various
 import argparse
 from pathlib import Path
 
-from .skills import AGENT_PATHS, install_skill, list_skills, uninstall_skill
+from .skills import install_skill, list_agent_names, list_skills, uninstall_skill
 
 
 def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
@@ -38,7 +38,7 @@ def add_skills_subcommands(subparsers: argparse._SubParsersAction) -> None:
     target_parser.add_argument(
         "--target",
         required=True,
-        help=f"Installation target: agent name ({', '.join(AGENT_PATHS.keys())}) or directory path",
+        help=f"Installation target: agent name ({', '.join(list_agent_names())}) or directory path",
     )
     target_parser.add_argument(
         "--scope",
