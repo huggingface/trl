@@ -107,10 +107,10 @@ def install_skill(
     Install a skill to target directory.
 
     Args:
-        skill_name: Name of skill to install.
-        target_dir: Target installation directory.
-        source_dir: Source directory containing skills. If `None`, it defaults to TRL skills directory.
-        force: Overwrite if exists.
+        skill_name (`str`): Name of skill to install.
+        target_dir (`Path`): Target installation directory.
+        source_dir (`Path`, *optional*): Source directory containing skills. If `None`, it defaults to TRL skills directory.
+        force (`bool`, defaults to `False`): Whether to overwrite if exists.
 
     Returns:
         `bool`: True if installed successfully.
@@ -163,14 +163,14 @@ def uninstall_skill(skill_name: str, target_dir: Path) -> bool:
     Uninstall a skill from target directory.
 
     Args:
-        skill_name: Name of skill to uninstall.
-        target_dir: Directory skill is installed in.
+        skill_name (`str`): Name of skill to uninstall.
+        target_dir (`Path`): Directory skill is installed in.
 
     Returns:
         `bool`: True if uninstalled successfully.
 
     Raises:
-        FileNotFoundError: If skill not installed. PermissionError: If no permission to remove.
+        `FileNotFoundError`: If skill not installed. PermissionError: If no permission to remove.
     """
     target_skill = target_dir / skill_name
 
