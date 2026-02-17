@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .grpo_config import GRPOConfig
 
@@ -65,6 +65,16 @@ class MaxRLConfig(GRPOConfig):
     trainer.train()
     ```
     """
+
+    scale_rewards: str = field(
+        default="none",
+        metadata={
+            "help": (
+                "MaxRL uses p-normalization (dividing by mean reward) for advantage calculation, "
+                "so this parameter is ignored. It is set to 'none' by default for MaxRL."
+            )
+        },
+    )
 
     def __post_init__(self):
         super().__post_init__()
