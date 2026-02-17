@@ -683,7 +683,6 @@ class GRPOTrainer(BaseTrainer):
                 top_k=self.top_k,
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
-                logprobs=0,
                 generation_kwargs=args.generation_kwargs,
                 # Chat/tool configuration
                 chat_template=self.chat_template,
