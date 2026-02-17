@@ -17,7 +17,9 @@ import textwrap
 from time import strftime
 
 import pytest
+import transformers
 from datasets import Dataset, DatasetDict
+from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
@@ -41,6 +43,12 @@ from .testing_utils import TrlTestCase, require_vision
 
 if is_vision_available():
     from PIL import Image
+
+
+requires_transformers_5_for_glm4 = pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.0.0"),
+    reason="GLM4 tokenizer requires transformers>=5.0.0",
+)
 
 
 @require_vision
@@ -463,7 +471,10 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
         "trl-internal-testing/tiny-GptOssForCausalLM",
-        "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            marks=requires_transformers_5_for_glm4,
+        ),
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
