@@ -895,5 +895,3 @@ class GRPOConfig(TrainingArguments):
                 f"{self.num_generations}, which is less than the minimum required."
             )
 
-        if self.delta is not None and self.use_liger_kernel:
-            raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
