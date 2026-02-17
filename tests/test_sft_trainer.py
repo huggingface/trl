@@ -272,7 +272,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-CohereForCausalLM",
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
