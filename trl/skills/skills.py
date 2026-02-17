@@ -47,11 +47,11 @@ AGENT_PATHS = {
 }
 
 
-def _get_skills_dir() -> Path:
+def _get_trl_skills_dir() -> Path:
     """
     Get the path to the TRL skills directory.
 
-    This function works in both development and installed package environments.
+    This is the directory inside the TRL package containing skills that can be installed to AI agent directories.
 
     Returns:
         `Path`: TRL skills directory.
@@ -87,7 +87,7 @@ def list_skills(skills_dir: Path | None = None) -> list[str]:
         print(skills)  # ['trl-training']
         ```
     """
-    skills_dir = skills_dir or _get_skills_dir()
+    skills_dir = skills_dir or _get_trl_skills_dir()
     if not skills_dir.exists():
         return []
     skills = []
