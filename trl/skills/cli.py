@@ -244,8 +244,6 @@ def cmd_list_installed(args):
 
     for skill in installed:
         print(f"  {skill['name']}")
-        print(f"    Path:   {skill['path']}")
-        print()
 
     print(f"Total: {len(installed)} skill(s)")
     return 0
