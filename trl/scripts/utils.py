@@ -17,6 +17,7 @@ import importlib
 import inspect
 import logging
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -51,6 +52,58 @@ def _ensure_transformers_parallelism_config() -> None:
 _ensure_transformers_parallelism_config()  # before creating HfArgumentParser
 
 logger = logging.getLogger(__name__)
+
+
+_VALID_ARGPARSE_PLACEHOLDER = re.compile(r"%\([^)]+\)[#0\- +]?(?:\d+)?(?:\.\d+)?[diouxXeEfFgGcrs]")
+_ESCAPED_PERCENT_TOKEN = "\0TRL_ESCAPED_PERCENT\0"
+_PLACEHOLDER_TOKEN_TEMPLATE = "\0TRL_PLACEHOLDER_{}\0"
+
+
+def _escape_unescaped_percents(help_string: str) -> str:
+    """Escape literal `%` while preserving valid argparse placeholders."""
+    placeholders: list[str] = []
+
+    def protect_placeholder(match: re.Match[str]) -> str:
+        placeholders.append(match.group(0))
+        return _PLACEHOLDER_TOKEN_TEMPLATE.format(len(placeholders) - 1)
+
+    escaped_help = help_string.replace("%%", _ESCAPED_PERCENT_TOKEN)
+    escaped_help = _VALID_ARGPARSE_PLACEHOLDER.sub(protect_placeholder, escaped_help)
+    escaped_help = escaped_help.replace("%", "%%")
+    escaped_help = escaped_help.replace(_ESCAPED_PERCENT_TOKEN, "%%")
+
+    for idx, placeholder in enumerate(placeholders):
+        escaped_help = escaped_help.replace(_PLACEHOLDER_TOKEN_TEMPLATE.format(idx), placeholder)
+
+    return escaped_help
+
+
+class TrlHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Help formatter that tolerates literal `%` in help strings."""
+
+    def _expand_help(self, action):
+        try:
+            return super()._expand_help(action)
+        except (TypeError, ValueError) as original_error:
+            # Mirror argparse._expand_help and retry after escaping literal `%`.
+            params = dict(vars(action), prog=self._prog)
+            for name in list(params):
+                if params[name] is argparse.SUPPRESS:
+                    del params[name]
+                elif hasattr(params[name], "__name__"):
+                    params[name] = params[name].__name__
+            if params.get("choices") is not None:
+                params["choices"] = ", ".join(map(str, params["choices"]))
+
+            help_string = self._get_help_string(action)
+            if help_string is None:
+                raise original_error
+
+            escaped_help = _escape_unescaped_percents(help_string)
+            try:
+                return escaped_help % params
+            except Exception:
+                raise original_error
 
 
 @dataclass
@@ -304,6 +357,8 @@ class TrlParser(HfArgumentParser):
                     f"Dataclass {dataclass_type.__name__} has a field named 'config'. This field is reserved for the "
                     f"config file path and should not be used in the dataclass."
                 )
+
+        kwargs.setdefault("formatter_class", TrlHelpFormatter)
 
         super().__init__(dataclass_types=dataclass_types, **kwargs)
 

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from unittest.mock import mock_open, patch
 
 import pytest
@@ -34,6 +34,14 @@ class MyDataclass:
 @dataclass
 class InvalidDataclass:
     config: str  # This should raise an error in the TrlParser
+
+
+@dataclass
+class PercentHelpDataclass:
+    template: str = field(
+        default="default",
+        metadata={"help": "Template strings can include `%s` and Jinja tags like `{% generation %}`."},
+    )
 
 
 class TestTrlParser(TrlTestCase):
@@ -133,6 +141,14 @@ class TestTrlParser(TrlTestCase):
         assert len(result_args) == 1
         assert isinstance(result_args[0], MyDataclass)
         assert result_args[0].arg1 == 42
+
+    def test_format_help_with_literal_percent(self):
+        parser = TrlParser(dataclass_types=[PercentHelpDataclass])
+
+        help_text = parser.format_help()
+
+        assert "%s" in help_text
+        assert "{% generation %}" in help_text
 
     def test_parse_args_and_config_with_remaining_strings(self):
         parser = TrlParser(dataclass_types=[MyDataclass])
