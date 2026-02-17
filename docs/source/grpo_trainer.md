@@ -648,6 +648,7 @@ trainer = GRPOTrainer(
 
 Tested with:
 
+- **GPT-OSS** — e.g., `openai/gpt-oss-20b`
 - **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
 
 > [!TIP]
@@ -664,6 +665,8 @@ accelerate launch \
   --model_name_or_path Qwen/Qwen3-0.6B
   ...
 ```
+
+You can also use `openai/gpt-oss-20b` as the base model.
 
 ## Vision-Language Model (VLM) Training
 

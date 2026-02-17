@@ -143,7 +143,7 @@ qwen3_schema = {
     },
 }
 
-gpt_oss_chat_template=r"""{#-
+gpt_oss_chat_template = r"""{#-
   In addition to the normal inputs of `messages` and `tools`, this template also accepts the
   following kwargs:
   - "builtin_tools": A list, can contain "browser" and/or "python".
@@ -1077,12 +1077,13 @@ gpt_oss_training_chat_template = r"""{#-
 <|start|>assistant
 {%- endif -%}"""
 
+
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     r"""
     Get a prefix-preserving chat template for training, if needed.
 
-    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently only Qwen3
-    supported). Otherwise, returns `None`.
+    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template when available
+    (currently Qwen3 and GPT-OSS templates are supported). Otherwise, returns `None`.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
