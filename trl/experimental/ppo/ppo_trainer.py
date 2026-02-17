@@ -530,13 +530,16 @@ class PPOTrainer(BaseTrainer):
         self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
         torch.manual_seed(self.local_seed)  # reset the local seed again
 
-        self.eval_dataloader = DataLoader(
-            self.eval_dataset,
-            batch_size=args.per_device_eval_batch_size,
-            collate_fn=self.data_collator,
-            drop_last=True,
-        )  # no need to shuffle eval dataset
-        self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
+        if self.eval_dataset is not None:
+            self.eval_dataloader = DataLoader(
+                self.eval_dataset,
+                batch_size=args.per_device_eval_batch_size,
+                collate_fn=self.data_collator,
+                drop_last=True,
+            )  # no need to shuffle eval dataset
+            self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
+        else:
+            self.eval_dataloader = iter([])  # empty list not enter for loop
 
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
