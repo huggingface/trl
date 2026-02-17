@@ -37,7 +37,6 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -1911,12 +1910,6 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.xfail(
-        Version(transformers.__version__) >= Version("5.0.0") and not is_liger_kernel_available(min_version="0.6.5"),
-        reason="Blocked by upstream liger-kernel bug (linkedin/Liger-Kernel#960); "
-        "fixed by linkedin/Liger-Kernel#966 but not yet released (>0.6.4 required)",
-        strict=True,
-    )
     @pytest.mark.parametrize(
         "model_id",
         [
