@@ -20,11 +20,11 @@ from trl.skills import install_skill, list_skills, uninstall_skill
 from trl.skills.skills import _get_trl_skills_dir
 
 
-class TestGetSkillsDir:
-    """Tests for _get_skills_dir function."""
+class TestGetTrlSkillsDir:
+    """Tests for _get_trl_skills_dir function."""
 
     def test_returns_path_object(self):
-        """Test that _get_skills_dir returns a Path object."""
+        """Test that returns a Path object."""
         skills_dir = _get_trl_skills_dir()
         assert isinstance(skills_dir, Path)
 
