@@ -20,8 +20,8 @@ def resolve_accelerate_config_argument(launch_args: list[str]) -> list[str]:
     """
     Resolve `--accelerate_config` from CLI arguments into `accelerate --config_file`.
 
-    The function supports either a filesystem path or a predefined config name shipped
-    in `trl/accelerate_configs` (without the `.yaml` suffix).
+    The function supports either a filesystem path or a predefined config name shipped in `trl/accelerate_configs`
+    (without the `.yaml` suffix).
     """
     if "--accelerate_config" not in launch_args:
         return launch_args
