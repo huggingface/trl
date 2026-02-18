@@ -54,11 +54,19 @@ python trl/scripts/sft.py \
 
 import argparse
 import os
+from functools import cached_property
+
+import torch
 
 from accelerate import logging
 from datasets import load_dataset
+from transformers.utils import requires_backends, is_accelerate_available
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
+
+from accelerate.state import AcceleratorState, PartialState
+from accelerate.utils import DistributedType
+from transformers.trainer_pt_utils import AcceleratorConfig
 
 from peft import get_peft_model
 from trl import (
@@ -80,6 +88,48 @@ logger = logging.get_logger(__name__)
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
+class NeuronSFTConfig(SFTConfig):
+    @cached_property
+    def _setup_devices(self) -> "torch.device":
+        try: 
+            import torch_neuronx # noqa: F401
+
+            from transformers.utils import logging as transformers_logging
+
+            transformers_logger = transformers_logging.get_logger(__name__)
+
+            requires_backends(self, ["torch"])
+            transformers_logger.info("PyTorch: setting up devices")
+
+            # Build kwargs for PartialState; actual init happens below
+            accelerator_state_kwargs: dict[str, Any] = {"enabled": True, "use_configured_state": False}
+            if isinstance(self.accelerator_config, AcceleratorConfig):
+                accelerator_state_kwargs["use_configured_state"] = self.accelerator_config.pop(
+                    "use_configured_state", False
+                )
+            if accelerator_state_kwargs["use_configured_state"]:
+                if PartialState._shared_state == {}:
+                    raise ValueError(
+                        "Passing `'use_configured_state':True` to the AcceleratorConfig requires a pre-configured "
+                        "`AcceleratorState` or `PartialState` to be defined before calling `TrainingArguments`. "
+                    )
+                self.distributed_state = PartialState(cpu=self.use_cpu)
+            else:
+                AcceleratorState._reset_state(reset_partial_state=True)
+                self.distributed_state = None
+
+            if accelerator_state_kwargs.pop("enabled", False) and not accelerator_state_kwargs.pop(
+                "use_configured_state", False
+            ):
+                self.distributed_state = PartialState(**accelerator_state_kwargs)
+
+            self._n_gpu = 0
+
+        except Exception as e:
+            raise e
+            return super()._setup_devices
+        return torch.device("neuron")
+
 
 def main(script_args, training_args, model_args, dataset_args):
     ################
@@ -98,9 +148,6 @@ def main(script_args, training_args, model_args, dataset_args):
     #     model_kwargs["device_map"] = get_kbit_device_map()
     #     model_kwargs["quantization_config"] = quantization_config
 
-    import torch
-    import torch_neuronx
-
     # Create model
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
@@ -112,14 +159,12 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
-    model = model.to("neuron")
+    # model = model.to("neuron")
+    training_args._setup_device = "neuron"
 
     peft_config = get_peft_config(model_args)
     if peft_config is not None:
         model = get_peft_model(model, peft_config)
-
-    for n, p in model.named_parameters():
-        logger.info(f"Parameter: {n}, device: {p.device}")
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -143,7 +188,7 @@ def main(script_args, training_args, model_args, dataset_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        peft_config=get_peft_config(model_args),
+        # peft_config=get_peft_config(model_args),
     )
 
     # Train the model
@@ -162,7 +207,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None):
-    dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig)
+    dataclass_types = (ScriptArguments, NeuronSFTConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)
     else:
