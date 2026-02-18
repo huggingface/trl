@@ -24,10 +24,13 @@
 Teach tool calling to CohereLabs/tiny-aya-global using SFT with QLoRA on the
 bebechien/SimpleToolCalling dataset.
 
-The model used in this script does not have native tool-calling support.
-We embed the tool schemas directly in the system prompt and train the model
-to produce a structured JSON response. This technique can work with any base
-language model regardless of its chat template.
+The model used in this script does not have native tool-calling support. We extend
+its existing Jinja2 chat template to serialize tool schemas into the system preamble
+and render tool calls as structured <tool_call> XML inside the model's native
+<|START_RESPONSE|> / <|END_RESPONSE|> delimiters. The modified template is saved with
+the tokenizer, so
+inference only requires loading the tokenizer from the output directory and calling
+apply_chat_template with tools=TOOLS — no manual system-prompt construction needed.
 
 Example:
 
@@ -35,11 +38,12 @@ Example:
 """
 
 import json
+from pathlib import Path
 
 import torch
 from datasets import load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import get_json_schema
 
 from trl import SFTConfig, SFTTrainer
@@ -67,30 +71,26 @@ def search_google(query: str) -> str:
 
 
 TOOLS = [get_json_schema(search_knowledge_base), get_json_schema(search_google)]
-TOOLS_TEXT = json.dumps([t["function"] for t in TOOLS], indent=2)
-
-SYSTEM_MSG = (
-    "You are a helpful assistant with access to tools. "
-    "For every user request, you MUST respond ONLY with a JSON object selecting the right tool. "
-    "Never answer from your own knowledge.\n\n"
-    f"Available tools:\n{TOOLS_TEXT}\n\n"
-    'Respond exclusively in this JSON format: {"name": "<tool_name>", "arguments": {"<arg>": "<value>"}}'
-)
 
 
 def create_conversation(sample):
-    tool_call_content = json.dumps(
-        {
-            "name": sample["tool_name"],
-            "arguments": json.loads(sample["tool_arguments"]),
-        }
-    )
     return {
         "messages": [
-            {"role": "system", "content": SYSTEM_MSG},
             {"role": "user", "content": sample["user_content"]},
-            {"role": "assistant", "content": tool_call_content},
-        ]
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": sample["tool_name"],
+                            "arguments": json.loads(sample["tool_arguments"]),
+                        },
+                    }
+                ],
+            },
+        ],
+        "tools": TOOLS,
     }
 
 
@@ -116,6 +116,11 @@ def main():
             bnb_4bit_quant_type="nf4",
         ),
     )
+
+    # Load tokenizer and add the tool-aware chat template
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    with open(Path(__file__).parent / "tiny_aya_chat_template.jinja", encoding="utf-8") as chat_template_file:
+        tokenizer.chat_template = chat_template_file.read()
 
     # Configure LoRA
     peft_config = LoraConfig(
@@ -144,6 +149,7 @@ def main():
 
     trainer = SFTTrainer(
         model=model,
+        processing_class=tokenizer,
         args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["test"],
@@ -151,8 +157,9 @@ def main():
     )
     trainer.train()
 
-    # Save and push to hub
+    # Save model and tokenizer (tokenizer carries the updated chat template)
     trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
     trainer.push_to_hub(dataset_name=dataset_name)
 
 
