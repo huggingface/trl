@@ -16,21 +16,19 @@
 # dependencies = [
 #     "trl[peft]",
 #     "bitsandbytes",
+#     "liger-kernel",
 #     "trackio",
 # ]
 # ///
 
 """
-Teach tool calling to CohereLabs/tiny-aya-global using SFT with QLoRA on the
-bebechien/SimpleToolCalling dataset.
+Teach tool calling to CohereLabs/tiny-aya-global using SFT with QLoRA on the bebechien/SimpleToolCalling dataset.
 
-The model used in this script does not have native tool-calling support. We extend
-its existing Jinja2 chat template to serialize tool schemas into the system preamble
-and render tool calls as structured <tool_call> XML inside the model's native
-<|START_RESPONSE|> / <|END_RESPONSE|> delimiters. The modified template is saved with
-the tokenizer, so
-inference only requires loading the tokenizer from the output directory and calling
-apply_chat_template with tools=TOOLS — no manual system-prompt construction needed.
+The model used in this script does not have native tool-calling support. We extend its existing Jinja2 chat template to
+serialize tool schemas into the system preamble and render tool calls as structured <tool_call> XML inside the model's
+native <|START_RESPONSE|> / <|END_RESPONSE|> delimiters. The modified template is saved with the tokenizer, so
+inference only requires loading the tokenizer from the output directory and calling apply_chat_template with
+tools=TOOLS — no manual system-prompt construction needed.
 
 Example:
 
@@ -43,40 +41,46 @@ from pathlib import Path
 import torch
 from datasets import load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.utils import get_json_schema
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 
 from trl import SFTConfig, SFTTrainer
 
 
-# --- Tool definitions ---
-def search_knowledge_base(query: str) -> str:
-    """
-    Search internal company documents, policies and project data.
-
-    Args:
-        query: query string
-    """
-    return "Internal Result"
-
-
-def search_google(query: str) -> str:
-    """
-    Search public information.
-
-    Args:
-        query: query string
-    """
-    return "Public Result"
-
-
-TOOLS = [get_json_schema(search_knowledge_base), get_json_schema(search_google)]
+# These are the tool schemas that are used in the dataset
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": "Search internal company documents, policies and project data.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "query string"}},
+                "required": ["query"],
+            },
+            "return": {"type": "string"},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_google",
+            "description": "Search public information.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "query string"}},
+                "required": ["query"],
+            },
+            "return": {"type": "string"},
+        },
+    },
+]
 
 
 def create_conversation(sample):
     return {
-        "messages": [
-            {"role": "user", "content": sample["user_content"]},
+        "prompt": [{"role": "user", "content": sample["user_content"]}],
+        "completion": [
             {
                 "role": "assistant",
                 "tool_calls": [
@@ -101,7 +105,7 @@ def main():
 
     # Load and format dataset
     dataset = load_dataset(dataset_name, split="train")
-    dataset = dataset.map(create_conversation, remove_columns=dataset.features, batched=False)
+    dataset = dataset.map(create_conversation, remove_columns=dataset.features)
     dataset = dataset.train_test_split(test_size=0.5, shuffle=True)
 
     # Load model
@@ -117,11 +121,6 @@ def main():
         ),
     )
 
-    # Load tokenizer and add the tool-aware chat template
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    with open(Path(__file__).parent / "tiny_aya_chat_template.jinja", encoding="utf-8") as chat_template_file:
-        tokenizer.chat_template = chat_template_file.read()
-
     # Configure LoRA
     peft_config = LoraConfig(
         r=32,
@@ -134,8 +133,9 @@ def main():
         output_dir=output_dir,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
+        # Use the tool-aware chat template
+        chat_template_path=str(Path(__file__).parent / "tiny_aya_chat_template.jinja"),
         warmup_steps=5,
-        num_train_epochs=3,
         learning_rate=2e-4,
         optim="paged_adamw_8bit",
         logging_steps=1,
@@ -149,17 +149,14 @@ def main():
 
     trainer = SFTTrainer(
         model=model,
-        processing_class=tokenizer,
         args=training_args,
         train_dataset=dataset["train"],
-        eval_dataset=dataset["test"],
         peft_config=peft_config,
     )
     trainer.train()
 
     # Save model and tokenizer (tokenizer carries the updated chat template)
     trainer.save_model(output_dir)
-    tokenizer.save_pretrained(output_dir)
     trainer.push_to_hub(dataset_name=dataset_name)
 
 
