@@ -504,6 +504,11 @@ class TestResolveTargetPath:
                 assert isinstance(path, Path)
                 assert path.is_absolute()
 
+    def test_invalid_scope_for_predefined_agent(self):
+        """Test invalid scope raises ValueError for predefined agents."""
+        with pytest.raises(ValueError, match="Invalid scope"):
+            resolve_target_path("claude", "invalid")
+
 
 class TestHighLevelAPI:
     """Tests for the new high-level API (target/scope instead of Path)."""
