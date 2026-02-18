@@ -25,6 +25,8 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     BartModel,
+    Cohere2Config,
+    Cohere2ForCausalLM,
     CohereConfig,
     CohereForCausalLM,
     DeepseekV3Config,
@@ -160,6 +162,7 @@ def init_weights_tiny_model(model):
 for model_id, config_class, model_class, dtype, suffix in [
     # ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),  # loading fails with this model, see https://huggingface.co/bigscience/bloomz-560m/discussions/14
     ("CohereLabs/aya-expanse-8b", CohereConfig, CohereForCausalLM, torch.float16, None),
+    ("CohereLabs/tiny-aya-earth", Cohere2Config, Cohere2ForCausalLM, torch.bfloat16, None),
     ("deepseek-ai/DeepSeek-R1", DeepseekV3Config, DeepseekV3ForCausalLM, torch.bfloat16, None),
     # It's important to have R1-0528 as it doesn't have the same chat template
     ("deepseek-ai/DeepSeek-R1-0528", DeepseekV3Config, DeepseekV3ForCausalLM, torch.bfloat16, "0528"),
