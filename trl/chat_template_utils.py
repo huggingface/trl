@@ -740,8 +740,10 @@ qwen3_training_chat_template = r"""{%- if tools %}
 # + {{- "<|start|>assistant<|channel|>final<|message|>" + message.content + "<|end|>" }}
 #   In the original template, only the last assistant message ends with <|return|>, while other turns use <|end|>.
 #   This breaks prefix preservation, so the training template uses <|end|> consistently.
-#   As a result, <|return|> is not seen during training with this template; with GRPO's comparative objective, we
-#   do not expect this change to materially reduce the model's ability to use <|return|> at inference.
+#   As a result, <|return|> is not seen during training with this template;
+#   GRPO's objective is based on relative scoring across sampled outputs, so this template change may not materially
+#   reduce the model's ability to use <|return|> at inference. However, this is a hypothesis, and it should be
+#   confirmed with targeted evaluations
 # - {%- elif loop.last and not add_generation_prompt %}
 # + {%- elif true and not add_generation_prompt %}
 #   Always include thinking block during training. It's important to have a prefix-preserving template.
