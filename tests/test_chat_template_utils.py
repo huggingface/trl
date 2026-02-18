@@ -213,12 +213,175 @@ class TestIsChatTemplatePrefixPreserving:
         assert is_chat_template_prefix_preserving(tokenizer) is False
 
 
+@pytest.mark.parametrize(
+    "tokenizer_name",
+    [
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+    ],
+)
 class TestGetTrainingChatTemplate:
-    def test_qwen3(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+    def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         assert is_chat_template_prefix_preserving(tokenizer) is False
         tokenizer.chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_prefix_preserving(tokenizer) is True
+
+    def test_behavior_unchanged_single_user_no_generation_prompt(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_single_user_with_generation_prompt(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        before = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            chat_template=new_chat_template,
+        )
+        assert before == after
+
+    def test_behavior_unchanged_single_user_and_final_assistant_plain_content(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {
+                "role": "assistant",
+                "content": "It is blue.",
+                "reasoning_content": "The sky appears blue due to Rayleigh scattering.",
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {
+                "role": "assistant",
+                "content": "<think>\nThe sky scatters shorter wavelengths.\n</think>\n\nIt is blue.",
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Multiply 3 by 4."},
+            {
+                "role": "assistant",
+                "content": "I will call a tool.",
+                "tool_calls": [{"name": "multiply", "arguments": {"a": 3, "b": 4}}],
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_assistant_with_tool_calls_with_string_arguments(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Multiply 3 by 4."},
+            {
+                "role": "assistant",
+                "content": "I will call a tool.",
+                "tool_calls": [{"name": "multiply", "arguments": '{"a": 3, "b": 4}'}],
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "multiply",
+                    "description": "Multiply two numbers.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "number"},
+                            "b": {"type": "number"},
+                        },
+                        "required": ["a", "b"],
+                    },
+                },
+            }
+        ]
+        messages = [{"role": "user", "content": "Multiply 3 by 4."}]
+        before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_with_tools_with_system_message(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "multiply",
+                    "description": "Multiply two numbers.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                        "required": ["a", "b"],
+                    },
+                },
+            }
+        ]
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Multiply 3 by 4."},
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_generation_prompt_with_enable_thinking_false(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        before = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+            chat_template=new_chat_template,
+        )
+        assert before == after
 
 
 @pytest.mark.parametrize(
