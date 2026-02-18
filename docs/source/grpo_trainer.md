@@ -666,8 +666,6 @@ accelerate launch \
   ...
 ```
 
-You can also use `openai/gpt-oss-20b` as the base model.
-
 ## Vision-Language Model (VLM) Training
 
 GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
