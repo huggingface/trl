@@ -141,8 +141,6 @@ def main():
         max_length=1024,
         use_liger_kernel=True,
         activation_offloading=True,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
         push_to_hub=True,
     )
 
