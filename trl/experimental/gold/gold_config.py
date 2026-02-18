@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,6 +54,14 @@ class GOLDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
             teacher-generated output).
+        steps_per_generation (`int` or `None`, *optional*, defaults to `None`):
+            Number of optimization steps per generation. If `None`, it defaults to
+            `gradient_accumulation_steps`.
+        num_generations (`int`, *optional*, defaults to `1`):
+            Number of generations per prompt. Each prompt is repeated this many times in the generation batch.
+        generation_batch_size (`int` or `None`, *optional*, defaults to `None`):
+            Number of prompts per generation batch (global, across all processes). If `None`, it is computed from
+            `per_device_train_batch_size * world_size * steps_per_generation`.
         use_uld_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
@@ -182,6 +191,19 @@ class GOLDConfig(SFTConfig):
         default=None,
         metadata={
             "help": "Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps."
+        },
+    )
+    num_generations: int = field(
+        default=1,
+        metadata={
+            "help": "Number of generations per prompt. Each prompt is repeated this many times in the batch."
+        },
+    )
+    generation_batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Number of prompts per generation batch (global, across all processes). "
+            "If None, computed from per_device_train_batch_size * num_processes * steps_per_generation."
         },
     )
 
@@ -391,6 +413,32 @@ class GOLDConfig(SFTConfig):
 
         if self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
+
+        if self.generation_batch_size is None:
+            self.generation_batch_size = (
+                self.per_device_train_batch_size * self.world_size * self.steps_per_generation
+            )
+
+        if self.num_generations < 1:
+            raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
+        if self.generation_batch_size % self.num_generations != 0:
+            raise ValueError(
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
+                f"({self.num_generations})."
+            )
+        if self.generation_batch_size // self.num_generations < 1:
+            raise ValueError(
+                f"generation_batch_size ({self.generation_batch_size}) must be at least num_generations "
+                f"({self.num_generations}) so that each generation batch contains at least one unique prompt."
+            )
+        if self.num_generations > 1 and self.lmbda < 1.0:
+            warnings.warn(
+                f"num_generations={self.num_generations} with lmbda={self.lmbda} means off-policy batches will "
+                f"contain {self.num_generations} identical copies of each dataset sample. Consider setting "
+                f"lmbda=1.0 (fully on-policy) when using num_generations > 1.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Validate ULD parameters
         if self.use_uld_loss:

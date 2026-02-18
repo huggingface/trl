@@ -19,8 +19,10 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
+from functools import partial
 from typing import Any, Optional
 
+import datasets
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -29,6 +31,7 @@ from accelerate import PartialState
 from accelerate.utils import DistributedType, broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, TrainerCallback, TrainerControl, TrainerState, is_bitsandbytes_available
 from transformers.data.data_collator import DataCollator
 from transformers.feature_extraction_utils import FeatureExtractionMixin
@@ -38,8 +41,9 @@ from transformers.integrations.integration_utils import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_utils import EvalPrediction
+from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import (
+    is_datasets_available,
     is_flash_attn_2_available,
     is_liger_kernel_available,
     is_peft_available,
@@ -54,11 +58,13 @@ from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
+    RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
     pad,
+    split_tensor_dict,
 )
 from ..utils import DataCollatorForChatML
 from .gold_config import GOLDConfig
@@ -887,12 +893,19 @@ class GOLDTrainer(SFTTrainer):
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.seq_kd = args.seq_kd
+        self.num_generations = args.num_generations
 
         # Track per-step loss statistics for on/off-policy batches (used in logging)
         self._on_policy_loss_total = 0.0
         self._off_policy_loss_total = 0.0
         self._on_policy_step_equiv = 0.0
         self._off_policy_step_equiv = 0.0
+
+        # Buffering for rollouts across gradient accumulation steps
+        self._buffered_inputs = None
+        self._buffered_on_policy = None
+        self._buffered_text_logs = None
+        self._step = 0
 
         # Hybrid ULD matched/unmatched accumulators (logged every step when ULD hybrid is used)
         self._matched_sum = 0.0
@@ -1049,6 +1062,508 @@ class GOLDTrainer(SFTTrainer):
             for column in required_columns:
                 if column not in self._signature_columns:
                     self._signature_columns.append(column)
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        self._step = 0
+        self._buffered_inputs = None
+        self._buffered_on_policy = None
+        self._buffered_text_logs = None
+        return control
+
+    def _get_train_sampler(self, dataset=None):
+        if dataset is None:
+            dataset = self.train_dataset
+        return RepeatSampler(
+            data_source=dataset,
+            mini_repeat_count=self.num_generations,
+            batch_size=self.args.generation_batch_size // self.num_generations,
+            repeat_count=self.args.steps_per_generation,
+            shuffle=True,
+            seed=self.args.seed,
+        )
+
+    def get_train_dataloader(self):
+        """
+        Override Trainer.get_train_dataloader to load a generation batch covering one optimizer window.
+
+        Instead of returning a standard per-step batch (i.e., `per_device_batch_size`), this dataloader loads
+        a batch of size `per_device_batch_size * steps_per_generation`. Combined with the `RepeatSampler`
+        (which inflates the sampler length by `steps_per_generation`), this prevents the Trainer from
+        double-dividing by `gradient_accumulation_steps` when computing optimizer steps per epoch.
+        """
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": self._train_batch_size * self.args.steps_per_generation,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker,
+                num_workers=self.args.dataloader_num_workers,
+                rank=self.args.process_index,
+            )
+            if self.args.dataloader_num_workers > 0:
+                dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+    @profiling_decorator
+    def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
+        if not self.model.training:
+            return generation_batch
+
+        spg = self.args.steps_per_generation
+        if self._step % spg == 0 or self._buffered_inputs is None:
+            self._fill_buffer(generation_batch, spg)
+
+        slice_idx = self._step % spg
+        inputs = self._buffered_inputs[slice_idx]
+        self._step += 1
+        return inputs
+
+    def _decode_completion_texts_from_labels(self, slice_inputs: dict[str, torch.Tensor | Any]) -> list[str] | None:
+        """
+        Decode completion-only text from labels for cross-tokenizer ULD when raw text is not available.
+        """
+        labels = slice_inputs.get("labels")
+        if labels is None or not isinstance(labels, torch.Tensor):
+            return None
+
+        labels_cpu = labels.detach().cpu()
+        decoded_completion_tokens: list[list[int]] = []
+        for row in labels_cpu:
+            token_ids = row[row != -100].tolist()
+            if self.processing_class.pad_token_id is not None:
+                token_ids = [tok for tok in token_ids if tok != self.processing_class.pad_token_id]
+            decoded_completion_tokens.append(token_ids)
+
+        return self.processing_class.batch_decode(
+            decoded_completion_tokens,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+
+    def _ensure_original_text_fields(self, slice_inputs: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
+        """
+        Ensure original prompt/completion text fields are available for ULD loss.
+        """
+        if "original_prompt_text" in slice_inputs and "original_completion_text" in slice_inputs:
+            return slice_inputs
+
+        prompts = slice_inputs.get("prompts")
+        if prompts is None or not isinstance(prompts, torch.Tensor):
+            return slice_inputs
+
+        prompt_texts = self.processing_class.batch_decode(
+            prompts,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+        completion_texts = self._decode_completion_texts_from_labels(slice_inputs)
+        if completion_texts is None:
+            return slice_inputs
+
+        updated_slice = dict(slice_inputs)
+        updated_slice["original_prompt_text"] = prompt_texts
+        updated_slice["original_completion_text"] = completion_texts
+        return updated_slice
+
+    @profiling_decorator
+    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], spg: int):
+        slices = split_tensor_dict(generation_batch, spg)
+
+        if self.accelerator.is_main_process:
+            on_policy_flags = [random.random() <= self.lmbda for _ in range(spg)]
+        else:
+            on_policy_flags = [False] * spg
+
+        on_policy_flags = broadcast_object_list(on_policy_flags, from_process=0)
+        on_policy_indices = [i for i, flag in enumerate(on_policy_flags) if flag]
+
+        self._buffered_inputs = [None] * spg
+        self._buffered_on_policy = on_policy_flags
+        self._buffered_text_logs = [None] * spg
+
+        for i, flag in enumerate(on_policy_flags):
+            if not flag:
+                slice_inputs = slices[i]
+
+                if self.use_uld_loss and self.teacher_tokenizer is not None:
+                    slice_inputs = self._ensure_original_text_fields(slice_inputs)
+                    if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
+                        raise ValueError(
+                            "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
+                            "When using ULD loss with cross-tokenizer alignment, datasets must be prepared with "
+                            "_prepare_dataset_with_original_text(). Ensure your dataset includes these fields."
+                        )
+
+                self._buffered_inputs[i] = slice_inputs
+
+        if on_policy_indices:
+            self._generate_on_policy_for_slices(slices, on_policy_indices)
+
+    @profiling_decorator
+    def _generate_on_policy_for_slices(
+        self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
+    ):
+        local_prompts = []
+        local_slice_info = []
+        for slice_idx in on_policy_indices:
+            slice_inputs = slices[slice_idx]
+            for j in range(slice_inputs["prompts"].shape[0]):
+                local_prompts.append(slice_inputs["prompts"][j])
+                local_slice_info.append((slice_idx, j))
+
+        prompts_text_for_vllm = self.processing_class.batch_decode(
+            torch.stack(local_prompts) if local_prompts else torch.empty(0, dtype=torch.long),
+            skip_special_tokens=True,
+        )
+        if self.processing_class.pad_token:
+            prompts_text_for_vllm = [p.replace(self.processing_class.pad_token, "") for p in prompts_text_for_vllm]
+
+        prompts_text_with_special = self.processing_class.batch_decode(
+            torch.stack(local_prompts) if local_prompts else torch.empty(0, dtype=torch.long),
+            skip_special_tokens=False,
+        )
+
+        if self.use_vllm:
+            self._wake_vllm_if_needed()
+
+        max_completion_length = self.generation_config.max_new_tokens
+        temperature = self.generation_config.temperature
+        top_k = self.generation_config.top_k if self.generation_config.top_k and self.generation_config.top_k > 0 else -1
+        top_p = self.args.top_p if hasattr(self.args, "top_p") else 1.0
+        repetition_penalty = self.args.repetition_penalty if hasattr(self.args, "repetition_penalty") else 1.0
+        min_p = self.args.min_p if hasattr(self.args, "min_p") else 0.0
+
+        if self.use_vllm and self.vllm_mode == "server":
+            completion_ids = self._generate_vllm_server_global(
+                prompts_text_for_vllm,
+                max_completion_length,
+                temperature,
+                top_k,
+                top_p,
+                repetition_penalty,
+                min_p,
+                n=self.num_generations,
+            )
+        elif self.use_vllm and self.vllm_mode == "colocate":
+            completion_ids = self._generate_vllm_colocate(
+                prompts_text_for_vllm,
+                max_completion_length,
+                temperature,
+                top_k,
+                top_p,
+                repetition_penalty,
+                min_p,
+                n=self.num_generations,
+            )
+        else:
+            self._generate_non_vllm_for_slices(slices, on_policy_indices)
+            return
+
+        self._process_completions_to_buffer(
+            slices,
+            on_policy_indices,
+            local_slice_info,
+            completion_ids,
+            prompts_text_for_vllm,
+            prompts_text_with_special,
+            max_completion_length,
+        )
+
+    @staticmethod
+    def _deduplicate_prompts(
+        prompts: list[str], num_generations: int
+    ) -> tuple[list[str], list[tuple[int, int]]] | None:
+        """
+        Deduplicate repeated prompts and build a mapping for remapping completions.
+
+        When ``num_generations > 1``, the ``RepeatSampler`` produces K copies of each prompt.
+        Instead of sending K copies to vLLM with ``n=1``, we send unique prompts with ``n=K``,
+        which is more efficient.
+        """
+        seen: dict[str, list[int]] = {}
+        unique_prompts: list[str] = []
+        dedup_mapping: list[tuple[int, int]] = []
+
+        for prompt in prompts:
+            if prompt not in seen:
+                seen[prompt] = [len(unique_prompts), 0]
+                unique_prompts.append(prompt)
+            entry = seen[prompt]
+            if entry[1] >= num_generations:
+                return None
+            dedup_mapping.append((entry[0], entry[1]))
+            entry[1] += 1
+
+        return unique_prompts, dedup_mapping
+
+    def _generate_vllm_server_global(
+        self,
+        prompts_text: list[str],
+        max_tokens: int,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        repetition_penalty: float,
+        min_p: float,
+        n: int = 1,
+    ) -> list:
+        all_prompts_text = gather_object(prompts_text)
+        local_count = len(prompts_text)
+
+        if self.accelerator.is_main_process:
+            if all_prompts_text:
+                dedup_mapping = None
+                if n > 1:
+                    dedup_result = self._deduplicate_prompts(all_prompts_text, n)
+                    if dedup_result is not None:
+                        gen_prompts, dedup_mapping = dedup_result
+                        gen_n = n
+                    else:
+                        gen_prompts = all_prompts_text
+                        gen_n = 1
+                else:
+                    gen_prompts = all_prompts_text
+                    gen_n = 1
+
+                completion_ids = self.vllm_client.generate(
+                    prompts=gen_prompts,
+                    n=gen_n,
+                    repetition_penalty=repetition_penalty,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
+                    max_tokens=max_tokens,
+                    structured_outputs_regex=self.vllm_structured_outputs_regex,
+                )["completion_ids"]
+
+                if dedup_mapping is not None:
+                    completion_ids = [completion_ids[uid * gen_n + gid] for uid, gid in dedup_mapping]
+            else:
+                completion_ids = []
+        else:
+            completion_ids = [None] * len(all_prompts_text) if all_prompts_text else []
+
+        completion_ids = broadcast_object_list(completion_ids, from_process=0)
+        process_slice = slice(
+            self.accelerator.process_index * local_count,
+            (self.accelerator.process_index + 1) * local_count,
+        )
+        return completion_ids[process_slice]
+
+    def _generate_vllm_colocate(
+        self,
+        prompts_text: list[str],
+        max_tokens: int,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        repetition_penalty: float,
+        min_p: float,
+        n: int = 1,
+    ) -> list:
+        if self.vllm_structured_outputs_regex:
+            structured_outputs = StructuredOutputsParams(backend="outlines", regex=self.vllm_structured_outputs_regex)
+        else:
+            structured_outputs = None
+
+        if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
+            orig_size = len(prompts_text)
+            gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+            torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.vllm_tp_group)
+            all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+        else:
+            all_prompts_text = prompts_text
+
+        dedup_mapping = None
+        if n > 1 and all_prompts_text:
+            dedup_result = self._deduplicate_prompts(all_prompts_text, n)
+            if dedup_result is not None:
+                gen_prompts, dedup_mapping = dedup_result
+                gen_n = n
+            else:
+                gen_prompts = all_prompts_text
+                gen_n = 1
+        else:
+            gen_prompts = all_prompts_text
+            gen_n = 1
+
+        sampling_params = SamplingParams(
+            n=gen_n,
+            repetition_penalty=repetition_penalty,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            structured_outputs=structured_outputs,
+        )
+
+        if gen_prompts:
+            all_outputs = self.vllm_engine.generate(gen_prompts, sampling_params=sampling_params, use_tqdm=False)
+            completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+        else:
+            completion_ids = []
+
+        if dedup_mapping is not None:
+            completion_ids = [completion_ids[uid * gen_n + gid] for uid, gid in dedup_mapping]
+
+        if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
+            local_rank_in_group = torch.distributed.get_rank(group=self.vllm_tp_group)
+            tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+            completion_ids = completion_ids[tp_slice]
+
+        if self.vllm_enable_sleep_mode:
+            self.vllm_engine.sleep(level=2)
+
+        return completion_ids
+
+    def _generate_non_vllm_for_slices(
+        self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
+    ):
+        """Fallback generation without vLLM (uses model.generate per slice)."""
+        for slice_idx in on_policy_indices:
+            slice_inputs = slices[slice_idx]
+            with unwrap_model_for_generation(
+                self.model,
+                self.accelerator,
+                generation_kwargs=self.generation_kwargs,
+            ) as unwrapped_model:
+                result = self.generate_on_policy_outputs(
+                    unwrapped_model,
+                    slice_inputs,
+                    self.generation_config,
+                    self.processing_class.pad_token_id,
+                )
+                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
+
+            updated_slice = dict(slice_inputs)
+            updated_slice["input_ids"] = new_input_ids
+            updated_slice["attention_mask"] = new_attention_mask
+            updated_slice["labels"] = new_labels
+            updated_slice["original_prompt_text"] = prompt_texts
+            updated_slice["original_completion_text"] = completion_texts
+
+            self._buffered_inputs[slice_idx] = updated_slice
+            self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+
+    def _process_completions_to_buffer(
+        self,
+        slices: list[dict[str, torch.Tensor | Any]],
+        on_policy_indices: list[int],
+        local_slice_info: list[tuple[int, int]],
+        completion_ids: list,
+        prompts_text: list[str],
+        prompts_text_with_special: list[str],
+        max_completion_length: int,
+    ):
+        """
+        Process vLLM completions and update buffered inputs for on-policy slices.
+        """
+        device = self.accelerator.device
+        pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
+
+        slice_completions = {idx: [] for idx in on_policy_indices}
+        slice_prompts = {idx: [] for idx in on_policy_indices}
+        slice_prompts_special = {idx: [] for idx in on_policy_indices}
+
+        for i, (slice_idx, _) in enumerate(local_slice_info):
+            slice_completions[slice_idx].append(completion_ids[i])
+            slice_prompts[slice_idx].append(prompts_text[i])
+            slice_prompts_special[slice_idx].append(prompts_text_with_special[i])
+
+        for slice_idx in on_policy_indices:
+            slice_inputs = slices[slice_idx]
+            completion_ids_for_slice = slice_completions[slice_idx]
+            prompt_txts = slice_prompts[slice_idx]
+            prompt_txts_with_special = slice_prompts_special[slice_idx]
+
+            prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+            prompt_tokenized = self.processing_class(
+                prompt_txts,
+                return_tensors="pt",
+                padding="longest",
+                truncation=True if prompt_max_length else False,
+                max_length=prompt_max_length,
+                add_special_tokens=False,
+            ).to(device)
+            prompt_ids = prompt_tokenized.input_ids
+
+            completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
+            completion_ids_for_text: list[list[int]] = []
+            padded_completion_ids_list = []
+            for completion_tensor in completion_ids_tensors:
+                if len(completion_tensor) > max_completion_length:
+                    truncated_completion_tensor = completion_tensor[:max_completion_length]
+                    padded_completion_ids_list.append(truncated_completion_tensor)
+                    completion_ids_for_text.append(truncated_completion_tensor.tolist())
+                elif len(completion_tensor) < max_completion_length:
+                    padding_needed = max_completion_length - len(completion_tensor)
+                    padded_tensor = torch.cat(
+                        [
+                            completion_tensor,
+                            torch.full(
+                                (padding_needed,),
+                                pad_token_id,
+                                device=device,
+                                dtype=completion_tensor.dtype,
+                            ),
+                        ]
+                    )
+                    padded_completion_ids_list.append(padded_tensor)
+                    completion_ids_for_text.append(completion_tensor.tolist())
+                else:
+                    padded_completion_ids_list.append(completion_tensor)
+                    completion_ids_for_text.append(completion_tensor.tolist())
+
+            completion_ids_padded = torch.stack(padded_completion_ids_list)
+
+            new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
+            new_attention_mask = torch.ones_like(new_input_ids)
+            if self.processing_class.pad_token_id is not None:
+                new_attention_mask[new_input_ids == self.processing_class.pad_token_id] = 0
+
+            prompt_lengths = (prompt_ids != pad_token_id).sum(dim=1)
+            new_labels = torch.full_like(new_input_ids, -100)
+            for idx in range(new_input_ids.shape[0]):
+                length = int(prompt_lengths[idx].item())
+                new_labels[idx, length:] = new_input_ids[idx, length:]
+            if self.processing_class.pad_token_id is not None:
+                new_labels[new_input_ids == self.processing_class.pad_token_id] = -100
+
+            completion_texts = self.processing_class.batch_decode(
+                completion_ids_for_text,
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+
+            updated_slice = dict(slice_inputs)
+            updated_slice["input_ids"] = new_input_ids
+            updated_slice["attention_mask"] = new_attention_mask
+            updated_slice["labels"] = new_labels
+            updated_slice["original_prompt_text"] = prompt_txts_with_special
+            updated_slice["original_completion_text"] = completion_texts
+
+            self._buffered_inputs[slice_idx] = updated_slice
+            self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
 
     def _prepare_dataset(
         self,
@@ -1960,46 +2475,23 @@ class GOLDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the offline original inputs.
         """
-        on_policy = False
-        if random.random() <= self.lmbda:
-            on_policy = True
-            if self.use_vllm:
-                self._wake_vllm_if_needed()
-                result = self._generate_on_policy_outputs_vllm(
-                    inputs, self.generation_config, self.processing_class.pad_token_id
-                )
-                new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
-            else:
-                with (
-                    unwrap_model_for_generation(
-                        model,
-                        self.accelerator,
-                        generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
-                    ) as unwrapped_model
-                ):
-                    result = self.generate_on_policy_outputs(
-                        unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
-                    )
-                    new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
-
-            inputs["input_ids"] = new_input_ids
-            inputs["attention_mask"] = new_attention_mask
-            inputs["labels"] = new_labels
-
-            # CRITICAL: Preserve original text for cross-tokenizer ULD loss
-            # This ensures both off-policy (dataset) and on-policy (generated) samples
-            # can use proper text-based alignment for different tokenizers
-            inputs["original_prompt_text"] = prompt_texts
-            inputs["original_completion_text"] = completion_texts
-
-            # Log prompt and completion texts
-            self._textual_logs["prompt"].extend(gather_object(prompt_texts))
-            self._textual_logs["completion"].extend(gather_object(completion_texts))
+        spg = self.args.steps_per_generation
+        ga = max(1, int(self.args.gradient_accumulation_steps))
 
         loss = super().training_step(model, inputs, num_items_in_batch)
 
+        slice_idx = (self._step - 1) % spg
+
+        on_policy = False
+        if self._buffered_on_policy is not None and slice_idx < len(self._buffered_on_policy):
+            on_policy = self._buffered_on_policy[slice_idx]
+
+        if on_policy and self._buffered_text_logs is not None and self._buffered_text_logs[slice_idx] is not None:
+            prompt_texts, completion_texts = self._buffered_text_logs[slice_idx]
+            self._textual_logs["prompt"].extend(gather_object(prompt_texts))
+            self._textual_logs["completion"].extend(gather_object(completion_texts))
+
         loss_scalar = float(loss.detach())
-        ga = max(1, int(self.args.gradient_accumulation_steps))
         step_equiv = 1.0 / ga
 
         if on_policy:
