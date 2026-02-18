@@ -92,7 +92,7 @@ class DPPOConfig(GRPOConfig):
             raise ValueError(f"clip_ratio_c must be > 0, got {self.clip_ratio_c}")
 
         if self.loss_type != "dapo":
-            raise ValueError("loss_type is not supported for DPPO")
+            raise ValueError("loss_type {self.loss_type} is not supported for DPPO")
 
         if self.top_entropy_quantile != 1.0:
             raise ValueError("top_entropy_quantile is not supported for DPPO")
