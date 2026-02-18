@@ -218,7 +218,7 @@ trainer.train()
 The [`RewardTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
 * The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON schemas
+* The list of available tools in the `tools` column, typically provided as JSON `str` schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
