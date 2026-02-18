@@ -194,16 +194,21 @@ def _install_skill_to_dir(
         `bool`: True if installed successfully.
 
     Raises:
-        - `FileNotFoundError`: If skill doesn't exist in source.
+        - `FileNotFoundError`: If skill doesn't exist in source_dir.
         - `FileExistsError`: If skill already installed and not force.
-        - `PermissionError`: If no permission to write to target.
+        - `PermissionError`: If no permission to write to target_dir.
+        - `ValueError`: If source_dir entry exists but is not a directory.
+        - `OSError`: If copying the skill fails.
     """
-    source_dir = source_dir or _get_trl_skills_dir()
     source_skill = source_dir / skill_name
 
     # Check if source skill exists
     if not source_skill.exists():
-        raise FileNotFoundError(f"Skill '{skill_name}' not found in TRL. Available skills: {', '.join(list_skills())}")
+        available = ", ".join(list_skills(target=source_dir))
+        source_msg = f"source directory {source_dir}"
+        if available:
+            raise FileNotFoundError(f"Skill '{skill_name}' not found in {source_msg}. Available skills: {available}")
+        raise FileNotFoundError(f"Skill '{skill_name}' not found in {source_msg}")
 
     if not source_skill.is_dir():
         raise ValueError(f"Skill '{skill_name}' is not a directory")
@@ -262,7 +267,10 @@ def install_skill(
         - `FileNotFoundError`: If skill doesn't exist in source.
         - `FileExistsError`: If skill already installed and not force.
         - `PermissionError`: If no permission to write to target.
-        - `ValueError`: If agent name is not recognized.
+        - `ValueError`:
+           - If `scope` is invalid for a predefined agent target.
+           - If `source` entry exists but is not a directory.
+        - `OSError`: If copying the skill fails.
 
     Example:
         ```python
