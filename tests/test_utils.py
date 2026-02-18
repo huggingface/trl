@@ -945,6 +945,7 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-CohereForCausalLM",
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             "trl-internal-testing/tiny-Gemma2ForCausalLM",

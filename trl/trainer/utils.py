@@ -398,6 +398,8 @@ def get_trackio_space_url() -> str | None:
     from trackio import context_vars
 
     run = context_vars.current_run.get()
+    if run is None:
+        return None
     space_id = run._space_id
     if space_id is None:
         return None
