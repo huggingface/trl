@@ -12,22 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -36,8 +24,8 @@ class SDFTConfig(TrainingArguments):
     r"""
     Configuration class for the [`SDFTTrainer`].
 
-    This class includes only the parameters that are specific to Self-Distillation Fine-Tuning (SDFT). For a full
-    list of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that
+    This class includes only the parameters that are specific to Self-Distillation Fine-Tuning (SDFT) training. For a
+    full list of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that
     default values in this class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
@@ -56,11 +44,7 @@ class SDFTConfig(TrainingArguments):
 
         > Parameters that control the data preprocessing
 
-        remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to only keep the columns needed by SDFT (`"prompt"` and `"teacher_prompt"`) in the dataset.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
-        num_generations (`int` or `None`, *optional*, defaults to `8`):
+        num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
@@ -87,12 +71,19 @@ class SDFTConfig(TrainingArguments):
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
             `1.0` to consider all tokens.
-        top_k (`int`, *optional*):
-            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
+        top_k (`int`, *optional*, defaults to `0`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
             disabled and all tokens are considered.
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
+        generation_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
+        chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
@@ -103,11 +94,6 @@ class SDFTConfig(TrainingArguments):
             parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
-        generation_kwargs (`dict[str, Any]`, *optional*):
-            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
-            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
-            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
-            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -126,6 +112,8 @@ class SDFTConfig(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -139,6 +127,9 @@ class SDFTConfig(TrainingArguments):
         vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        vllm_group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group. This is used to communicate with the vLLM server. Unless the port
+            is occupied, there is no need to change it.
 
         > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
 
@@ -146,13 +137,16 @@ class SDFTConfig(TrainingArguments):
             Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        vllm_max_model_length (`int`, *optional*):
+            Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus
+            `max_completion_length`; if omitted, it is inferred from the model config.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
-            for weight sync and generation.
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
 
         > Parameters that control the training
 
@@ -185,25 +179,39 @@ class SDFTConfig(TrainingArguments):
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
-            Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
-            logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
-            Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
-            (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
-            and training backends. TIS is proposed as a remedy for this issue.
-        vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
-            Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
-            sampling ratio, improving training stability.
+            Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
+            recomputed training logprobs. If set to `False`, no IS is applied regardless of
+            `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
+            and constrained.
+        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
+            Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
+            values are:
+
+                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped from above at C.
+                - `"token_mask"`: Token-level masked IS. Per-token ratios above C are set to zero.
+                - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped from above at
+                  C and applied to all tokens in the sequence.
+                - `"sequence_mask"`: Sequence-level masked IS. Sequences with ratios above C are masked out.
+        vllm_importance_sampling_cap (`float`, *optional*, defaults to `3.0`):
+            Importance sampling cap C used by `vllm_importance_sampling_mode`. For `*_truncate` modes, importance
+            ratios are clipped from above at C. For `*_mask` modes, ratios larger than C are set to zero.
 
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
-            it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+            it prints the sample. If `wandb` and/or `trackio` logging is enabled, it logs it to `wandb` and/or
+            `trackio`.
         num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
-        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
-            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
-            are logged.
+        log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
+            logged.
+        log_completions_hub_repo (`str`, *optional*):
+            Hugging Face Hub repository to save the completions. Should be a complete repository name like
+            `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
+            created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -234,6 +242,16 @@ class SDFTConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
+    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
+    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
+    lr_scheduler_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
+            "restarts."
+        },
+    )
 
     # Parameters that control the model and reference model
     model_init_kwargs: dict | str | None = field(
@@ -252,21 +270,6 @@ class SDFTConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    # The default value remove_unused_columns is overwritten from the parent class, because SDFT relies on custom
-    # columns like `teacher_prompt` (and sometimes multimodal inputs).
-    remove_unused_columns: bool | None = field(
-        default=False,
-        metadata={
-            "help": "Whether to only keep the columns 'prompt' and 'teacher_prompt' in the dataset. If you use any "
-            "additional columns (e.g., images), you should keep this to `False`."
-        },
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
-        },
-    )
     num_generations: int | None = field(
         default=8,
         metadata={
@@ -315,10 +318,10 @@ class SDFTConfig(TrainingArguments):
             "Set to 1.0 to consider all tokens."
         },
     )
-    top_k: int | None = field(
-        default=None,
+    top_k: int = field(
+        default=0,
         metadata={
-            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
@@ -336,6 +339,13 @@ class SDFTConfig(TrainingArguments):
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
             "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+        },
+    )
+    chat_template_kwargs: dict | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
+            "completions."
         },
     )
     repetition_penalty: float = field(
@@ -388,10 +398,15 @@ class SDFTConfig(TrainingArguments):
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={
-            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
-            "and woken for weight sync and generation."
+            "help": "Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory "
+            "usage low, but waking the engine adds host–device transfer latency."
         },
     )
+    vllm_structured_outputs_regex: str | None = field(
+        default=None,
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
+    )
+
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_base_url: str | None = field(
         default=None,
@@ -415,6 +430,13 @@ class SDFTConfig(TrainingArguments):
             "after the timeout, a `ConnectionError` is raised."
         },
     )
+    vllm_group_port: int = field(
+        default=51216,
+        metadata={
+            "help": "Port number for the weight update group. This is used to communicate with the vLLM server. "
+            "Unless the port is occupied, there is no need to change it.",
+        },
+    )
 
     # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
@@ -423,6 +445,13 @@ class SDFTConfig(TrainingArguments):
             "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
             "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
             "launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
+        },
+    )
+    vllm_max_model_length: int | None = field(
+        default=None,
+        metadata={
+            "help": "Context window for vLLM. Set it to at least the maximum prompt length in the dataset plus "
+            "`max_completion_length`; if omitted, it is inferred from the model config."
         },
     )
     vllm_tensor_parallel_size: int = field(
@@ -440,21 +469,6 @@ class SDFTConfig(TrainingArguments):
         metadata={
             "help": "KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and "
             "improving training speed."
-        },
-    )
-    alpha: float = field(
-        default=0.0,
-        metadata={
-            "help": "Alpha coefficient. If `0.0` (default), the forward KL is used. If `1.0`, the reverse KL is used. If anything in between, the Jensen-Shannon Divergence is used."
-        },
-    )
-    generate_from_teacher: bool = field(
-        default=False,
-        metadata={
-            "help": "If True, use the teacher model (ref_model) for generation. vLLM will be initialized with teacher "
-            "weights, enabling fast generation from the teacher. This makes training equivalent to online SFT "
-            "where the teacher generates completions and the student learns to reproduce them. "
-            "If False (default), use the student model for generation (standard RL behavior)."
         },
     )
     num_iterations: int = field(
@@ -501,29 +515,43 @@ class SDFTConfig(TrainingArguments):
             "non-truncated completions are considered."
         },
     )
-    num_loss_tokens_to_skip: int = field(
-        default=0,
-        metadata={
-            "help": "Number of tokens at the beginning of each completion to exclude from the loss calculation. "
-            "This can be useful to avoid penalizing the model for the initial tokens of the response, which may be "
-            "less predictable. A value of `0` (default) means all completion tokens are included in the loss."
-        },
-    )
     vllm_importance_sampling_correction: bool = field(
         default=True,
         metadata={
-            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
-            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
-            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
-            "effects due to subtle implementation differences between generation and training backends. TIS is "
-            "proposed as a remedy for this issue."
+            "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
+            "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
+            "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
+            "IS ratios are computed and constrained."
         },
     )
-    vllm_importance_sampling_cap: float = field(
-        default=2.0,
+
+    vllm_importance_sampling_mode: str = field(
+        default="sequence_mask",
         metadata={
-            "help": "Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the "
-            "importance sampling ratio, improving training stability."
+            "help": "Specifies how Importance Sampling (IS) is performed when "
+            "vllm_importance_sampling_correction=True. Modes are defined along two orthogonal "
+            "dimensions: (1) constraint, which determines how to handle ratios above "
+            "vllm_importance_sampling_cap (C)—either truncation (clip from above, ρ ← min(ρ, C)) or "
+            "masking (set ratios above C to zero); and (2) granularity, which determines whether "
+            "ratios are computed per token or as a single sequence-level ratio applied to all tokens. "
+            "Supported options are: 'token_truncate', 'token_mask', 'sequence_truncate', and "
+            "'sequence_mask'."
+        },
+    )
+
+    vllm_importance_sampling_cap: float = field(
+        default=3.0,
+        metadata={
+            "help": "Importance sampling cap C used by `vllm_importance_sampling_mode`. For '*_truncate' modes, "
+            "ratios are clipped from above at C. For '*_mask' modes, ratios larger than C are set to zero."
+        },
+    )
+    use_bias_correction_kl: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
+            "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
+            "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
         },
     )
 
@@ -539,18 +567,44 @@ class SDFTConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
-    wandb_log_unique_prompts: bool | None = field(
+    log_unique_prompts: bool = field(
         default=False,
         metadata={
-            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
-            "all prompts are logged."
+            "help": "Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all "
+            "prompts are logged."
+        },
+    )
+    log_completions_hub_repo: str | None = field(
+        default=None,
+        metadata={
+            "help": "Hugging Face Hub repository to save the completions. Should be a complete repository name like "
+            "`'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will "
+            "be created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be "
+            "public unless you set `hub_private_repo=True` or your organization's default is to create private "
+            "repositories."
         },
     )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
+            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__post_init__()
+
+        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+
+        if self.log_completions_hub_repo is not None and not self.log_completions:
+            raise ValueError(
+                "log_completions_hub_repo is set, but log_completions is False. Enable log_completions to upload "
+                "completions to the Hub, or unset log_completions_hub_repo."
+            )
 
         num_processes = self.world_size
         # The current default effective batch size
@@ -575,11 +629,14 @@ class SDFTConfig(TrainingArguments):
             )
 
         if self.do_eval and self.eval_strategy != "no":
+            # Determine the number of generations to use for evaluation
+            num_generations = self.num_generations_eval or self.num_generations
+
             # Just ensure the value is divisible by the global batch size
-            if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
+            if (self.per_device_eval_batch_size * num_processes) % num_generations != 0:
                 raise ValueError(
                     f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
-                    f"divisible by num_generations ({self.num_generations})."
+                    f"divisible by the number of generations used for evaluation ({num_generations})."
                 )
 
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
@@ -589,3 +646,12 @@ class SDFTConfig(TrainingArguments):
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
                 f"({self.num_generations})."
             )
+
+        if self.num_generations < 2:
+            raise ValueError(
+                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                f"{self.num_generations}, which is less than the minimum required."
+            )
+
+        if self.delta is not None and self.use_liger_kernel:
+            raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
