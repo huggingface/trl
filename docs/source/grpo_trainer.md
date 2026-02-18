@@ -662,7 +662,7 @@ def reward_func(environments, **kwargs):  # dummy reward: the reward is the curr
     return [environment.counter for environment in environments]
 
 class IncrementEnv:
-    def reset(self) -> None:  # the only required method for the environment is `reset`
+    def reset(self, **kwargs) -> None:  # required; receives sampled row fields as kwargs (e.g., `prompt`)
         self.counter = 0
 
     def increment(self, step: int) -> int:  # the other public methods of the environment are exposed as tools

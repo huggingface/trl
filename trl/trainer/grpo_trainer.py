@@ -120,7 +120,7 @@ RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
 
 
 class _SupportsReset(Protocol):
-    def reset(self) -> Any: ...
+    def reset(self, **kwargs) -> Any: ...
 
 
 EnvironmentFactory = Callable[[], _SupportsReset]
@@ -1496,11 +1496,6 @@ class GRPOTrainer(BaseTrainer):
         # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        # Reset environment state at the beginning of each generation batch.
-        if self.environments:
-            for environment in self.environments:
-                environment.reset()
-
         prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
@@ -1591,6 +1586,10 @@ class GRPOTrainer(BaseTrainer):
     ) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
+
+        if self.environments:
+            for environment, reset_kwargs in zip(self.environments, inputs, strict=True):
+                environment.reset(**reset_kwargs)
 
         prompts = [x["prompt"] for x in inputs]
 

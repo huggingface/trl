@@ -2208,7 +2208,7 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         class DummyEnvironment:
-            def reset(self):
+            def reset(self, **kwargs):
                 self._counter = 0
 
             def increment(self, step: int) -> int:
