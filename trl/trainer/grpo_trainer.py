@@ -646,13 +646,6 @@ class GRPOTrainer(BaseTrainer):
 
         if self.use_vllm:
             # Initialize vLLM generation backend
-            # Wrap rollout_func to capture trainer context if provided
-            rollout_func = None
-            if self.rollout_func is not None:
-
-                def rollout_func(prompts):
-                    return self.rollout_func(prompts, self)
-
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
@@ -688,7 +681,6 @@ class GRPOTrainer(BaseTrainer):
                 chat_template=self.chat_template,
                 chat_template_kwargs=self.chat_template_kwargs,
                 tools=self.tools,
-                rollout_func=rollout_func,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
