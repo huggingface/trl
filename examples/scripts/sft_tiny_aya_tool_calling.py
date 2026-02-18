@@ -24,9 +24,9 @@
 Teach tool calling to CohereLabs/tiny-aya-global using SFT with QLoRA on the
 bebechien/SimpleToolCalling dataset.
 
-The model used in this script does not have native tool-calling support. 
-We embed the tool schemas directly in the system prompt and train the model 
-to produce a structured JSON response. This technique can work with any base 
+The model used in this script does not have native tool-calling support.
+We embed the tool schemas directly in the system prompt and train the model
+to produce a structured JSON response. This technique can work with any base
 language model regardless of its chat template.
 
 Example:
@@ -35,7 +35,6 @@ Example:
 """
 
 import json
-import os
 
 import torch
 from datasets import load_dataset
@@ -44,10 +43,6 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.utils import get_json_schema
 
 from trl import SFTConfig, SFTTrainer
-
-
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 # --- Tool definitions ---
@@ -84,10 +79,12 @@ SYSTEM_MSG = (
 
 
 def create_conversation(sample):
-    tool_call_content = json.dumps({
-        "name": sample["tool_name"],
-        "arguments": json.loads(sample["tool_arguments"]),
-    })
+    tool_call_content = json.dumps(
+        {
+            "name": sample["tool_name"],
+            "arguments": json.loads(sample["tool_arguments"]),
+        }
+    )
     return {
         "messages": [
             {"role": "system", "content": SYSTEM_MSG},
@@ -138,6 +135,7 @@ def main():
         optim="paged_adamw_8bit",
         logging_steps=1,
         report_to="trackio",
+        trackio_space_id=output_dir,
         max_length=1024,
         use_liger_kernel=True,
         activation_offloading=True,
