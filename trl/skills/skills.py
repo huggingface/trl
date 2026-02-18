@@ -84,7 +84,7 @@ def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
         `Path`: Resolved absolute path.
 
     Raises:
-        `ValueError`: If agent name is not recognized.
+        `ValueError`: If `scope` is invalid for a predefined agent target.
 
     Example:
         ```python
@@ -104,6 +104,9 @@ def resolve_target_path(target: str | Path, scope: str = "project") -> Path:
 
     # Check if it's a predefined agent
     if target in AGENT_PATHS:
+        if scope not in AGENT_PATHS[target]:
+            valid_scopes = ", ".join(sorted(AGENT_PATHS[target]))
+            raise ValueError(f"Invalid scope '{scope}' for agent '{target}'. Expected one of: {valid_scopes}")
         agent_path = AGENT_PATHS[target][scope]
         return agent_path.expanduser().resolve()
 
