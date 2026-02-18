@@ -22,7 +22,6 @@ from contextlib import nullcontext
 from functools import partial
 from typing import Any, Optional
 
-import datasets
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -1063,13 +1062,6 @@ class GOLDTrainer(SFTTrainer):
                 if column not in self._signature_columns:
                     self._signature_columns.append(column)
 
-    def on_epoch_begin(self, args, state, control, **kwargs):
-        self._step = 0
-        self._buffered_inputs = None
-        self._buffered_on_policy = None
-        self._buffered_text_logs = None
-        return control
-
     def _get_train_sampler(self, dataset=None):
         if dataset is None:
             dataset = self.train_dataset
@@ -1096,7 +1088,7 @@ class GOLDTrainer(SFTTrainer):
 
         train_dataset = self.train_dataset
         data_collator = self.data_collator
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+        if is_datasets_available() and isinstance(train_dataset, Dataset):
             train_dataset = self._remove_unused_columns(train_dataset, description="training")
         else:
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
@@ -1291,13 +1283,7 @@ class GOLDTrainer(SFTTrainer):
     def _deduplicate_prompts(
         prompts: list[str], num_generations: int
     ) -> tuple[list[str], list[tuple[int, int]]] | None:
-        """
-        Deduplicate repeated prompts and build a mapping for remapping completions.
-
-        When ``num_generations > 1``, the ``RepeatSampler`` produces K copies of each prompt.
-        Instead of sending K copies to vLLM with ``n=1``, we send unique prompts with ``n=K``,
-        which is more efficient.
-        """
+        """Deduplicate prompts and build a completion remapping."""
         seen: dict[str, list[int]] = {}
         unique_prompts: list[str] = []
         dedup_mapping: list[tuple[int, int]] = []
