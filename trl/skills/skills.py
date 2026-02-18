@@ -305,6 +305,7 @@ def _uninstall_skill_from_dir(skill_name: str, target_dir: Path) -> bool:
     Raises:
         - `FileNotFoundError`: If skill not installed.
         - `PermissionError`: If no permission to remove.
+        - `OSError`: If removing the skill fails for another filesystem reason.
     """
     target_skill = target_dir / skill_name
 
@@ -314,8 +315,10 @@ def _uninstall_skill_from_dir(skill_name: str, target_dir: Path) -> bool:
     # Remove symlink or directory
     try:
         shutil.rmtree(target_skill)
-    except OSError as e:
+    except PermissionError as e:
         raise PermissionError(f"Cannot remove skill: {e}") from e
+    except OSError as e:
+        raise OSError(f"Failed to remove skill: {e}") from e
 
     return True
 
@@ -336,7 +339,8 @@ def uninstall_skill(skill_name: str, target: str | Path, scope: str = "project")
     Raises:
         - `FileNotFoundError`: If skill not installed.
         - `PermissionError`: If no permission to remove.
-        - `ValueError`: If agent name is not recognized.
+        - `OSError`: If removing the skill fails for another filesystem reason.
+        - `ValueError`: If `scope` is invalid for a predefined agent target.
 
     Example:
         ```python
