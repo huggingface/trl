@@ -101,6 +101,10 @@ class NeuronSFTConfig(SFTConfig):
             requires_backends(self, ["torch"])
             transformers_logger.info("PyTorch: setting up devices")
 
+            # For Neuron, we need to set the `ACCELERATE_TORCH_DEVICE` environment variable to "neuron" before
+            # initializing the AcceleratorState.
+            os.environ["ACCELERATE_TORCH_DEVICE"] = "neuron"
+
             # Build kwargs for PartialState; actual init happens below
             accelerator_state_kwargs: dict[str, Any] = {"enabled": True, "use_configured_state": False}
             if isinstance(self.accelerator_config, AcceleratorConfig):
@@ -124,9 +128,7 @@ class NeuronSFTConfig(SFTConfig):
                 self.distributed_state = PartialState(**accelerator_state_kwargs)
 
             self._n_gpu = 0
-
         except Exception as e:
-            raise e
             return super()._setup_devices
         return torch.device("neuron")
 
@@ -159,13 +161,6 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
-    # model = model.to("neuron")
-    training_args._setup_device = "neuron"
-
-    peft_config = get_peft_config(model_args)
-    if peft_config is not None:
-        model = get_peft_model(model, peft_config)
-
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
@@ -188,7 +183,7 @@ def main(script_args, training_args, model_args, dataset_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        # peft_config=get_peft_config(model_args),
+        peft_config=get_peft_config(model_args),
     )
 
     # Train the model
