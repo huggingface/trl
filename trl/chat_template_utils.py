@@ -112,7 +112,7 @@ def clone_chat_template(
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
-    "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
+    "x-regex": r"^(?:<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
