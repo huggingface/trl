@@ -13,12 +13,12 @@
 # limitations under the License.
 
 import asyncio
+import hashlib
 import importlib.resources as pkg_resources
 import os
 import random
 import socket
 import threading
-import zlib
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1069,14 +1069,14 @@ def create_model_from_path(
 
 
 def hash_module(module: torch.nn.Module) -> str:
-    h = zlib.adler32(b"")
+    h = hashlib.sha256()
     for _, tensor in sorted(module.state_dict().items()):
         tensor = tensor.cpu()
-        h = zlib.adler32(str(tensor.dtype).encode(), h)
-        if tensor.dtype in (torch.bfloat16, torch.float8_e4m3fn, torch.float8_e5m2):
+        h.update(str(tensor.dtype).encode())
+        if tensor.dtype in [torch.bfloat16, torch.float8_e4m3fn, torch.float8_e5m2]:
             tensor = tensor.to(torch.float32)
-        h = zlib.adler32(tensor.numpy().tobytes(), h)
-    return f"{h:08x}"
+        h.update(tensor.numpy().tobytes())
+    return h.hexdigest()
 
 
 def get_config_model_id(config: PretrainedConfig) -> str:
