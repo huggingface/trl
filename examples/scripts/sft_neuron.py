@@ -55,8 +55,10 @@ python trl/scripts/sft.py \
 import argparse
 import os
 from functools import cached_property, lru_cache
+from typing import Any
 
 import torch
+import torch.distributed as dist
 
 from accelerate import logging
 from datasets import load_dataset
@@ -97,6 +99,17 @@ def is_torch_neuron_available() -> bool:
     except ImportError:
         return False
 
+
+class NeuronPartialState(PartialState):
+    def _prepare_backend(
+        self, cpu: bool = False, sagemaker_dp=False, backend: str | None = None
+    ) -> tuple[str, DistributedType]:
+        if is_torch_neuron_available():
+            # TODO: extend accelerate to add the proper DistributedType for Neuron.
+            return "neuron", DistributedType.MULTI_GPU
+        else:
+            return super()._prepare_backend(cpu=cpu, sagemaker_dp=sagemaker_dp, backend=backend)
+
 class NeuronSFTConfig(SFTConfig):
     @cached_property
     def _setup_devices(self) -> "torch.device":
@@ -132,7 +145,7 @@ class NeuronSFTConfig(SFTConfig):
             if accelerator_state_kwargs.pop("enabled", False) and not accelerator_state_kwargs.pop(
                 "use_configured_state", False
             ):
-                self.distributed_state = PartialState(**accelerator_state_kwargs)
+                self.distributed_state = NeuronPartialState(**accelerator_state_kwargs)
 
             self._n_gpu = 0
             device = torch.device("neuron")
@@ -236,4 +249,5 @@ if __name__ == "__main__":
     script_args, training_args, model_args, dataset_args, _ = parser.parse_args_and_config(
         return_remaining_strings=True
     )
+
     main(script_args, training_args, model_args, dataset_args)
