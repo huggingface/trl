@@ -124,18 +124,12 @@ def cmd_install(args):
             print("✓")
             success_count += 1
 
-        except FileNotFoundError as e:
-            print("✗")
-            print(f"  Error: {e}")
         except FileExistsError as e:
             print("✗")
             print(f"  Error: {e}")
             if not args.force:
                 print("  Use --force to overwrite")
-        except ValueError as e:
-            print("✗")
-            print(f"  Error: {e}")
-        except Exception as e:
+        except (FileNotFoundError, ValueError) as e:
             print("✗")
             print(f"  Error: {e}")
 
@@ -159,19 +153,7 @@ def cmd_uninstall(args):
         print(f"\nSkill '{args.skill}' has been removed")
         return 0
 
-    except FileNotFoundError as e:
-        print("✗")
-        print(f"Error: {e}")
-        return 1
-    except PermissionError as e:
-        print("✗")
-        print(f"Error: {e}")
-        return 1
-    except ValueError as e:
-        print("✗")
-        print(f"Error: {e}")
-        return 1
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, ValueError) as e:
         print("✗")
         print(f"Error: {e}")
         return 1
@@ -208,9 +190,6 @@ def cmd_list(args):
         return 0
 
     except ValueError as e:
-        print(f"Error: {e}")
-        return 1
-    except Exception as e:
         print(f"Error: {e}")
         return 1
 
