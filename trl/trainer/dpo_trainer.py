@@ -276,7 +276,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         if self.pad_to_multiple_of is not None:
             raise NotImplementedError(
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
-                "prompt-completion data yet."
+                "prompt-completion data."
             )
         if "image" in examples[0]:
             for example in examples:
