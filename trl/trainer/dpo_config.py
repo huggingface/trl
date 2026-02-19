@@ -308,8 +308,10 @@ class DPOConfig(TrainingArguments):
     sync_ref_model: bool = field(
         default=False,
         metadata={
-            "help": "Whether to synchronize the reference model with the main model at each training step. This is "
-            "useful when training with PEFT methods, where the main model's weights change during training."
+            "help": "Whether to synchronize the reference model with the active model every `ref_model_sync_steps` "
+            "steps, using the `ref_model_mixup_alpha` parameter. This synchronization originates from the "
+            "[TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible "
+            "with PEFT or `precompute_ref_log_probs=True`."
         },
     )
     ref_model_mixup_alpha: float = field(
