@@ -1602,10 +1602,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_vlm_multi_image(self, model_id):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-multi-image",
-            "conversational_prompt_completion",
-            split="train",
-            revision="refs/pr/10",
+            "trl-internal-testing/zen-multi-image", "conversational_prompt_completion", split="train"
         )
 
         # Initialize the trainer
