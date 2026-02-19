@@ -1780,7 +1780,7 @@ class GRPOTrainer(BaseTrainer):
             )
             
         if self.mgpo_reward_base:
-            pc = (rewards.detach() >= 3).float().view(-1, self.num_generations).mean(dim=1)
+            pc = (rewards.detach() >= self.mgpo_reward_base).float().view(-1, self.num_generations).mean(dim=1)
             p0 = 0.5
             d_me = pc * torch.log(pc / p0 + 1e-8) + (1 - pc) * torch.log((1 - pc) / (1 - p0) + 1e-8)
             w_me = torch.exp(-0.5 * d_me).repeat_interleave(self.num_generations)
