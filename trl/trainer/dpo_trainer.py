@@ -880,7 +880,15 @@ class DPOTrainer(BaseTrainer):
         # and "attention_mask").
         if self._signature_columns is None:
             if self._is_vision_dataset:
-                self._signature_columns = ["prompt", "chosen", "rejected", "images", "image", "tools", "chat_template_kwargs"]
+                self._signature_columns = [
+                    "prompt",
+                    "chosen",
+                    "rejected",
+                    "image",
+                    "images",
+                    "tools",
+                    "chat_template_kwargs",
+                ]
             else:
                 self._signature_columns = [
                     "prompt_ids",
