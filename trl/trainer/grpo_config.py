@@ -188,6 +188,10 @@ class GRPOConfig(TrainingArguments):
             log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
             paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
             stable training and better alignment with sequence-level rewards.
+        mgpo_reward_base (`float`, *optional*): 
+            The reward amount considered to be successful for MGPO scaling. If `None`, regular advantages are used. MGPO is introduced in 
+            [Tiny Model, Big Logic](https://huggingface.co/papers/2511.06221) to stabilize training and encourage exploration 
+            with the GRPO framework.
         reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -643,6 +647,12 @@ class GRPOConfig(TrainingArguments):
             "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
             "shows that sequence-level sampling often yields more stable training and better alignment with "
             "sequence-level rewards."
+        },
+    )
+    mgpo_reward_base: float | None = field(
+        default=None,
+        metadata={
+            "help": "The reward amount considered to be successful for MGPO scaling. If `None`, regular advantages are used"
         },
     )
     reward_weights: list[float] | None = field(
