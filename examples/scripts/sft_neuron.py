@@ -54,7 +54,7 @@ python trl/scripts/sft.py \
 
 import argparse
 import os
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 import torch
 
@@ -88,12 +88,19 @@ logger = logging.get_logger(__name__)
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
+
+@lru_cache()
+def is_torch_neuron_available() -> bool:
+    try:
+        import torch_neuronx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 class NeuronSFTConfig(SFTConfig):
     @cached_property
     def _setup_devices(self) -> "torch.device":
-        try: 
-            import torch_neuronx # noqa: F401
-
+        if is_torch_neuron_available():
             from transformers.utils import logging as transformers_logging
 
             transformers_logger = transformers_logging.get_logger(__name__)
@@ -128,9 +135,20 @@ class NeuronSFTConfig(SFTConfig):
                 self.distributed_state = PartialState(**accelerator_state_kwargs)
 
             self._n_gpu = 0
+            device = torch.device("neuron")
+        else:
+            device = super()._setup_devices
+        return device
+
+    def _validate_args(self):
+        try:
+            super()._validate_args()
         except Exception as e:
-            return super()._setup_devices
-        return torch.device("neuron")
+            bf16_error_message = (
+                "Your setup doesn't support bf16/gpu. You need to assign use_cpu if you want to train the model on CPU."
+            )
+            if not (is_torch_neuron_available() and isinstance(e, ValueError) and bf16_error_message in str(e)):
+                raise e
 
 
 def main(script_args, training_args, model_args, dataset_args):
