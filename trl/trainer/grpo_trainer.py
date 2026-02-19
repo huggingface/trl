@@ -27,7 +27,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, Optional
 
 import datasets
 import pandas as pd
@@ -109,9 +109,19 @@ if is_trackio_available():
 
 logger = get_logger(__name__)
 
+
+class RewardCallable(Protocol):
+    def __call__(
+        self,
+        prompts: list[Any] | None = None,
+        completions: list[Any] | None = None,
+        completion_ids: list[list[int]] | None = None,
+        **kwargs: Any,
+    ) -> list[float | None]: ...
+
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
+RewardFunc = str | PreTrainedModel | RewardCallable
 
 # What we call a rollout function is a callable that takes prompts (list) and the trainer instance as parameters and
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
