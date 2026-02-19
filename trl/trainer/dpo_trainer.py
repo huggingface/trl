@@ -934,10 +934,9 @@ class DPOTrainer(BaseTrainer):
             ref_rejected_logps = torch.cat(ref_rejected_logps).float().numpy()
             if self.accelerator.is_main_process:
                 np.savez_compressed(
-                    cache_file,
-                    ref_chosen_logps=ref_chosen_logps,
-                    ref_rejected_logps=ref_rejected_logps,
+                    cache_file, ref_chosen_logps=ref_chosen_logps, ref_rejected_logps=ref_rejected_logps
                 )
+            self.accelerator.wait_for_everyone()
 
         dataset = dataset.add_column(name="ref_chosen_logps", column=ref_chosen_logps)
         dataset = dataset.add_column(name="ref_rejected_logps", column=ref_rejected_logps, new_fingerprint=fingerprint)
