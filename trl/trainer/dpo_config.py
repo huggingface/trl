@@ -75,7 +75,7 @@ class DPOConfig(TrainingArguments):
             `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, `'apo_down'`,
             `'discopop'`, `'sft'`. If multiple loss types are provided, they will be combined using the weights
             specified in `loss_weights`.
-        loss_weights (`list[float]`, *optional*)::
+        loss_weights (`list[float]`, *optional*):
             List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
             0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss types.
         ld_alpha (`float`, *optional*):
