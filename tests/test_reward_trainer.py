@@ -667,7 +667,7 @@ class TestRewardTrainer(TrlTestCase):
 
     def test_train_toolcall_data(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train", revision="refs/pr/3")
+        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
@@ -696,7 +696,7 @@ class TestRewardTrainer(TrlTestCase):
         # If `tools` is stored as a list of dicts and examples use different dict schemas, nulls may
         # be introduced and break tool processing. This test ensures we also support `tools` provided
         # as a list of dicts.
-        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train", revision="refs/pr/3")
+        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
 
         def convert_to_json(example):
             return {"tools": json.loads(example["tools"])}
