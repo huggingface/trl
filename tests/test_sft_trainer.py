@@ -1313,9 +1313,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_toolcall_data(self):
         # Get the dataset
-        dataset = load_dataset(
-            "trl-internal-testing/toolcall", "language_modeling", split="train", revision="refs/pr/2"
-        )
+        dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
@@ -1343,9 +1341,7 @@ class TestSFTTrainer(TrlTestCase):
         # be introduced and break tool processing. This test ensures we also support `tools` provided
         # as a list of dicts.
         # Get the dataset
-        dataset = load_dataset(
-            "trl-internal-testing/toolcall", "language_modeling", split="train", revision="refs/pr/2"
-        )
+        dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
         def convert_to_json(example):
             return {"tools": json.loads(example["tools"])}
@@ -1553,7 +1549,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_vlm(self, model_id):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/2"
+            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/8"
         )
 
         # Initialize the trainer
@@ -1609,7 +1605,7 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/zen-multi-image",
             "conversational_prompt_completion",
             split="train",
-            revision="refs/pr/4",
+            revision="refs/pr/10",
         )
 
         # Initialize the trainer
@@ -1651,7 +1647,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_prompt_completion", split="train", revision="refs/pr/4"
+            "trl-internal-testing/zen-image", "conversational_prompt_completion", split="train", revision="refs/pr/10"
         )
 
         # Initialize the trainer
@@ -1689,7 +1685,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_vlm_gemma_3n(self):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/2"
+            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/8"
         )
 
         # Initialize the trainer
