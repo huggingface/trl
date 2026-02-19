@@ -95,9 +95,9 @@ class DataCollatorForPreference(DataCollatorMixin):
     Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch.
 
     This collator expects each example in the input list to be a dictionary containing the keys `"prompt_ids"`,
-    `"chosen_ids"` and `"rejected_input_ids"`. The collator returns a dictionary containing the following keys:
+    `"chosen_ids"` and `"rejected_ids"`. The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first half of the batch
-        corresponds to the `"chosen_input_ids"` and the second half to the `"rejected_input_ids"`.
+        corresponds to the `"chosen_ids"` and the second half to the `"rejected_ids"`.
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
     - `"completion_mask"`: Tensor indicating the positions of the completion tokens, padded to the maximum length of
         the batch.
@@ -880,7 +880,7 @@ class DPOTrainer(BaseTrainer):
         # and "attention_mask").
         if self._signature_columns is None:
             if self._is_vision_dataset:
-                self._signature_columns = ["prompt", "chosen", "rejected", "images", "tools", "chat_template_kwargs"]
+                self._signature_columns = ["prompt", "chosen", "rejected", "images", "image", "tools", "chat_template_kwargs"]
             else:
                 self._signature_columns = [
                     "prompt_ids",
