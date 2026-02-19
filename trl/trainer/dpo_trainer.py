@@ -200,7 +200,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     image processing on-the-fly to efficiently prepare batches.
 
     Each input example should be a dictionary containing at least:
-    - An `"images"` key holding the image data.
+    - An `"images"` key holding a list of images, or an `"image"` key holding a single image.
     - Keys `"prompt"` `"chosen"` and `"rejected"` for the prompt and preference responses.
 
     The collator outputs a dictionary including:
@@ -278,6 +278,9 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
                 "prompt-completion data yet."
             )
+        if "image" in examples[0]:
+            for example in examples:
+                example["images"] = [example.pop("image")]
         images = [example["images"] for example in examples] * 2  # repeat for chosen and rejected
         # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):

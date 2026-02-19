@@ -1015,7 +1015,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_vlm(self, model_id):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_preference", split="train", revision="refs/pr/5"
+            "trl-internal-testing/zen-image", "conversational_preference", split="train", revision="refs/pr/11"
         )
 
         # Initialize the trainer
@@ -1108,7 +1108,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_vlm_gemma_3n(self):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_preference", split="train", revision="refs/pr/5"
+            "trl-internal-testing/zen-image", "conversational_preference", split="train", revision="refs/pr/11"
         )
 
         # Initialize the trainer
