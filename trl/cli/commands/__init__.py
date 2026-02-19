@@ -20,6 +20,7 @@ from ...scripts.rloo import make_parser as make_rloo_parser
 from ...scripts.sft import make_parser as make_sft_parser
 from .base import Command
 from .env import EnvCommand
+from .skills import SkillsCommand
 from .training import TrainingCommand
 from .vllm_serve import VllmServeCommand
 
@@ -34,6 +35,7 @@ def get_commands() -> list[Command]:
         TrainingCommand("reward", "reward.py", make_reward_parser),
         TrainingCommand("rloo", "rloo.py", make_rloo_parser),
         TrainingCommand("sft", "sft.py", make_sft_parser),
+        SkillsCommand(),
         VllmServeCommand(),
     ]
 
