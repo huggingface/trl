@@ -1744,13 +1744,24 @@ class GRPOTrainer(BaseTrainer):
                     std_rewards = rewards.std().expand_as(rewards)
                 else:  # doesn't occur during training, but could occur in eval when num_generations_eval=batch_size=1
                     std_rewards = torch.zeros_like(rewards)
+            elif self.scale_rewards == "mean":
+                # MaxRL (https://arxiv.org/abs/2602.02710): normalize by the group mean rather than the group std.
+                # A_i = (r_i - mean(r)) / (mean(r) + eps). For binary rewards this is equivalent to normalizing
+                # by the empirical success rate. std_rewards is set to zeros here only for logging purposes
+                # (is_std_zero tracking); the actual scaling uses mean_grouped_rewards directly.
+                std_rewards = torch.zeros_like(rewards)
             else:
                 raise ValueError(
-                    f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+                    f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', 'mean', or 'none'."
                 )
 
             advantages = rewards - mean_grouped_rewards
-            if self.scale_rewards != "none":
+            if self.scale_rewards == "mean":
+                # Experimental: MaxRL advantage normalization — divide by group mean instead of group std.
+                # When all rollouts in a group fail (mean == 0), the numerator is also 0, so the result is 0
+                # regardless of eps; abs() keeps the denominator positive for mixed-sign reward spaces.
+                advantages = advantages / (mean_grouped_rewards.abs() + 1e-4)
+            elif self.scale_rewards != "none":
                 advantages = advantages / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 

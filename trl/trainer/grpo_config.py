@@ -211,6 +211,12 @@ class GRPOConfig(TrainingArguments):
             - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
               paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
               standard deviation introduces a question-level difficulty bias.
+            - `"mean"` *(experimental)*: rewards are scaled by the group mean rather than the group standard
+              deviation. This corresponds to the advantage formulation used in
+              [MaxRL](https://arxiv.org/abs/2602.02710): `A_i = (r_i - mean(r)) / (mean(r) + eps)`. For binary
+              (0/1) rewards this is equivalent to normalizing by the empirical success rate, which MaxRL shows
+              approximates a maximum-likelihood objective. Note: this option is only supported with
+              `multi_objective_aggregation="sum_then_normalize"`.
         loss_type (`str`, *optional*, defaults to `"dapo"`):
             Specifies the loss formulation to use. Supported values are:
 
@@ -673,7 +679,9 @@ class GRPOConfig(TrainingArguments):
             "`'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the "
             "PPO Lite paper. "
             "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
-            "scaling by the standard deviation introduces a question-level difficulty bias."
+            "scaling by the standard deviation introduces a question-level difficulty bias. "
+            "`'mean'` (experimental): rewards are scaled by the group mean, as in MaxRL "
+            "(https://arxiv.org/abs/2602.02710). Only supported with multi_objective_aggregation='sum_then_normalize'."
         },
     )
     loss_type: str = field(
