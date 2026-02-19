@@ -29,6 +29,7 @@ from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
 from .scripts.vllm_serve import main as vllm_serve_main
 from .scripts.vllm_serve import make_parser as make_vllm_serve_parser
+from .skills.cli import add_skills_subcommands
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,12 @@ def main():
     make_reward_parser(subparsers)
     make_rloo_parser(subparsers)
     make_sft_parser(subparsers)
+
+    # Add skills command with subcommands
+    skills_parser = subparsers.add_parser("skills", help="Manage TRL agent skills")
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command", help="Skills commands")
+    add_skills_subcommands(skills_subparsers)
+
     make_vllm_serve_parser(subparsers)
 
     # Parse the arguments; the remaining ones (`launch_args`) are passed to the 'accelerate launch' subparser.
@@ -114,6 +121,18 @@ def main():
     elif args.command == "sft":
         # This simulates running: `accelerate launch <launch args> sft.py <training script args>`.
         _launch_training_script("sft.py", launch_args, sys.argv[2:])  # remove "trl" and "sft"
+
+    elif args.command == "skills":
+        # Handle skills subcommands
+        if hasattr(args, "skills_command") and args.skills_command:
+            # Call the subcommand handler
+            if hasattr(args, "func"):
+                return args.func(args)
+            else:
+                print("Error: Unknown skills command")
+                return 1
+        skills_parser.print_help()
+        return 0
 
     elif args.command == "vllm-serve":
         (script_args,) = parser.parse_args_and_config()

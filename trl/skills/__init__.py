@@ -12,4 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .skills import install_skill, list_skills, uninstall_skill
+from .skills import (
+    install_skill,
+    list_agent_names,
+    list_skills,
+    resolve_target_path,
+    uninstall_skill,
+)
