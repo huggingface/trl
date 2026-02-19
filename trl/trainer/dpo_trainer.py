@@ -944,6 +944,29 @@ class DPOTrainer(BaseTrainer):
 
         return dataset
 
+    def _truncate_inputs(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, completion_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.args.max_length is None:
+            return input_ids, attention_mask, completion_mask
+
+        if self.args.truncation_mode == "keep_start":
+            input_ids = input_ids[:, : self.args.max_length]
+            attention_mask = attention_mask[:, : self.args.max_length]
+            completion_mask = completion_mask[:, : self.args.max_length]
+        elif self.args.truncation_mode == "keep_end":
+            attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
+            input_ids = input_ids[:, -self.args.max_length :]
+            attention_mask = attention_mask[:, -self.args.max_length :]
+            completion_mask = completion_mask[:, -self.args.max_length :]
+            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+        else:
+            raise ValueError(
+                f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
+            )
+
+        return input_ids, attention_mask, completion_mask
+
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
@@ -951,22 +974,7 @@ class DPOTrainer(BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-
-        if self.args.max_length is not None:
-            if self.args.truncation_mode == "keep_start":
-                input_ids = input_ids[:, : self.args.max_length]
-                attention_mask = attention_mask[:, : self.args.max_length]
-                completion_mask = completion_mask[:, : self.args.max_length]
-            elif self.args.truncation_mode == "keep_end":
-                attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
-                input_ids = input_ids[:, -self.args.max_length :]
-                attention_mask = attention_mask[:, -self.args.max_length :]
-                completion_mask = completion_mask[:, -self.args.max_length :]
-                attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
-            else:
-                raise ValueError(
-                    f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
-                )
+        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
@@ -1017,23 +1025,7 @@ class DPOTrainer(BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-
-        # Truncate inputs
-        if self.args.max_length is not None:
-            if self.args.truncation_mode == "keep_start":
-                input_ids = input_ids[:, : self.args.max_length]
-                attention_mask = attention_mask[:, : self.args.max_length]
-                completion_mask = completion_mask[:, : self.args.max_length]
-            elif self.args.truncation_mode == "keep_end":
-                attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
-                input_ids = input_ids[:, -self.args.max_length :]
-                attention_mask = attention_mask[:, -self.args.max_length :]
-                completion_mask = completion_mask[:, -self.args.max_length :]
-                attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
-            else:
-                raise ValueError(
-                    f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
-                )
+        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         decoder = model.get_decoder()
         outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
@@ -1106,23 +1098,7 @@ class DPOTrainer(BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-
-        # Truncate inputs
-        if self.args.max_length is not None:
-            if self.args.truncation_mode == "keep_start":
-                input_ids = input_ids[:, : self.args.max_length]
-                attention_mask = attention_mask[:, : self.args.max_length]
-                completion_mask = completion_mask[:, : self.args.max_length]
-            elif self.args.truncation_mode == "keep_end":
-                attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
-                input_ids = input_ids[:, -self.args.max_length :]
-                attention_mask = attention_mask[:, -self.args.max_length :]
-                completion_mask = completion_mask[:, -self.args.max_length :]
-                attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
-            else:
-                raise ValueError(
-                    f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
-                )
+        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
         for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
