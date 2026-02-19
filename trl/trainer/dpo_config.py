@@ -106,8 +106,10 @@ class DPOConfig(TrainingArguments):
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
-            Whether to synchronize the reference model with the main model at each training step. This is useful when
-            training with PEFT methods, where the main model's weights change during training.
+            Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
+            [TR-DPO](https://huggingface.co/papers/2404.09656) paper. `sync_ref_model=True` is not yet compatible with
+            PEFT or `precompute_ref_log_probs=True`.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the TR-DPO paper, which controls the mix between the current policy and the previous
             reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
