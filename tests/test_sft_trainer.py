@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import json
 import pathlib
 from unittest.mock import MagicMock, patch
 
@@ -272,9 +273,17 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
         ],
     )
     def test_train(self, model_id):
@@ -1304,7 +1313,44 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_toolcall_data(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/toolcall", "language_modeling", split="train", revision="refs/pr/2"
+        )
+
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    def test_train_toolcall_data_as_json(self):
+        # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures.
+        # If `tools` is stored as a list of dicts and examples use different dict schemas, nulls may
+        # be introduced and break tool processing. This test ensures we also support `tools` provided
+        # as a list of dicts.
+        # Get the dataset
+        dataset = load_dataset(
+            "trl-internal-testing/toolcall", "language_modeling", split="train", revision="refs/pr/2"
+        )
+
+        def convert_to_json(example):
+            return {"tools": json.loads(example["tools"])}
+
+        dataset = dataset.map(convert_to_json)
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")

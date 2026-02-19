@@ -159,6 +159,7 @@ When preparing datasets for Supervised Fine-Tuning (SFT) with tool calling, it i
 The tools must be specified in a codified JSON schema format. You can automatically generate this schema from Python function signatures using the [`~transformers.utils.get_json_schema`] utility:
 
 ```python
+import json
 from transformers.utils import get_json_schema
 
 def control_light(room: str, state: str) -> str:
@@ -175,37 +176,26 @@ def control_light(room: str, state: str) -> str:
     return f"The lights in {room} are now {state}."
 
 # Generate JSON schema
-json_schema = get_json_schema(control_light)
+json_schema = json.dumps([get_json_schema(control_light)])
 ```
 
 The generated schema would look like:
 
 ```python
-{
-    "type": "function",
-    "function": {
-        "name": "control_light",
-        "description": "Controls the lights in a room.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "room": {"type": "string", "description": "The name of the room."},
-                "state": {"type": "string", "description": 'The desired state of the light ("on" or "off").'},
-            },
-            "required": ["room", "state"],
-        },
-        "return": {"type": "string", "description": "str: A message indicating the new state of the lights."},
-    },
-}
+'[{"type": "function", "function": {"name": "control_light", "description": "Controls the lights in a room.", "parameters": {"type": "object", "properties": {"room": {"type": "string", "description": "The name of the room."}, "state": {"type": "string", "description": "The desired state of the light (\\"on\\" or \\"off\\")."}}, "required": ["room", "state"]}, "return": {"type": "string", "description": "str: A message indicating the new state of the lights."}}}]'
 ```
 
 A complete dataset entry for SFT might look like:
 
 ```python
-{"messages": messages, "tools": [json_schema]}
+{"messages": messages, "tools": json_schema}
 ```
 
 For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
+
+> [!NOTE]  
+> TRL also accepts `tools` as a Python `list[dict]` (for backward compatibility).  
+> This is a legacy format and is **not recommended** for new datasets. Prefer storing `tools` as a JSON `str` (with `json.dumps([...])`).
 
 ### Harmony
 

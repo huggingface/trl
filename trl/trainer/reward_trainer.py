@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import logging
 import os
 import re
@@ -565,6 +566,8 @@ class RewardTrainer(BaseTrainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize_fn(example, processing_class):
+                    tools = example.get("tools")
+                    tools = json.loads(tools) if isinstance(tools, str) else tools
                     if "prompt" in example:  # explicit prompt case
                         example["chosen"] = example["prompt"] + example["chosen"]
                         example["rejected"] = example["prompt"] + example["rejected"]
@@ -572,13 +575,13 @@ class RewardTrainer(BaseTrainer):
                     if is_conversational(example):
                         chosen_input_ids = processing_class.apply_chat_template(
                             example["chosen"],
-                            tools=example.get("tools"),
+                            tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
                         rejected_input_ids = processing_class.apply_chat_template(
                             example["rejected"],
-                            tools=example.get("tools"),
+                            tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
