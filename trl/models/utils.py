@@ -28,6 +28,12 @@ from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig, PreTrainedModel
 
+from ..import_utils import suppress_experimental_warning
+
+
+with suppress_experimental_warning():
+    from ..experimental.utils import create_reference_model as _create_reference_model
+
 
 if Version(accelerate.__version__) >= Version("1.11.0"):
     from accelerate.utils.fsdp_utils import get_parameters_from_modules
@@ -374,3 +380,16 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
     finally:
         if was_enabled:
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+
+
+def create_reference_model(
+    model: nn.Module, num_shared_layers: int | None = None, pattern: str | None = None
+) -> nn.Module:
+    warnings.warn(
+        "The `create_reference_model` function is now located in `trl.experimental.utils`. Please update your "
+        "imports to `from trl.experimental.utils import create_reference_model`. This import path will be removed in "
+        "TRL 1.0.0.",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return _create_reference_model(model, num_shared_layers=num_shared_layers, pattern=pattern)
