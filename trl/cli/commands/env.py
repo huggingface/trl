@@ -12,10 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .skills import (
-    install_skill,
-    list_agent_names,
-    list_skills,
-    resolve_target_path,
-    uninstall_skill,
-)
+from argparse import Namespace
+
+from ...scripts.env import print_env
+from .base import Command, CommandContext
+
+
+class EnvCommand(Command):
+    """CLI command that prints TRL environment information."""
+
+    def __init__(self):
+        super().__init__(name="env", help_text="Print the environment information")
+
+    def register(self, subparsers) -> None:
+        subparsers.add_parser(self.name, help=self.help_text)
+
+    def run(self, args: Namespace, context: CommandContext) -> int:
+        print_env()
+        return 0
