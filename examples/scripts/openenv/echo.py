@@ -47,8 +47,9 @@ class MyEchoEnv:
     def __init__(self):
         self.env = EchoEnv(base_url="https://qgallouedec-echo-env.hf.space")
 
-    def reset(self, **kwargs) -> None:
+    def reset(self, **kwargs) -> None | str:
         self._reward = None
+        return None
 
     def step(self, message: str) -> str:
         """

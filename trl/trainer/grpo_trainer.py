@@ -120,7 +120,7 @@ RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
 
 
 class _SupportsReset(Protocol):
-    def reset(self, **kwargs) -> Any: ...
+    def reset(self, **kwargs) -> str | None: ...
 
 
 EnvironmentFactory = Callable[[], _SupportsReset]
@@ -239,8 +239,10 @@ class GRPOTrainer(BaseTrainer):
             that can be invoked as tools during generation. Each method should comply with the same requirements as the
             `tools` described above. If `environment_factory` is provided, an instance of the environment is created
             for each generation in the batch, allowing for parallel and independent interactions. The environment must
-            also implement a callable `reset` method that can be used to reset state between generations. This feature
-            is experimental and may change or be removed at any time without prior notice.
+            also implement a callable `reset` method that can be used to reset state between generations. The `reset`
+            method should return either `None` or a string: when it returns a string, that string is appended to the
+            last user message before generation. This feature is experimental and may change or be removed at any time
+            without prior notice.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -1587,11 +1589,14 @@ class GRPOTrainer(BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        if self.environments:
-            for environment, reset_kwargs in zip(self.environments, inputs, strict=True):
-                environment.reset(**reset_kwargs)
-
         prompts = [x["prompt"] for x in inputs]
+
+        if self.environments:
+            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+                observation = environment.reset(**reset_kwargs)
+                if observation is None:
+                    continue
+                prompt[-1]["content"] += observation
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]

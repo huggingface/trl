@@ -51,13 +51,14 @@ class WordleEnv:
     def __init__(self):
         self.client = TextArenaEnv(base_url="https://openenv-wordle.hf.space")
 
-    def reset(self, **kwargs) -> None:
-        self.client.reset()
-        self.reward = -1.0
+    def reset(self, **kwargs) -> None | str:
+        result = self.client.reset()
         # The game returns cumulative feedback each turn (new text appended at the end), so
         # we store the previous full response and slice out only the newly appended part.
-        self._last_full_feedback = ""
+        self._last_full_feedback = result.observation.messages[0].content
+        self.reward = -1.0
         self.done = False
+        return self._last_full_feedback
 
     def guess(self, guess: str) -> str:
         """

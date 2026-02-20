@@ -662,8 +662,9 @@ def reward_func(environments, **kwargs):  # dummy reward: the reward is the curr
     return [environment.counter for environment in environments]
 
 class IncrementEnv:
-    def reset(self, **kwargs) -> None:  # required; receives sampled row fields as kwargs (e.g., `prompt`)
+    def reset(self, **kwargs) -> str | None:  # required; receives sampled row fields as kwargs (e.g., `prompt`)
         self.counter = 0
+        return "Counter reset to 0.\n"
 
     def increment(self, step: int) -> int:  # the other public methods of the environment are exposed as tools
         """
@@ -687,6 +688,8 @@ trainer = GRPOTrainer(
 )
 trainer.train()
 ```
+
+`reset` can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message before generation.
 
 ### Supported Models
 
