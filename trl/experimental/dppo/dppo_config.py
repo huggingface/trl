@@ -23,17 +23,22 @@ class DPPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`experimental.dppo.DPPOTrainer`].
 
-    DPPO (Decoupled Proximal Policy Optimization) is a variant of PPO that decouples the optimization 
-    of the policy and value function for improved training stability. This is based on the Stable-RL 
-    paper: https://github.com/sail-sg/Stable-RL
+    DPPO (Divergence Proximal Policy Optimization) is a variant of PPO that replaces the clipped
+    surrogate objective with a divergence-based binary token mask. Instead of clipping the probability
+    ratio, DPPO zeroes out gradient contributions from tokens whose probability has moved outside a
+    trust region defined by a direct divergence measure (Total Variation or KL divergence). This
+    provides theoretically grounded trust-region enforcement that is robust to the numerical instability
+    of probability ratios for low-probability tokens.
 
-    This class includes only the parameters that are specific to DPPO training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
-    differ from those in [`~transformers.TrainingArguments`].
+    Reference: https://github.com/sail-sg/Stable-RL
+    Paper: "Rethinking the Trust Region in LLM Reinforcement Learning" (arXiv 2602.04879)
+
+    This class includes only the parameters that are specific to DPPO training. For a full list of
+    training arguments, please refer to the [`~transformers.TrainingArguments`] documentation.
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
-    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
-    command line.
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be
+    specified on the command line.
 
     Parameters:
         dataset_num_proc (`int`, *optional*):
@@ -56,14 +61,14 @@ class DPPOConfig(TrainingArguments):
             - `'eos'`: Uses the tokenizer's `eos_token`.
 
         stop_token_id (`int`, *optional*):
-            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
-            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
+            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is
+            applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
         missing_eos_penalty (`float`, *optional*):
-            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
-            generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
-            value.
+            Penalty applied to the score when the model fails to generate an EOS token. This is useful to
+            encourage generating completions shorter than the maximum length (`max_new_tokens`). The penalty
+            must be a positive value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
         world_size (`int`, *optional*):
@@ -98,10 +103,11 @@ class DPPOConfig(TrainingArguments):
         kl_estimator (`Literal["k1", "k3"]`, *optional*, defaults to `"k1"`):
             Which estimator for KL-Divergence to use from [Approximating KL
             Divergence](http://joschu.net/blog/kl-approx.html). Defaults to "k1", a straightforward, unbiased
-            estimator. Can be set to "k3", an unbiased estimator with lower variance which "appears to be a strictly
-            better estimator". Cannot be set to "k2", as it is used for logging purposes.
+            estimator. Can be set to "k3", an unbiased estimator with lower variance which "appears to be a
+            strictly better estimator". Cannot be set to "k2", as it is used for logging purposes.
         cliprange (`float`, *optional*, defaults to `0.2`):
-            Clip range.
+            Clip range used as default for divergence thresholds. For DPPO-Binary-TV this is the allowed
+            absolute probability difference; for DPPO-Binary-KL this is the allowed binary KL value.
         vf_coef (`float`, *optional*, defaults to `0.1`):
             Value function coefficient.
         cliprange_value (`float`, *optional*, defaults to `0.2`):
@@ -111,15 +117,28 @@ class DPPOConfig(TrainingArguments):
         lam (`float`, *optional*, defaults to `0.95`):
             Lambda value for GAE.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
-            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
-            improving generation speed. However, disabling this option allows training models that exceed the VRAM
-            capacity of a single GPU, albeit at the cost of slower generation.
-        vf_learning_rate (`float`, *optional*, defaults to `1e-4`):
-            Learning rate for the value function. If not set, uses the same learning rate as the policy.
-        num_vf_epochs (`int`, *optional*, defaults to `1`):
-            Number of epochs to train the value function per batch. DPPO decouples value function training.
-        vf_update_frequency (`int`, *optional*, defaults to `1`):
-            How often to update the value function (every N policy updates).
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for
+            generation, improving generation speed. However, disabling this option allows training models that
+            exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation.
+        loss_mode (`Literal["dppo_binary_tv", "dppo_binary_kl", "dppo_binary_kl_recompute"]`, *optional*,
+            defaults to `"dppo_binary_tv"`):
+            Which DPPO divergence measure to use for the trust-region mask.
+
+            - `"dppo_binary_tv"`: Total Variation distance. Masks token if
+              ``|p_current - p_rollout| > threshold``. Straightforward probability-space constraint.
+            - `"dppo_binary_kl"`: Binary KL divergence between ``Bernoulli(p_rollout)`` and
+              ``Bernoulli(p_current)``. Anchored to rollout-engine probabilities.
+            - `"dppo_binary_kl_recompute"`: Same binary KL formula but anchored to the training-engine
+              probabilities at the start of each PPO epoch (MiniRL-style anchor).
+
+        clip_ratio_low (`float`, *optional*):
+            Divergence threshold applied to tokens with **negative** advantages. If `None`, uses `cliprange`.
+            Setting this separately from `clip_ratio_high` enables asymmetric trust regions.
+        clip_ratio_high (`float`, *optional*):
+            Divergence threshold applied to tokens with **positive** advantages. If `None`, uses `cliprange`.
+        clip_ratio_c (`float`, *optional*, defaults to `10.0`):
+            Upper cap on the importance-sampling ratio ``π_current / π_rollout`` used as a multiplicative
+            weight in the DPPO loss. This prevents runaway IS weights from destabilizing training.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -281,7 +300,11 @@ class DPPOConfig(TrainingArguments):
     )
     cliprange: float = field(
         default=0.2,
-        metadata={"help": "Clip range."},
+        metadata={
+            "help": "Default divergence threshold for DPPO masking. For dppo_binary_tv this is the allowed "
+            "absolute probability difference; for dppo_binary_kl this is the allowed binary KL value. Used as "
+            "the default for clip_ratio_low and clip_ratio_high when those are not set."
+        },
     )
     vf_coef: float = field(
         default=0.1,
@@ -308,33 +331,46 @@ class DPPOConfig(TrainingArguments):
         },
     )
     # DPPO-specific parameters
-    vf_learning_rate: float | None = field(
+    loss_mode: Literal["dppo_binary_tv", "dppo_binary_kl", "dppo_binary_kl_recompute"] = field(
+        default="dppo_binary_tv",
+        metadata={
+            "help": "Which divergence measure to use for the DPPO trust-region mask. "
+            "'dppo_binary_tv' uses Total Variation (|p_current - p_rollout|). "
+            "'dppo_binary_kl' uses the binary KL between Bernoulli(p_rollout) and Bernoulli(p_current), "
+            "anchored to rollout-engine probabilities. "
+            "'dppo_binary_kl_recompute' uses the same binary KL formula anchored to training-engine "
+            "probabilities recomputed at the start of each PPO epoch."
+        },
+    )
+    clip_ratio_low: float | None = field(
         default=None,
         metadata={
-            "help": "Learning rate for the value function. If not set, uses the same learning rate as the policy. "
-            "DPPO decouples policy and value function learning rates for better stability."
+            "help": "Divergence threshold for tokens with negative advantages. If None, falls back to cliprange. "
+            "Setting this separately from clip_ratio_high enables asymmetric trust regions."
         },
     )
-    num_vf_epochs: int = field(
-        default=1,
+    clip_ratio_high: float | None = field(
+        default=None,
         metadata={
-            "help": "Number of epochs to train the value function per batch. DPPO decouples value function training "
-            "to improve stability."
+            "help": "Divergence threshold for tokens with positive advantages. If None, falls back to cliprange. "
+            "Setting this separately from clip_ratio_low enables asymmetric trust regions."
         },
     )
-    vf_update_frequency: int = field(
-        default=1,
+    clip_ratio_c: float = field(
+        default=10.0,
         metadata={
-            "help": "How often to update the value function (every N policy updates). Setting this > 1 further "
-            "decouples policy and value updates."
+            "help": "Upper cap on the importance-sampling ratio pi_current / pi_rollout used as a multiplicative "
+            "weight in the DPPO loss. Prevents runaway IS weights."
         },
     )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-        
-        # Set value function learning rate to policy learning rate if not specified
-        if self.vf_learning_rate is None:
-            self.vf_learning_rate = self.learning_rate
+
+        # Default asymmetric thresholds to the symmetric cliprange
+        if self.clip_ratio_low is None:
+            self.clip_ratio_low = self.cliprange
+        if self.clip_ratio_high is None:
+            self.clip_ratio_high = self.cliprange
 
         super().__post_init__()

@@ -13,30 +13,34 @@
 # limitations under the License.
 
 """
-DPPO (Decoupled Proximal Policy Optimization) Trainer
+DPPO (Divergence Proximal Policy Optimization) Trainer
 
-This implements the Stable-RL DPPO algorithm which decouples the optimization
-of the policy and value function for improved training stability.
+Implements the Stable-RL DPPO algorithm which replaces PPO's clipped surrogate
+objective with a divergence-based binary token mask.  Instead of clipping the
+probability ratio, DPPO zeroes out gradient contributions from tokens whose
+policy probability has moved outside a trust region measured by a direct
+divergence metric (Total Variation or binary KL).
+
 Reference: https://github.com/sail-sg/Stable-RL
+Paper: "Rethinking the Trust Region in LLM Reinforcement Learning" (arXiv 2602.04879)
 """
 
 import gc
 import math
 import textwrap
 import time
-from collections import defaultdict
 
 import numpy as np
-import pandas as pd
 import torch
-import torch.nn as nn
 from accelerate import logging
+from transformers import GenerationConfig
 
 from ..ppo.ppo_trainer import PPOTrainer as BasePPOTrainer
 from ..ppo.ppo_trainer import (
     batch_generation,
     forward,
     masked_mean,
+    masked_whiten,
     selective_log_softmax,
     truncate_response,
 )
@@ -52,15 +56,34 @@ INVALID_LOGPROB = 1.0
 
 
 class DPPOTrainer(BasePPOTrainer):
-    """Trainer for Decoupled Proximal Policy Optimization (DPPO).
+    """Trainer for Divergence Proximal Policy Optimization (DPPO).
 
-    DPPO is a variant of PPO that decouples the optimization of the policy and value function
-    for improved training stability. Key features:
-    - Separate optimizers and learning rates for policy and value function
-    - Independent training loops for policy and value function
-    - Configurable value function update frequency
+    DPPO replaces PPO's clipped surrogate objective with a divergence-based binary
+    token mask.  For each response token the trainer computes a divergence between the
+    current policy and the rollout policy (either Total Variation or binary KL).  Tokens
+    whose divergence exceeds a threshold are masked out (gradient set to zero) rather than
+    being soft-clipped as in standard PPO.  Within the trust region the loss is the
+    IS-weighted policy gradient:
 
-    For details on the Stable-RL approach, see: https://github.com/sail-sg/Stable-RL
+        L_DPPO = -A · clamp(π_current/π_rollout, max=c) · mask · log π_current
+
+    where ``mask`` is 1 for tokens inside the trust region and 0 for tokens outside.
+    The IS weight is detached so the gradient flows entirely through ``log π_current``.
+
+    Key algorithmic differences from PPO:
+
+    * Trust-region metric: divergence on the *sampled* token (probability difference or
+      binary KL) rather than the probability ratio.  This is bounded and numerically
+      stable for low-probability tokens.
+    * Enforcement: hard zeroing via a binary mask rather than soft clipping.
+    * Gradient signal: ``log π`` (policy gradient style) rather than the ratio surrogate.
+
+    Three mask variants are supported via ``DPPOConfig.loss_mode``:
+
+    * ``"dppo_binary_tv"``: Total Variation — mask if ``|p_current − p_rollout| > ε``.
+    * ``"dppo_binary_kl"``: Binary KL anchored to rollout-engine probabilities.
+    * ``"dppo_binary_kl_recompute"``: Binary KL anchored to training-engine probabilities
+      recomputed at the start of each PPO epoch (MiniRL-style).
 
     Args:
         args ([`experimental.dppo.DPPOConfig`]):
@@ -78,82 +101,113 @@ class DPPOTrainer(BasePPOTrainer):
         value_model (`torch.nn.Module`):
             Value model used to predict the value of a state.
         data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
-            Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
-            using the `processing_class`.
+            Data collator to batch and pad samples from the dataset. If `None`, a default data collator is
+            created using the `processing_class`.
         eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
             Dataset for evaluation.
-        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
-            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
-            optimizer and the learning rate scheduler are created using the
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*,
+            defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`,
+            the optimizer and the learning rate scheduler are created using the
             [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
         callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
             Callbacks to use during training.
         peft_config ([`~peft.PeftConfig`], *optional*):
-            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
-            will be wrapped with the specified PEFT adapter.
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the
+            policy `model` will be wrapped with the specified PEFT adapter.
     """
 
     _tag_names = ["trl", "dppo"]
     _name = "DPPO"
     _paper = {
-        "title": "Stable-RL: Decoupled Proximal Policy Optimization for Stable Reinforcement Learning",
-        "url": "https://github.com/sail-sg/Stable-RL",
+        "title": "Rethinking the Trust Region in LLM Reinforcement Learning",
+        "url": "https://arxiv.org/abs/2602.04879",
         # docstyle-ignore
         "citation": textwrap.dedent("""\
-            @misc{stable-rl,
-                title        = {{Stable-RL: Decoupled Proximal Policy Optimization}},
+            @article{dppo2025,
+                title        = {{Rethinking the Trust Region in LLM Reinforcement Learning}},
                 author       = {SAIL-SG},
-                year         = 2023,
-                url          = {https://github.com/sail-sg/Stable-RL}
+                year         = 2025,
+                journal      = {arXiv},
+                url          = {https://arxiv.org/abs/2602.04879}
             }"""),
     }
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        # Create separate optimizer for value function with its own learning rate
-        self.vf_optimizer = self._create_value_optimizer()
-        self.vf_lr_scheduler = self._create_value_lr_scheduler()
-        
-        # Prepare value optimizer with accelerator
-        self.vf_optimizer, self.vf_lr_scheduler = self.accelerator.prepare(
-            self.vf_optimizer, self.vf_lr_scheduler
-        )
+    def _compute_dppo_mask(
+        self,
+        new_logprobs: torch.Tensor,
+        rollout_logprobs: torch.Tensor,
+        old_logprobs: torch.Tensor,
+        advantages: torch.Tensor,
+        response_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the DPPO binary token mask.
 
-    def _create_value_optimizer(self):
-        """Create optimizer specifically for the value function."""
-        # Get value model parameters
-        value_params = self.value_model.parameters()
-        
-        # Use the value function learning rate from config
-        optimizer_cls = torch.optim.AdamW
-        optimizer_kwargs = {
-            "lr": self.args.vf_learning_rate,
-            "betas": (self.args.adam_beta1, self.args.adam_beta2),
-            "eps": self.args.adam_epsilon,
-            "weight_decay": self.args.weight_decay,
-        }
-        
-        return optimizer_cls(value_params, **optimizer_kwargs)
+        For each token, determines whether it is inside or outside the trust region based
+        on a direct divergence measure between the current policy and the rollout policy.
+        Tokens outside the trust region are masked to zero.
 
-    def _create_value_lr_scheduler(self):
-        """Create learning rate scheduler for the value function optimizer."""
-        from transformers.trainer_utils import SchedulerType
-        from transformers.optimization import get_scheduler
-        
-        return get_scheduler(
-            SchedulerType(self.args.lr_scheduler_type),
-            optimizer=self.vf_optimizer,
-            num_warmup_steps=self.args.get_warmup_steps(self.args.num_total_batches),
-            num_training_steps=self.args.num_total_batches,
-            scheduler_specific_kwargs=self.args.lr_scheduler_kwargs,
-        )
+        Args:
+            new_logprobs: Current policy log-probabilities ``[batch, seq]``.
+            rollout_logprobs: Log-probabilities from the rollout engine ``[batch, seq]``.
+            old_logprobs: Log-probabilities from training engine at epoch start ``[batch, seq]``.
+                Used only for ``"dppo_binary_kl_recompute"``; pass ``rollout_logprobs`` otherwise.
+            advantages: Advantage estimates ``[batch, seq]``.
+            response_mask: Boolean mask for valid (non-padding) response tokens ``[batch, seq]``.
+
+        Returns:
+            token_mask: Float tensor, shape ``[batch, seq]``, with ``1`` for tokens inside the
+                trust region and within ``response_mask``, ``0`` otherwise.
+            invalid_mask: Boolean tensor, shape ``[batch, seq]``, ``True`` for masked-out tokens.
+        """
+        args = self.args
+        clip_low = args.clip_ratio_low
+        clip_high = args.clip_ratio_high
+
+        prob = torch.exp(new_logprobs)
+        rollout_prob = torch.exp(rollout_logprobs)
+
+        if args.loss_mode == "dppo_binary_tv":
+            # Total Variation: mask based on |p_current - p_rollout|
+            prob_diff = prob - rollout_prob
+            invalid_positive_mask = prob_diff > clip_high
+            invalid_negative_mask = prob_diff < -clip_low
+
+        elif args.loss_mode == "dppo_binary_kl":
+            # Binary KL between Bernoulli(p_rollout) and Bernoulli(p_current),
+            # anchored to rollout-engine probabilities.
+            kl = rollout_prob * (rollout_logprobs - new_logprobs) + (1.0 - rollout_prob) * torch.log(
+                (1.0 - rollout_prob + 1e-8) / (1.0 - prob + 1e-8)
+            )
+            invalid_positive_mask = (kl > clip_high) & (prob > rollout_prob)
+            invalid_negative_mask = (kl > clip_low) & (prob < rollout_prob)
+
+        elif args.loss_mode == "dppo_binary_kl_recompute":
+            # Binary KL anchored to training-engine probabilities at epoch start (MiniRL-style).
+            old_prob = torch.exp(old_logprobs)
+            kl = old_prob * (old_logprobs - new_logprobs) + (1.0 - old_prob) * torch.log(
+                (1.0 - old_prob + 1e-8) / (1.0 - prob + 1e-8)
+            )
+            invalid_positive_mask = (kl > clip_high) & (prob > old_prob)
+            invalid_negative_mask = (kl > clip_low) & (prob < old_prob)
+
+        else:
+            raise ValueError(
+                f"Unknown loss_mode: '{args.loss_mode}'. "
+                "Expected one of: 'dppo_binary_tv', 'dppo_binary_kl', 'dppo_binary_kl_recompute'."
+            )
+
+        # Select the mask based on the sign of the advantage
+        invalid_mask = torch.where(advantages > 0, invalid_positive_mask, invalid_negative_mask)
+
+        # Detach: the mask is not differentiated, it acts as a hard gate
+        token_mask = (1.0 - invalid_mask.detach().float()) * response_mask.float()
+        return token_mask, invalid_mask.detach()
 
     def train(self):
         args = self.args
         accelerator = self.accelerator
         optimizer = self.optimizer
-        vf_optimizer = self.vf_optimizer
         model = self.model
         ref_policy = self.ref_model
         reward_model = self.reward_model
@@ -173,18 +227,16 @@ class DPPOTrainer(BasePPOTrainer):
             "top_p": 1.0,
             "do_sample": True,
         }
-        from transformers import GenerationConfig
         generation_config = GenerationConfig(**generation_kwargs)
 
         accelerator.print("===training policy with DPPO===")
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
-        vf_stats_shape = (args.num_vf_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
-        pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
+        pg_maskfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
-        vf_loss_stats = torch.zeros(vf_stats_shape, device=device)
-        vf_clipfrac_stats = torch.zeros(vf_stats_shape, device=device)
+        vf_loss_stats = torch.zeros(stats_shape, device=device)
+        vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
@@ -309,6 +361,7 @@ class DPPOTrainer(BasePPOTrainer):
                     scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
                 # Create padding masks
+                # See https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
@@ -328,7 +381,6 @@ class DPPOTrainer(BasePPOTrainer):
 
                 # 5. whiten rewards
                 if args.whiten_rewards:
-                    from ..ppo.ppo_trainer import masked_whiten
                     rewards = masked_whiten(rewards, mask=~padding_mask_p1, shift_mean=False)
                     rewards = torch.masked_fill(rewards, padding_mask_p1, 0)
 
@@ -343,16 +395,23 @@ class DPPOTrainer(BasePPOTrainer):
                     advantages_reversed.append(lastgaelam)
                 advantages = torch.stack(advantages_reversed[::-1], axis=1)
                 returns = advantages + values
-                from ..ppo.ppo_trainer import masked_whiten
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
                 empty_cache()
 
-            # DPPO: Train policy and value function with decoupled optimization
-            
-            # Phase 1: Policy optimization
+            # DPPO training: jointly optimise policy and value with the divergence-masked loss.
+            # At the start of each PPO epoch we snapshot the training-engine log-probs so that
+            # dppo_binary_kl_recompute can use them as the epoch-start anchor.
+            epoch_start_logprobs = logprobs  # rollout logprobs used as default anchor
+
             for ppo_epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size)
+
+                if args.loss_mode == "dppo_binary_kl_recompute" and ppo_epoch_idx == 0:
+                    # The first epoch anchor equals the rollout logprobs; we recompute below for
+                    # subsequent epochs after the first weight update.
+                    epoch_start_logprobs = logprobs
+
                 minibatch_idx = 0
                 for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
                     mini_batch_end = mini_batch_start + args.local_mini_batch_size
@@ -365,99 +424,107 @@ class DPPOTrainer(BasePPOTrainer):
                             mb_advantage = advantages[micro_batch_inds]
                             mb_responses = responses[micro_batch_inds]
                             mb_query_responses = query_responses[micro_batch_inds]
-                            mb_logprobs = logprobs[micro_batch_inds]
+                            mb_logprobs = logprobs[micro_batch_inds]          # rollout logprobs
+                            mb_old_logprobs = epoch_start_logprobs[micro_batch_inds]  # epoch-start anchor
+                            mb_return = returns[micro_batch_inds]
+                            mb_values = values[micro_batch_inds]
+                            mb_response_mask = ~padding_mask[micro_batch_inds]
 
-                            output, _ = forward(model, mb_query_responses, processing_class.pad_token_id)
+                            output, vpred_temp = forward(model, mb_query_responses, processing_class.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
                             new_logprobs = selective_log_softmax(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
-                            
+
+                            # Value function loss (same as standard PPO)
+                            vpred = vpred_temp[:, context_length - 1 : -1].squeeze(-1)
+                            vpred = torch.masked_fill(vpred, padding_mask_p1[micro_batch_inds], 0)
+                            vpredclipped = torch.clamp(
+                                vpred,
+                                mb_values - args.cliprange_value,
+                                mb_values + args.cliprange_value,
+                            )
+                            vf_losses1 = torch.square(vpred - mb_return)
+                            vf_losses2 = torch.square(vpredclipped - mb_return)
+                            vf_loss_max = torch.max(vf_losses1, vf_losses2)
+                            vf_loss = 0.5 * masked_mean(vf_loss_max, ~padding_mask_p1[micro_batch_inds])
+
+                            # DPPO policy loss
+                            # 1. Compute the binary divergence mask
+                            token_mask, invalid_mask = self._compute_dppo_mask(
+                                new_logprobs=new_logprobs,
+                                rollout_logprobs=mb_logprobs,
+                                old_logprobs=mb_old_logprobs,
+                                advantages=mb_advantage,
+                                response_mask=mb_response_mask,
+                            )
+
+                            # 2. IS weight (detached): π_current / π_rollout, capped at clip_ratio_c
                             logprobs_diff = new_logprobs - mb_logprobs
-                            ratio = torch.exp(logprobs_diff)
-                            pg_losses = -mb_advantage * ratio
-                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
-                            pg_loss_max = torch.max(pg_losses, pg_losses2)
-                            pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
-                            
-                            accelerator.backward(pg_loss)
+                            ratio = torch.clamp(torch.exp(logprobs_diff), max=args.clip_ratio_c).detach()
+
+                            # 3. L_DPPO = -A · ratio · mask · log π_current
+                            #    Gradient flows through log π_current (new_logprobs) only.
+                            pg_losses = -mb_advantage * ratio * token_mask * new_logprobs
+                            # Normalise by the number of valid (unmasked) tokens
+                            num_valid = token_mask.sum().clamp(min=1.0)
+                            pg_loss = pg_losses.sum() / num_valid
+
+                            loss = pg_loss + args.vf_coef * vf_loss
+                            accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
-                            
+
                             with torch.no_grad():
-                                pg_clipfrac = masked_mean(
-                                    (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
-                                )
+                                # Fraction of valid tokens that were masked out
+                                pg_maskfrac = masked_mean(invalid_mask.float(), mb_response_mask)
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    pg_clipfrac
+                                pg_maskfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    pg_maskfrac
                                 )
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
+                                vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
+                                vf_clipfrac = masked_mean(
+                                    (vf_losses2 > vf_losses1).float(), ~padding_mask_p1[micro_batch_inds]
+                                )
+                                vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    vf_clipfrac
+                                )
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
+                    # fmt: off
                     del (
-                        output, logits, new_logprobs, logprobs_diff, ratio, pg_losses, pg_losses2,
-                        pg_loss_max, pg_loss, pg_clipfrac, prob_dist, entropy, approxkl,
-                        mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
+                        output, vpred_temp, logits, new_logprobs, vpred, vpredclipped,
+                        vf_losses1, vf_losses2, vf_loss, vf_clipfrac, logprobs_diff, ratio,
+                        token_mask, invalid_mask, pg_losses, pg_loss, loss,
+                        pg_maskfrac, prob_dist, entropy, approxkl,
+                        mb_return, mb_advantage, mb_values, mb_responses,
+                        mb_query_responses, mb_logprobs, mb_old_logprobs, mb_response_mask,
                     )
+                    # fmt: on
                     empty_cache()
 
-            # Phase 2: Value function optimization (decoupled from policy)
-            if update % args.vf_update_frequency == 0:
-                for vf_epoch_idx in range(args.num_vf_epochs):
-                    b_inds = np.random.permutation(args.local_batch_size)
-                    minibatch_idx = 0
-                    for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
-                        mini_batch_end = mini_batch_start + args.local_mini_batch_size
-                        mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
-                        gradient_accumulation_idx = 0
-                        for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
-                            with accelerator.accumulate(model):
-                                micro_batch_end = micro_batch_start + args.per_device_train_batch_size
-                                micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                                mb_return = returns[micro_batch_inds]
-                                mb_values = values[micro_batch_inds]
-                                mb_query_responses = query_responses[micro_batch_inds]
-
-                                _, vpred_temp = forward(model, mb_query_responses, processing_class.pad_token_id)
-                                vpred = vpred_temp[:, context_length - 1 : -1].squeeze(-1)
-                                vpred = torch.masked_fill(vpred, padding_mask_p1[micro_batch_inds], 0)
-                                vpredclipped = torch.clamp(
-                                    vpred,
-                                    mb_values - args.cliprange_value,
-                                    mb_values + args.cliprange_value,
-                                )
-                                vf_losses1 = torch.square(vpred - mb_return)
-                                vf_losses2 = torch.square(vpredclipped - mb_return)
-                                vf_loss_max = torch.max(vf_losses1, vf_losses2)
-                                vf_loss = 0.5 * masked_mean(vf_loss_max, ~padding_mask_p1[micro_batch_inds])
-                                
-                                accelerator.backward(vf_loss)
-                                vf_optimizer.step()
-                                vf_optimizer.zero_grad()
-                                
-                                with torch.no_grad():
-                                    vf_clipfrac = masked_mean(
-                                        (vf_losses2 > vf_losses1).float(), ~padding_mask_p1[micro_batch_inds]
-                                    )
-                                    vf_loss_stats[vf_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
-                                    vf_clipfrac_stats[vf_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                        vf_clipfrac
-                                    )
-                            gradient_accumulation_idx += 1
-                        minibatch_idx += 1
-                        del (
-                            vpred_temp, vpred, vpredclipped, vf_losses1, vf_losses2,
-                            vf_loss_max, vf_loss, vf_clipfrac, mb_return, mb_values, mb_query_responses,
-                        )
-                        empty_cache()
+                # For dppo_binary_kl_recompute: after the first epoch weight update, re-snapshot
+                # the training-engine log-probs as the new epoch-start anchor.
+                if args.loss_mode == "dppo_binary_kl_recompute" and ppo_epoch_idx < args.num_ppo_epochs - 1:
+                    with torch.no_grad():
+                        new_epoch_logprobs_list = []
+                        for i in range(0, query_responses.shape[0], args.local_rollout_forward_batch_size):
+                            mb_qr = query_responses[i : i + args.local_rollout_forward_batch_size]
+                            mb_resp = responses[i : i + args.local_rollout_forward_batch_size]
+                            out, _ = forward(model, mb_qr, processing_class.pad_token_id)
+                            lgt = out.logits[:, context_length - 1 : -1] / (args.temperature + 1e-7)
+                            lp = selective_log_softmax(lgt, mb_resp)
+                            new_epoch_logprobs_list.append(lp)
+                        epoch_start_logprobs = torch.cat(new_epoch_logprobs_list, 0)
+                        epoch_start_logprobs = torch.masked_fill(epoch_start_logprobs, padding_mask, INVALID_LOGPROB)
 
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
@@ -475,7 +542,9 @@ class DPPOTrainer(BasePPOTrainer):
                 metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
                 metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(approxkl_stats).mean().item()
-                metrics["policy/clipfrac_avg"] = self.accelerator.gather_for_metrics(pg_clipfrac_stats).mean().item()
+                metrics["policy/maskfrac_avg"] = (
+                    self.accelerator.gather_for_metrics(pg_maskfrac_stats).mean().item()
+                )
                 metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(pg_loss_stats).mean().item()
                 metrics["loss/value_avg"] = self.accelerator.gather_for_metrics(vf_loss_stats).mean().item()
                 metrics["val/clipfrac_avg"] = self.accelerator.gather_for_metrics(vf_clipfrac_stats).mean().item()
@@ -484,14 +553,12 @@ class DPPOTrainer(BasePPOTrainer):
                 metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
-                metrics["vf_lr"] = self.vf_lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len
                 self.state.global_step += 1
                 self.log(metrics)
 
             self.lr_scheduler.step()
-            self.vf_lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None)
@@ -521,6 +588,7 @@ class DPPOTrainer(BasePPOTrainer):
                 actual_end,
                 advantages,
                 returns,
+                epoch_start_logprobs,
             )
             empty_cache()
 

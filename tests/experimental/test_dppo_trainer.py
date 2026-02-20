@@ -36,68 +36,91 @@ if is_peft_available():
 class TestDPPOConfig(TrlTestCase):
     """Test DPPO configuration validation and defaults."""
 
-    def test_default_vf_learning_rate(self):
-        """Test that vf_learning_rate defaults to learning_rate if not set."""
+    def test_default_clip_ratios(self):
+        """clip_ratio_low and clip_ratio_high should default to cliprange."""
         config = DPPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=3e-6,
+            cliprange=0.2,
         )
-        assert config.vf_learning_rate == 3e-6
+        assert config.clip_ratio_low == 0.2
+        assert config.clip_ratio_high == 0.2
 
-    def test_custom_vf_learning_rate(self):
-        """Test that custom vf_learning_rate is respected."""
+    def test_custom_clip_ratios(self):
+        """Asymmetric clip ratios should be respected when set explicitly."""
         config = DPPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
+            clip_ratio_low=0.1,
+            clip_ratio_high=0.3,
         )
-        assert config.learning_rate == 3e-6
-        assert config.vf_learning_rate == 1e-4
+        assert config.clip_ratio_low == 0.1
+        assert config.clip_ratio_high == 0.3
 
-    def test_num_vf_epochs_default(self):
-        """Test default value of num_vf_epochs."""
+    def test_default_loss_mode(self):
+        """Default loss_mode should be dppo_binary_tv."""
         config = DPPOConfig(output_dir=self.tmp_dir)
-        assert config.num_vf_epochs == 1
+        assert config.loss_mode == "dppo_binary_tv"
 
-    def test_vf_update_frequency_default(self):
-        """Test default value of vf_update_frequency."""
+    def test_loss_mode_kl(self):
+        """dppo_binary_kl loss mode should be accepted."""
+        config = DPPOConfig(output_dir=self.tmp_dir, loss_mode="dppo_binary_kl")
+        assert config.loss_mode == "dppo_binary_kl"
+
+    def test_loss_mode_kl_recompute(self):
+        """dppo_binary_kl_recompute loss mode should be accepted."""
+        config = DPPOConfig(output_dir=self.tmp_dir, loss_mode="dppo_binary_kl_recompute")
+        assert config.loss_mode == "dppo_binary_kl_recompute"
+
+    def test_clip_ratio_c_default(self):
+        """clip_ratio_c should default to 10.0."""
         config = DPPOConfig(output_dir=self.tmp_dir)
-        assert config.vf_update_frequency == 1
+        assert config.clip_ratio_c == 10.0
 
     def test_dppo_specific_params(self):
-        """Test all DPPO-specific parameters can be set."""
+        """All DPPO-specific parameters can be set."""
+        config = DPPOConfig(
+            output_dir=self.tmp_dir,
+            loss_mode="dppo_binary_kl",
+            clip_ratio_low=0.1,
+            clip_ratio_high=0.3,
+            clip_ratio_c=5.0,
+            num_ppo_epochs=4,
+        )
+        assert config.loss_mode == "dppo_binary_kl"
+        assert config.clip_ratio_low == 0.1
+        assert config.clip_ratio_high == 0.3
+        assert config.clip_ratio_c == 5.0
+        assert config.num_ppo_epochs == 4
+
+    def test_dppo_config_inheritance(self):
+        """DPPOConfig should inherit from TrainingArguments."""
         config = DPPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            num_vf_epochs=2,
-            vf_update_frequency=2,
             num_ppo_epochs=4,
         )
-        assert config.vf_learning_rate == 1e-4
-        assert config.num_vf_epochs == 2
-        assert config.vf_update_frequency == 2
-        assert config.num_ppo_epochs == 4
+        assert hasattr(config, "learning_rate")
+        assert hasattr(config, "output_dir")
+        assert hasattr(config, "loss_mode")
+        assert hasattr(config, "clip_ratio_low")
+        assert hasattr(config, "clip_ratio_high")
+        assert hasattr(config, "clip_ratio_c")
+        assert hasattr(config, "num_ppo_epochs")
 
 
 class TestDPPOTrainer(TrlTestCase):
     """Test DPPO trainer functionality."""
 
     def setup_method(self):
-        """Set up models, tokenizer, and dataset for testing."""
-        # Set up the models and tokenizer using the test model
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
-        # Add reward and value models
         reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
         self.value_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
 
-        # Load dataset
         raw_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
         def tokenize(example, tokenizer):
@@ -110,86 +133,145 @@ class TestDPPOTrainer(TrlTestCase):
         self.raw_dataset = raw_dataset.map(tokenize, fn_kwargs={"tokenizer": self.tokenizer}, remove_columns="prompt")
 
     def teardown_method(self):
-        """Clean up after each test."""
         gc.collect()
 
+    def _make_trainer(self, **config_kwargs):
+        """Helper to build a DPPOTrainer with minimal config for unit tests."""
+        training_args = DPPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            report_to="none",
+            **config_kwargs,
+        )
+        return DPPOTrainer(
+            args=training_args,
+            processing_class=self.tokenizer,
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+        )
+
+    # ------------------------------------------------------------------
+    # Trainer creation
+    # ------------------------------------------------------------------
+
     def test_dppo_trainer_creation(self):
-        """Test that DPPO trainer can be created successfully."""
-        training_args = DPPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            num_ppo_epochs=2,
-            num_vf_epochs=1,
-            report_to="none",
-        )
+        """DPPOTrainer should be created without errors."""
+        trainer = self._make_trainer()
+        assert trainer is not None
 
-        trainer = DPPOTrainer(
-            args=training_args,
-            processing_class=self.tokenizer,
-            model=self.model,
-            ref_model=self.ref_model,
-            reward_model=self.reward_model,
-            value_model=self.value_model,
-            train_dataset=self.raw_dataset["train"],
-            eval_dataset=self.raw_dataset["test"],
-        )
+    def test_dppo_trainer_tags(self):
+        """DPPO trainer should expose correct tag names."""
+        trainer = self._make_trainer()
+        assert hasattr(trainer, "_tag_names")
+        assert "trl" in trainer._tag_names
+        assert "dppo" in trainer._tag_names
 
-        # Verify trainer has separate value function optimizer
-        assert hasattr(trainer, "vf_optimizer")
-        assert hasattr(trainer, "vf_lr_scheduler")
-        assert trainer.vf_optimizer is not None
-        assert trainer.vf_lr_scheduler is not None
-
-    def test_separate_optimizers(self):
-        """Test that DPPO creates separate optimizers for policy and value function."""
-        training_args = DPPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            report_to="none",
-        )
-
-        trainer = DPPOTrainer(
-            args=training_args,
-            processing_class=self.tokenizer,
-            model=self.model,
-            ref_model=self.ref_model,
-            reward_model=self.reward_model,
-            value_model=self.value_model,
-            train_dataset=self.raw_dataset["train"],
-        )
-
-        # Verify both optimizers exist and are different
+    def test_dppo_has_single_optimizer(self):
+        """DPPO uses a single joint optimizer (policy + value), not a separate one."""
+        trainer = self._make_trainer()
         assert trainer.optimizer is not None
-        assert trainer.vf_optimizer is not None
-        assert trainer.optimizer is not trainer.vf_optimizer
+        # DPPO does NOT create a separate value optimizer
+        assert not hasattr(trainer, "vf_optimizer")
 
-    def test_basic_training(self):
-        """Test basic DPPO training and verify both policy and value weights update."""
-        # Capture initial weights
-        initial_value_weights = {}
-        initial_policy_weights = {}
-        for name, param in self.value_model.named_parameters():
-            initial_value_weights[name] = param.clone().detach()
-        for name, param in self.model.named_parameters():
-            initial_policy_weights[name] = param.clone().detach()
+    # ------------------------------------------------------------------
+    # Divergence mask unit tests
+    # ------------------------------------------------------------------
 
-        # Configure training args with decoupled learning rates
+    def test_dppo_mask_binary_tv_all_inside(self):
+        """All tokens should be valid when divergence is below threshold."""
+        trainer = self._make_trainer(loss_mode="dppo_binary_tv", cliprange=0.2)
+        # Set up nearly identical probabilities
+        new_lp = torch.log(torch.tensor([[0.5, 0.3, 0.2]]))
+        rollout_lp = torch.log(torch.tensor([[0.5, 0.3, 0.2]]))
+        advantages = torch.tensor([[1.0, -1.0, 1.0]])
+        response_mask = torch.ones(1, 3, dtype=torch.bool)
+        token_mask, invalid_mask = trainer._compute_dppo_mask(new_lp, rollout_lp, rollout_lp, advantages, response_mask)
+        assert token_mask.all(), "All tokens should be valid when divergence is 0"
+
+    def test_dppo_mask_binary_tv_positive_exceeds_threshold(self):
+        """Tokens with positive advantage whose prob moved up beyond threshold are masked."""
+        trainer = self._make_trainer(loss_mode="dppo_binary_tv", cliprange=0.1)
+        # prob_current = 0.8, prob_rollout = 0.5 → diff = 0.3 > 0.1
+        new_lp = torch.log(torch.tensor([[0.8]]))
+        rollout_lp = torch.log(torch.tensor([[0.5]]))
+        advantages = torch.tensor([[1.0]])  # positive advantage
+        response_mask = torch.ones(1, 1, dtype=torch.bool)
+        token_mask, invalid_mask = trainer._compute_dppo_mask(new_lp, rollout_lp, rollout_lp, advantages, response_mask)
+        assert not token_mask.any(), "Token should be masked (prob increased too much for positive advantage)"
+
+    def test_dppo_mask_binary_tv_negative_inside_threshold(self):
+        """Token with negative advantage whose prob moved down within threshold stays valid."""
+        trainer = self._make_trainer(loss_mode="dppo_binary_tv", cliprange=0.2)
+        # prob_current = 0.4, prob_rollout = 0.5 → diff = -0.1, threshold = 0.2 → inside
+        new_lp = torch.log(torch.tensor([[0.4]]))
+        rollout_lp = torch.log(torch.tensor([[0.5]]))
+        advantages = torch.tensor([[-1.0]])  # negative advantage
+        response_mask = torch.ones(1, 1, dtype=torch.bool)
+        token_mask, invalid_mask = trainer._compute_dppo_mask(new_lp, rollout_lp, rollout_lp, advantages, response_mask)
+        assert token_mask.all(), "Token should be valid (prob decreased within threshold for negative advantage)"
+
+    def test_dppo_mask_binary_tv_padding_zeroed(self):
+        """Padding tokens should always be zeroed regardless of divergence."""
+        trainer = self._make_trainer(loss_mode="dppo_binary_tv", cliprange=1.0)  # very wide threshold
+        new_lp = torch.log(torch.tensor([[0.5, 0.5]]))
+        rollout_lp = torch.log(torch.tensor([[0.5, 0.5]]))
+        advantages = torch.tensor([[1.0, 1.0]])
+        # Second token is padding
+        response_mask = torch.tensor([[True, False]])
+        token_mask, invalid_mask = trainer._compute_dppo_mask(new_lp, rollout_lp, rollout_lp, advantages, response_mask)
+        assert token_mask[0, 0] == 1.0, "Valid token should be unmasked"
+        assert token_mask[0, 1] == 0.0, "Padding token should be zeroed"
+
+    def test_dppo_mask_binary_kl_all_inside(self):
+        """dppo_binary_kl: identical distributions give zero KL, all tokens valid."""
+        trainer = self._make_trainer(loss_mode="dppo_binary_kl", cliprange=0.01)
+        lp = torch.log(torch.tensor([[0.5, 0.3, 0.2]]))
+        advantages = torch.tensor([[1.0, -1.0, 1.0]])
+        response_mask = torch.ones(1, 3, dtype=torch.bool)
+        token_mask, _ = trainer._compute_dppo_mask(lp, lp, lp, advantages, response_mask)
+        assert token_mask.all()
+
+    def test_dppo_mask_binary_kl_recompute_uses_old_logprobs(self):
+        """dppo_binary_kl_recompute should anchor to old_logprobs, not rollout_logprobs."""
+        trainer = self._make_trainer(loss_mode="dppo_binary_kl_recompute", cliprange=0.05)
+        # Make new_logprobs close to old_logprobs (inside trust region) but far from rollout
+        old_lp = torch.log(torch.tensor([[0.5]]))
+        new_lp = torch.log(torch.tensor([[0.49]]))   # very close to old → inside trust region
+        rollout_lp = torch.log(torch.tensor([[0.1]]))  # far away → would trigger if anchored to rollout
+        advantages = torch.tensor([[1.0]])
+        response_mask = torch.ones(1, 1, dtype=torch.bool)
+        token_mask, _ = trainer._compute_dppo_mask(new_lp, rollout_lp, old_lp, advantages, response_mask)
+        assert token_mask.all(), "Should be valid when anchored to old_logprobs (not rollout_logprobs)"
+
+    def test_dppo_mask_invalid_loss_mode(self):
+        """Unknown loss_mode should raise ValueError."""
+        trainer = self._make_trainer()
+        trainer.args.loss_mode = "invalid_mode"
+        lp = torch.log(torch.tensor([[0.5]]))
+        adv = torch.tensor([[1.0]])
+        mask = torch.ones(1, 1, dtype=torch.bool)
+        with pytest.raises(ValueError, match="Unknown loss_mode"):
+            trainer._compute_dppo_mask(lp, lp, lp, adv, mask)
+
+    # ------------------------------------------------------------------
+    # End-to-end training
+    # ------------------------------------------------------------------
+
+    def test_basic_training_tv(self):
+        """DPPO-Binary-TV: both policy and value weights should update."""
+        initial_value_weights = {n: p.clone().detach() for n, p in self.value_model.named_parameters()}
+        initial_policy_weights = {n: p.clone().detach() for n, p in self.model.named_parameters()}
+
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=4,
-            learning_rate=3e-6,  # Policy learning rate
-            vf_learning_rate=1e-4,  # Value function learning rate (typically higher)
+            loss_mode="dppo_binary_tv",
             num_ppo_epochs=2,
-            num_vf_epochs=1,
-            vf_update_frequency=1,
             report_to="none",
         )
-
-        # Create trainer
         trainer = DPPOTrainer(
             args=training_args,
             processing_class=self.tokenizer,
@@ -200,69 +282,29 @@ class TestDPPOTrainer(TrlTestCase):
             train_dataset=self.raw_dataset["train"],
             eval_dataset=self.raw_dataset["test"],
         )
-
-        # Train
         trainer.train()
 
-        # Check if value function weights have been updated
-        value_weights_updated = False
-        for name, param in trainer.model.value_model.named_parameters():
-            if not torch.allclose(initial_value_weights[name], param.to("cpu"), atol=1e-6):
-                value_weights_updated = True
-                break
+        value_updated = any(
+            not torch.allclose(initial_value_weights[n], p.cpu(), atol=1e-6)
+            for n, p in trainer.model.value_model.named_parameters()
+        )
+        policy_updated = any(
+            not torch.allclose(initial_policy_weights[n], p.cpu(), atol=1e-6)
+            for n, p in trainer.model.policy.named_parameters()
+        )
+        assert value_updated, "Value function weights were not updated"
+        assert policy_updated, "Policy weights were not updated"
 
-        # Check if policy weights have been updated
-        policy_weights_updated = False
-        for name, param in trainer.model.policy.named_parameters():
-            if not torch.allclose(initial_policy_weights[name], param.to("cpu"), atol=1e-6):
-                policy_weights_updated = True
-                break
-
-        assert value_weights_updated, "Value function weights were not updated during DPPO training"
-        assert policy_weights_updated, "Policy weights were not updated during DPPO training"
-
-    def test_decoupled_learning_rates(self):
-        """Test that policy and value function use different learning rates."""
+    def test_basic_training_kl(self):
+        """DPPO-Binary-KL: training should complete without errors."""
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            report_to="none",
-        )
-
-        trainer = DPPOTrainer(
-            args=training_args,
-            processing_class=self.tokenizer,
-            model=self.model,
-            ref_model=self.ref_model,
-            reward_model=self.reward_model,
-            value_model=self.value_model,
-            train_dataset=self.raw_dataset["train"],
-        )
-
-        # Get initial learning rates from schedulers
-        policy_lr = trainer.lr_scheduler.get_last_lr()[0]
-        vf_lr = trainer.vf_lr_scheduler.get_last_lr()[0]
-
-        # Verify they are different as configured
-        assert policy_lr == pytest.approx(3e-6, rel=1e-3)
-        assert vf_lr == pytest.approx(1e-4, rel=1e-3)
-        assert policy_lr != vf_lr
-
-    def test_vf_update_frequency(self):
-        """Test that value function update frequency is respected."""
-        training_args = DPPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
+            loss_mode="dppo_binary_kl",
             num_ppo_epochs=2,
-            num_vf_epochs=2,
-            vf_update_frequency=2,  # Only update value every 2 policy updates
+            num_sample_generations=0,
             report_to="none",
         )
-
         trainer = DPPOTrainer(
             args=training_args,
             processing_class=self.tokenizer,
@@ -272,23 +314,18 @@ class TestDPPOTrainer(TrlTestCase):
             value_model=self.value_model,
             train_dataset=self.raw_dataset["train"],
         )
+        trainer.train()  # should not raise
 
-        # Verify the configuration is set correctly
-        assert trainer.args.vf_update_frequency == 2
-        assert trainer.args.num_vf_epochs == 2
-
-    def test_num_vf_epochs(self):
-        """Test that num_vf_epochs controls value function training epochs."""
+    def test_basic_training_kl_recompute(self):
+        """DPPO-Binary-KL-Recompute: training should complete without errors."""
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
+            loss_mode="dppo_binary_kl_recompute",
             num_ppo_epochs=2,
-            num_vf_epochs=3,  # Train value function for 3 epochs
+            num_sample_generations=0,
             report_to="none",
         )
-
         trainer = DPPOTrainer(
             args=training_args,
             processing_class=self.tokenizer,
@@ -298,33 +335,87 @@ class TestDPPOTrainer(TrlTestCase):
             value_model=self.value_model,
             train_dataset=self.raw_dataset["train"],
         )
+        trainer.train()  # should not raise
 
-        # Verify the configuration
-        assert trainer.args.num_vf_epochs == 3
+    def test_training_without_ref_model(self):
+        """DPPO should train when ref_model=None (uses null-ref context)."""
+        training_args = DPPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            num_ppo_epochs=2,
+            report_to="none",
+        )
+        trainer = DPPOTrainer(
+            args=training_args,
+            processing_class=self.tokenizer,
+            model=self.model,
+            ref_model=None,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+        )
+        trainer.train()
+
+    def test_training_logs_maskfrac(self):
+        """Training logs should include policy/maskfrac_avg (DPPO-specific metric)."""
+        training_args = DPPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            num_ppo_epochs=2,
+            logging_steps=1,
+            num_sample_generations=0,
+            report_to="none",
+        )
+        trainer = DPPOTrainer(
+            args=training_args,
+            processing_class=self.tokenizer,
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+        )
+        trainer.train()
+
+        has_maskfrac = any("maskfrac" in entry for entry in trainer.state.log_history)
+        assert has_maskfrac, "Training logs should include 'policy/maskfrac_avg'"
+
+    def test_asymmetric_clip_ratios(self):
+        """Asymmetric clip_ratio_low / clip_ratio_high should be accepted and applied."""
+        training_args = DPPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            loss_mode="dppo_binary_tv",
+            clip_ratio_low=0.05,   # strict for negative advantages
+            clip_ratio_high=0.3,   # lenient for positive advantages
+            num_ppo_epochs=2,
+            num_sample_generations=0,
+            report_to="none",
+        )
+        trainer = DPPOTrainer(
+            args=training_args,
+            processing_class=self.tokenizer,
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+        )
+        assert trainer.args.clip_ratio_low == 0.05
+        assert trainer.args.clip_ratio_high == 0.3
+        trainer.train()
 
     @require_peft
     def test_peft_training(self):
-        """Test DPPO training with PEFT configuration."""
-        # Capture initial weights
-        initial_value_weights = {}
-        initial_policy_weights = {}
-        for name, param in self.value_model.named_parameters():
-            initial_value_weights[name] = param.clone().detach()
-        for name, param in self.model.named_parameters():
-            initial_policy_weights[name] = param.clone().detach()
+        """DPPO training with PEFT (LoRA) should update LoRA weights."""
+        initial_value_weights = {n: p.clone().detach() for n, p in self.value_model.named_parameters()}
 
-        # Configure training args
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
             num_ppo_epochs=2,
-            num_vf_epochs=1,
             report_to="none",
         )
-
-        # Configure PEFT
         peft_config = LoraConfig(
             r=32,
             lora_alpha=16,
@@ -332,8 +423,6 @@ class TestDPPOTrainer(TrlTestCase):
             bias="none",
             task_type="CAUSAL_LM",
         )
-
-        # Create trainer with PEFT
         trainer = DPPOTrainer(
             args=training_args,
             processing_class=self.tokenizer,
@@ -345,194 +434,25 @@ class TestDPPOTrainer(TrlTestCase):
             eval_dataset=self.raw_dataset["test"],
             peft_config=peft_config,
         )
-
-        # Train
         trainer.train()
 
-        # Check if value function weights have been updated
-        value_weights_updated = False
-        for name, param in trainer.model.value_model.named_parameters():
-            if name in initial_value_weights and not torch.allclose(
-                initial_value_weights[name], param.to("cpu"), atol=1e-6
-            ):
-                value_weights_updated = True
-                break
-
-        # Check if policy LoRA weights have been updated
-        policy_weights_updated = False
-        for name, param in trainer.model.policy.named_parameters():
-            if "lora" in name.lower() and param.requires_grad:
-                # New weights should be non-zero if they've been updated
-                if not torch.allclose(param, torch.zeros_like(param), atol=1e-6):
-                    policy_weights_updated = True
-                    break
-
-        assert value_weights_updated, "Value function weights were not updated during DPPO training with PEFT"
-        assert policy_weights_updated, "Policy LoRA weights were not updated during DPPO training with PEFT"
-
-    def test_training_logs_both_learning_rates(self):
-        """Test that training logs include both policy and value function learning rates."""
-        training_args = DPPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            num_ppo_epochs=2,
-            num_vf_epochs=1,
-            logging_steps=1,
-            num_sample_generations=0,  # Disable sample generation
-            report_to="none",
+        value_updated = any(
+            n in initial_value_weights
+            and not torch.allclose(initial_value_weights[n], p.cpu(), atol=1e-6)
+            for n, p in trainer.model.value_model.named_parameters()
         )
-
-        trainer = DPPOTrainer(
-            args=training_args,
-            processing_class=self.tokenizer,
-            model=self.model,
-            ref_model=self.ref_model,
-            reward_model=self.reward_model,
-            value_model=self.value_model,
-            train_dataset=self.raw_dataset["train"],
+        policy_lora_nonzero = any(
+            "lora" in n.lower() and p.requires_grad and not torch.allclose(p, torch.zeros_like(p), atol=1e-6)
+            for n, p in trainer.model.policy.named_parameters()
         )
-
-        # Train for a few steps
-        trainer.train()
-
-        # Check that logs contain both learning rates
-        assert len(trainer.state.log_history) > 0
-        # Find a log entry that has learning rates
-        has_lr = False
-        has_vf_lr = False
-        for log_entry in trainer.state.log_history:
-            if "lr" in log_entry:
-                has_lr = True
-            if "vf_lr" in log_entry:
-                has_vf_lr = True
-            if has_lr and has_vf_lr:
-                break
-
-        assert has_lr, "Training logs should include policy learning rate (lr)"
-        assert has_vf_lr, "Training logs should include value function learning rate (vf_lr)"
-
-    def test_dppo_without_ref_model(self):
-        """Test DPPO training without providing a reference model."""
-        training_args = DPPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            num_ppo_epochs=2,
-            report_to="none",
-        )
-
-        trainer = DPPOTrainer(
-            args=training_args,
-            processing_class=self.tokenizer,
-            model=self.model,
-            ref_model=None,  # No reference model
-            reward_model=self.reward_model,
-            value_model=self.value_model,
-            train_dataset=self.raw_dataset["train"],
-        )
-
-        # Should still create both optimizers
-        assert hasattr(trainer, "optimizer")
-        assert hasattr(trainer, "vf_optimizer")
-        assert trainer.optimizer is not None
-        assert trainer.vf_optimizer is not None
-
-    def test_dppo_scheduler_steps(self):
-        """Test that both schedulers step correctly during training."""
-        training_args = DPPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            num_ppo_epochs=2,
-            num_vf_epochs=1,
-            num_sample_generations=0,  # Disable sample generation
-            report_to="none",
-        )
-
-        trainer = DPPOTrainer(
-            args=training_args,
-            processing_class=self.tokenizer,
-            model=self.model,
-            ref_model=self.ref_model,
-            reward_model=self.reward_model,
-            value_model=self.value_model,
-            train_dataset=self.raw_dataset["train"],
-        )
-
-        # Get initial learning rates
-        initial_policy_lr = trainer.lr_scheduler.get_last_lr()[0]
-        initial_vf_lr = trainer.vf_lr_scheduler.get_last_lr()[0]
-
-        # Verify initial learning rates are correct
-        assert initial_policy_lr == pytest.approx(3e-6, rel=1e-3)
-        assert initial_vf_lr == pytest.approx(1e-4, rel=1e-3)
-
-        # Train
-        trainer.train()
-
-        # After training, verify both schedulers exist and can return LR
-        # (Note: LR may decay to 0 or near-0 after training completes depending on scheduler)
-        final_policy_lr = trainer.lr_scheduler.get_last_lr()[0]
-        final_vf_lr = trainer.vf_lr_scheduler.get_last_lr()[0]
-
-        # Both should return non-negative learning rates
-        assert final_policy_lr >= 0
-        assert final_vf_lr >= 0
-        # The LRs should have decreased or stayed the same (due to scheduling)
-        assert final_policy_lr <= initial_policy_lr
-        assert final_vf_lr <= initial_vf_lr
-
-    def test_dppo_trainer_tags(self):
-        """Test that DPPO trainer has correct tags."""
-        training_args = DPPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            report_to="none",
-        )
-
-        trainer = DPPOTrainer(
-            args=training_args,
-            processing_class=self.tokenizer,
-            model=self.model,
-            ref_model=self.ref_model,
-            reward_model=self.reward_model,
-            value_model=self.value_model,
-            train_dataset=self.raw_dataset["train"],
-        )
-
-        # Check trainer has correct tags
-        assert hasattr(trainer, "_tag_names")
-        assert "trl" in trainer._tag_names
-        assert "dppo" in trainer._tag_names
-
-    def test_dppo_config_inheritance(self):
-        """Test that DPPOConfig properly inherits from TrainingArguments."""
-        config = DPPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            num_ppo_epochs=4,
-            num_vf_epochs=2,
-        )
-
-        # Check it has both base TrainingArguments attrs and DPPO-specific ones
-        assert hasattr(config, "learning_rate")  # From TrainingArguments
-        assert hasattr(config, "output_dir")  # From TrainingArguments
-        assert hasattr(config, "vf_learning_rate")  # DPPO-specific
-        assert hasattr(config, "num_vf_epochs")  # DPPO-specific
-        assert hasattr(config, "vf_update_frequency")  # DPPO-specific
-        assert hasattr(config, "num_ppo_epochs")  # From PPO/DPPO
+        assert value_updated, "Value function weights were not updated with PEFT"
+        assert policy_lora_nonzero, "Policy LoRA weights were not updated with PEFT"
 
 
 class TestDPPOTrainerIntegration(TrlTestCase):
-    """Integration tests for DPPO trainer with various configurations."""
+    """Integration tests for DPPO with various configurations."""
 
     def setup_method(self):
-        """Set up models for integration tests."""
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -555,22 +475,44 @@ class TestDPPOTrainerIntegration(TrlTestCase):
         self.raw_dataset = raw_dataset.map(tokenize, fn_kwargs={"tokenizer": self.tokenizer}, remove_columns="prompt")
 
     def teardown_method(self):
-        """Clean up after tests."""
         gc.collect()
 
-    def test_dppo_higher_vf_learning_rate(self):
-        """Test DPPO with higher value function learning rate (typical use case)."""
+    def test_all_loss_modes_run(self):
+        """All three DPPO loss modes should complete training without errors."""
+        for loss_mode in ("dppo_binary_tv", "dppo_binary_kl", "dppo_binary_kl_recompute"):
+            model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
+            training_args = DPPOConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=4,
+                loss_mode=loss_mode,
+                num_ppo_epochs=2,
+                num_sample_generations=0,
+                report_to="none",
+            )
+            trainer = DPPOTrainer(
+                args=training_args,
+                processing_class=self.tokenizer,
+                model=model,
+                ref_model=self.ref_model,
+                reward_model=self.reward_model,
+                value_model=self.value_model,
+                train_dataset=self.raw_dataset["train"],
+            )
+            trainer.train()
+            gc.collect()
+
+    def test_tight_threshold_masks_most_tokens(self):
+        """A very tight threshold should result in a high mask fraction."""
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=4,
-            learning_rate=3e-6,  # Lower policy LR
-            vf_learning_rate=1e-4,  # Higher value LR (typical for DPPO)
-            num_ppo_epochs=2,
-            num_vf_epochs=1,
-            num_sample_generations=0,  # Disable sample generation
+            loss_mode="dppo_binary_tv",
+            cliprange=1e-6,  # nearly all tokens will be outside trust region
+            num_ppo_epochs=1,
+            num_sample_generations=0,
+            logging_steps=1,
             report_to="none",
         )
-
         trainer = DPPOTrainer(
             args=training_args,
             processing_class=self.tokenizer,
@@ -580,29 +522,29 @@ class TestDPPOTrainerIntegration(TrlTestCase):
             value_model=self.value_model,
             train_dataset=self.raw_dataset["train"],
         )
-
-        # Verify VF LR is indeed higher
-        policy_lr = trainer.lr_scheduler.get_last_lr()[0]
-        vf_lr = trainer.vf_lr_scheduler.get_last_lr()[0]
-        assert vf_lr > policy_lr, "Value function LR should be higher than policy LR in typical DPPO setup"
-
-        # Train should complete successfully
         trainer.train()
 
-    def test_dppo_infrequent_vf_updates(self):
-        """Test DPPO with infrequent value function updates."""
+        maskfrac_values = [
+            entry.get("policy/maskfrac_avg", None)
+            for entry in trainer.state.log_history
+            if "policy/maskfrac_avg" in entry
+        ]
+        assert len(maskfrac_values) > 0
+        # With a near-zero threshold, most tokens should be masked
+        assert max(maskfrac_values) > 0.5, "Expected high mask fraction with very tight threshold"
+
+    def test_wide_threshold_masks_few_tokens(self):
+        """A very wide threshold should result in a low mask fraction."""
         training_args = DPPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=4,
-            learning_rate=3e-6,
-            vf_learning_rate=1e-4,
-            num_ppo_epochs=2,
-            num_vf_epochs=2,
-            vf_update_frequency=3,  # Update value every 3 policy updates
-            num_sample_generations=0,  # Disable sample generation
+            loss_mode="dppo_binary_tv",
+            cliprange=1.0,  # threshold = 1 means almost nothing is masked (prob diff ∈ [0, 1])
+            num_ppo_epochs=1,
+            num_sample_generations=0,
+            logging_steps=1,
             report_to="none",
         )
-
         trainer = DPPOTrainer(
             args=training_args,
             processing_class=self.tokenizer,
@@ -612,9 +554,13 @@ class TestDPPOTrainerIntegration(TrlTestCase):
             value_model=self.value_model,
             train_dataset=self.raw_dataset["train"],
         )
-
-        # Train should complete successfully with infrequent VF updates
         trainer.train()
 
-        # Verify configuration was respected
-        assert trainer.args.vf_update_frequency == 3
+        maskfrac_values = [
+            entry.get("policy/maskfrac_avg", None)
+            for entry in trainer.state.log_history
+            if "policy/maskfrac_avg" in entry
+        ]
+        assert len(maskfrac_values) > 0
+        # With threshold = 1 (max possible prob diff), few tokens should be masked
+        assert min(maskfrac_values) < 0.5, "Expected low mask fraction with very wide threshold"
