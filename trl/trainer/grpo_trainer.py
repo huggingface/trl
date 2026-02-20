@@ -491,11 +491,10 @@ class GRPOTrainer(BaseTrainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-        # DGPO (Difficulty-Aware Group Policy Optimization)
-        self.use_dgpo_dgae = getattr(args, "use_dgpo_dgae", False)
-        self.use_dgpo_dqw = getattr(args, "use_dgpo_dqw", False)
-        self.dgpo_dqw_temp = getattr(args, "dgpo_dqw_temp", 2.0)
-        self.dgpo_dqw_acc_reward_index = getattr(args, "dgpo_dqw_acc_reward_index", 0)
+        self.use_dgpo_dgae = args.use_dgpo_dgae
+        self.use_dgpo_dqw = args.use_dgpo_dqw
+        self.dgpo_dqw_temp = args.dgpo_dqw_temp
+        self.dgpo_dqw_acc_reward_index = args.dgpo_dqw_acc_reward_index
         if self.use_dgpo_dqw and (self.dgpo_dqw_acc_reward_index < 0 or self.dgpo_dqw_acc_reward_index >= len(self.reward_funcs)):
             raise ValueError(
                 f"dgpo_dqw_acc_reward_index must be in [0, {len(self.reward_funcs)}), got "
@@ -1812,18 +1811,24 @@ class GRPOTrainer(BaseTrainer):
         # Valid token-level loss averaging: zero_mask_ratio before slice, global_balancing_ratio after slice
         # Valid sample = std_rewards not zero (is_std_zero is already defined above)
         if self.use_dgpo_dgae or self.use_dgpo_dqw:
-            completion_length = completion_mask.sum(dim=1)  # (N_local,) valid tokens per sample
-            gathered_completion_length = self.accelerator.gather(completion_length)
-            global_completion_length_sum = gathered_completion_length.sum().clamp(min=1e-8)
-            local_completion_length_sum = completion_length.sum()
+            completion_length_local = completion_mask.sum(dim=1)
+            completion_length_global = self.accelerator.gather(completion_length_local)
+            valid_mask_global = ~is_std_zero
+
+            global_completion_length_sum = completion_length_global.sum().clamp(min=1e-8)
+            local_completion_length_sum = completion_length_local.sum()
+
+            # Rebalance each process by its share of valid tokens.
             global_balancing_ratio = (
                 self.accelerator.num_processes * local_completion_length_sum / global_completion_length_sum
             )
-            if (~is_std_zero).any():
-                valid_completion_length_sum = gathered_completion_length[~is_std_zero].sum().clamp(min=1e-8)
+
+            if valid_mask_global.any():
+                valid_completion_length_sum = completion_length_global[valid_mask_global].sum().clamp(min=1e-8)
                 zero_mask_ratio = global_completion_length_sum / valid_completion_length_sum
             else:
                 zero_mask_ratio = torch.tensor(1.0, device=advantages.device, dtype=advantages.dtype)
+
             advantages = advantages * zero_mask_ratio
 
         # DQW: multiply advantages by question-level weights; weights sum to num_questions, zero-variance questions get 1
