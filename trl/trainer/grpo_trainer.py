@@ -1857,6 +1857,7 @@ class GRPOTrainer(BaseTrainer):
                 advantages = rewards - mean_grouped_rewards
                 if self.scale_rewards != "none":
                     advantages = advantages / (std_rewards + 1e-4)
+            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
         elif self.multi_objective_aggregation == "normalize_then_sum":
             grouped = rewards_per_func.view(-1, num_generations, len(self.reward_funcs))
@@ -1872,6 +1873,7 @@ class GRPOTrainer(BaseTrainer):
                 )
             else:
                 advantages = (rewards - rewards.mean()) / (std_rewards + 1e-4)
+            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
         else:
             raise ValueError(
@@ -1880,7 +1882,6 @@ class GRPOTrainer(BaseTrainer):
             )
 
         # Valid token-level loss averaging: zero_mask_ratio before slice, global_balancing_ratio after slice
-        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
         if self.use_dgpo_dgae or self.use_dgpo_dqw:
             zero_mask_ratio, global_balancing_ratio = self._compute_valid_token_balancing_ratios(
                 completion_mask, is_std_zero
