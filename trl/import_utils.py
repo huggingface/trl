@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import importlib
+import importlib.metadata
+import importlib.util
 import warnings
 from contextlib import contextmanager
 
