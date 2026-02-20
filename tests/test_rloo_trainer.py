@@ -1200,9 +1200,7 @@ class TestRLOOTrainer(TrlTestCase):
     )
     @require_vision
     def test_training_vlm(self, model_id):
-        dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_prompt_only", split="train", revision="refs/pr/3"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
@@ -1252,9 +1250,7 @@ class TestRLOOTrainer(TrlTestCase):
     )
     @require_vision
     def test_training_vlm_beta_non_zero(self, model_id):
-        dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_prompt_only", split="train", revision="refs/pr/3"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
@@ -1303,9 +1299,7 @@ class TestRLOOTrainer(TrlTestCase):
     def test_training_vlm_peft(self, model_id):
         model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_prompt_only", split="train", revision="refs/pr/3"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
@@ -1352,9 +1346,7 @@ class TestRLOOTrainer(TrlTestCase):
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vlm_and_vllm(self, model_id) -> None:
-        dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_prompt_only", split="train", revision="refs/pr/3"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
@@ -1395,9 +1387,7 @@ class TestRLOOTrainer(TrlTestCase):
     )
     @require_vision
     def test_training_vlm_multi_image(self, model_id):
-        dataset = load_dataset(
-            "trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train", revision="refs/pr/3"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""

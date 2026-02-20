@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import textwrap
 from collections import defaultdict
@@ -797,6 +798,8 @@ class DPOTrainer(BaseTrainer):
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
             def tokenize_fn(example, processing_class):
+                tools = example.get("tools")
+                tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
                     if self._is_vlm:
@@ -809,7 +812,7 @@ class DPOTrainer(BaseTrainer):
                         rejected = example["rejected"]
                     prompt_ids = processing_class.apply_chat_template(
                         prompt,
-                        tools=example.get("tools"),
+                        tools=tools,
                         add_generation_prompt=True,
                         tokenize=True,
                         return_dict=False,
@@ -817,14 +820,14 @@ class DPOTrainer(BaseTrainer):
                     )
                     prompt_chosen_processed = processing_class.apply_chat_template(
                         prompt + chosen,
-                        tools=example.get("tools"),
+                        tools=tools,
                         tokenize=True,
                         return_dict=True,
                         **example.get("chat_template_kwargs", {}),
                     )
                     prompt_rejected_processed = processing_class.apply_chat_template(
                         prompt + rejected,
-                        tools=example.get("tools"),
+                        tools=tools,
                         tokenize=True,
                         return_dict=True,
                         **example.get("chat_template_kwargs", {}),

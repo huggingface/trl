@@ -1068,9 +1068,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_vision
     def test_train_vlm_multi_image(self, model_id):
         # Get the dataset
-        dataset = load_dataset(
-            "trl-internal-testing/zen-multi-image", "conversational_preference", split="train", revision="refs/pr/5"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_preference", split="train")
 
         # Initialize the trainer
         training_args = DPOConfig(
