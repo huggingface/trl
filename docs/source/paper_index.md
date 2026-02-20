@@ -1556,6 +1556,35 @@ trainer.train()
 
 For more details, see the [MiniLLM Trainer documentation](minillm) documentation.
 
+### Reinforcement Learning via Self-Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2601.20802
+
+Self-Distillation Policy Optimization (SDPO) enhances reinforcement learning with verifiable rewards by converting rich textual feedback (e.g., runtime errors, judge evaluations) into a dense learning signal without any external teacher or explicit reward model. SDPO treats the current model conditioned on feedback as a self-teacher and distills its feedback-informed next-token predictions back into the policy. Notably, SDPO also outperforms baselines in standard RLVR environments that only return scalar feedback by using successful rollouts as implicit feedback for failed attempts.
+
+```python
+from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
+
+training_args = SDPOConfig(
+    distillation_alpha=0.5,          # Jensen-Shannon divergence (recommended)
+    distillation_topk=100,           # Top-K distillation
+    distillation_is_clip=2.0,        # Importance sampling clipping
+    distillation_weight=1.0,         # Weight for self-distillation loss
+    use_successful_as_teacher=True,  # Use successful rollouts as teacher
+    ema_update_rate=0.05,            # Teacher EMA update rate
+)
+
+trainer = SDPOTrainer(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    reward_funcs=...,
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
+For more details, see the [SDPO Trainer documentation](sdpo_trainer).
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models
