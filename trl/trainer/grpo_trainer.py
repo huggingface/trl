@@ -482,6 +482,7 @@ class GRPOTrainer(BaseTrainer):
         self.multi_objective_aggregation = args.multi_objective_aggregation
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
+        self.mgpo_reward_base = args.mgpo_reward_base
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
         if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
             raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
@@ -1777,6 +1778,13 @@ class GRPOTrainer(BaseTrainer):
                 f"Invalid multi_objective_aggregation: {self.multi_objective_aggregation}. Must be "
                 "'sum_then_normalize' or 'normalize_then_sum'."
             )
+            
+        if self.mgpo_reward_base:
+            pc = (rewards.detach() >= self.mgpo_reward_base).float().view(-1, self.num_generations).mean(dim=1)
+            p0 = 0.5
+            d_me = pc * torch.log(pc / p0 + 1e-8) + (1 - pc) * torch.log((1 - pc) / (1 - p0) + 1e-8)
+            w_me = torch.exp(-0.5 * d_me).repeat_interleave(self.num_generations)
+            advantages = advantages * w_me
 
         # Slice to keep only the local part of the data
         process_slice = slice(
