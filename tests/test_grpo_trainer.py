@@ -37,6 +37,7 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -52,6 +53,9 @@ from .testing_utils import (
     require_vllm,
 )
 
+
+if is_liger_kernel_available():
+    from liger_kernel.transformers.grpo_loss import triton_grpo_loss
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
@@ -1022,12 +1026,12 @@ class TestGRPOTrainer(TrlTestCase):
 
         with (
             patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
-            patch.object(trainer.liger_grpo_loss, "forward", wraps=trainer.liger_grpo_loss.forward) as mock_forward,
+            patch("trl.trainer.grpo_trainer.triton_grpo_loss", wraps=triton_grpo_loss) as mock_forward,
         ):
             trainer.train()
 
-            # Verify vllm_is_ratio was passed in every call to liger_grpo_loss
-            assert mock_forward.call_count > 0, "liger_grpo_loss.forward was never called"
+            # Verify vllm_is_ratio was passed in every call to triton_grpo_loss
+            assert mock_forward.call_count > 0, "triton_grpo_loss was never called"
             for call in mock_forward.call_args_list:
                 vllm_is_ratio = call.kwargs.get("vllm_is_ratio")
                 assert vllm_is_ratio is not None, (
@@ -1918,7 +1922,8 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_vision
     @require_liger_kernel
-    def test_training_vlm_and_liger(self, model_id):
+    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo"])
+    def test_training_vlm_and_liger(self, model_id, loss_type):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -1932,6 +1937,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             use_liger_kernel=True,  # enable Liger kernel
+            loss_type=loss_type,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2375,9 +2381,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             eval_dataset=self.eval_dataset,
             processing_class=tokenizer,
         )
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
-
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
@@ -2434,9 +2437,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
             processing_class=tokenizer,
             peft_config=peft_config,
         )
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
-
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
 
         # Verify PEFT adapter is properly initialized
         from peft import PeftModel
