@@ -1616,6 +1616,17 @@ class GRPOTrainer(BaseTrainer):
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
             forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+            if self.args.bf16:
+                compute_dtype = torch.bfloat16
+            elif self.args.fp16:
+                compute_dtype = torch.float16
+            else:
+                compute_dtype = None
+            if compute_dtype is not None:
+                forward_kwargs = {
+                    k: v.to(compute_dtype) if isinstance(v, torch.Tensor) and torch.is_floating_point(v) else v
+                    for k, v in forward_kwargs.items()
+                }
         else:
             forward_kwargs = {}
 
