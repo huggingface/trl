@@ -55,11 +55,18 @@ from ...data_utils import apply_chat_template, is_conversational, maybe_apply_ch
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
-from ...models.utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, empty_cache, ensure_master_addr_port, get_config_model_id, pad
+from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_config_model_id, pad
 from ..judges import BasePairwiseJudge
-from ..utils import SIMPLE_CHAT_TEMPLATE, DPODataCollatorWithPadding, prepare_peft_model, truncate_right
+from ..utils import (
+    SIMPLE_CHAT_TEMPLATE,
+    DPODataCollatorWithPadding,
+    create_reference_model,
+    empty_cache,
+    prepare_peft_model,
+    truncate_right,
+)
 from .online_dpo_config import OnlineDPOConfig
 
 
