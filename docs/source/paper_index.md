@@ -715,7 +715,7 @@ $$
 which reveals RLHF and DPO as special cases corresponding to the logit choice of  \\( \Psi \\).
 The paper shows that this logit transform amplifies near-deterministic preferences and effectively weakens KL regularization, explaining overfitting.
 Using the **Identity transform (IPO)** avoids this pathology by optimizing preferences directly, without assuming a Bradley–Terry reward model.
-To reproduce the paper's setting, use this configuration: 
+To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
@@ -741,7 +741,7 @@ from trl import DPOConfig
 training_args = DPOConfig(
     loss_type="exo_pair", # Section 3.2 of the paper
     # From Section B of the paper
-    per_device_train_batch_size=64
+    per_device_train_batch_size=64,
     learning_rate=1e-6,
     beta=0.1,
 )
@@ -776,7 +776,7 @@ training_args = DPOConfig(
 DPO breaks under noisy human preferences because label flips bias the objective. Robust DPO fixes this by analytically debiasing the DPO loss under a simple noise model, with provable guarantees.
 
 $$
-\mathcal{L}_{\text{robust}}(\pi_\theta) = \frac{(1-\varepsilon)\mathcal{L}_{\text{DPO}} - \varepsilon\mathcal{L}_{\text{DPO}}}
+\mathcal{L}_{\text{robust}}(\pi_\theta) = \frac{(1-\varepsilon)\mathcal{L}_{\text{DPO}}(y_w, y_l) - \varepsilon\mathcal{L}_{\text{DPO}}(y_l, y_w)}
 {1-2\varepsilon}
 $$
 

@@ -12,14 +12,15 @@ By default, the [`DPOTrainer`] creates a `torch.optim.AdamW` optimizer. You can 
 ```python
 from datasets import load_dataset
 from torch import optim
+from transformers import AutoModelForCausalLM
 from trl import DPOTrainer
 
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-
-optimizer = optim.SGD(model.parameters(), lr=training_args.learning_rate)
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+optimizer = optim.SGD(model.parameters(), lr=1e-6)
 
 trainer = DPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
+    model=model,
     train_dataset=dataset,
     optimizers=(optimizer, None),
 )
@@ -33,7 +34,7 @@ You can also add learning rate schedulers by passing both optimizer and schedule
 ```python
 from torch import optim
 
-optimizer = optim.AdamW(model.parameters(), lr=training_args.learning_rate)
+optimizer = optim.AdamW(model.parameters(), lr=1e-6)
 lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
 trainer = DPOTrainer(..., optimizers=(optimizer, lr_scheduler))
