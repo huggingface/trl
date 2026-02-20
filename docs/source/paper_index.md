@@ -1,7 +1,6 @@
 # Paper Index
 
-> [!WARNING]
-> Section under construction. Feel free to contribute! See https://github.com/huggingface/trl/issues/4407.
+<!-- Within sections, papers are sorted by publish dates -->
 
 ## Group Relative Policy Optimization
 
@@ -218,7 +217,7 @@ training_args = GRPOConfig(
     per_device_train_batch_size=1, # train_batch_size_per_device in the Training section of the repository
     num_generations=8, #  num_samples in the Training section of the repository
     max_completion_length=3000, # generate_max_length in the Training section of the repository
-    beta=0.0, # beta in the Training section of the repository
+    beta=0.0, # β in the Training section of the repository
 )
 ```
 
@@ -633,27 +632,9 @@ training_args = DPOConfig(
     loss_type="sigmoid", # losses in Appendix B of the paper
     per_device_train_batch_size=64, #  batch size in Appendix B of the paper
     learning_rate=1e-6, # learning rate in Appendix B of the paper
-    beta=0.1, # beta in Appendix B of the paper
+    beta=0.1, # β in Appendix B of the paper
 )
 ```
-
-### A General Theoretical Paradigm to Understand Learning from Human Preferences
-
-**📜 Paper**: https://huggingface.co/papers/2310.12036
-
-A new general objective,  \\( \Psi \\)PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration:
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(
-    loss_type="ipo", # Section 5.1 of the paper
-    per_device_train_batch_size=90, #  mini-batch size in Section C.1 of the paper
-    learning_rate=1e-2, # learning rate in Section C.1 of the paper
-)
-```
-
-These parameters only appear in the [published version](https://proceedings.mlr.press/v238/gheshlaghi-azar24a/gheshlaghi-azar24a.pdf)
 
 ### SLiC-HF: Sequence Likelihood Calibration with Human Feedback
 
@@ -673,20 +654,120 @@ training_args = DPOConfig(
 
 These parameters only appear in the [published version](https://openreview.net/pdf?id=0qSOodKmJaN)
 
+### Statistical Rejection Sampling Improves Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2309.06657
+
+Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC. They also introduce a new loss defined as:
+
+$$
+\mathcal{L}_{\text{hinge-norm}}(\pi_\theta)
+= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+\max\left(0,\; 1 - \left[\gamma \log \frac{\pi_\theta(y_w \mid x)}{\pi_\text{ref}(y_w \mid x)} - \gamma \log \frac{\pi_\theta(y_l \mid x)}{\pi_\text{ref}(y_l \mid x)}\right]\right)
+\right]
+$$
+
+To train with RSO-filtered data and the hinge-norm loss, you can use the following code:
+
+```python
+from trl import DPOConfig, DPOTrainer
+
+dataset = ...
+
+def rso_accept(example):  # replace with your actual filter/score logic
+    return example["rso_keep"]
+
+train_dataset = train_dataset.filter(rso_accept)
+
+training_args = DPOConfig(
+    loss_type="hinge",
+    beta=0.05,  # correspond to γ in the paper
+)
+
+trainer = DPOTrainer(
+    ...,
+    args=training_args,
+    train_dataset=train_dataset,
+)
+trainer.train()
+```
+
+### Beyond Reverse KL: Generalizing Direct Preference Optimization with Diverse Divergence Constraints
+
+**📜 Paper**: https://huggingface.co/papers/2309.16240
+
+Proposes  \(( f \\)-DPO, extending DPO by replacing the usual reverse-KL regularizer with a general \(( f \\)-divergence, letting you trade off mode-seeking vs mass-covering behavior (e.g. forward KL, JS,  \(( \alpha \\)-divergences). The only change is replacing the DPO log-ratio margin with an **f′ score**:
+
+$$
+\mathcal{L}_{f\text{-DPO}}(\pi_\theta)
+= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+-\log \sigma\left(
+\beta \textcolor{red}{f'}\textcolor{red}{\Big(}\frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)}\textcolor{red}{\Big)}
+-
+\beta \textcolor{red}{f'}\textcolor{red}{\Big(}\frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\textcolor{red}{\Big)}
+\right)
+\right]
+$$
+
+Where  \\( f' \\) is the derivative of the convex function defining the chosen  \(( f \\)-divergence.
+
+To reproduce:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid",
+    beta=0.1,
+    f_divergence_type="js_divergence",  # or "reverse_kl" (default), "forward_kl", "js_divergence", "alpha_divergence"
+    f_alpha_divergence_coef=0.5,  # only used if f_divergence_type="alpha_divergence"
+)
+```
+
+### A General Theoretical Paradigm to Understand Learning from Human Preferences
+
+**📜 Paper**: https://huggingface.co/papers/2310.12036
+
+Learning from human preferences can be written as a single KL-regularized objective over pairwise preference probabilities,
+
+$$
+\max_\pi ;\mathbb{E}\big[\Psi\left(p^*(y \succ y' \mid x)\right)\big] - \tau\mathrm{KL}(\pi||\pi_{\text{ref}}),
+$$
+
+which reveals RLHF and DPO as special cases corresponding to the logit choice of  \\( \Psi \\).
+The paper shows that this logit transform amplifies near-deterministic preferences and effectively weakens KL regularization, explaining overfitting.
+Using the **Identity transform (IPO)** avoids this pathology by optimizing preferences directly, without assuming a Bradley–Terry reward model.
+To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="ipo",  # Section 5.1 of the paper
+    per_device_train_batch_size=90,  #  mini-batch size in Section C.1 of the paper
+    learning_rate=1e-2,  # learning rate in Section C.1 of the paper
+)
+```
+
+These parameters only appear in the [published version](https://proceedings.mlr.press/v238/gheshlaghi-azar24a/gheshlaghi-azar24a.pdf)
+
 ### Towards Efficient and Exact Optimization of Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2402.00856
 
-Efficient exact optimization (EXO) method is proposed to align language models with human preferences, providing a guaranteed and efficient alternative to reinforcement learning and direct preference optimization. To reproduce the paper's setting, use this configuration:
+The paper shows that direct preference methods like DPO optimize the wrong KL direction, leading to blurred preference capture, and proposes EXO as an efficient way to exactly optimize the human‑preference alignment objective by leveraging reverse KL probability matching rather than forward KL approximations. To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="exo_pair", # Section 3.2 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B of the paper
-    learning_rate=1e-6, # learning rate in Section B of the paper
-    beta=0.1, # $\beta_r$ in Section B of the paper
+    # From Section B of the paper
+    per_device_train_batch_size=64,
+    learning_rate=1e-6,
+    beta=0.1,
 )
 ```
 
@@ -694,16 +775,21 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2402.05369
 
-A framework using Noise Contrastive Estimation enhances language model alignment with both scalar rewards and pairwise preferences, demonstrating advantages over Direct Preference Optimization. To reproduce the paper's setting, use this configuration:
+The paper reframes language-model alignment as a *noise-contrastive classification* problem, proposing InfoNCA to learn a policy from explicit rewards (or preferences) by matching a reward-induced target distribution over responses, and showing DPO is a special binary case. It then introduces NCA, which adds an absolute likelihood term to prevent the likelihood collapse seen in purely relative (contrastive) objectives.
+
+With pairwise preferences, treat the chosen/rejected \\( K=2 \\), define scores \\( r=\beta(\log\pi_\theta-\log\pi_{\text{ref}}) \\), and apply the NCA preference loss \\( -\log\sigma(r_w)-\tfrac12\log\sigma(-r_w)-\tfrac12\log\sigma(-r_l) \\).
+
+To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="nca_pair", # Section 4.1 of the paper
-    per_device_train_batch_size=32, #  batch size in Section C of the paper
-    learning_rate=5e-6, # learning rate in Section C of the paper
-    beta=0.01, # $\alpha$ in Section C of the paper
+    loss_type="nca_pair",
+    # From Section C of the paper
+    per_device_train_batch_size=32,
+    learning_rate=5e-6,
+    beta=0.01,
 )
 ```
 
@@ -711,19 +797,27 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2403.00409
 
-The paper introduces a robust direct preference optimization (rDPO) framework to address noise in preference-based feedback for language models, proving its sub-optimality gap and demonstrating its effectiveness through experiments. To reproduce the paper's setting, use this configuration:
+DPO breaks under noisy human preferences because label flips bias the objective. Robust DPO fixes this by analytically debiasing the DPO loss under a simple noise model, with provable guarantees.
+
+$$
+\mathcal{L}_{\text{robust}}(\pi_\theta) = \frac{(1-\varepsilon)\mathcal{L}_{\text{DPO}}(y_w, y_l) - \varepsilon\mathcal{L}_{\text{DPO}}(y_l, y_w)}
+{1-2\varepsilon}
+$$
+
+Where  \\( \mathcal{L}_{\text{DPO}} \\) is the DPO loss defined in [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](#direct-preference-optimization-your-language-model-is-secretly-a-reward-model) and  \\( \varepsilon \\) is the probability of a label flip.
+
+This single correction turns noisy preference data into an unbiased estimator of the clean DPO objective.
 
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="robust", # Section 3.1 of the paper
-    per_device_train_batch_size=16, #  batch size in Section B of the paper
-    learning_rate=1e-3, # learning rate in Section B of the paper
-    beta=0.01, # $\beta$ in Section B of the paper,
-    max_length=512, # max length in Section B of the paper
-    label_smoothing=0.1 # label smoothing $\epsilon$ in section 6 of the paper
-
+    loss_type="robust",
+    per_device_train_batch_size=16,  # batch size in Section B of the paper
+    learning_rate=1e-3,  # learning rate in Section B of the paper
+    beta=0.1,  # β in Section B of the paper,
+    max_length=512,  # max length in Section B of the paper
+    label_smoothing=0.1  # label smoothing $\varepsilon$ in Section 6 of the paper
 )
 ```
 
@@ -733,14 +827,34 @@ training_args = DPOConfig(
 
 Theoretical analysis and a new algorithm, Binary Classifier Optimization, explain and enhance the alignment of large language models using binary feedback signals. To reproduce the paper's setting, use this configuration:
 
+BCO reframes language-model alignment as behavioral cloning from an optimal reward-weighted distribution, yielding simple supervised objectives that avoid RL while remaining theoretically grounded.
+It supports both unpaired reward data and pairwise preference data, with a reward-shift–invariant formulation that reduces to a DPO-style loss in the preference setting.
+
+For the pairwise preference setting, the BCO loss is defined as:
+
+$$
+\mathcal{L}_{\text{bco\_pair}}(\pi_\theta) =
+\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
+\left[
+-\log \sigma\Big(
+\beta[(\log\pi_\theta-\log\pi_{\text{ref}})(y_w)
+-
+(\log\pi_\theta-\log\pi_{\text{ref}})(y_l)]
+\Big)
+\right]
+$$
+
+To reproduce the paper in this setting, use this configuration:
+
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="bco_pair", # Section 4 of the paper
-    per_device_train_batch_size=128, #  batch size in Section C of the paper
-    learning_rate=5e-7, # learning rate in Section C of the paper
-    beta=0.01, # $\beta$ in Section C of the paper,
+    loss_type="bco_pair",
+    # From Section C of the paper
+    per_device_train_batch_size=128,
+    learning_rate=5e-7,
+    beta=0.01,
 )
 ```
 
@@ -768,6 +882,29 @@ training_args = DPOConfig(
 )
 ```
 
+### Iterative Reasoning Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2404.19733
+
+Iterative RPO improves reasoning by repeatedly generating chain-of-thought candidates, building preference pairs from correct vs. incorrect answers, and training with a DPO + NLL objective. The extra NLL term is key for learning to actually generate winning traces.
+
+TRL can express the DPO + NLL objective by mixing `"sigmoid"` (DPO) with `"sft"` (NLL):
+
+```python
+from trl import DPOConfig, DPOTrainer
+
+training_args = DPOConfig(
+    loss_type=["sigmoid", "sft"],
+    loss_weights=[1.0, 1.0],  # alpha in the paper, recommended value is 1.0
+)
+trainer = DPOTrainer(
+    ...,
+    args=training_args,
+)
+```
+
+Note that the paper uses an iterative loop: each iteration regenerates CoT candidates with the current model, then retrains on fresh preference pairs. TRL does not automate that loop for you.
+
 ### Self-Play Preference Optimization for Language Model Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2405.00675
@@ -778,9 +915,11 @@ A self-play method called SPPO for language model alignment achieves state-of-th
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="sppo_hard", # Section 3 of the paper
-    per_device_train_batch_size=64, #  batch size in Section C of the paper
-    learning_rate=5e-7, # learning rate in Section C of the paper
+    loss_type="sppo_hard",
+    # From Section 5 of the paper
+    beta=0.001,  # β = η^−1
+    per_device_train_batch_size=64,
+    learning_rate=5e-7,
 )
 ```
 
@@ -812,15 +951,19 @@ Alignment via Optimal Transport (AOT) aligns large language models distributiona
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="aot", # Section 3 of the paper
+    loss_type="aot",
+    beta=0.01,  # from the caption of Figure 2
 )
 ```
+
+or, for the unpaired version:
 
 ```python
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="aot_unpaired", # Section 3 of the paper
+    loss_type="aot_unpaired",
+    beta=0.01,  # from the caption of Figure 2
 )
 ```
 
@@ -836,11 +979,39 @@ An LLM-driven method automatically discovers performant preference optimization 
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="discopop", # Section 3 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-    learning_rate=5e-7, # learning rate in Section B.1 of the paper
-    beta=0.05, # $\beta$ in Section B.1 of the paper,
-    discopop_tau=0.05 # $\tau$ in Section E of the paper
+    loss_type="discopop",
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=5e-7,  # learning rate in Section B.1 of the paper
+    beta=0.05,  # β in Section B.1 of the paper,
+    discopop_tau=0.05  # τ in Section E of the paper
+)
+```
+
+### WPO: Enhancing RLHF with Weighted Preference Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2406.11827
+
+WPO reweights preference pairs by their policy probabilities to reduce the off-policy gap in DPO-style training. The loss is:
+
+$$
+\mathcal{L}_{\text{WPO}} = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}} \left[ \textcolor{red}{w(x, y_w) w(x, y_l)} \log p(y_w \succ y_l \mid x) \right]
+$$
+
+where the weight  \\( w(x, y) \\) is defined as:
+
+$$
+w(x, y) = \exp\left(\frac{1}{|y|}\sum_{t=1}^{|y|} \log \frac{\pi_\theta(y_t \mid x, y_{<t})}{\sum_{v \in \mathcal{V}} \pi_\theta(v \mid x, y_{<t})^2}\right)
+$$
+
+To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid",  # DPO loss used in the paper
+    beta=0.01,  # Section 4 of the paper
+    use_weighting=True,
 )
 ```
 
@@ -854,10 +1025,10 @@ CLAIR and APO enhance LLM alignment through more contrastive preference pairs an
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="apo_zero", # Section 4 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-    learning_rate=2e-7, # learning rate in Section 5.2 of the paper
-    beta=0.1, # $\beta$ in Section 5.2 of the paper,
+    loss_type="apo_zero",  # Section 4 of the paper
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
+    beta=0.1,  # β in Section 5.2 of the paper,
 )
 ```
 
@@ -865,53 +1036,36 @@ training_args = DPOConfig(
 from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="apo_down", # Section 4 of the paper
-    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-    learning_rate=2e-7, # learning rate in Section 5.2 of the paper
-    beta=0.1, # $\beta$ in Section 5.2 of the paper,
+    loss_type="apo_down",  # Section 4 of the paper
+    per_device_train_batch_size=64,  # batch size in Section B.1 of the paper
+    learning_rate=2e-7,  # learning rate in Section 5.2 of the paper
+    beta=0.1,  # β in Section 5.2 of the paper,
 )
 ```
 
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
-### Statistical Rejection Sampling Improves Preference Optimization
+### Length Desensitization in Direct Preference Optimization
 
-**📜 Paper**: https://huggingface.co/papers/2309.06657
+**📜 Paper**: https://huggingface.co/papers/2409.06411
 
-Proposes **RSO**, selecting stronger preference pairs via statistical rejection sampling to boost offline preference optimization; complements DPO/SLiC. They also introduce a new loss defined as:
+Shows that standard DPO is inherently length-sensitive, which often pushes models toward overly long or verbose generations. The paper proposes LD-DPO, which modifies the sequence log-prob aggregation by splitting the longer response into a shared prefix (up to the shorter response length) and an excess tail, then downweighting the tail with a factor  \\( \alpha \in [0,1] \\):
 
 $$
-\mathcal{L}_{\text{hinge-norm}}(\pi_\theta)
-= \mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}
-\left[
-\max\left(0,\; 1 - \left[\gamma \log \frac{\pi_\theta(y_w \mid x)}{\pi_\text{ref}(y_w \mid x)} - \gamma \log \frac{\pi_\theta(y_l \mid x)}{\pi_\text{ref}(y_l \mid x)}\right]\right)
-\right]
+\log \pi_\theta(y_{\text{long}}|x) = \log \pi_\theta(y_{1:l_p}|x) + \alpha \cdot \log \pi_\theta(y_{l_p+1:l}|x, y_{1:l_p}),
+\quad
+l_p=\min(|y_w|,|y_l|).
 $$
 
-To train with RSO-filtered data and the hinge-norm loss, you can use the following code:
+Setting  \\( \alpha=1 \\) recovers standard  \\( \alpha \\) reduces verbosity while preserving preference quality.
+The optimal  \\( \alpha \\) depends on the model family and whether you’re training a base vs. instruct model, but the paper suggests  \\( \alpha=0.5 \\) as a strong default starting point.
 
 ```python
-from trl import DPOConfig, DPOTrainer
-
-dataset = ...
-
-def rso_accept(example):  # replace with your actual filter/score logic
-    return example["rso_keep"]
-
-train_dataset = train_dataset.filter(rso_accept)
+from trl import DPOConfig
 
 training_args = DPOConfig(
-    loss_type="hinge",
-    beta=0.05,  # correspond to gamma in the paper
+    ld_alpha=0.5,
 )
-
-trainer = DPOTrainer(
-    ...,
-    args=training_args,
-    train_dataset=train_dataset,
-)
-trainer.train()
-
 ```
 
 ### Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization

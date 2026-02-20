@@ -25,11 +25,7 @@ _import_structure = {
         "SyncRefModelCallback",
         "WeaveCallback",
     ],
-    "dpo_config": [
-        "DPOConfig",
-        "FDivergenceConstants",  # deprecated import
-        "FDivergenceType",  # deprecated import
-    ],
+    "dpo_config": ["DPOConfig"],
     "dpo_trainer": ["DPOTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
@@ -43,9 +39,7 @@ _import_structure = {
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "utils": [
-        "RunningMoments",
         "disable_dropout_in_model",
-        "empty_cache",
         "ensure_master_addr_port",
         "get_kbit_device_map",
         "get_peft_config",
@@ -61,11 +55,7 @@ if TYPE_CHECKING:
         SyncRefModelCallback,
         WeaveCallback,
     )
-    from .dpo_config import (
-        DPOConfig,
-        FDivergenceConstants,  # deprecated import
-        FDivergenceType,  # deprecated import
-    )
+    from .dpo_config import DPOConfig
     from .dpo_trainer import DPOTrainer
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
@@ -79,9 +69,7 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
-        RunningMoments,
         disable_dropout_in_model,
-        empty_cache,
         ensure_master_addr_port,
         get_kbit_device_map,
         get_peft_config,

@@ -27,7 +27,7 @@ from datasets import load_dataset
 from trl.rewards import accuracy_reward
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",  # Start from SFT model
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     train_dataset=load_dataset("trl-lib/DeepMath-103K", split="train"),
     reward_funcs=accuracy_reward,
 )
@@ -41,8 +41,7 @@ from trl import DPOTrainer
 from datasets import load_dataset
 
 trainer = DPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",  # Use your SFT model
-    ref_model="Qwen/Qwen2.5-0.5B-Instruct",  # Original base model
+    model="Qwen/Qwen2.5-0.5B-Instruct",
     train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train"),
 )
 trainer.train()

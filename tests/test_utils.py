@@ -32,6 +32,7 @@ from trl.trainer.utils import (
     forward_masked_logits,
     generate_model_card,
     get_peft_config,
+    hash_module,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -185,6 +186,56 @@ class TestPad(TrlTestCase):
         output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
         expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
         assert torch.equal(output, expected)
+
+
+class TestHashModule(TrlTestCase):
+    def test_hash_module_deterministic_across_order(self):
+        class ModAB(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.a = torch.nn.Parameter(a)
+                self.b = torch.nn.Parameter(b)
+
+        class ModBA(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.b = torch.nn.Parameter(b)
+                self.a = torch.nn.Parameter(a)
+
+        a = torch.tensor([[1.0, 2.0]])
+        b = torch.tensor([3.0])
+        assert hash_module(ModAB(a, b)) == hash_module(ModBA(a, b))
+
+    def test_hash_module_changes_with_value(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, value: float):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([value, 2.0]))
+
+        assert hash_module(Mod(1.0)) != hash_module(Mod(1.5))
+
+    def test_hash_module_includes_dtype(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, dtype: torch.dtype):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0, 2.0], dtype=dtype))
+
+        assert hash_module(Mod(torch.float32)) != hash_module(Mod(torch.float16))
+
+    def test_hash_module_tiny_model_twice(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_a = AutoModelForCausalLM.from_pretrained(model_id)
+        model_b = AutoModelForCausalLM.from_pretrained(model_id)
+        assert hash_module(model_a) == hash_module(model_b)
+
+    def test_hash_module_tiny_model_change_layer(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        h1 = hash_module(model)
+        with torch.no_grad():
+            model.lm_head.weight.add_(0.01)
+        h2 = hash_module(model)
+        assert h1 != h2
 
 
 @require_peft
@@ -894,10 +945,12 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-CohereForCausalLM",
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             "trl-internal-testing/tiny-GemmaForCausalLM",
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
