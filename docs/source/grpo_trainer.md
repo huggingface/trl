@@ -165,14 +165,6 @@ They recommend using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\te
 
 To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
 
-### DGPO (Difficulty-Aware Group Policy Optimization)
-
-DGPO extends GRPO with difficulty-aware mechanisms to improve training on tasks with varying question difficulty (e.g., math reasoning). It is introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026) and is supported in [`GRPOTrainer`] via [`GRPOConfig`].
-
-- **DGAE (Difficulty-balanced Group Advantage Estimation)**: When `use_dgpo_dgae=True`, advantages are scaled using Mean Absolute Deviation (MAD) instead of standard deviation, i.e. advantage = (reward - mean) / (MAD + eps), which can address the implicit imbalance
-where the update magnitudes are suppressed for both easier and harder questions and peak for those of moderate difficulty.
-- **DQW (Difficulty-aware Question-level Weighting)**: When `use_dgpo_dqw=True`, each question (prompt group) is assigned a weight based on its difficulty (e.g., mean accuracy reward). Harder questions get higher weight so the policy focuses more on them. Use `dgpo_dqw_temp` to control how sharp the weighting is (lower = more focus on hard questions) and `dgpo_dqw_acc_reward_index` to specify which reward in `reward_funcs` is used as the accuracy/difficulty signal.
-
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
