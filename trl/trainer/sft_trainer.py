@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import warnings
 from collections import defaultdict
@@ -392,7 +393,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if self.pad_to_multiple_of is not None:
             raise NotImplementedError(
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
-                "prompt-completion data yet."
+                "prompt-completion data."
             )
         images = [example["images"] for example in examples]
         # Transformers requires at least one image in the batch, otherwise it throws an error
@@ -1016,6 +1017,8 @@ class SFTTrainer(BaseTrainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss):
+                    tools = example.get("tools")
+                    tools = json.loads(tools) if isinstance(tools, str) else tools
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
@@ -1027,7 +1030,7 @@ class SFTTrainer(BaseTrainer):
                                 completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
                                 prompt,
-                                tools=example.get("tools"),
+                                tools=tools,
                                 add_generation_prompt=True,
                                 tokenize=True,
                                 return_dict=False,
@@ -1038,7 +1041,7 @@ class SFTTrainer(BaseTrainer):
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
                                 prompt + completion,
-                                tools=example.get("tools"),
+                                tools=tools,
                                 tokenize=True,
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1088,7 +1091,7 @@ class SFTTrainer(BaseTrainer):
                                 messages = example["messages"]
                             processed = processing_class.apply_chat_template(
                                 messages,
-                                tools=example.get("tools"),
+                                tools=tools,
                                 tokenize=True,
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1170,6 +1173,7 @@ class SFTTrainer(BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
+        prediction_loss_only = inputs.pop("_prediction_loss_only", None)
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
@@ -1181,6 +1185,23 @@ class SFTTrainer(BaseTrainer):
 
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
+            # Avoid materializing full logits during eval unless explicitly needed.
+            # By default, liger kernel only skips logits during training (self.training=True).
+            # When only loss is needed for eval (no compute_metrics), we can safely skip logits.
+            # prediction_step communicates whether logits are expected via `_prediction_loss_only`;
+            # this prevents skipping logits during `predict()` where outputs are requested.
+            # Keep logits when preprocess_logits_for_metrics is set, even if compute_metrics is None.
+            # to prevent massive vRAM spikes from the lm_head projection.
+            # See: https://github.com/huggingface/trl/issues/4679
+            inputs["skip_logits"] = (
+                self.model.training
+                or self.args.prediction_loss_only
+                or (
+                    self.compute_metrics is None
+                    and self.preprocess_logits_for_metrics is None
+                    and prediction_loss_only is not False
+                )
+            )
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
@@ -1227,13 +1248,9 @@ class SFTTrainer(BaseTrainer):
                 token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
                 self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
             else:
-                # liger-kernel<=0.6.4 can omit token_accuracy even when requested; fixed for Gemma3 in
-                # https://github.com/linkedin/Liger-Kernel/pull/1010
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
-                    "not be logged. This may indicate an outdated liger-kernel version. Consider upgrading to the "
-                    "latest version. If the issue persists after upgrading, please report it to the liger-kernel "
-                    "repository.",
+                    "not be logged. This is unexpected; please report it to the liger-kernel repository.",
                     stacklevel=2,
                 )
         else:
@@ -1283,6 +1300,11 @@ class SFTTrainer(BaseTrainer):
             self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        # Preserve the eval loop intent so compute_loss can decide whether logits are needed.
+        inputs["_prediction_loss_only"] = prediction_loss_only
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):

@@ -97,7 +97,7 @@ class TestDistributed(
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 DPO is currently failing, see #4812")),
+            "fsdp2",
         ],
     )
     def test_dpo(self, config, get_config_path):
@@ -214,7 +214,7 @@ class TestDistributed(
             [
                 "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/reward.py",
                 "--output_dir", self.tmp_dir,
-                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_implicit_prompt_preference",
             ],
@@ -234,7 +234,7 @@ class TestDistributed(
                 ),
             ),
             pytest.param("zero3", marks=pytest.mark.xfail(reason="ZeRO 3 is currently failing, see #4899")),
-            pytest.param("fsdp2", marks=pytest.mark.xfail(reason="FSDP2 RLOO is currently failing, see #4854")),
+            "fsdp2",
         ],
     )
     def test_rloo(self, config, get_config_path):

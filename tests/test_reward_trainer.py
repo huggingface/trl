@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import pathlib
 
 import pytest
@@ -107,12 +108,24 @@ class TestDataCollatorForPreference(TrlTestCase):
 
 
 class TestRewardTrainer(TrlTestCase):
+    def test_raises_error_when_model_num_labels_not_one(self):
+        """Test that RewardTrainer raises ValueError when model doesn't have num_labels=1."""
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            dtype="float32",
+            # num_labels=2,  # Defaults to 2 num_labels for causal models
+        )
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match=r"reward models require `num_labels=1`"):
+            RewardTrainer(model=model, args=training_args)
+
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            "trl-internal-testing/tiny-Qwen3MoeForSequenceClassification",
-            "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         ],
     )
     def test_train(self, model_id):
@@ -153,7 +166,7 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
         )
@@ -175,7 +188,8 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_model(self):
         # Instantiate the model
         model = AutoModelForSequenceClassification.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            num_labels=1,  # required for reward models
             dtype="float32",
         )
 
@@ -200,14 +214,16 @@ class TestRewardTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    def test_train_from_causal_lm(self):
+    def test_train_from_sequence_classification_model(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
         )
 
         # Save the initial parameters to compare them later
@@ -236,7 +252,7 @@ class TestRewardTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
         )
@@ -264,7 +280,7 @@ class TestRewardTrainer(TrlTestCase):
     @require_peft
     def test_train_dense_with_peft_config(self):
         # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
@@ -301,7 +317,7 @@ class TestRewardTrainer(TrlTestCase):
     @require_peft
     def test_train_moe_with_peft_config(self):
         # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-Qwen3MoeForSequenceClassification"
+        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
@@ -338,8 +354,12 @@ class TestRewardTrainer(TrlTestCase):
     @require_peft
     def test_train_peft_model(self):
         # Get the base model
-        model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_id,
+            num_labels=1,  # required for reward models
+            dtype="float32",
+        )
 
         # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -378,7 +398,7 @@ class TestRewardTrainer(TrlTestCase):
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         # Get the base model parameter names
-        model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
@@ -387,6 +407,49 @@ class TestRewardTrainer(TrlTestCase):
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+
+        trainer = RewardTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    @pytest.mark.parametrize("use_reentrant", [True, False])
+    @require_peft
+    def test_train_with_peft_config_and_gradient_checkpointing_reentrant(self, use_reentrant):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        # Initialize the trainer
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir,
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+            report_to="none",
+        )
 
         trainer = RewardTrainer(
             model=model_id,
@@ -454,7 +517,7 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
         )
@@ -480,7 +543,7 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
 
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         # The following template is a simplified version of the Qwen chat template, where an additional argument
         # `role_capital` is used to control the capitalization of roles.
         tokenizer.chat_template = '{%- if messages[0]["role"] == "system" -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\n" + messages[0]["content"] + "<|im_end|>\\n" }}{%- else -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\\n" }}{%- endif -%}{%- for message in messages -%}    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) -%}        {{ "<|im_start|>" + (message.role.upper() if role_capital else message.role) + "\\n" + message.content + "<|im_end|>\\n" }}    {%- elif message.role == "assistant" -%}        {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") }}        {%- if message.content -%}            {{ "\\n" + message.content }}        {%- endif -%}        {{ "<|im_end|>\\n" }}    {%- elif message.role == "tool" -%}        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") -%}            {{ "<|im_start|>" + ("USER" if role_capital else "user") }}        {%- endif -%}        {{ "\\n<tool_response>\\n" + message.content + "\\n</tool_response>" }}        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") -%}            {{ "<|im_end|>\\n" }}        {%- endif -%}    {%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}    {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") + "\\n" }}{%- endif -%}'
@@ -491,7 +554,7 @@ class TestRewardTrainer(TrlTestCase):
         assert "chat_template_kwargs" in dataset.features
 
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
             processing_class=tokenizer,
@@ -530,9 +593,9 @@ class TestRewardTrainer(TrlTestCase):
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, chat_template_path="Qwen/Qwen3-4B", report_to="none")
-        # trl-internal-testing/tiny-GPTNeoXForSequenceClassification doesn't have a chat template set by default
+        # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-GPTNeoXForSequenceClassification",
+            model="trl-internal-testing/tiny-GPTNeoXForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -566,9 +629,9 @@ class TestRewardTrainer(TrlTestCase):
             chat_template_path=str(lazy_shared_datadir / "template.jinja"),
             report_to="none",
         )
-        # trl-internal-testing/tiny-GPTNeoXForSequenceClassification doesn't have a chat template set by default
+        # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-GPTNeoXForSequenceClassification",
+            model="trl-internal-testing/tiny-GPTNeoXForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -609,7 +672,41 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    def test_train_toolcall_data_as_json(self):
+        # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures.
+        # If `tools` is stored as a list of dicts and examples use different dict schemas, nulls may
+        # be introduced and break tool processing. This test ensures we also support `tools` provided
+        # as a list of dicts.
+        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
+
+        def convert_to_json(example):
+            return {"tools": json.loads(example["tools"])}
+
+        dataset = dataset.map(convert_to_json)
+
+        # Initialize the trainer
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
         )
@@ -635,7 +732,7 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -654,7 +751,7 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset={"data1": dataset["test"], "data2": dataset["test"]},
@@ -681,7 +778,7 @@ class TestRewardTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -703,6 +800,38 @@ class TestRewardTrainer(TrlTestCase):
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    @pytest.mark.parametrize("use_reentrant", [True, False])
+    def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        # Initialize the trainer
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir,
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+            report_to="none",
+        )
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -729,7 +858,7 @@ class TestRewardTrainer(TrlTestCase):
 
         # Initialize the trainer
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             train_dataset=dataset,
         )
 
@@ -743,7 +872,7 @@ class TestRewardTrainer(TrlTestCase):
 
         # Initialize the trainer
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             train_dataset=dataset,
             peft_config=LoraConfig(),
         )
@@ -764,7 +893,7 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
         )
@@ -790,7 +919,7 @@ class TestRewardTrainer(TrlTestCase):
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, center_rewards_coefficient=0.01, report_to="none")
         trainer = RewardTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
         )
