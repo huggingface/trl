@@ -828,7 +828,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to use difficulty-balanced group advantage estimation (DGAE). When True, the denominator "
             "when scaling advantages uses the Mean Absolute Deviation (MAD) of rewards instead of the standard "
-            "deviation. Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026)."
+            "deviation. Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614)."
         },
     )
     use_dgpo_dqw: bool = field(
@@ -836,21 +836,21 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to use difficulty-aware question-level weighting (DQW). When True, question weights are "
             "multiplied directly onto the advantages. Introduced in the [MathForge paper](https://huggingface.co/"
-            "papers/2601.20614) (ICLR 2026)."
+            "papers/2601.20614)."
         },
     )
     dgpo_dqw_temp: float = field(
         default=2.0,
         metadata={
             "help": "Temperature for the DQW softmax over negative mean (accuracy) reward. Introduced in the "
-            "[MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026)."
+            "[MathForge paper](https://huggingface.co/papers/2601.20614)."
         },
     )
     dgpo_dqw_acc_reward_index: int = field(
         default=0,
         metadata={
             "help": "Index of the accuracy reward in reward_funcs used by DQW for difficulty measure. Introduced in "
-            "the [MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026)."
+            "the [MathForge paper](https://huggingface.co/papers/2601.20614)."
         },
     )
 
