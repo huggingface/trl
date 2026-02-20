@@ -17,7 +17,9 @@ import textwrap
 from time import strftime
 
 import pytest
+import transformers
 from datasets import Dataset, DatasetDict
+from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
@@ -457,12 +459,20 @@ class TestIsConversationalFromValue(TrlTestCase):
 class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
+        "trl-internal-testing/tiny-Cohere2ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
         "trl-internal-testing/tiny-GptOssForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="GLM4 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
