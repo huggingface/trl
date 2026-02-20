@@ -148,14 +148,15 @@ While training and evaluating we record the following reward metrics:
 
 Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
 
-- `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
-- With `use_liger_kernel=True`:
-   - only a single `loss_type` is supported,
-   - `compute_metrics` is not supported,
-   - `precompute_ref_log_probs=True` is not supported.
-- `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
-- `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
-- `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
+* `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
+* With `use_liger_kernel=True`:
+  * only a single `loss_type` is supported,
+  * `compute_metrics` is not supported,
+  * `precompute_ref_log_probs=True` is not supported.
+* `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
+* `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
+* `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
+
 ### Multi-loss combinations
 
 The DPO trainer supports combining multiple loss functions with different weights, enabling more sophisticated optimization strategies. This is particularly useful for implementing algorithms like MPO (Mixed Preference Optimization). MPO is a training approach that combines multiple optimization objectives, as described in the paper [Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization](https://huggingface.co/papers/2411.10442).
@@ -252,13 +253,13 @@ Unsloth is an open‑source framework for fine‑tuning and reinforcement learni
 The [`DPOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
 * The conversation messages (prompt, chosen and rejected), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON schemas
+* The list of available tools in the `tools` column, typically provided as JSON `str` schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
 ## Training Vision Language Models
 
-[`DPOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, you need to provide a dataset with an additional `images` column containing the images to be processed. For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
+[`DPOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
 An example of such a dataset is the [RLAIF-V Dataset](https://huggingface.co/datasets/HuggingFaceH4/rlaif-v_formatted) dataset.
 
 ```python
