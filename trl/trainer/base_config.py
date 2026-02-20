@@ -21,8 +21,7 @@ from transformers import TrainingArguments
 class BaseConfig(TrainingArguments):
     # Override fields from TrainingArguments whose help strings contain unescaped "%" characters.
     # argparse interprets "%" as a format specifier, raising TypeError when rendering --help output.
-    # Fixed upstream in transformers v5.3.0 (https://github.com/huggingface/transformers/pull/43980),
-    # but overridden here to support older versions.
+    # Fixed upstream in transformers v5.3.0, but overridden here to support older versions.
     gradient_checkpointing: bool = field(
         default=False,
         metadata={
