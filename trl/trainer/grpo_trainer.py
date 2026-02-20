@@ -1843,7 +1843,7 @@ class GRPOTrainer(BaseTrainer):
                 num_questions, device=advantages.device, dtype=advantages.dtype
             )
             if num_zero_variance_questions < num_questions:
-                # For mean accuracy 0 (all wrong) or NaN, set difficulty to -1 so they get less weight
+                # mean accuracy == 0 (all wrong) or NaN are remapped to 1.0 before softmax so they get less weight```
                 mean_per_q_acc_modified = mean_per_q_acc.clone()
                 mean_per_q_acc_modified[(mean_per_q_acc == 0) | torch.isnan(mean_per_q_acc)] = 1.0
                 difficulty_balancing_weights[~is_std_zero_q] = (
