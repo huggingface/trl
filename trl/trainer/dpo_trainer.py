@@ -557,6 +557,14 @@ class DPOTrainer(BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
+        self.padding_free = args.padding_free
+        if self.padding_free:
+            logger.warning(
+                "`padding_free=True` is temporarily unavailable after a refactor and is currently disabled. Falling "
+                "back to standard padding (`padding_free=False`). This feature is planned to return in a future "
+                "update; for now, please set `padding_free=False` explicitly."
+            )
+            self.padding_free = False
         dataset_sample = next(iter(train_dataset))
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
