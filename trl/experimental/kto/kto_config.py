@@ -17,9 +17,11 @@ from typing import Any
 
 from transformers import TrainingArguments
 
+from ...trainer.base_config import BaseConfig
+
 
 @dataclass
-class KTOConfig(TrainingArguments):
+class KTOConfig(BaseConfig):
     r"""
     Configuration class for the [`experimental.kto.KTOTrainer`].
 
