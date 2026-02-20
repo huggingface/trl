@@ -647,7 +647,7 @@ trainer = GRPOTrainer(
 You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
 
 > [!IMPORTANT]
-> `environment_factory` requires `transformers>=5.2.0.dev0`.
+> `environment_factory` requires `transformers>=5.2.0`.
 
 The following is a minimal example of using `environment_factory` to define a simple environment with an `increment` method, which is exposed as a tool to the agent:
 

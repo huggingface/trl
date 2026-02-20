@@ -2194,8 +2194,8 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.2.0.dev0"),
-        reason="Environment factory support is not available in transformers versions below 5.2.0.dev0",
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
         strict=True,
     )
     @require_jmespath
