@@ -13,9 +13,8 @@
 # limitations under the License.
 
 import asyncio
-import dataclasses
+import hashlib
 import importlib.resources as pkg_resources
-import json
 import os
 import random
 import socket
@@ -32,7 +31,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import Accelerator, PartialState, logging
+from accelerate import PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.utils.data import Sampler
@@ -49,8 +48,6 @@ from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     is_peft_available,
     is_rich_available,
-    is_torch_mlu_available,
-    is_torch_npu_available,
     is_torch_xpu_available,
 )
 
@@ -180,101 +177,6 @@ def pad(
     return output
 
 
-@dataclass
-class RunningMoments:
-    """
-    Calculates the running mean and standard deviation of a data stream. Reference:
-    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
-    """
-
-    accelerator: Accelerator
-    mean: float = 0
-    std: float = 1
-    var: float = 1
-    count: float = 1e-24
-
-    @torch.no_grad()
-    def update(self, xs: torch.Tensor) -> tuple[float, float]:
-        """
-        Updates running moments from batch's moments computed across ranks
-        """
-        if self.accelerator.use_distributed:
-            xs_mean, xs_var, xs_count = get_global_statistics(self.accelerator, xs)
-        else:
-            xs_count = xs.numel()
-            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
-        xs_mean, xs_var = xs_mean.float(), xs_var.float()
-
-        delta = xs_mean - self.mean
-        tot_count = self.count + xs_count
-
-        new_sum = xs_var * xs_count
-        # correct old_sum deviation accounting for the new mean
-        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
-        tot_sum = old_sum + new_sum
-
-        self.mean += (delta * xs_count / tot_count).item()
-        new_var = tot_sum / tot_count
-        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
-        self.var = new_var.item()
-        self.count = tot_count
-
-        return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
-
-    def save_to_json(self, json_path: str):
-        """Save the content of this instance in JSON format inside `json_path`."""
-        # save everything except accelerator
-        if self.accelerator.is_main_process:
-            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
-            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
-            with open(json_path, "w", encoding="utf-8") as f:
-                f.write(json_string)
-
-    @classmethod
-    def load_from_json(cls, accelerator: Accelerator, json_path: str):
-        """Create an instance from the content of `json_path`."""
-        # load everything except accelerator
-        with open(json_path, encoding="utf-8") as f:
-            text = f.read()
-        return cls(accelerator=accelerator, **json.loads(text))
-
-
-@torch.no_grad()
-def get_global_statistics(
-    accelerator, xs: torch.Tensor, mask=None, device="cpu"
-) -> tuple[torch.Tensor, torch.Tensor, int]:
-    """
-    Computes element-wise mean and variance of the tensor across processes. Reference:
-    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
-    """
-    xs = xs.to(accelerator.device)
-    sum_and_count = torch.tensor([xs.sum(), (xs.numel() if mask is None else mask.sum())], device=xs.device)
-    sum_and_count = accelerator.reduce(sum_and_count)
-    global_sum, count = sum_and_count
-    global_mean = global_sum / count
-
-    sum_var = torch.sum(((xs - global_mean) ** 2).mul(1 if mask is None else mask))
-    sum_var = accelerator.reduce(sum_var)
-    global_var = sum_var / count
-
-    return global_mean.to(device), global_var.to(device), count.item()
-
-
-def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float, dim: int = -1) -> torch.Tensor:
-    if tensor.size(dim) >= length:
-        return tensor
-    else:
-        pad_size = list(tensor.shape)
-        pad_size[dim] = length - tensor.size(dim)
-        return torch.cat(
-            [
-                tensor,
-                pad_value * torch.ones(*pad_size, dtype=tensor.dtype, device=tensor.device),
-            ],
-            dim=dim,
-        )
-
-
 def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
@@ -333,29 +235,6 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
     return peft_config
 
 
-def get_exp_cap(value, decimal=4):
-    """
-    Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow. The formula is :
-    log(value.dtype.max) E.g. for float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
-
-    Args:
-        value (`torch.Tensor`):
-            The input tensor to obtain the data type
-        decimal (`int`):
-            The number of decimal points of the output exponent cap. eg: direct calling exp(log(torch.float32.max))
-            will result in inf so we cap the exponent to 88.7228 to avoid overflow.
-    """
-    vdtype_max = torch.zeros([1]).to(value.dtype) + torch.finfo(value.dtype).max
-    vdtype_log_max = torch.log(vdtype_max).to(value.device)
-    return torch.floor(vdtype_log_max * 10**decimal) / 10**decimal if decimal > 0 else vdtype_log_max
-
-
-def cap_exp(value, cap=-1):
-    # Cap the exponent value below the upper-bound to avoid overflow, before calling torch.exp
-    cap = get_exp_cap(value) if cap < 0 else cap
-    return torch.exp(torch.clamp(value, max=cap))
-
-
 def prepare_deepspeed(
     model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
 ) -> torch.nn.Module:
@@ -412,24 +291,6 @@ def prepare_deepspeed(
     model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
     model.eval()
     return model
-
-
-def empty_cache() -> None:
-    """Empties the cache of the available torch device.
-
-    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
-    the first available device it finds.
-
-    If none of the specific devices are available, it defaults to emptying the CUDA cache.
-    """
-    if is_torch_xpu_available():
-        torch.xpu.empty_cache()
-    elif is_torch_mlu_available():
-        torch.mlu.empty_cache()
-    elif is_torch_npu_available():
-        torch.npu.empty_cache()
-    else:
-        torch.cuda.empty_cache()
 
 
 def generate_model_card(
@@ -1205,6 +1066,17 @@ def create_model_from_path(
         architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(model_id, **kwargs)
     return model
+
+
+def hash_module(module: torch.nn.Module) -> str:
+    h = hashlib.sha256()
+    for _, tensor in sorted(module.state_dict().items()):
+        tensor = tensor.cpu()
+        h.update(str(tensor.dtype).encode())
+        if tensor.dtype in [torch.bfloat16, torch.float8_e4m3fn, torch.float8_e5m2]:
+            tensor = tensor.to(torch.float32)
+        h.update(tensor.numpy().tobytes())
+    return h.hexdigest()
 
 
 def get_config_model_id(config: PretrainedConfig) -> str:

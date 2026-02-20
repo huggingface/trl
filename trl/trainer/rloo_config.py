@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 
 from transformers import TrainingArguments
 
+from .base_config import BaseConfig
+
 
 @dataclass
-class RLOOConfig(TrainingArguments):
+class RLOOConfig(BaseConfig):
     r"""
     Configuration class for the [`RLOOTrainer`].
 
