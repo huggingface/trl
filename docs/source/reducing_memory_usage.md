@@ -32,7 +32,7 @@ training_args = DPOConfig(..., max_length=...)
 ```
 
 > [!WARNING]
-> The legacy `max_prompt_length` and `max_completion_length` parameters are deprecated and will be removed; instead, filter or pre-truncate overlong prompts/completions in your dataset before training.
+> The legacy `max_prompt_length` and `max_completion_length` parameters are now removed; instead, filter or pre-truncate overlong prompts/completions in your dataset before training.
 
 </hfoption>
 <hfoption id="SFT">

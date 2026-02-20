@@ -7,7 +7,3 @@
 ## disable_gradient_checkpointing
 
 [[autodoc]] models.utils.disable_gradient_checkpointing
-
-## create_reference_model
-
-[[autodoc]] create_reference_model

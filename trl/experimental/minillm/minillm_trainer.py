@@ -31,7 +31,8 @@ from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
-from ...trainer.utils import disable_dropout_in_model, empty_cache, get_config_model_id
+from ...trainer.utils import disable_dropout_in_model, get_config_model_id
+from ..utils import empty_cache
 from .minillm_config import MiniLLMConfig
 
 

@@ -38,8 +38,8 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import disable_dropout_in_model, empty_cache
-from ..utils import DataCollatorForChatML
+from ...trainer.utils import disable_dropout_in_model
+from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
 
