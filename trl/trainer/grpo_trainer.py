@@ -1531,6 +1531,90 @@ class GRPOTrainer(BaseTrainer):
             extra_fields,
         )
 
+    def _compute_advantages_with_dgae(
+        self,
+        rewards: torch.Tensor,
+        num_generations: int,
+        *,
+        use_group_mad: bool | None = None,
+    ) -> torch.Tensor:
+        """Compute advantages using MAD (DGAE) as denominator. Call only when use_dgpo_dgae is True."""
+        advantages = rewards - rewards.mean()
+        if self.scale_rewards != "none":
+            if use_group_mad is None:
+                use_group_mad = self.scale_rewards == "group" and num_generations > 1
+            if use_group_mad:
+                mad_rewards = (
+                    advantages.abs()
+                    .view(-1, num_generations)
+                    .mean(dim=1)
+                    .repeat_interleave(num_generations, dim=0)
+                )
+            else:
+                mad_rewards = advantages.abs().mean().expand_as(rewards)
+            advantages = advantages / (mad_rewards + 1e-4)
+        return advantages
+
+    def _compute_valid_token_balancing_ratios(
+        self,
+        completion_mask: torch.Tensor,
+        is_std_zero: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute valid token-level balancing ratios (zero_mask_ratio and global_balancing_ratio).
+        Returns (zero_mask_ratio, global_balancing_ratio). Apply zero_mask_ratio to advantages before slice,
+        global_balancing_ratio after slice. Call only when use_dgpo_dgae or use_dgpo_dqw is True.
+        """
+        completion_length_local = completion_mask.sum(dim=1)
+        completion_length_global = gather(completion_length_local)
+
+        global_completion_length_sum = completion_length_global.sum().clamp(min=1e-8)
+        local_completion_length_sum = completion_length_local.sum()
+
+        global_balancing_ratio = (
+            self.accelerator.num_processes * local_completion_length_sum / global_completion_length_sum
+        )
+
+        valid_mask_global = ~gather(is_std_zero)
+        if valid_mask_global.any():
+            valid_completion_length_sum = completion_length_global[valid_mask_global].sum().clamp(min=1e-8)
+            zero_mask_ratio = global_completion_length_sum / valid_completion_length_sum
+        else:
+            zero_mask_ratio = torch.tensor(1.0, device=completion_mask.device, dtype=completion_mask.dtype)
+
+        return zero_mask_ratio, global_balancing_ratio
+
+    def _compute_dqw_weights(
+        self,
+        rewards: torch.Tensor,
+        rewards_per_func: torch.Tensor,
+        num_generations: int,
+    ) -> torch.Tensor:
+        """
+        Compute question-level difficulty balancing weights (DQW).
+        Returns difficulty_balancing_weights (num_questions,); expand with repeat_interleave at call site.
+        Weights sum to num_questions; zero-variance questions get weight 1.
+        Call only when use_dgpo_dqw is True.
+        """
+        num_questions = rewards.size(0) // num_generations
+        acc_rewards = rewards_per_func[:, self.dgpo_dqw_acc_reward_index]  # (N,)
+        mean_per_q_acc = acc_rewards.view(-1, num_generations).nanmean(dim=1)  # (num_questions,)
+        std_per_q_acc = acc_rewards.view(-1, num_generations).std(dim=1)  # (num_questions,)
+        is_std_zero_q = std_per_q_acc < 1e-8
+        num_zero_variance_questions = is_std_zero_q.sum().item()
+        difficulty_balancing_weights = torch.ones(
+            num_questions, device=rewards.device, dtype=rewards.dtype
+        )
+        if num_zero_variance_questions < num_questions:
+            mean_per_q_acc_modified = mean_per_q_acc.clone()
+            mean_per_q_acc_modified[(mean_per_q_acc == 0) | torch.isnan(mean_per_q_acc)] = 1.0
+            difficulty_balancing_weights[~is_std_zero_q] = (
+                num_questions - num_zero_variance_questions
+            ) * torch.nn.functional.softmax(
+                -mean_per_q_acc_modified[~is_std_zero_q] / self.dgpo_dqw_temp, dim=0
+            )
+        return difficulty_balancing_weights
+
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
     ) -> dict[str, torch.Tensor | Any]:
@@ -1765,26 +1849,14 @@ class GRPOTrainer(BaseTrainer):
                     f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
                 )
 
-            advantages = rewards - mean_grouped_rewards
-            if self.scale_rewards != "none":
-                if self.use_dgpo_dgae:
-                    # DGAE: use Mean Absolute Deviation (MAD) as denominator instead of std
-                    # MAD = mean(|rewards - mean|), per group when scale_rewards=="group"
-                    if self.scale_rewards == "group" and num_generations > 1:
-                        mad_rewards = (
-                            (rewards - mean_grouped_rewards)
-                            .abs()
-                            .view(-1, num_generations)
-                            .mean(dim=1)
-                            .repeat_interleave(num_generations, dim=0)
-                        )
-                    else:
-                        # batch scaling or single sample per group: use global MAD
-                        mad_rewards = (rewards - mean_grouped_rewards).abs().mean().expand_as(rewards)
-                    advantages = advantages / (mad_rewards + 1e-4)
-                else:
+            if self.use_dgpo_dgae:
+                advantages = self._compute_advantages_with_dgae(
+                    rewards, num_generations
+                )
+            else:
+                advantages = rewards - mean_grouped_rewards
+                if self.scale_rewards != "none":
                     advantages = advantages / (std_rewards + 1e-4)
-            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
         elif self.multi_objective_aggregation == "normalize_then_sum":
             grouped = rewards_per_func.view(-1, num_generations, len(self.reward_funcs))
@@ -1795,12 +1867,11 @@ class GRPOTrainer(BaseTrainer):
             rewards = (reward_k * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             std_rewards = rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
             if self.use_dgpo_dgae:
-                # DGAE: use MAD as denominator instead of std
-                mad_rewards = (rewards - rewards.mean()).abs().mean().expand_as(rewards)
-                advantages = (rewards - rewards.mean()) / (mad_rewards + 1e-4)
+                advantages = self._compute_advantages_with_dgae(
+                    rewards, num_generations, use_group_mad=False
+                )
             else:
                 advantages = (rewards - rewards.mean()) / (std_rewards + 1e-4)
-            is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
         else:
             raise ValueError(
@@ -1809,50 +1880,19 @@ class GRPOTrainer(BaseTrainer):
             )
 
         # Valid token-level loss averaging: zero_mask_ratio before slice, global_balancing_ratio after slice
-        # Valid sample = std_rewards not zero (is_std_zero is already defined above)
+        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
         if self.use_dgpo_dgae or self.use_dgpo_dqw:
-            completion_length_local = completion_mask.sum(dim=1)
-            completion_length_global = self.accelerator.gather(completion_length_local)
-            valid_mask_global = ~is_std_zero
-
-            global_completion_length_sum = completion_length_global.sum().clamp(min=1e-8)
-            local_completion_length_sum = completion_length_local.sum()
-
-            # Rebalance each process by its share of valid tokens.
-            global_balancing_ratio = (
-                self.accelerator.num_processes * local_completion_length_sum / global_completion_length_sum
+            zero_mask_ratio, global_balancing_ratio = self._compute_valid_token_balancing_ratios(
+                completion_mask, is_std_zero
             )
-
-            if valid_mask_global.any():
-                valid_completion_length_sum = completion_length_global[valid_mask_global].sum().clamp(min=1e-8)
-                zero_mask_ratio = global_completion_length_sum / valid_completion_length_sum
-            else:
-                zero_mask_ratio = torch.tensor(1.0, device=advantages.device, dtype=advantages.dtype)
-
             advantages = advantages * zero_mask_ratio
 
         # DQW: multiply advantages by question-level weights; weights sum to num_questions, zero-variance questions get 1
         if self.use_dgpo_dqw:
-            num_questions = rewards.size(0) // num_generations
-            acc_rewards = rewards_per_func[:, self.dgpo_dqw_acc_reward_index]  # (N,)
-            mean_per_q_acc = acc_rewards.view(-1, num_generations).nanmean(dim=1)  # (num_questions,)
-            std_per_q_acc = acc_rewards.view(-1, num_generations).std(dim=1)  # (num_questions,)
-            is_std_zero_q = std_per_q_acc < 1e-8
-            num_zero_variance_questions = is_std_zero_q.sum().item()
-            difficulty_balancing_weights = torch.ones(
-                num_questions, device=advantages.device, dtype=advantages.dtype
+            difficulty_balancing_weights = self._compute_dqw_weights(
+                rewards, rewards_per_func, num_generations
             )
-            if num_zero_variance_questions < num_questions:
-                # mean accuracy == 0 (all wrong) or NaN are remapped to 1.0 before softmax so they get less weight```
-                mean_per_q_acc_modified = mean_per_q_acc.clone()
-                mean_per_q_acc_modified[(mean_per_q_acc == 0) | torch.isnan(mean_per_q_acc)] = 1.0
-                difficulty_balancing_weights[~is_std_zero_q] = (
-                    num_questions - num_zero_variance_questions
-                ) * torch.nn.functional.softmax(
-                    -mean_per_q_acc_modified[~is_std_zero_q] / self.dgpo_dqw_temp, dim=0
-                )
-            question_weights_expanded = difficulty_balancing_weights.repeat_interleave(num_generations)
-            advantages = advantages * question_weights_expanded
+            advantages = advantages * difficulty_balancing_weights.repeat_interleave(num_generations)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
