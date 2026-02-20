@@ -1313,9 +1313,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_train_toolcall_data(self):
         # Get the dataset
-        dataset = load_dataset(
-            "trl-internal-testing/toolcall", "language_modeling", split="train", revision="refs/pr/2"
-        )
+        dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
@@ -1343,9 +1341,7 @@ class TestSFTTrainer(TrlTestCase):
         # be introduced and break tool processing. This test ensures we also support `tools` provided
         # as a list of dicts.
         # Get the dataset
-        dataset = load_dataset(
-            "trl-internal-testing/toolcall", "language_modeling", split="train", revision="refs/pr/2"
-        )
+        dataset = load_dataset("trl-internal-testing/toolcall", "language_modeling", split="train")
 
         def convert_to_json(example):
             return {"tools": json.loads(example["tools"])}
@@ -1688,7 +1684,7 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=1,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )

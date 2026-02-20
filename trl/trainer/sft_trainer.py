@@ -393,7 +393,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if self.pad_to_multiple_of is not None:
             raise NotImplementedError(
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
-                "prompt-completion data yet."
+                "prompt-completion data."
             )
         images = [example["images"] for example in examples]
         # Transformers requires at least one image in the batch, otherwise it throws an error

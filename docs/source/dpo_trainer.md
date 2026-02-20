@@ -1,147 +1,161 @@
 # DPO Trainer
 
-[![model badge](https://img.shields.io/badge/All_models-DPO-blue)](https://huggingface.co/models?other=dpo,trl) [![model badge](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
+[![All_models-DPO-blue](https://img.shields.io/badge/All_models-DPO-blue)](https://huggingface.co/models?other=dpo,trl) [![smol_course-Chapter_2-yellow](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
 
 ## Overview
 
-TRL supports the DPO Trainer for training language models from preference data, as described in the paper [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://huggingface.co/papers/2305.18290) by [Rafael Rafailov](https://huggingface.co/rmrafailov), Archit Sharma, Eric Mitchell, [Stefano Ermon](https://huggingface.co/ermonste), [Christopher D. Manning](https://huggingface.co/manning), [Chelsea Finn](https://huggingface.co/cbfinn).
+TRL supports the Direct Preference Optimization (DPO) Trainer for training language models, as described in the paper [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://huggingface.co/papers/2305.18290) by [Rafael Rafailov](https://huggingface.co/rmrafailov), Archit Sharma, Eric Mitchell, [Stefano Ermon](https://huggingface.co/ermonste), [Christopher D. Manning](https://huggingface.co/manning), [Chelsea Finn](https://huggingface.co/cbfinn).
 
 The abstract from the paper is the following:
 
 > While large-scale unsupervised language models (LMs) learn broad world knowledge and some reasoning skills, achieving precise control of their behavior is difficult due to the completely unsupervised nature of their training. Existing methods for gaining such steerability collect human labels of the relative quality of model generations and fine-tune the unsupervised LM to align with these preferences, often with reinforcement learning from human feedback (RLHF). However, RLHF is a complex and often unstable procedure, first fitting a reward model that reflects the human preferences, and then fine-tuning the large unsupervised LM using reinforcement learning to maximize this estimated reward without drifting too far from the original model. In this paper we introduce a new parameterization of the reward model in RLHF that enables extraction of the corresponding optimal policy in closed form, allowing us to solve the standard RLHF problem with only a simple classification loss. The resulting algorithm, which we call Direct Preference Optimization (DPO), is stable, performant, and computationally lightweight, eliminating the need for sampling from the LM during fine-tuning or performing significant hyperparameter tuning. Our experiments show that DPO can fine-tune LMs to align with human preferences as well as or better than existing methods. Notably, fine-tuning with DPO exceeds PPO-based RLHF in ability to control sentiment of generations, and matches or improves response quality in summarization and single-turn dialogue while being substantially simpler to implement and train.
 
-The first step is to train an SFT model, to ensure the data we train on is in-distribution for the DPO algorithm.
-
-Then, fine-tuning a language model via DPO consists of two steps and is easier than [PPO](ppo_trainer):
-
-1. **Data collection**: Gather a [preference dataset](dataset_formats#preference) with positive and negative selected pairs of generation, given a prompt.
-2. **Optimization**: Maximize the log-likelihood of the DPO loss directly.
-
-This process is illustrated in the sketch below (from [Figure 1 of the DPO paper](https://huggingface.co/papers/2305.18290)):
-
-![Figure 1 DPO](https://github.com/huggingface/trl/assets/49240599/9150fac6-3d88-4ca2-8ec6-2a6f3473216d)
-
-Read more about DPO algorithm in the [original paper](https://huggingface.co/papers/2305.18290).
+This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif) and later refactored by [Quentin Gallouédec](https://huggingface.co/qgallouedec).
 
 ## Quick start
 
-This example demonstrates how to train a model using the DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
-
-<iframe
-  src="https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized/embed/viewer/default/train?row=0"
-  frameborder="0"
-  width="100%"
-  height="560px"
-></iframe>
-
-Below is the script to train the model:
+This example demonstrates how to train a language model using the [`DPOTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback).
 
 ```python
-# train_dpo.py
+from trl import DPOTrainer
 from datasets import load_dataset
-from trl import DPOConfig, DPOTrainer
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-
-training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO")
-trainer = DPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
+trainer = DPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train"),
+)
 trainer.train()
 ```
 
-Execute the script using the following command:
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&sidebar=hidden&runs=dpo_qwen3-0.6B_ultrafeedback" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
 
-```bash
-accelerate launch train_dpo.py
+## Expected dataset type and format
+
+DPO requires a [preference](dataset_formats#preference) dataset. The [`DPOTrainer`] is compatible with both [standard](dataset_formats#standard) and [conversational](dataset_formats#conversational) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+```python
+# Standard format
+## Explicit prompt (recommended)
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+# Implicit prompt
+preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
+
+# Conversational format
+## Explicit prompt (recommended)
+preference_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                      "chosen": [{"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "assistant", "content": "It is green."}]}
+## Implicit prompt
+preference_example = {"chosen": [{"role": "user", "content": "What color is the sky?"},
+                                 {"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "user", "content": "What color is the sky?"},
+                                   {"role": "assistant", "content": "It is green."}]}
 ```
 
-Distributed across 8 GPUs, the training takes approximately 3 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
+If your dataset is not in one of these formats, you can preprocess it to convert it into the expected format. Here is an example with the [Vezora/Code-Preference-Pairs](https://huggingface.co/datasets/Vezora/Code-Preference-Pairs) dataset:
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/dpo-qwen2-reward-margin.png)
+```python
+from datasets import load_dataset
 
-To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-DPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
+dataset = load_dataset("Vezora/Code-Preference-Pairs")
 
-<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-DPO
-<strong><span style="color: red;">&lt;shirin_yamani&gt;:</span></strong>
-What is Huggingface?
 
-<strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-DPO&gt;:</span></strong>
-Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000 pre-trained models in  Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000  pre-trained models in a variety of languages, enabling users to explore and utilize the latest techniques and technologies in the field of machine learning.
-</code></pre>
+def preprocess_function(example):
+    return {
+        "prompt": [{"role": "user", "content": example["input"]}],
+        "chosen": [{"role": "assistant", "content": example["accepted"]}],
+        "rejected": [{"role": "assistant", "content": example["rejected"]}],
+    }
 
-## Expected dataset type
 
-DPO requires a [preference dataset](dataset_formats#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
-
-Although the [`DPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
-
-### Special considerations for vision-language models
-
-The [`DPOTrainer`] supports fine-tuning vision-language models (VLMs). For these models, a vision dataset is required. To learn more about the specific format for vision datasets, refer to the [Vision dataset format](dataset_formats#vision-datasets) section.
-
-Additionally, unlike standard text-based models where a `tokenizer` is used, for VLMs, you should replace the `tokenizer` with a `processor`.
-
-```diff
-- model = AutoModelForCausalLM.from_pretrained(model_id)
-+ model = AutoModelForImageTextToText.from_pretrained(model_id)
-
-- tokenizer = AutoTokenizer.from_pretrained(model_id)
-+ processor = AutoProcessor.from_pretrained(model_id)
-
-  trainer = DPOTrainer(
-      model,
-      args=training_args,
-      train_dataset=train_dataset,
--     processing_class=tokenizer,
-+     processing_class=processor,
-)
+dataset = dataset.map(preprocess_function, remove_columns=["instruction", "input", "accepted", "ID"])
+print(next(iter(dataset["train"])))
 ```
 
-For a complete example of fine-tuning a vision-language model, refer to the script in [`examples/scripts/dpo_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo_vlm.py).
-
-## Example script
-
-We provide an example script to train a model using the DPO method. The script is available in [`trl/scripts/dpo.py`](https://github.com/huggingface/trl/blob/main/trl/scripts/dpo.py)
-
-To test the DPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
-
-```bash
-accelerate launch trl/scripts/dpo.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/ultrafeedback_binarized \
-    --num_train_epochs 1 \
-    --output_dir Qwen2-0.5B-DPO
+```json
+{
+    "prompt": [{"role": "user", "content": "Create a nested loop to print every combination of numbers [...]"}],
+    "chosen": [{"role": "assistant", "content": "Here is an example of a nested loop in Python [...]"}],
+    "rejected": [{"role": "assistant", "content": "Here is an example of a nested loop in Python [...]"}],
+}
 ```
 
-## Logged metrics
+## Looking deeper into the DPO method
 
-While training and evaluating, we record the following reward metrics:
+Direct Preference Optimization (DPO) is a training method designed to align a language model with preference data. Instead of supervised input–output pairs, the model is trained on pairs of completions to the same prompt, where one completion is preferred over the other. The objective directly optimizes the model to assign higher likelihood to preferred completions than to dispreferred ones, relative to a reference model, without requiring an explicit reward model.
 
-- `rewards/chosen`: the mean difference between the log probabilities of the policy model and the reference model for the chosen responses scaled by beta
-- `rewards/rejected`: the mean difference between the log probabilities of the policy model and the reference model for the rejected responses scaled by beta
-- `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
-- `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
+This section breaks down how DPO works in practice, covering the key steps: **preprocessing** and **loss computation**.
 
-## Loss functions
+### Preprocessing and tokenization
 
-The DPO algorithm supports several loss functions. The loss function can be set using the `loss_type` parameter in the [`DPOConfig`]. The following loss functions are supported:
+During training, each example is expected to contain a prompt along with a preferred (`chosen`) and a dispreferred (`rejected`) completion. For more details on the expected formats, see [Dataset formats](dataset_formats).
+The [`DPOTrainer`] tokenizes each input using the model's tokenizer.
+
+### Computing the loss
+
+![dpo_figure](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/dpo_figure.png)
+
+The loss used in DPO is defined as follows:
+$$
+\mathcal{L}_{\mathrm{DPO}}(\theta) = -\mathbb{E}_{(x,y^{+},y^{-})}\!\left[\log \sigma\!\left(\beta\Big(\log\frac{{\pi_{\theta}(y^{+}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{+}\!\mid x)}}-\log \frac{{\pi_{\theta}(y^{-}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{-}\!\mid x)}}\Big)\right)\right]
+$$
+  
+where  \\( x \\)  is the prompt,  \\( y^+ \\) is the preferred completion and  \\( y^- \\)  is the dispreferred completion.  \\( \pi_{\theta} \\)  is the policy model being trained,  \\( \pi_{\mathrm{ref}} \\)  is the reference model,  \\( \sigma \\)  is the sigmoid function, and  \\( \beta > 0 \\)  is a hyperparameter that controls the strength of the preference signal.
+
+#### Loss Types
+
+Several formulations of the objective have been proposed in the literature. Initially, the objective of DPO was defined as presented above.
 
 | `loss_type=` | Description |
 | --- | --- |
 | `"sigmoid"` (default) | Given the preference data, we can fit a binary classifier according to the Bradley-Terry model and in fact the [DPO](https://huggingface.co/papers/2305.18290) authors propose the sigmoid loss on the normalized likelihood via the `logsigmoid` to fit a logistic regression. |
 | `"hinge"` | The [RSO](https://huggingface.co/papers/2309.06657) authors propose to use a hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper. In this case, the `beta` is the reciprocal of the margin. |
-| `"ipo"` | The [IPO](https://huggingface.co/papers/2310.12036) authors provide a deeper theoretical understanding of the DPO algorithms and identify an issue with overfitting and propose an alternative loss. In this case, the `beta` is the reciprocal of the gap between the log-likelihood ratios of the chosen vs the rejected completion pair and thus the smaller the `beta` the larger this gaps is. As per the paper the loss is averaged over log-likelihoods of the completion (unlike DPO which is summed only). |
-| `"exo_pair"` | The [EXO](https://huggingface.co/papers/2402.00856) authors propose to minimize the reverse KL instead of the negative log-sigmoid loss of DPO which corresponds to forward KL. Setting non-zero `label_smoothing` (default `1e-3`) leads to a simplified version of EXO on pair-wise preferences (see Eqn. (16) of the [EXO paper](https://huggingface.co/papers/2402.00856)). The full version of EXO uses `K>2` completions generated by the SFT policy, which becomes an unbiased estimator of the PPO objective (up to a constant) when `K` is sufficiently large. |
+| `"ipo"` | The [IPO](https://huggingface.co/papers/2310.12036) authors argue the logit transform can overfit and propose the identity transform to optimize preferences directly; TRL exposes this as `loss_type="ipo"`. |
+| `"exo_pair"` | The [EXO](https://huggingface.co/papers/2402.00856) authors propose reverse-KL preference optimization. `label_smoothing` must be strictly greater than `0.0`; a recommended value is `1e-3` (see Eq. 16 for the simplified pairwise variant). The full method uses `K>2` SFT completions and approaches PPO as `K` grows. |
 | `"nca_pair"` | The [NCA](https://huggingface.co/papers/2402.05369) authors shows that NCA optimizes the absolute likelihood for each response rather than the relative likelihood. |
-| `"robust"` | The [Robust DPO](https://huggingface.co/papers/2403.00409) authors propose an unbiased estimate of the DPO loss that is robust to preference noise in the data. Like in cDPO, it assumes that the preference labels are noisy with some probability. In this approach, the `label_smoothing` parameter in the [`DPOConfig`] is used to model the probability of existing label noise. To apply this conservative loss, set `label_smoothing` to a value greater than 0.0 (between 0.0 and 0.5; the default is 0.0) |
+| `"robust"` | The [Robust DPO](https://huggingface.co/papers/2403.00409) authors propose an unbiased DPO loss under noisy preferences. Use `label_smoothing` in [`DPOConfig`] to model label-flip probability; valid values are in the range `[0.0, 0.5)`. |
 | `"bco_pair"` | The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0. For unpaired data, we recommend the dedicated [`experimental.bco.BCOTrainer`]. |
 | `"sppo_hard"` | The [SPPO](https://huggingface.co/papers/2405.00675) authors claim that SPPO is capable of solving the Nash equilibrium iteratively by pushing the chosen rewards to be as large as 1/2 and the rejected rewards to be as small as -1/2 and can alleviate data sparsity issues. The implementation approximates this algorithm by employing hard label probabilities, assigning 1 to the winner and 0 to the loser. |
-| `"aot"`  or `loss_type="aot_unpaired"` | The [AOT](https://huggingface.co/papers/2406.05882) authors propose to use Distributional Preference Alignment Via Optimal Transport. Traditionally, the alignment algorithms use paired preferences at a sample level, which does not ensure alignment on the distributional level. AOT, on the other hand, can align LLMs on paired or unpaired preference data by making the reward distribution of the positive samples stochastically dominant in the first order on the distribution of negative samples. Specifically, `loss_type="aot"` is appropriate for paired datasets, where each prompt has both chosen and rejected responses; `loss_type="aot_unpaired"` is for unpaired datasets. In a nutshell, `loss_type="aot"` ensures that the log-likelihood ratio of chosen to rejected of the aligned model has higher quantiles than that ratio for the reference model. `loss_type="aot_unpaired"` ensures that the chosen reward is higher on all quantiles than the rejected reward. Note that in both cases quantiles are obtained via sorting. To fully leverage the advantages of the AOT algorithm, it is important to maximize the per-GPU batch size. |
-| `"apo_zero"` or `loss_type="apo_down"` | The [APO](https://huggingface.co/papers/2408.06266) method introduces an "anchored" version of the alignment objective. There are two variants: `apo_zero` and `apo_down`. The `apo_zero` loss increases the likelihood of winning outputs while decreasing the likelihood of losing outputs, making it suitable when the model is less performant than the winning outputs. On the other hand, `apo_down` decreases the likelihood of both winning and losing outputs, but with a stronger emphasis on reducing the likelihood of losing outputs. This variant is more effective when the model is better than the winning outputs. |
+| `"aot"`  or `loss_type="aot_unpaired"` | The [AOT](https://huggingface.co/papers/2406.05882) authors propose Distributional Preference Alignment via Optimal Transport. `loss_type="aot"` is for paired data; `loss_type="aot_unpaired"` is for unpaired data. Both enforce stochastic dominance via sorted quantiles; larger per-GPU batch sizes help. |
+| `"apo_zero"` or `loss_type="apo_down"` | The [APO](https://huggingface.co/papers/2408.06266) method introduces an anchored objective. `apo_zero` boosts winners and downweights losers (useful when the model underperforms the winners). `apo_down` downweights both, with stronger pressure on losers (useful when the model already outperforms winners). |
 | `"discopop"` | The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0). |
 | `"sft"` | SFT (Supervised Fine-Tuning) loss is the negative log likelihood loss, used to train the model to generate preferred responses. |
+
+## Logged metrics
+
+While training and evaluating we record the following reward metrics:
+
+* `global_step`: The total number of optimizer steps taken so far.
+* `epoch`: The current epoch number, based on dataset iteration.
+* `num_tokens`: The total number of tokens processed so far.
+* `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
+* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
+* `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
+* `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
+* `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+* `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion.
+* `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
+* `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
+* `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
+* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{{\pi_{\theta}(y^{+}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{+}\!\mid x)}} \\).
+* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{{\pi_{\theta}(y^{-}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{-}\!\mid x)}} \\).
+* `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
+* `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
+
+## Customization
+
+### Compatibility and constraints
+
+Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
+
+* `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
+* With `use_liger_kernel=True`:
+  * only a single `loss_type` is supported,
+  * `compute_metrics` is not supported,
+  * `precompute_ref_log_probs=True` is not supported.
+* `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
+* `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
+* `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
 
 ### Multi-loss combinations
 
@@ -152,140 +166,122 @@ To combine multiple losses, specify the loss types and corresponding weights as 
 ```python
 # MPO: Combines DPO (sigmoid) for preference and BCO (bco_pair) for quality
 training_args = DPOConfig(
-    loss_type=["sigmoid", "bco_pair", "sft"],  # Loss types to combine
-    loss_weights=[0.8, 0.2, 1.0]  # Corresponding weights, as used in the MPO paper
+    loss_type=["sigmoid", "bco_pair", "sft"],  # loss types to combine
+    loss_weights=[0.8, 0.2, 1.0]  # corresponding weights, as used in the MPO paper
 )
 ```
 
-If `loss_weights` is not provided, all loss types will have equal weights (1.0 by default).
+### Model initialization
 
-### Label smoothing
+You can directly pass the kwargs of the [`~transformers.AutoModelForCausalLM.from_pretrained()`] method to the [`DPOConfig`]. For example, if you want to load a model in a different precision, analogous to
 
-The [cDPO](https://ericmitchell.ai/cdpo.pdf) is a tweak on the DPO loss where we assume that the preference labels are noisy with some probability. In this approach, the `label_smoothing` parameter in the [`DPOConfig`] is used to model the probability of existing label noise. To apply this conservative loss, set `label_smoothing` to a value greater than 0.0 (between 0.0 and 0.5; the default is 0.0).
+```python
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", dtype=torch.bfloat16)
+```
 
-### Syncing the reference model
+you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`DPOConfig`].
 
-The [TR-DPO](https://huggingface.co/papers/2404.09656) paper suggests syncing the reference model weights after every `ref_model_sync_steps` steps of SGD with weight `ref_model_mixup_alpha` during DPO training. To toggle this callback use the `sync_ref_model=True` in the [`DPOConfig`].
+```python
+from trl import DPOConfig
 
-### RPO loss
+training_args = DPOConfig(
+    model_init_kwargs={"dtype": torch.bfloat16},
+)
+```
 
-The [RPO](https://huggingface.co/papers/2404.19733) paper implements an iterative preference tuning algorithm using a loss related to the RPO loss in this [paper](https://huggingface.co/papers/2405.16436) that essentially consists of a weighted SFT loss on the chosen preferences together with the DPO loss. To use this loss, include `"sft"` in the `loss_type` list in the [`DPOConfig`] and set its weight in `loss_weights`.
+Note that all keyword arguments of [`~transformers.AutoModelForCausalLM.from_pretrained()`] are supported.
 
-> [!WARNING]
-> The old implementation of RPO loss in TRL used the `rpo_alpha` parameter. This parameter is deprecated and will be removed in 0.29.0; instead.
+### Train adapters with PEFT
 
-### WPO loss
+We support tight integration with 🤗 PEFT library, allowing any user to conveniently train adapters and share them on the Hub, rather than training the entire model.
 
-The [WPO](https://huggingface.co/papers/2406.11827) paper adapts off-policy data to resemble on-policy data more closely by reweighting preference pairs according to their probability under the current policy. To use this method, set the `use_weighting` flag to `True` in the [`DPOConfig`].
+```python
+from datasets import load_dataset
+from trl import DPOTrainer
+from peft import LoraConfig
 
-### LD-DPO loss
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-The [LD-DPO](https://huggingface.co/papers/2409.06411) paper decomposes the portion of the response that exceeds the desired length into two components — human-like preferences and verbosity preference — based on a mixing coefficient  \\( \alpha \\). To use this method, set the `ld_alpha` in the [`DPOConfig`] to an appropriate value. The paper suggests setting this value between `0.0` and `1.0`.
+trainer = DPOTrainer(
+    "Qwen/Qwen3-0.6B",
+    train_dataset=dataset,
+    peft_config=LoraConfig(),
+)
 
-### For Mixture of Experts Models: Enabling the auxiliary loss
+trainer.train()
+```
 
-MOEs are the most efficient if the load is about equally distributed between experts.  
-To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.
+You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`DPOTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
 
-This option is enabled by setting `output_router_logits=True` in the model config (e.g. [`~transformers.MixtralConfig`]).  
-To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: `0.001`) in the model config.
+```python
+from datasets import load_dataset
+from trl import DPOTrainer
+from peft import AutoPeftModelForCausalLM
+
+model = AutoPeftModelForCausalLM.from_pretrained("trl-lib/Qwen3-4B-LoRA", is_trainable=True)
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+
+trainer = DPOTrainer(
+    model=model,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+> [!TIP]
+> When training adapters, you typically use a higher learning rate (≈1e‑5) since only new parameters are being learned.
+>
+> ```python
+> DPOConfig(learning_rate=1e-5, ...)
+> ```
+
+### Train with Liger Kernel
+
+Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ### Rapid Experimentation for DPO
 
 RapidFire AI is an open-source experimentation engine that sits on top of TRL and lets you launch multiple DPO configurations at once, even on a single GPU. Instead of trying configurations sequentially, RapidFire lets you **see all their learning curves earlier, stop underperforming runs, and clone promising ones with new settings in flight** without restarting. For more information, see [RapidFire AI Integration](rapidfire_integration).
 
-## Accelerate DPO fine-tuning using `unsloth`
+### Train with Unsloth
 
-You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is fully compatible with `SFTTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama, Qwen, Deepseek etc) and Mistral architectures. Some benchmarks for DPO listed below:
+Unsloth is an open‑source framework for fine‑tuning and reinforcement learning that trains LLMs (like Llama, Mistral, Gemma, DeepSeek, and more) up to 2× faster with up to 70% less VRAM, while providing a streamlined, Hugging Face–compatible workflow for training, evaluation, and deployment. For more information, see [Unsloth Integration](unsloth_integration).
 
-| GPU | Model | Dataset | 🤗 | 🤗 + FlashAttention 2 | 🦥 Unsloth | 🦥 VRAM saved |
-| --- | --- | --- | --- | --- | --- | --- |
-| A100 40G | Zephyr 7b | Ultra Chat | 1x | 1.24x | **1.88x** | -11.6% |
-| Tesla T4 | Zephyr 7b | Ultra Chat | 1x | 1.09x | **1.55x** | -18.6% |
+## Tool Calling with DPO
 
-First install `unsloth` according to the [official documentation](https://github.com/unslothai/unsloth). Once installed, you can incorporate unsloth into your workflow in a very simple manner; instead of loading `AutoModelForCausalLM`, you just need to load a `FastLanguageModel` as follows:
+The [`DPOTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
-```diff
-  from datasets import load_dataset
-  from trl import DPOConfig, DPOTrainer
-- from transformers import AutoModelForCausalLM, AutoTokenizer
-+ from unsloth import FastLanguageModel
+* The conversation messages (prompt, chosen and rejected), including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+* The list of available tools in the `tools` column, typically provided as JSON `str` schemas
 
-- model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-- tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-+ model, tokenizer = FastLanguageModel.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-+ model = FastLanguageModel.get_peft_model(model)
-  train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
-- training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO")
-+ training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", bf16=True)
-  trainer = DPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
-  trainer.train()
+## Training Vision Language Models
 
-```
-
-The saved model is fully compatible with Hugging Face's transformers library. Learn more about unsloth in their [official repository](https://github.com/unslothai/unsloth).
-
-## Reference model considerations with PEFT
-
-You have three main options (plus several variants) for how the reference model works when using PEFT, assuming the model that you would like to further enhance with DPO was tuned using (Q)LoRA.
-
-1. Simply create two instances of the model, each loading your adapter - works fine but is very inefficient.
-2. Merge the adapter into the base model, create another adapter on top, then leave the `ref_model` param null, in which case DPOTrainer will unload the adapter for reference inference - efficient, but has potential downsides discussed below.
-3. Load the adapter twice with different names, then use `set_adapter` during training to swap between the adapter being DPO'd and the reference adapter - slightly less efficient compared to 2 (~adapter size VRAM overhead), but avoids the pitfalls.
-
-### Downsides to merging QLoRA before DPO (approach 2)
-
-As suggested by [Benjamin Marie](https://medium.com/@bnjmn_marie/dont-merge-your-lora-adapter-into-a-4-bit-llm-65b6da287997), the best option for merging QLoRA adapters is to first dequantize the base model, then merge the adapter. Something similar to [this script](https://github.com/jondurbin/qlora/blob/main/qmerge.py).
-
-However, after using this approach, you will have an unquantized base model. Therefore, to use QLoRA for DPO, you will need to re-quantize the merged model or use the unquantized merge (resulting in higher memory demand).
-
-### Using option 3 - load the adapter twice
-
-To avoid the downsides with option 2, you can load your fine-tuned adapter into the model twice, with different names, and set the model/ref adapter names in [`DPOTrainer`].
-
-For example:
+[`DPOTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
+An example of such a dataset is the [RLAIF-V Dataset](https://huggingface.co/datasets/HuggingFaceH4/rlaif-v_formatted) dataset.
 
 ```python
-# Load the base model.
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    llm_int8_threshold=6.0,
-    llm_int8_has_fp16_weight=False,
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-)
-model = AutoModelForCausalLM.from_pretrained(
-    "mistralai/mixtral-8x7b-v0.1",
-    load_in_4bit=True,
-    quantization_config=bnb_config,
-    attn_implementation="kernels-community/flash-attn2",
-    dtype=torch.bfloat16,
-    device_map="auto",
-)
+from trl import DPOConfig, DPOTrainer
+from datasets import load_dataset
 
-# Load the adapter.
-model = PeftModel.from_pretrained(
-    model,
-    "/path/to/peft",
-    is_trainable=True,
-    adapter_name="train",
+trainer = DPOTrainer(
+    model="Qwen/Qwen2.5-VL-3B-Instruct",
+    args=DPOConfig(max_length=None),
+    train_dataset=load_dataset("HuggingFaceH4/rlaif-v_formatted", split="train"),
 )
-# Load the adapter a second time, with a different name, which will be our reference model.
-model.load_adapter("/path/to/peft", adapter_name="reference")
-
-# Initialize the trainer, without a ref_model param.
-training_args = DPOConfig(
-    model_adapter_name="train",
-    ref_adapter_name="reference",
-)
-dpo_trainer = DPOTrainer(
-    model,
-    args=training_args,
-    ...
-)
+trainer.train()
 ```
+
+> [!TIP]
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`DPOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> DPOConfig(max_length=None, ...)
+> ```
+>
+> Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 ## DPOTrainer
 
@@ -302,3 +298,6 @@ dpo_trainer = DPOTrainer(
 
 [[autodoc]] trainer.dpo_trainer.DataCollatorForPreference
 
+## DataCollatorForVisionPreference
+
+[[autodoc]] trainer.dpo_trainer.DataCollatorForVisionPreference
