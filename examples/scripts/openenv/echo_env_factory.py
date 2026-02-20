@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# pip install git+https://github.com/huggingface/transformers.git@main
+# /// script
+# dependencies = [
+#     "trl",
+#     "openenv-echo-env @ git+https://huggingface.co/spaces/qgallouedec/echo_env",
+# ]
+# ///
 
 from datasets import Dataset
 from echo_env import EchoEnv
