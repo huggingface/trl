@@ -27,20 +27,27 @@ class BaseConfig(TrainingArguments):
 
     Parameters:
         logging_steps (`float`, *optional*, defaults to `10`):
-            Log every X update steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, will be
-            interpreted as ratio of total training steps.
+            Number of update steps between two logs if `logging_strategy="steps"`. Should be an integer or a float in
+            range `[0,1)`. If smaller than 1, will be interpreted as ratio of total training steps.
         gradient_checkpointing (`bool`, *optional*, defaults to `True`):
-            If True, use gradient checkpointing to save memory at the expense of slower backward pass.
+            Whether to enable gradient checkpointing to trade compute for memory. Reduces memory usage by clearing
+            activations during forward pass and recomputing them during backward pass. Enables training larger models
+            or batch sizes at the cost of ~20% slower training.
         bf16 (`bool`, *optional*):
-            Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA architecture or
+            Whether to use bfloat16 (BF16) mixed precision instead of 32-bit. Generally preferred over FP16 due to
+            better numerical stability and no loss scaling required. Requires Ampere or higher NVIDIA architecture or
             Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if `fp16` is not set.
         lr_scheduler_kwargs (`dict` or `str`, *optional*):
-            Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts.
+            Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts. See
+            the documentation of each scheduler for possible values.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
-            Enable Liger Kernel optimizations. Increases throughput by ~20% and reduces memory by ~60%.
+            Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations. Increases multi-GPU
+            throughput by ~20% and reduces memory usage by ~60%. Works with Flash Attention, FSDP, and DeepSpeed.
+            Currently, supports Llama, Mistral, Mixtral, and Gemma models.
         torch_empty_cache_steps (`int`, *optional*):
-            Number of steps to wait before calling `torch.<device>.empty_cache()`. Helps avoid CUDA OOM at a cost of
-            ~10% slower performance. If `None`, cache will not be emptied.
+            Number of steps to wait before calling `torch.<device>.empty_cache()`. If left unset or set to None, cache
+            will not be emptied. This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of
+            about [10% slower performance](https://github.com/huggingface/transformers/issues/31372).
     """
 
     # Override fields from TrainingArguments to set defaults preferred by all TRL trainers.
@@ -54,7 +61,7 @@ class BaseConfig(TrainingArguments):
     gradient_checkpointing: bool = field(
         default=True,
         metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+            "help": "Enable gradient checkpointing to trade compute for memory. Reduces memory at the cost of ~20%% slower training."
         },
     )
     bf16: bool | None = field(
@@ -72,7 +79,7 @@ class BaseConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
-            "restarts."
+            "restarts. See the documentation of each scheduler for possible values."
         },
     )
 
