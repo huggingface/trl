@@ -31,14 +31,14 @@ class BaseConfig(TrainingArguments):
             interpreted as ratio of total training steps.
         gradient_checkpointing (`bool`, *optional*, defaults to `True`):
             If True, use gradient checkpointing to save memory at the expense of slower backward pass.
-        bf16 (`bool` or `None`, *optional*, defaults to `None`):
+        bf16 (`bool`, *optional*):
             Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA architecture or
             Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if `fp16` is not set.
-        lr_scheduler_kwargs (`dict`, `str`, or `None`, *optional*, defaults to `None`):
+        lr_scheduler_kwargs (`dict` or `str`, *optional*):
             Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
             Enable Liger Kernel optimizations. Increases throughput by ~20% and reduces memory by ~60%.
-        torch_empty_cache_steps (`int` or `None`, *optional*, defaults to `None`):
+        torch_empty_cache_steps (`int`, *optional*):
             Number of steps to wait before calling `torch.<device>.empty_cache()`. Helps avoid CUDA OOM at a cost of
             ~10% slower performance. If `None`, cache will not be emptied.
     """
