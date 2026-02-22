@@ -1548,7 +1548,9 @@ class TestSFTTrainer(TrlTestCase):
     @require_vision
     def test_train_vlm(self, model_id):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/8"
+        )
 
         # Initialize the trainer
         training_args = SFTConfig(
@@ -1641,7 +1643,9 @@ class TestSFTTrainer(TrlTestCase):
     @require_vision
     def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen-image", "conversational_prompt_completion", split="train", revision="refs/pr/10"
+        )
 
         # Initialize the trainer
         training_args = SFTConfig(
@@ -1677,7 +1681,9 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
     def test_train_vlm_gemma_3n(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/8"
+        )
 
         # Initialize the trainer
         training_args = SFTConfig(
