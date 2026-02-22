@@ -2344,6 +2344,110 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_jmespath
+    def test_training_with_tools_keeps_masks_aligned_when_retokenization_shortens_completion(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train[:3]")
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=128,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        turn = {"value": 0}
+
+        def fake_generate_single_turn(prompts):
+            del prompts
+            turn["value"] += 1
+            if turn["value"] == 1:
+                # Initial batch: sample 0 is interpreted as a tool call, others are plain completions.
+                prompt_ids = [[100, 101], [110, 111], [120, 121]]
+                completion_ids = [
+                    [900, 901, 902, 903],
+                    [700, 701, 702],
+                    [710, 711, 712],
+                ]
+                return prompt_ids, completion_ids, None, {}
+            if turn["value"] == 2:
+                # Tool round for the single tool-calling sample:
+                # prompt+completion+tool is intentionally short to trigger the edge case where
+                # completion_tool_length can be shorter than the previous completion length.
+                prompt_ids = [[100, 101, 201, 202]]
+                completion_ids = [[600, 601]]
+                return prompt_ids, completion_ids, None, {}
+            raise RuntimeError(f"Unexpected fake generation turn: {turn['value']}")
+
+        def fake_parse_response(processing_class, ids):
+            del processing_class
+            if ids and ids[0] == 900:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "multiply_tool",
+                                "arguments": {"a": 3, "b": 4},
+                            },
+                        }
+                    ],
+                }
+            return {"role": "assistant", "content": "ok"}
+
+        def fake_get_per_token_logps_and_entropies(
+            model,
+            input_ids,
+            attention_mask,
+            logits_to_keep,
+            *args,
+            compute_entropy=False,
+            **kwargs,
+        ):
+            del model, attention_mask, args, kwargs
+            shape = (input_ids.size(0), logits_to_keep)
+            logps = torch.zeros(shape, dtype=torch.float32, device=input_ids.device, requires_grad=True)
+            entropies = torch.zeros(shape, dtype=torch.float32, device=input_ids.device) if compute_entropy else None
+            return logps, entropies
+
+        observed_lengths = {}
+        original_tool_call_loop = trainer._tool_call_loop
+
+        def wrapped_tool_call_loop(*args, **kwargs):
+            out = original_tool_call_loop(*args, **kwargs)
+            tool_mask, _completions, completion_ids, _logprobs, *_ = out
+            observed_lengths["completion"] = [len(ids) for ids in completion_ids]
+            observed_lengths["tool"] = [len(mask) for mask in tool_mask]
+            return out
+
+        with (
+            patch.object(trainer, "_generate_single_turn", side_effect=fake_generate_single_turn),
+            patch("trl.trainer.grpo_trainer.parse_response", side_effect=fake_parse_response),
+            patch.object(trainer, "_get_per_token_logps_and_entropies", side_effect=fake_get_per_token_logps_and_entropies),
+            patch.object(trainer, "_tool_call_loop", side_effect=wrapped_tool_call_loop),
+        ):
+            trainer.train()
+
+        assert observed_lengths["completion"] == observed_lengths["tool"]
+
     def test_mismatched_reward_processing_classes_length(self):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

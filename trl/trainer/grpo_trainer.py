@@ -1414,9 +1414,16 @@ class GRPOTrainer(BaseTrainer):
                     prompt_length = len(prompt_ids[idx_with_tool])
                     ct = pct_ids[idx][prompt_length : prompt_length + self.max_completion_length]
                     completion_ids[idx_with_tool] = ct
-                    tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
+                    # Keep tool_mask aligned with completion_ids even if ct becomes shorter.
+                    if len(tool_mask[idx_with_tool]) > len(ct):
+                        tool_mask[idx_with_tool] = tool_mask[idx_with_tool][: len(ct)]
+                    else:
+                        tool_mask[idx_with_tool] += [1] * (len(ct) - len(tool_mask[idx_with_tool]))
                     if logprobs is not None:
-                        logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
+                        if len(logprobs[idx_with_tool]) > len(ct):
+                            logprobs[idx_with_tool] = logprobs[idx_with_tool][: len(ct)]
+                        else:
+                            logprobs[idx_with_tool] += [0.0] * (len(ct) - len(logprobs[idx_with_tool]))
             # Keep only non-overlong items for further processing
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
             prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
@@ -1459,12 +1466,23 @@ class GRPOTrainer(BaseTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 prompt_completion_tool_length = len(prompt_completion_tool_ids[idx])
                 prompt_length = len(prompt_ids[idx_with_tool])
-                completion_length = len(completion_ids[idx_with_tool])
                 post_tool_length = len(post_tool_ids[idx])
-                tool_length = prompt_completion_tool_length - prompt_length - completion_length
-                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+
+                # Build mask for completion_tool_ids (tool tokens should be 0), then append post-tool model tokens (1).
+                completion_tool_length = prompt_completion_tool_length - prompt_length
+                if len(tool_mask[idx_with_tool]) > completion_tool_length:
+                    tool_mask[idx_with_tool] = tool_mask[idx_with_tool][:completion_tool_length]
+                else:
+                    tool_mask[idx_with_tool] += [0] * (completion_tool_length - len(tool_mask[idx_with_tool]))
+                tool_mask[idx_with_tool] += [1] * post_tool_length
+
                 if logprobs is not None:
-                    logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
+                    # Tool-result tokens are external and have no model logprob, so they get 0.0.
+                    if len(logprobs[idx_with_tool]) > completion_tool_length:
+                        logprobs[idx_with_tool] = logprobs[idx_with_tool][:completion_tool_length]
+                    else:
+                        logprobs[idx_with_tool] += [0.0] * (completion_tool_length - len(logprobs[idx_with_tool]))
+                    logprobs[idx_with_tool] += post_tool_logprobs[idx]
 
             # Update completion_ids with the new completions (after tool execution)
             for idx in range(len(idxs_with_tool)):
