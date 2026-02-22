@@ -392,7 +392,7 @@ See [Experimental - GFPO](experimental#gfpo).
 
 **📜 Paper**: https://huggingface.co/papers/2507.06448
 
-A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. This is a TRL adaptation. The TRL implementation is not the official one provided by the authors.
+A novel policy gradient algorithm that encourages VLMs to learn to perceive while learning to reason. 
 This is a TRL adaptation of PAPO. Note that this is not the official implementation. The official code can be found in [MikeWangWZHL/PAPO](https://github.com/MikeWangWZHL/PAPO).
 
 ```python
@@ -452,6 +452,19 @@ training_args = GRPOConfig(
     ...
 )
 ```
+
+### Reverse Thinking Policy Optimization
+
+**📰 Blog**: https://github.com/SolarWindRider/avr/blob/main/README.md
+
+Current GRPO-based RL methods require the model to autonomously generate a full chain-of-thought before producing the final answer.
+However, many training datasets already contain **complete, high-quality reasoning traces** that the model could benefit from.
+
+RTPO is designed to:
+
+- Utilize existing reasoning traces as **auxiliary CoT** to support early-stage rollouts.
+- Force the model to gradually reconstruct its own reasoning by **shortening the auxiliary CoT** step by step.
+- Enable a *reverse learning schedule*: the model first learns to output correct answers, then progressively learns how to reason.
 
 ### DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models
 
