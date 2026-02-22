@@ -282,7 +282,7 @@ $$
 \small{
 \mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
 \Bigl[
-\underbrace{\min(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}{\textcolor{red}{\pi_{\text{inference}}}(a, \theta_{\mathrm{old}})}, C)}_{\text{truncated importance ratio}} \cdot
+\underbrace{\text{clip}\bigl(\frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}{\textcolor{red}{\pi_{\text{inference}}}(a, \theta_{\mathrm{old}})}, C_{\min}, C_{\max}\bigr)}_{\text{truncated importance ratio}} \cdot
 \nabla_\theta
 \min\Bigl(
 \frac{\textcolor{blue}{\pi_{\text{training}}}(a, \theta)}{\textcolor{blue}{\pi_{\text{training}}}(a, \theta_{\mathrm{old}})}\,\hat A,
@@ -292,7 +292,7 @@ $$
 }
 $$
 
-where  \\( C \\) is a hyper-parameter. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
+where  \\( C_{\min} \\) and  \\( C_{\max} \\) are hyper-parameters. TIS is implemented in GRPO, and is enabled by selecting a `vllm_importance_sampling_mode` variant that includes the term `truncate`, such as `"sequence_truncate"` or `"token_truncate"`.
 
 ```python
 from trl import GRPOConfig
@@ -302,7 +302,8 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_truncate", # or "token_truncate"
-    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+    vllm_importance_sampling_max=2.0, # hyper-parameter C_max
+    vllm_importance_sampling_min=0.0, # hyper-parameter C_min
 )
 ```
 
@@ -310,9 +311,11 @@ training_args = GRPOConfig(
 
 **📰 Blog**: https://ringtech.notion.site/icepop
 
+**📜 Paper**: https://huggingface.co/papers/2510.18855
+
 **📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
 
-Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy exceeds a threshold  \\( C \\). We apply upper-side masking, so any ratio above  \\( C \\) is removed from the update.
+Masked Importance Sampling (MIS) addresses the same issue as [Truncated Importance Sampling](#truncated-importance-sampling) but replaces clipping with masking. MIS takes a more decisive stance by discarding updates whose discrepancy falls outside the range  \\( [C_{\min}, C_{\max}] \\).
 
 
 $$
@@ -320,9 +323,9 @@ $$
 \mathbb{E}_{a\sim\textcolor{red}{\pi_{\text{inference}}}(\theta_{\mathrm{old}})}
 \Bigl[
 \underbrace{\mathbf{1}\left[
-\frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
+C_{\min} \le \frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
 {\pi_{\text{inference}}(a, \theta_{\mathrm{old}})}
-\le C
+\le C_{\max}
 \right]
 \cdot
 \frac{\pi_{\text{training}}(a, \theta_{\mathrm{old}})}
@@ -346,7 +349,8 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_importance_sampling_correction=True, # default True
     vllm_importance_sampling_mode="sequence_mask", # or "token_mask"
-    vllm_importance_sampling_cap=2.0, # hyper-parameter C
+    vllm_importance_sampling_max=2.0, # hyper-parameter C_max
+    vllm_importance_sampling_min=0.0, # hyper-parameter C_min
 )
 ```
 

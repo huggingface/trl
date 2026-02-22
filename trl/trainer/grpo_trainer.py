@@ -531,7 +531,8 @@ class GRPOTrainer(BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
-        self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
+        self.vllm_importance_sampling_max = args.vllm_importance_sampling_max
+        self.vllm_importance_sampling_min = args.vllm_importance_sampling_min
         self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
@@ -1741,11 +1742,16 @@ class GRPOTrainer(BaseTrainer):
 
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                        vllm_importance_sampling_ratio,
+                        min=self.vllm_importance_sampling_min,
+                        max=self.vllm_importance_sampling_max,
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                    invalid_mis_mask = (vllm_importance_sampling_ratio < self.vllm_importance_sampling_min) | (
+                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_max
+                    )
                     vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                        invalid_mis_mask, value=0.0
                     )
                 else:
                     raise ValueError(

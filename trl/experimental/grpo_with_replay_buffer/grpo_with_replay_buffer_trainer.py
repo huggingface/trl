@@ -191,7 +191,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
             if self.use_vllm and self.vllm_importance_sampling_correction:
                 importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
                 importance_sampling_ratio = torch.clamp(
-                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                    importance_sampling_ratio, max=self.vllm_importance_sampling_max
                 )
 
             # Compute the per-token log probabilities for the reference model
