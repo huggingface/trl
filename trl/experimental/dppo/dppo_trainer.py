@@ -69,7 +69,7 @@ class DPPOTrainer(GRPOTrainer):
     DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy
     divergence estimates. PPO-style clipping masks tokens based on probability ratio π/μ, which over-penalizes
     low-probability tokens and under-penalizes high-probability tokens. In contrast, DPPO masks based on
-    direct approximation of policy divergence (e.g TV or KL) ensuring updates stay within a theortically
+    direct approximation of policy divergence (e.g TV or KL) ensuring updates stay within a theoretically
     grounded trust region.
 
 
