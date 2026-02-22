@@ -591,6 +591,37 @@ training_args = GRPOConfig(
 )
 ```
 
+
+### Rethinking the Trust Region in LLM Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2602.04879
+
+DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence estimates. PPO-style clipping masks tokens based on the probability ratio π/μ, which over-penalizes low-probability tokens and under-penalizes high-probability ones. DPPO instead masks based on direct approximations of policy divergence (TV or KL), ensuring updates stay within a theoretically grounded trust region. Four divergence approximations are supported: `binary_tv`, `binary_kl`, `topk_tv`, and `topk_kl`.
+
+```python
+from trl.experimental.dppo import DPPOConfig, DPPOTrainer
+
+training_args = DPPOConfig(
+    divergence_type="binary_kl",  # divergence approximation (Section 3.2 of the paper)
+    divergence_topk=20,  # K for top-K divergence modes (Section 3.2 of the paper)
+    epsilon=0.2,  # δ_low threshold (Section 3.2 of the paper)
+    epsilon_high=0.28,  # δ_high threshold (Section 3.2 of the paper)
+    clip_ratio_c=3.0,  # IS ratio upper bound C (Section 3.2 of the paper)
+    beta=0.0,  # KL regularization coefficient
+    use_vllm=True,
+)
+
+trainer = DPPOTrainer(
+    model="your-model",
+    reward_funcs=[...],
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
+
 ## Direct Policy Optimization
 
 Papers relating to the [`DPOTrainer`]
