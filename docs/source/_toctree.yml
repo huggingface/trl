@@ -97,6 +97,8 @@
     title: BCO
   - local: cpo_trainer
     title: CPO
+  - local: dppo_trainer
+    title: DPPO
   - local: gfpo
     title: GFPO
   - local: gkd_trainer
