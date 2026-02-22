@@ -558,25 +558,17 @@ class DPOTrainer(BaseTrainer):
 
         # Data collator
         self.padding_free = args.padding_free
-        if self.padding_free:
-            use_flash_attention = getattr(model.config, "_attn_implementation", None) in FLASH_ATTENTION_VARIANTS
-            if not use_flash_attention:
-                logger.warning(
-                    "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
-                    "the following implementations are known to reliably support this: "
-                    f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
-                    "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
-                    "configuration to one of these supported options or verify that your attention mechanism can "
-                    "handle flattened sequences."
-                )
+        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
+        if self.padding_free and not use_flash_attention:
+            logger.warning(
+                "Padding-free training is enabled, but the attention implementation is not set to a supported flash "
+                "attention variant. Padding-free training flattens batches into a single sequence, and only the "
+                "following implementations are known to reliably support this: "
+                f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to unexpected "
+                "behavior. To ensure compatibility, set `attn_implementation` in the model configuration to one of "
+                "these supported options or verify that your attention mechanism can handle flattened sequences."
+            )
 
-            if args.per_device_train_batch_size == 1:
-                logger.warning(
-                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 annihilate the benefits of padding-free training. Please consider increasing the batch size "
-                    "to at least 2."
-                )
         dataset_sample = next(iter(train_dataset))
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
