@@ -60,6 +60,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    forward_masked_logits,
     get_config_model_id,
     pad,
     remove_none_values,
@@ -1183,6 +1184,14 @@ class SFTTrainer(BaseTrainer):
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
 
+        use_masked_logits = (
+            not self.args.use_liger_kernel
+            and self.compute_loss_func is None
+            and not self.aux_loss_enabled # aux loss isn't supported yet
+            and self.num_virtual_tokens == 0  # not implemented yet
+            and not self.model.config._attn_implementation in FLASH_ATTENTION_VARIANTS # weird issue
+        )
+
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
             # Avoid materializing full logits during eval unless explicitly needed.
@@ -1205,28 +1214,38 @@ class SFTTrainer(BaseTrainer):
             inputs["return_token_accuracy"] = True
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
-        (loss, outputs) = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-        )
+        if use_masked_logits:
+            outputs = forward_masked_logits(model, num_items_in_batch=num_items_in_batch, **inputs)
+            loss = outputs.loss
+        else:
+            (loss, outputs) = super().compute_loss(
+                model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+            )
 
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
-                per_token_entropy = entropy_from_logits(outputs.logits)
-                # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
-                # do not correspond to actual input tokens.
-                if (
-                    self.num_virtual_tokens > 0
-                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
-                ):
-                    per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
-                if "attention_mask" in inputs:
-                    attention_mask = inputs["attention_mask"]
-                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-                elif "position_ids" in inputs:
-                    entropy = torch.mean(per_token_entropy)
+                if use_masked_logits:
+                    if outputs.flat_logits.numel() == 0:
+                        entropy = torch.tensor(0.0, device=outputs.flat_logits.device)
+                    else:
+                        entropy = entropy_from_logits(outputs.flat_logits).mean()
                 else:
-                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                    per_token_entropy = entropy_from_logits(outputs.logits)
+                    # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
+                    # do not correspond to actual input tokens.
+                    if (
+                        self.num_virtual_tokens > 0
+                        and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                    ):
+                        per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
+                    if "attention_mask" in inputs:
+                        attention_mask = inputs["attention_mask"]
+                        entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
+                    elif "position_ids" in inputs:
+                        entropy = torch.mean(per_token_entropy)
+                    else:
+                        raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
             self._metrics[mode]["entropy"].append(entropy)
 
@@ -1263,21 +1282,27 @@ class SFTTrainer(BaseTrainer):
                     shift_logits = outputs.logits.contiguous()
                     shift_labels = inputs["shift_labels"]
                 else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_logits = (
+                        outputs.logits[..., :-1, :].contiguous() if not use_masked_logits else outputs.flat_logits
+                    )
                     shift_labels = labels[..., 1:].contiguous()
 
                 # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
                 if (
                     self.num_virtual_tokens > 0
-                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING and not use_masked_logits
                 ):
                     shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
-                # Get predictions
-                predictions = shift_logits.argmax(dim=-1)
-
                 # Create mask for non-padding tokens (assuming ignore_index is -100)
                 mask = shift_labels != -100
+
+                # Get predictions
+                if use_masked_logits:
+                    predictions = torch.zeros_like(shift_labels)
+                    predictions[mask] = shift_logits.argmax(dim=-1)
+                else:
+                    predictions = shift_logits.argmax(dim=-1)
 
                 # Calculate accuracy only on non-padding tokens
                 correct_predictions = (predictions == shift_labels) & mask

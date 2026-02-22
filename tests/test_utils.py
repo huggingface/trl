@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
+import torch.nn.functional as F
 import transformers
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
@@ -1021,3 +1022,54 @@ class TestForwardMaskedLogits:
             masked_outputs.flat_logits,
             full_outputs.logits[logits_mask.bool()],
         )
+
+    def test_loss_matches_full_forward(self):
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3"
+        device = torch.device("cuda")
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+        labels = input_ids.clone()
+        labels[0, 0] = -100
+        labels[1, 3] = -100
+
+        full_outputs = model(input_ids=input_ids, labels=labels)
+        masked_outputs = forward_masked_logits(model, input_ids=input_ids, labels=labels)
+
+        torch.testing.assert_close(masked_outputs.loss, full_outputs.loss)
+
+    def test_loss_with_shift_labels(self):
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3"
+        device = torch.device("cuda")
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+        labels = input_ids.clone()
+        labels[0, 0] = -100
+        labels[1, 3] = -100
+        shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
+
+        full_outputs = model(input_ids=input_ids, labels=labels)
+        masked_outputs = forward_masked_logits(model, input_ids=input_ids, shift_labels=shift_labels)
+
+        torch.testing.assert_close(masked_outputs.loss, full_outputs.loss)
+
+    def test_logits_mask_excludes_valid_labels(self):
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3"
+        device = torch.device("cuda")
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto", device_map=device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+        labels = input_ids.clone()
+        labels[0, 0] = -100
+        labels[1, 3] = -100
+        logits_mask = torch.tensor(
+            [[1, 1, 0, 0, 1, 0, 1, 0], [0, 1, 1, 0, 0, 1, 0, 1]],
+            device=device,
+        )
+        logits_mask[0, 1] = False
+
+        with pytest.raises(ValueError, match="logits_mask excludes positions with valid labels"):
+            forward_masked_logits(
+                model,
+                labels=labels,
+                logits_mask=logits_mask,
+                input_ids=input_ids,
+            )

@@ -43,7 +43,13 @@ from transformers import (
     is_comet_available,
     is_trackio_available,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.loss.loss_utils import ForCausalLMLoss
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+    MoeCausalLMOutputWithPast,
+    MoeModelOutputWithPast,
+)
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import (
     is_peft_available,
@@ -1099,9 +1105,19 @@ class CausalLMOutputWithPastAndFlatLogits(CausalLMOutputWithPast):
     flat_logits: torch.Tensor | None = None
 
 
+@dataclass
+class MoeCausalLMOutputWithPastAndFlatLogits(MoeCausalLMOutputWithPast):
+    flat_logits: torch.Tensor | None = None
+
+
 def forward_masked_logits(
-    model: PreTrainedModel, logits_mask: torch.LongTensor, **kwargs
-) -> CausalLMOutputWithPastAndFlatLogits:
+    model: PreTrainedModel,
+    logits_mask: torch.LongTensor | None = None,
+    labels: torch.LongTensor | None = None,
+    shift_labels: torch.LongTensor | None = None,
+    num_items_in_batch: torch.Tensor | None = None,
+    **kwargs,
+) -> CausalLMOutputWithPastAndFlatLogits | MoeCausalLMOutputWithPastAndFlatLogits:
     """
     Run a Causal LM forward pass while computing logits only for masked positions to reduce memory usage.
 
@@ -1120,24 +1136,41 @@ def forward_masked_logits(
     Args:
         model ([`~transformers.PreTrainedModel`]):
             A causal language model.
-        logits_mask (`torch.LongTensor`):
+        logits_mask (`torch.LongTensor`, *optional*):
             Boolean-like tensor indicating which token positions should have logits computed. Shape should match the
-            input sequence shape in `kwargs` (typically `[batch, seq_len]`).
+            input sequence shape in `kwargs` (typically `[batch, seq_len]`). If `None`, it is inferred from `labels` or
+            `shift_labels`.
+        labels (`torch.LongTensor`, *optional*):
+            Labels used to compute the loss. When provided, the output will include the loss entry.
+        shift_labels (`torch.LongTensor`, *optional*):
+            Pre-shifted labels (typically `labels[..., 1:]`) used to compute the loss. When provided, `labels` must be
+            `None`. If `logits_mask` is `None`, it will be inferred from `shift_labels`.
+        num_items_in_batch (`torch.Tensor`, *optional*):
+            Number of items in the accumulated batch used to normalize summed losses.
         **kwargs:
             Keyword arguments forwarded to the inner decoder (e.g., `input_ids`, `attention_mask`, `past_key_values`).
 
     Returns:
-        `CausalLMOutputWithPastAndFlatLogits`: Output containing logits only for the unmasked positions.
+        `CausalLMOutputWithPastAndFlatLogits` or `MoeCausalLMOutputWithPastAndFlatLogits`:
+            Output containing logits only for the unmasked positions.
 
     Raises:
-        ValueError: If `logits_to_keep` or `labels` are provided in `kwargs`.
+        ValueError: If `logits_to_keep` is provided in `kwargs`.
     """
     if kwargs.get("logits_to_keep") is not None:
         raise ValueError("`logits_to_keep` is not supported by this forward helper.")
-    if kwargs.get("labels") is not None:
-        raise ValueError("`labels` is not yet supported by this forward helper.")
+    if labels is not None and shift_labels is not None:
+        raise ValueError("Provide only one of `labels` or `shift_labels`.")
+    # Infer logits_mask if not provided
+    if logits_mask is None:
+        if labels is None and shift_labels is None:
+            raise ValueError("`logits_mask` cannot be None when `labels` (or `shift_labels`) is also None.")
+        if shift_labels is None:
+            labels = F.pad(labels, (0, 1), value=-100)
+            shift_labels = labels[..., 1:].contiguous()
+        logits_mask = shift_labels != -100
 
-    outputs: BaseModelOutputWithPast = model.get_decoder()(**kwargs)
+    outputs: BaseModelOutputWithPast | MoeModelOutputWithPast = model.get_decoder()(**kwargs)
     hidden_states = outputs.last_hidden_state
 
     # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
@@ -1145,13 +1178,43 @@ def forward_masked_logits(
     if hasattr(model, "logit_scale"):  # CohereForCausalLM has this attribute
         flat_logits = flat_logits * model.logit_scale
 
-    return CausalLMOutputWithPastAndFlatLogits(
-        flat_logits=flat_logits,
-        # We use .get(...) because some models like FalconMambaForCausalLM don't return past_key_values or attentions
-        past_key_values=outputs.get("past_key_values"),
-        hidden_states=outputs.hidden_states,
-        attentions=outputs.get("attentions"),
-    )
+    loss = None
+    if labels is not None or shift_labels is not None:
+        if shift_labels is None:
+            labels = F.pad(labels, (0, 1), value=-100)
+            shift_labels = labels[..., 1:]
+        shift_labels = shift_labels.contiguous()
+        flat_shift_labels = shift_labels[logits_mask.bool()]
+        if torch.any(flat_shift_labels == -100):
+            raise ValueError("logits_mask excludes positions with valid labels.")
+        loss = ForCausalLMLoss(
+            flat_logits,
+            labels=None,
+            vocab_size=flat_logits.size(-1),
+            num_items_in_batch=num_items_in_batch,
+            shift_labels=flat_shift_labels,
+        )
+
+    if isinstance(outputs, BaseModelOutputWithPast):
+        return CausalLMOutputWithPastAndFlatLogits(
+            loss=loss,
+            flat_logits=flat_logits,
+            past_key_values=outputs.get("past_key_values"),
+            hidden_states=outputs.get("hidden_states"),
+            attentions=outputs.get("attentions"),
+        )
+    elif isinstance(outputs, MoeModelOutputWithPast):
+        return MoeCausalLMOutputWithPastAndFlatLogits(
+            loss=loss,
+            aux_loss=None,  # we will need to implement this
+            flat_logits=flat_logits,
+            past_key_values=outputs.get("past_key_values"),
+            hidden_states=outputs.get("hidden_states"),
+            attentions=outputs.get("attentions"),
+            router_logits=outputs.get("router_logits"),
+        )
+    else:
+        raise ValueError(f"Unexpected output type: {type(outputs)}")
 
 
 @contextmanager
