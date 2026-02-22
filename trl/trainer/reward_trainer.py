@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import logging
 import os
 import re
@@ -354,6 +355,13 @@ class RewardTrainer(BaseTrainer):
                     "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+            # Validate that the model has num_labels = 1 (required for reward models)
+            if getattr(model.config, "num_labels", None) != 1:
+                raise ValueError(
+                    f"The model has `num_labels={model.config.num_labels}`, but reward models require `num_labels=1` "
+                    "to output a single scalar reward per sequence. Please instantiate your model with `num_labels=1` "
+                    "or pass a model name as a string to have it configured automatically."
+                )
 
         # Processing class
         if processing_class is None:
@@ -558,6 +566,8 @@ class RewardTrainer(BaseTrainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize_fn(example, processing_class):
+                    tools = example.get("tools")
+                    tools = json.loads(tools) if isinstance(tools, str) else tools
                     if "prompt" in example:  # explicit prompt case
                         example["chosen"] = example["prompt"] + example["chosen"]
                         example["rejected"] = example["prompt"] + example["rejected"]
@@ -565,13 +575,13 @@ class RewardTrainer(BaseTrainer):
                     if is_conversational(example):
                         chosen_input_ids = processing_class.apply_chat_template(
                             example["chosen"],
-                            tools=example.get("tools"),
+                            tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
                         rejected_input_ids = processing_class.apply_chat_template(
                             example["rejected"],
-                            tools=example.get("tools"),
+                            tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]

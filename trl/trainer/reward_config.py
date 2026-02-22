@@ -17,9 +17,11 @@ from typing import Any
 
 from transformers import TrainingArguments
 
+from .base_config import BaseConfig
+
 
 @dataclass
-class RewardConfig(TrainingArguments):
+class RewardConfig(BaseConfig):
     r"""
     Configuration class for the [`RewardTrainer`].
 

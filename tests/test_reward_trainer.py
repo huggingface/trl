@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import pathlib
 
 import pytest
@@ -107,6 +108,18 @@ class TestDataCollatorForPreference(TrlTestCase):
 
 
 class TestRewardTrainer(TrlTestCase):
+    def test_raises_error_when_model_num_labels_not_one(self):
+        """Test that RewardTrainer raises ValueError when model doesn't have num_labels=1."""
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            dtype="float32",
+            # num_labels=2,  # Defaults to 2 num_labels for causal models
+        )
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match=r"reward models require `num_labels=1`"):
+            RewardTrainer(model=model, args=training_args)
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -176,6 +189,7 @@ class TestRewardTrainer(TrlTestCase):
         # Instantiate the model
         model = AutoModelForSequenceClassification.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            num_labels=1,  # required for reward models
             dtype="float32",
         )
 
@@ -341,7 +355,11 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_peft_model(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_id,
+            num_labels=1,  # required for reward models
+            dtype="float32",
+        )
 
         # Get the base model parameter names
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -650,6 +668,40 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_toolcall_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
+
+        # Initialize the trainer
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    def test_train_toolcall_data_as_json(self):
+        # Tabular backends (Arrow/Parquet) can insert `None` for missing keys in nested structures.
+        # If `tools` is stored as a list of dicts and examples use different dict schemas, nulls may
+        # be introduced and break tool processing. This test ensures we also support `tools` provided
+        # as a list of dicts.
+        dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
+
+        def convert_to_json(example):
+            return {"tools": json.loads(example["tools"])}
+
+        dataset = dataset.map(convert_to_json)
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")

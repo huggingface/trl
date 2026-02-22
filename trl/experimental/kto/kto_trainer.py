@@ -51,16 +51,15 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_liger_kernel_available
-from ...models.utils import create_reference_model, peft_module_casting_to_bf16, prepare_deepspeed
+from ...models.utils import prepare_deepspeed
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     log_table_to_comet_experiment,
-    pad_to_length,
     selective_log_softmax,
 )
-from ..utils import DPODataCollatorWithPadding
+from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
 from .kto_config import KTOConfig
 
 

@@ -23,7 +23,8 @@ Each patch should be removed when minimum version requirements eliminate the nee
 import warnings
 
 from packaging.version import Version
-from transformers.utils.import_utils import _is_package_available
+
+from .import_utils import _is_package_available
 
 
 def _is_package_version_below(package_name: str, version_threshold: str) -> bool:
@@ -170,15 +171,12 @@ def _patch_transformers_hybrid_cache() -> None:
     """
     Fix HybridCache import for transformers v5 compatibility.
 
-    - Issue: liger_kernel and peft import HybridCache from transformers.cache_utils
+    - Issue: peft import HybridCache from transformers.cache_utils
     - HybridCache removed in https://github.com/huggingface/transformers/pull/43168 (transformers>=5.0.0)
-    - Fixed in liger_kernel: https://github.com/linkedin/Liger-Kernel/pull/1002 (released in v0.6.5)
     - Fixed in peft: https://github.com/huggingface/peft/pull/2735 (released in v0.18.0)
-    - This can be removed when TRL requires liger_kernel>=0.6.5 and peft>=0.18.0
+    - This can be removed when TRL requires peft>=0.18.0
     """
-    if _is_package_version_at_least("transformers", "5.0.0") and (
-        _is_package_version_below("liger_kernel", "0.6.5") or _is_package_version_below("peft", "0.18.0")
-    ):
+    if _is_package_version_at_least("transformers", "5.0.0") and _is_package_version_below("peft", "0.18.0"):
         try:
             import transformers.cache_utils
             from transformers.utils.import_utils import _LazyModule

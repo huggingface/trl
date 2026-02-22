@@ -60,7 +60,7 @@ kernels = [
     "kernels"
 ]
 liger = [
-    "liger-kernel>=0.6.4"
+    "liger-kernel>=0.7.0"
 ]
 peft = [
     "peft>=0.8.0"
@@ -109,7 +109,7 @@ dev = [
     # kernels
     "kernels",
     # liger
-    "liger-kernel>=0.6.4",
+    "liger-kernel>=0.7.0",
     # peft
     "peft>=0.8.0",
     # quality
@@ -160,6 +160,8 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 # Allow prints in auxiliary scripts
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
+"trl/cli/**.py" = ["T201"]
+"trl/skills/cli.py" = ["T201"]
 # Ignore import violations in all `__init__.py` files.
 "__init__.py" = ["F401"]
 

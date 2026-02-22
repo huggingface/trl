@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import json
 import os
 import warnings
 from collections import defaultdict
@@ -392,7 +393,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if self.pad_to_multiple_of is not None:
             raise NotImplementedError(
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
-                "prompt-completion data yet."
+                "prompt-completion data."
             )
         images = [example["images"] for example in examples]
         # Transformers requires at least one image in the batch, otherwise it throws an error
@@ -1016,6 +1017,8 @@ class SFTTrainer(BaseTrainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss):
+                    tools = example.get("tools")
+                    tools = json.loads(tools) if isinstance(tools, str) else tools
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
@@ -1027,7 +1030,7 @@ class SFTTrainer(BaseTrainer):
                                 completion = example["completion"]
                             prompt_ids = processing_class.apply_chat_template(
                                 prompt,
-                                tools=example.get("tools"),
+                                tools=tools,
                                 add_generation_prompt=True,
                                 tokenize=True,
                                 return_dict=False,
@@ -1038,7 +1041,7 @@ class SFTTrainer(BaseTrainer):
                             prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
                                 prompt + completion,
-                                tools=example.get("tools"),
+                                tools=tools,
                                 tokenize=True,
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1088,7 +1091,7 @@ class SFTTrainer(BaseTrainer):
                                 messages = example["messages"]
                             processed = processing_class.apply_chat_template(
                                 messages,
-                                tools=example.get("tools"),
+                                tools=tools,
                                 tokenize=True,
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
@@ -1245,13 +1248,9 @@ class SFTTrainer(BaseTrainer):
                 token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
                 self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
             else:
-                # liger-kernel<=0.6.4 can omit token_accuracy even when requested; fixed for Gemma3 in
-                # https://github.com/linkedin/Liger-Kernel/pull/1010
                 warnings.warn(
                     "liger-kernel did not return token_accuracy when requested. The mean_token_accuracy metric will "
-                    "not be logged. This may indicate an outdated liger-kernel version. Consider upgrading to the "
-                    "latest version. If the issue persists after upgrading, please report it to the liger-kernel "
-                    "repository.",
+                    "not be logged. This is unexpected; please report it to the liger-kernel repository.",
                     stacklevel=2,
                 )
         else:
