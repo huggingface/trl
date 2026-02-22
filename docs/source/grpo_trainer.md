@@ -695,6 +695,7 @@ trainer.train()
 
 Tested with:
 
+- **GPT-OSS** — e.g., `openai/gpt-oss-20b`
 - **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
 
 > [!TIP]
