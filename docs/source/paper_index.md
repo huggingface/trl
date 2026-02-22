@@ -221,6 +221,30 @@ training_args = GRPOConfig(
 )
 ```
 
+### DGPO: Difficulty-Aware Group Policy Optimization
+
+**📜 Paper**: https://huggingface.co/papers/2601.20614
+
+DGPO extends GRPO with difficulty-aware mechanisms to improve training on tasks with varying question difficulty (e.g., math reasoning). It is introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614) (ICLR 2026) and is supported in [`GRPOTrainer`] via [`GRPOConfig`].
+
+- **DGAE (Difficulty-balanced Group Advantage Estimation)**: When `use_dgpo_dgae=True`, advantages are scaled using Mean Absolute Deviation (MAD) instead of standard deviation, i.e. advantage = (reward - mean) / (MAD + eps), which can address the implicit imbalance where the update magnitudes are suppressed for both easier and harder questions and peak for those of moderate difficulty.
+- **DQW (Difficulty-aware Question-level Weighting)**: When `use_dgpo_dqw=True`, each question (prompt group) is assigned a weight based on its difficulty (e.g., mean accuracy reward). Harder questions get higher weight, so the policy focuses more on them. Use `dgpo_dqw_temp` to control how sharp the weighting is (lower = more focus on hard questions) and `dgpo_dqw_acc_reward_index` to specify which reward in `reward_funcs` is used as the accuracy/difficulty signal.
+
+To use DGPO in TRL, enable the corresponding options in [`GRPOConfig`]:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    ...,
+    use_dgpo_dgae=True,
+    use_dgpo_dqw=True,
+    dgpo_dqw_temp=2.0,
+    dgpo_dqw_acc_reward_index=0,
+)
+trainer = GRPOTrainer(..., args=training_args, reward_funcs=[...], train_dataset=...)
+```
+
 ### Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)
 
 **📜 Paper**: https://huggingface.co/papers/2508.08221
