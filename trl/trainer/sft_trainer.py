@@ -799,18 +799,21 @@ class SFTTrainer(BaseTrainer):
 
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
-        dataset_sample = next(iter(train_dataset))
-        if args.completion_only_loss is None:
-            self.completion_only_loss = "prompt" in dataset_sample and "completion" in dataset_sample
+        if train_dataset is not None:
+            dataset_sample = next(iter(train_dataset))
+            if args.completion_only_loss is None:
+                self.completion_only_loss = "prompt" in dataset_sample and "completion" in dataset_sample
+            else:
+                self.completion_only_loss = args.completion_only_loss
+            self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+            if self._is_vision_dataset and not self._is_vlm:
+                raise ValueError(
+                    "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                    "model does not seem to be a vision-language model. Please check your model and dataset."
+                )
         else:
-            self.completion_only_loss = args.completion_only_loss
-
-        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
-        if self._is_vision_dataset and not self._is_vlm:
-            raise ValueError(
-                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
-                "model does not seem to be a vision-language model. Please check your model and dataset."
-            )
+            self.completion_only_loss = args.completion_only_loss or False
+            self._is_vision_dataset = False
 
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
@@ -847,7 +850,7 @@ class SFTTrainer(BaseTrainer):
                 "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
                 "to one of these supported options."
             )
-        if args.assistant_only_loss and not is_conversational(dataset_sample):
+        if train_dataset is not None and args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
                 "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
                 "supported for conversational datasets."
@@ -869,9 +872,10 @@ class SFTTrainer(BaseTrainer):
                     "completion-only loss. To resolve this, apply your formatting function before passing the "
                     "dataset, or disable `completion_only_loss` in `SFTConfig`."
                 )
-            train_dataset = self._prepare_dataset(
-                train_dataset, processing_class, args, args.packing, formatting_func, "train"
-            )
+            if train_dataset is not None:
+                train_dataset = self._prepare_dataset(
+                    train_dataset, processing_class, args, args.packing, formatting_func, "train"
+                )
             if eval_dataset is not None:
                 packing = args.packing if args.eval_packing is None else args.eval_packing
                 if isinstance(eval_dataset, dict):
