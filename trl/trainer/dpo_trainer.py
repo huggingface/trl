@@ -558,19 +558,28 @@ class DPOTrainer(BaseTrainer):
 
         # Data collator
         self.padding_free = args.padding_free
-        if self.padding_free:
+        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
+        if self.padding_free and not use_flash_attention:
             logger.warning(
-                "`padding_free=True` is temporarily unavailable after a refactor and is currently disabled. Falling "
-                "back to standard padding (`padding_free=False`). This feature is planned to return in a future "
-                "update; for now, please set `padding_free=False` explicitly."
+                "Padding-free training is enabled, but the attention implementation is not set to a supported flash "
+                "attention variant. Padding-free training flattens batches into a single sequence, and only the "
+                "following implementations are known to reliably support this: "
+                f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to unexpected "
+                "behavior. To ensure compatibility, set `attn_implementation` in the model configuration to one of "
+                "these supported options or verify that your attention mechanism can handle flattened sequences."
             )
-            self.padding_free = False
+
         dataset_sample = next(iter(train_dataset))
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
             raise ValueError(
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
+        if self.padding_free and self._is_vision_dataset:
+            raise ValueError(
+                "Padding-free training is not supported for vision-language preference data. Please set "
+                "`padding_free=False`."
             )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
@@ -977,6 +986,25 @@ class DPOTrainer(BaseTrainer):
 
         return input_ids, attention_mask, completion_mask
 
+    def _flatten_batch_for_padding_free(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        non_padding_mask = attention_mask.bool()
+        position_ids = attention_mask.cumsum(dim=1) - 1
+        position_ids = position_ids.masked_fill(~non_padding_mask, 0)
+        seq_lengths = non_padding_mask.sum(dim=1)
+        flat_input_ids = input_ids[non_padding_mask].unsqueeze(0)
+        flat_position_ids = position_ids[non_padding_mask].unsqueeze(0)
+        return flat_input_ids, flat_position_ids, seq_lengths
+
+    def _restore_padding_from_flattened(
+        self, tensor: torch.Tensor, flat_position_ids: torch.Tensor, seq_lengths: torch.Tensor, padding_value: int = 0
+    ) -> torch.Tensor:
+        keep_mask = flat_position_ids[:, 1:].ne(0).squeeze(0)
+        tensor = tensor.squeeze(0)[keep_mask]
+        split_lengths = (seq_lengths - 1).clamp_min(0).tolist()
+        return pad(list(tensor.split(split_lengths, dim=0)), padding_value=padding_value)
+
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
@@ -988,11 +1016,19 @@ class DPOTrainer(BaseTrainer):
 
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
-
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        if self.padding_free:
+            model_input_ids, flat_position_ids, seq_lengths = self._flatten_batch_for_padding_free(
+                input_ids, attention_mask
+            )
+            model_kwargs = {"input_ids": model_input_ids, "position_ids": flat_position_ids, "use_cache": False}
+        else:
+            model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
         for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
             if key in inputs:
-                model_kwargs[key] = inputs[key]
+                if self.padding_free and key == "token_type_ids":
+                    model_kwargs[key] = inputs[key][attention_mask.bool()].unsqueeze(0)
+                else:
+                    model_kwargs[key] = inputs[key]
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if is_peft_model(self.model) and self.ref_model is None:
@@ -1003,6 +1039,8 @@ class DPOTrainer(BaseTrainer):
                 ref_outputs = self.ref_model(**model_kwargs)
 
         ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
+        if self.padding_free:
+            ref_shift_logits = self._restore_padding_from_flattened(ref_shift_logits, flat_position_ids, seq_lengths)
         ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
         ref_per_token_logps[shift_completion_mask == 0] = 0.0
 
@@ -1037,9 +1075,19 @@ class DPOTrainer(BaseTrainer):
         completion_mask = inputs["completion_mask"]
         input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
+        if self.padding_free:
+            model_input_ids, flat_position_ids, seq_lengths = self._flatten_batch_for_padding_free(
+                input_ids, attention_mask
+            )
+            decoder_kwargs = {"input_ids": model_input_ids, "position_ids": flat_position_ids, "use_cache": False}
+        else:
+            decoder_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+
         decoder = model.get_decoder()
-        outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+        outputs = decoder(**decoder_kwargs)
         hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
+        if self.padding_free:
+            hidden_states = self._restore_padding_from_flattened(hidden_states, flat_position_ids, seq_lengths)
         lm_head = model.get_output_embeddings()
         weight = lm_head.weight
         bias = lm_head.bias
@@ -1049,9 +1097,13 @@ class DPOTrainer(BaseTrainer):
         else:
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
                 ref_decoder = self.ref_model.get_decoder()
-                ref_outputs = ref_decoder(input_ids, attention_mask=attention_mask, use_cache=False)
+                ref_outputs = ref_decoder(**decoder_kwargs)
                 ref_lm_head = self.ref_model.get_output_embeddings()
                 ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
+                if self.padding_free:
+                    ref_hidden_states = self._restore_padding_from_flattened(
+                        ref_hidden_states, flat_position_ids, seq_lengths
+                    )
                 ref_weight = ref_lm_head.weight
                 ref_bias = ref_lm_head.bias
 
@@ -1110,13 +1162,24 @@ class DPOTrainer(BaseTrainer):
         completion_mask = inputs["completion_mask"]
         input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
-        model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        if self.padding_free:
+            model_input_ids, flat_position_ids, seq_lengths = self._flatten_batch_for_padding_free(
+                input_ids, attention_mask
+            )
+            model_kwargs = {"input_ids": model_input_ids, "position_ids": flat_position_ids, "use_cache": False}
+        else:
+            model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
         for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
             if key in inputs:
-                model_kwargs[key] = inputs[key]
+                if self.padding_free and key == "token_type_ids":
+                    model_kwargs[key] = inputs[key][attention_mask.bool()].unsqueeze(0)
+                else:
+                    model_kwargs[key] = inputs[key]
 
         outputs = model(**model_kwargs)
         shift_logits = outputs.logits[..., :-1, :].contiguous()
+        if self.padding_free:
+            shift_logits = self._restore_padding_from_flattened(shift_logits, flat_position_ids, seq_lengths)
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
@@ -1154,6 +1217,10 @@ class DPOTrainer(BaseTrainer):
                     ref_outputs = self.ref_model(**model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :].contiguous()
+            if self.padding_free:
+                ref_shift_logits = self._restore_padding_from_flattened(
+                    ref_shift_logits, flat_position_ids, seq_lengths
+                )
             ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
             ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             if self.ld_alpha is None:
