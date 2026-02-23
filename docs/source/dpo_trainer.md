@@ -82,7 +82,7 @@ print(next(iter(dataset["train"])))
 
 ## Looking deeper into the DPO method
 
-Direct Preference Optimization (DPO) is a training method designed to align a language model with preference data. Instead of supervised input–output pairs, the model is trained on pairs of completions to the same prompt, where one completion is preferred over the other. The objective directly optimizes the model to assign higher likelihood to preferred completions than to dispreferred ones, relative to a reference model, without requiring an explicit reward model.
+Direct Preference Optimization (DPO) is a training method designed to align a language model with preference data. Instead of supervised input–output pairs, the model is trained on pairs of completions to the same prompt, where one completion is preferred over the other. The objective directly optimizes the model to widen the margin between the log-likelihoods of preferred and dispreferred completions, relative to a reference model, without requiring an explicit reward model. In practice, this is typically achieved by suppressing the likelihood of dispreferred completions rather than by increasing the likelihood of preferred ones.
 
 This section breaks down how DPO works in practice, covering the key steps: **preprocessing** and **loss computation**.
 
@@ -230,7 +230,7 @@ trainer.train()
 ```
 
 > [!TIP]
-> When training adapters, you typically use a higher learning rate (≈1e‑5) since only new parameters are being learned.
+> When training adapters, you typically use a higher learning rate (≈1e‑5) than full fine-tuning since only new parameters are being learned.
 >
 > ```python
 > DPOConfig(learning_rate=1e-5, ...)

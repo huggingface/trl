@@ -17,9 +17,11 @@ from typing import Any
 
 from transformers import TrainingArguments
 
+from ...trainer.base_config import BaseConfig
+
 
 @dataclass
-class BCOConfig(TrainingArguments):
+class BCOConfig(BaseConfig):
     r"""
     Configuration class for the [`experimental.bco.BCOTrainer`].
 
@@ -69,39 +71,6 @@ class BCOConfig(TrainingArguments):
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
-
-    # Parameters whose default values are overridden from TrainingArguments
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
-    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
-    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
-    lr_scheduler_kwargs: dict | str | None = field(
-        default=None,
-        metadata={
-            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
-            "restarts."
-        },
-    )
 
     max_length: int | None = field(
         default=1024,
@@ -182,8 +151,3 @@ class BCOConfig(TrainingArguments):
         default=10.0,
         metadata={"help": "Maximum value of the density ratio. The estimated density ratio is clamped to this value."},
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()

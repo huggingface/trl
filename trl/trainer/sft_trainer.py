@@ -260,7 +260,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     """
     Data collator for vision-language modeling tasks.
 
-    Unlike text-only datasets—where the collator typically receives pre-tokenized inputs ready for batching,
+    Unlike text-only datasets, where the collator typically receives pre-tokenized inputs ready for batching,
     vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
     making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
     image processing on-the-fly to efficiently prepare batches.
