@@ -17,9 +17,11 @@ from typing import Any
 
 from transformers import TrainingArguments
 
+from ...trainer.base_config import BaseConfig
+
 
 @dataclass
-class CPOConfig(TrainingArguments):
+class CPOConfig(BaseConfig):
     r"""
     Configuration class for the [`experimental.cpo.CPOTrainer`].
 

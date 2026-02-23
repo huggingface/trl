@@ -15,11 +15,11 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from transformers import TrainingArguments
+from ...trainer.base_config import BaseConfig
 
 
 @dataclass
-class PPOConfig(TrainingArguments):
+class PPOConfig(BaseConfig):
     r"""
     Configuration class for the [`experimental.ppo.PPOTrainer`].
 

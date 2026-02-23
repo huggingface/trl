@@ -17,9 +17,11 @@ from typing import Any
 
 from transformers import TrainingArguments
 
+from ...trainer.base_config import BaseConfig
+
 
 @dataclass
-class ORPOConfig(TrainingArguments):
+class ORPOConfig(BaseConfig):
     r"""
     Configuration class for the [`experimental.orpo.ORPOTrainer`].
 

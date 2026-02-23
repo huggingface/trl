@@ -17,9 +17,11 @@ from typing import Any
 
 from transformers import TrainingArguments
 
+from ...trainer.base_config import BaseConfig
+
 
 @dataclass
-class BCOConfig(TrainingArguments):
+class BCOConfig(BaseConfig):
     r"""
     Configuration class for the [`experimental.bco.BCOTrainer`].
 
