@@ -58,19 +58,21 @@ from functools import cached_property, lru_cache
 from typing import Any
 
 import torch
-import torch.distributed as dist
-
-from accelerate import logging
-from datasets import load_dataset
-from transformers.utils import requires_backends, is_accelerate_available
-from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
-
+from accelerate import ParallelismConfig, logging
 from accelerate.state import AcceleratorState, PartialState
 from accelerate.utils import DistributedType
+from datasets import load_dataset
+from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.tensor.parallel import (
+    ColwiseParallel,
+    RowwiseParallel,
+    parallelize_module,
+)
+from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
+from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_pt_utils import AcceleratorConfig
+from transformers.utils import requires_backends
 
-from peft import get_peft_model
 from trl import (
     DatasetMixtureConfig,
     ModelConfig,
@@ -91,7 +93,7 @@ logger = logging.get_logger(__name__)
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
-@lru_cache()
+@lru_cache
 def is_torch_neuron_available() -> bool:
     try:
         import torch_neuronx  # noqa: F401
@@ -164,6 +166,27 @@ class NeuronSFTConfig(SFTConfig):
                 raise e
 
 
+def apply_tp(model: PreTrainedModel, device_mesh: DeviceMesh) -> PreTrainedModel:
+    layer_tp_plan = {
+        # Self Attention Block
+        "self_attn.q_proj": ColwiseParallel(),
+        "self_attn.k_proj": ColwiseParallel(),
+        "self_attn.v_proj":ColwiseParallel(),
+        "self_attn.o_proj": RowwiseParallel(),
+        # MLP Block (SwiGLU)
+        "mlp.gate_proj": ColwiseParallel(),
+        "mlp.up_proj": ColwiseParallel(),
+        "mlp.down_proj": RowwiseParallel(),
+    }
+
+    for layer in model.model.layers:
+        parallelize_module(layer, device_mesh, layer_tp_plan)
+
+    model._tp_size = device_mesh.shape[0]
+
+    return model
+
+
 def main(script_args, training_args, model_args, dataset_args):
     ################
     # Model init kwargs
@@ -174,23 +197,41 @@ def main(script_args, training_args, model_args, dataset_args):
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
-    # TODO: not supported for now.
-    # quantization_config = get_quantization_config(model_args)
-    # if quantization_config is not None:
-    #     # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
-    #     model_kwargs["device_map"] = get_kbit_device_map()
-    #     model_kwargs["quantization_config"] = quantization_config
+
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
 
     # Create model
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
 
+    tp_size = int(os.environ.get("TP_SIZE", "1"))
+    dp_size = int(os.environ.get("WORLD_SIZE", "1")) // tp_size
+    print(f"Data Parallel Size: {dp_size}, Tensor Parallel Size: {tp_size}")
+
+    if tp_size > 1:
+        parallelism_config = ParallelismConfig(
+            dp_shard_size=1,
+            dp_replicate_size=dp_size,
+            tp_size=tp_size,
+        )
+        training_args.parallelism_config = parallelism_config
+
+    kwargs = {}
+
     if config.architectures and any(arch in valid_image_text_architectures for arch in config.architectures):
         from transformers import AutoModelForImageTextToText
 
-        model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+        model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **kwargs, **model_kwargs)
     else:
-        model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **kwargs, **model_kwargs)
+
+
+    if tp_size > 1:
+        model = apply_tp(model, parallelism_config.get_device_mesh(device_type="neuron"))
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -207,6 +248,7 @@ def main(script_args, training_args, model_args, dataset_args):
         )
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
+
 
     # Initialize the SFT trainer
     trainer = SFTTrainer(
