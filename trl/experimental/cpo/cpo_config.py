@@ -168,8 +168,6 @@ class CPOConfig(BaseConfig):
     )
 
     def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
         # Syntactic sugar for AlphaPO: set loss_type to "simpo" and cpo_alpha to 0.0
         if self.loss_type == "alphapo":
             self.loss_type = "simpo"

@@ -369,8 +369,6 @@ class OnlineDPOConfig(BaseConfig):
     )
 
     def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
         super().__post_init__()
 
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:

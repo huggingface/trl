@@ -78,8 +78,3 @@ class PRMConfig(BaseConfig):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()

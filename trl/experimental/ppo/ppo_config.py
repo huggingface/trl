@@ -264,8 +264,3 @@ class PPOConfig(BaseConfig):
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
         },
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()
