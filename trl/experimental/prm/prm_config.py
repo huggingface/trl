@@ -14,11 +14,11 @@
 
 from dataclasses import dataclass, field
 
-from transformers import TrainingArguments
+from ...trainer.base_config import BaseConfig
 
 
 @dataclass
-class PRMConfig(TrainingArguments):
+class PRMConfig(BaseConfig):
     r"""
     Configuration class for the [`experimental.prm.PRMTrainer`].
 
@@ -50,27 +50,6 @@ class PRMConfig(TrainingArguments):
         default=1e-5,
         metadata={"help": "The initial learning rate for AdamW."},
     )
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
 
     max_length: int | None = field(
         default=1024,
@@ -99,8 +78,3 @@ class PRMConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()
