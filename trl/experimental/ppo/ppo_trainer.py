@@ -48,17 +48,22 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
-from ...models.utils import create_reference_model, peft_module_casting_to_bf16, unwrap_model_for_generation
+from ...models.utils import unwrap_model_for_generation
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
-    empty_cache,
     log_table_to_comet_experiment,
     pad,
     prepare_deepspeed,
     selective_log_softmax,
 )
-from ..utils import first_true_indices, get_reward
+from ..utils import (
+    create_reference_model,
+    empty_cache,
+    first_true_indices,
+    get_reward,
+    peft_module_casting_to_bf16,
+)
 from .ppo_config import PPOConfig
 
 

@@ -16,9 +16,22 @@ import os
 from io import StringIO
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from .testing_utils import TrlTestCase
+
+
+@pytest.mark.parametrize("command", ["dpo", "grpo", "kto", "reward", "rloo", "sft"])
+def test_help_no_type_error(command):
+    # Regression test for https://github.com/huggingface/trl/issues/5099:
+    # TrainingArguments help strings with unescaped "%" caused TypeError in argparse.
+    from trl.cli import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        with patch("sys.argv", ["trl", command, "--help"]), patch("sys.stdout", new_callable=StringIO):
+            main()
+    assert exc_info.value.code == 0
 
 
 class TestCLI(TrlTestCase):

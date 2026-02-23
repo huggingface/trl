@@ -17,7 +17,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
 from . import _compat
-from .import_utils import _LazyModule
+from ._lazy_module import _LazyModule
 
 
 try:
@@ -42,16 +42,12 @@ _import_structure = {
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "models": [
-        "create_reference_model",
-    ],
+    "models": ["create_reference_model"],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
         "BEMACallback",
         "DPOConfig",
         "DPOTrainer",
-        "FDivergenceConstants",  # deprecated import
-        "FDivergenceType",  # deprecated import
         "GRPOConfig",
         "GRPOTrainer",
         "KTOConfig",
@@ -90,16 +86,12 @@ if TYPE_CHECKING:
         truncate_dataset,
         unpair_preference_dataset,
     )
-    from .models import (
-        create_reference_model,
-    )
+    from .models import create_reference_model
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
         BEMACallback,
         DPOConfig,
         DPOTrainer,
-        FDivergenceConstants,  # deprecated import
-        FDivergenceType,  # deprecated import
         GRPOConfig,
         GRPOTrainer,
         KTOConfig,
