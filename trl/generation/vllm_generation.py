@@ -36,6 +36,21 @@ from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
 
 
+def _empty_device_cache():
+    """Empty the cache for the current accelerator device.
+
+    Handles non-CUDA backends (XPU, NPU, MLU) that don't have ``torch.cuda``.
+    """
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        torch.xpu.empty_cache()
+    elif hasattr(torch, "npu") and torch.npu.is_available():
+        torch.npu.empty_cache()
+    elif hasattr(torch, "mlu") and torch.mlu.is_available():
+        torch.mlu.empty_cache()
+    else:
+        torch.cuda.empty_cache()
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -409,6 +424,14 @@ class VLLMGeneration:
 
         Handles FSDP, DeepSpeed, PEFT weight synchronization.
         """
+        # Wake up vLLM weights before loading to ensure device memory is mapped.
+        # Without this, load_weights() writes to freed/unmapped memory when sleep
+        # mode is active, which crashes on backends with strict physical memory
+        # management (e.g., Ascend NPU). See https://github.com/huggingface/trl/issues/5142
+        if self.mode == "colocate" and self.enable_sleep_mode:
+            _empty_device_cache()
+            self.llm.wake_up(tags=["weights"])
+
         model = self.model
         accelerator = self.accelerator
         is_fsdp_enabled = self.is_fsdp_enabled
@@ -511,12 +534,15 @@ class VLLMGeneration:
         tools = self.tools
         chat_template = self.chat_template
 
-        # Wake up colocated vLLM instances if needed
+        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
         if self.mode == "colocate" and self.enable_sleep_mode:
-            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            _empty_device_cache()
             self.llm.wake_up(tags=["weights"])
             # Work around for https://github.com/vllm-project/vllm/issues/29341
-            self.llm.collective_rpc("reload_weights")
+            try:
+                self.llm.collective_rpc("reload_weights")
+            except NotImplementedError:
+                pass
 
         if is_conversational({"prompt": prompts[0]}):
             prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
