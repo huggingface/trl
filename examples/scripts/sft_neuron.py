@@ -58,17 +58,11 @@ from functools import cached_property, lru_cache
 from typing import Any
 
 import torch
-from accelerate import ParallelismConfig, logging
+from accelerate import Accelerator, ParallelismConfig, logging
 from accelerate.state import AcceleratorState, PartialState
 from accelerate.utils import DistributedType
 from datasets import load_dataset
-from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.tensor.parallel import (
-    ColwiseParallel,
-    RowwiseParallel,
-    parallelize_module,
-)
-from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_pt_utils import AcceleratorConfig
 from transformers.utils import requires_backends
@@ -165,28 +159,6 @@ class NeuronSFTConfig(SFTConfig):
             if not (is_torch_neuron_available() and isinstance(e, ValueError) and bf16_error_message in str(e)):
                 raise e
 
-
-def apply_tp(model: PreTrainedModel, device_mesh: DeviceMesh) -> PreTrainedModel:
-    layer_tp_plan = {
-        # Self Attention Block
-        "self_attn.q_proj": ColwiseParallel(),
-        "self_attn.k_proj": ColwiseParallel(),
-        "self_attn.v_proj":ColwiseParallel(),
-        "self_attn.o_proj": RowwiseParallel(),
-        # MLP Block (SwiGLU)
-        "mlp.gate_proj": ColwiseParallel(),
-        "mlp.up_proj": ColwiseParallel(),
-        "mlp.down_proj": RowwiseParallel(),
-    }
-
-    for layer in model.model.layers:
-        parallelize_module(layer, device_mesh, layer_tp_plan)
-
-    model._tp_size = device_mesh.shape[0]
-
-    return model
-
-
 def main(script_args, training_args, model_args, dataset_args):
     ################
     # Model init kwargs
@@ -210,17 +182,36 @@ def main(script_args, training_args, model_args, dataset_args):
 
     tp_size = int(os.environ.get("TP_SIZE", "1"))
     dp_size = int(os.environ.get("WORLD_SIZE", "1")) // tp_size
-    print(f"Data Parallel Size: {dp_size}, Tensor Parallel Size: {tp_size}")
+
+    tp_plan = {
+        "model.layers.*.self_attn.q_proj": "colwise",
+        "model.layers.*.self_attn.k_proj": "colwise",
+        "model.layers.*.self_attn.v_proj": "colwise",
+        "model.layers.*.self_attn.o_proj": "rowwise",
+        "model.layers.*.mlp.gate_proj": "colwise",
+        "model.layers.*.mlp.up_proj": "colwise",
+        "model.layers.*.mlp.down_proj": "rowwise",
+    }
 
     if tp_size > 1:
         parallelism_config = ParallelismConfig(
-            dp_shard_size=1,
-            dp_replicate_size=dp_size,
+            dp_replicate_size=1,
+            dp_shard_size=dp_size,
             tp_size=tp_size,
         )
         training_args.parallelism_config = parallelism_config
 
+        def _prepare_tp(self, *args):
+            # This function is used to prepare the model for tensor parallelism. In a real implementation, this would
+            # involve modifying the model's layers according to the tp_plan and the device mesh.
+            # However, with the current approach in Transformers, it is not required anymore.
+            return args
+
+        Accelerator._prepare_tp = _prepare_tp.__get__(Accelerator)
+
     kwargs = {}
+    kwargs["tp_plan"] = tp_plan
+    kwargs["tp_size"] = tp_size
 
     if config.architectures and any(arch in valid_image_text_architectures for arch in config.architectures):
         from transformers import AutoModelForImageTextToText
@@ -228,10 +219,6 @@ def main(script_args, training_args, model_args, dataset_args):
         model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **kwargs, **model_kwargs)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **kwargs, **model_kwargs)
-
-
-    if tp_size > 1:
-        model = apply_tp(model, parallelism_config.get_device_mesh(device_type="neuron"))
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
