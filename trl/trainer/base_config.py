@@ -51,7 +51,7 @@ class BaseConfig(TrainingArguments):
     """
 
     # Override fields from TrainingArguments to set defaults preferred by all TRL trainers.
-    logging_steps: int | float = field(
+    logging_steps: float = field(
         default=10,
         metadata={
             "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
