@@ -1,7 +1,5 @@
-# Model
+# Model and data 
 model_name: "Qwen/Qwen3-4B-Instruct-2507"
-
-# Data
 dataset_path: "/path/to/Gym/resources_servers/workplace_assistant/data/train.jsonl"
 eval_dataset_path: "/path/to/Gym/resources_servers/workplace_assistant/data/validation.jsonl"
 
@@ -31,8 +29,6 @@ lr_scheduler_type: "linear"
 optim: "adamw_torch_fused"
 weight_decay: 0.01
 vllm_importance_sampling_correction: true
-
-# Inference
 temperature: 1.0
 top_p: 0.999
 

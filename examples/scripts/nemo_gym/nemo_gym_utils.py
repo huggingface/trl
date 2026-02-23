@@ -109,6 +109,9 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         responses_create_params = item.get("responses_create_params", {})
         responses_create_params["temperature"] = trainer.args.temperature
         responses_create_params["top_p"] = trainer.args.top_p
+        if trainer.args.max_completion_length is not None:
+            responses_create_params["max_output_tokens"] = trainer.args.max_completion_length
+        item["responses_create_params"] = responses_create_params
 
     rch = trainer.args.rch
     head_server_config = trainer.args.head_server_config
@@ -185,8 +188,8 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
                 continue
 
             num_turns += 1
-            item_prompt_ids = output_item_dict["prompt_token_ids"]
-            item_gen_ids = output_item_dict["generation_token_ids"]
+            item_prompt_ids = [int(t) for t in output_item_dict["prompt_token_ids"]]
+            item_gen_ids = [int(t) for t in output_item_dict["generation_token_ids"]]
             item_logprobs = output_item_dict.get("generation_log_probs", [])
 
             if first_prompt is None:

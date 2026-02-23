@@ -2157,7 +2157,8 @@ class GRPOTrainer(BaseTrainer):
 
         logs = {**logs, **metrics}
         super().log(logs, start_time)
-        self._metrics[mode].clear()
+        if mode == "train" or "eval_loss" in logs:
+            self._metrics[mode].clear()
 
         if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():

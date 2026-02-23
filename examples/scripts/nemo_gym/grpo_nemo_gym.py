@@ -40,10 +40,11 @@ class NeMoGymGRPOConfig(GRPOConfig):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config.yaml", help="Path to config YAML file")
+    parser.add_argument("--config", default="examples/scripts/nemo_gym/config.yaml", help="Path to config file")
     parser.add_argument("--vllm_server_host", type=str, default="127.0.0.1")
     parser.add_argument("--head_server_host", type=str, default="127.0.0.1")
     parser.add_argument("--head_server_port", type=int, default=11000)
+    parser.add_argument("--vllm_server_port", type=int, default=8000)
     parser.add_argument("--resume_from_checkpoint", type=str, default=None)
     args = parser.parse_args()
 
@@ -69,6 +70,7 @@ def main():
             config_paths=gym_configs,
             model_name=model_name,
             vllm_server_host=args.vllm_server_host,
+            vllm_server_port=args.vllm_server_port,
             host="0.0.0.0",
             port=args.head_server_port,
         )
@@ -89,7 +91,7 @@ def main():
         use_vllm=True,
         vllm_mode="server",
         vllm_server_host=args.vllm_server_host,
-        vllm_server_port=8000,
+        vllm_server_port=args.vllm_server_port,
         gradient_checkpointing=True,
         num_generations_eval=1,
         logging_steps=1,
