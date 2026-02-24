@@ -111,15 +111,3 @@ training_args = DPOConfig(
     gradient_accumulation_steps=8,
 )
 ```
-
-## Use a custom data collator
-
-You can provide a custom data collator to handle special data preprocessing or padding strategies.
-
-```python
-from trl.trainer.dpo_trainer import DataCollatorForPreference
-
-data_collator = DataCollatorForPreference(pad_token_id=tokenizer.pad_token_id)
-
-trainer = DPOTrainer(..., data_collator=data_collator)
-```
