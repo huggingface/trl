@@ -112,6 +112,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
     responses = loop.run_until_complete(_collect_rollouts(dataset_items, rch, head_server_config))
 
     tokenizer = trainer.processing_class
+    eos_token_id = tokenizer.eos_token_id or 0
 
     prompt_ids: list[list[int]] = []
     completion_ids: list[list[int]] = []
@@ -120,31 +121,9 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
     env_rewards: list[float] = []
 
     for i, response in enumerate(responses):
-        eos_token_id = tokenizer.eos_token_id or 0
-
-        if not isinstance(response, dict) or response.get("error"):
-            rollout_failed = True
-        else:
-            output_items = response.get("response", {}).get("output", [])
-            has_content = output_items and any(
-                item.get("type") == "function_call"
-                or (
-                    item.get("type") == "message"
-                    and any(
-                        c.get("type") == "output_text" and c.get("text", "").strip() for c in item.get("content", [])
-                    )
-                )
-                for item in output_items
-            )
-            rollout_failed = not has_content
-
-        if rollout_failed:
-            prompt_ids.append([eos_token_id])
-            completion_ids.append([eos_token_id])
-            completion_mask.append([0])
-            logprobs.append([0.0])
-            env_rewards.append(0.0)
-            continue
+        assert isinstance(response, dict), (
+            f"Hit a non-successful response when querying NeMo Gym for rollouts: {response}"
+        )
 
         episode_reward = response.get("reward", 0.0)
         output_items = response.get("response", {}).get("output", [])
