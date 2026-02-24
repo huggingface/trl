@@ -218,6 +218,7 @@ class TestIsChatTemplatePrefixPreserving:
         # '<|user|>What is 2+2?<|end|><|analysis|>Let me think about this...<|end|><|tool_call|><|end|><|tool|>4<|end|><|assistant|>'
         # '<|user|>What is 2+2?<|end|><|tool_call|><|end|><|tool|>4<|end|><|assistant|>The answer is 4.<|end|>'
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        # docstyle-ignore
         tokenizer.chat_template = textwrap.dedent(r"""
         {%- for message in messages %}
             {%- if message.role == "user" %}
