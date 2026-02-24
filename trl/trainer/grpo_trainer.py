@@ -533,6 +533,25 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_kernel = args.use_liger_kernel
+        if args.vllm_sync_strategy == "lora_adapter":
+            if args.vllm_mode != "server":
+                raise ValueError(
+                    'vllm_sync_strategy="lora_adapter" is only supported with vllm_mode="server".'
+                )
+            if not (is_peft_available() and is_peft_model(model)):
+                raise ValueError(
+                    'vllm_sync_strategy="lora_adapter" requires a PEFT model. '
+                    "Pass a peft_config or a pre-wrapped PeftModel."
+                )
+            # Only standard LoRA (including rsLoRA) is supported by vLLM's native adapter serving.
+            # Other adapter types (DoRA, IA3, etc.) must use the "weights" strategy instead.
+            peft_config = model.peft_config[model.active_adapter]
+            if peft_config.peft_type.value != "LORA":
+                raise ValueError(
+                    f'vllm_sync_strategy="lora_adapter" only supports LoRA adapters, '
+                    f"but the active adapter uses {peft_config.peft_type.value}. "
+                    'Use vllm_sync_strategy="weights" instead.'
+                )
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
         self.scale_rewards = args.scale_rewards
@@ -718,6 +737,7 @@ class GRPOTrainer(_BaseTrainer):
                 # vLLM configuration
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
+                sync_strategy=args.vllm_sync_strategy,
                 # Server mode configuration
                 server_base_url=args.vllm_server_base_url,
                 server_host=args.vllm_server_host,
@@ -1225,7 +1245,12 @@ class GRPOTrainer(_BaseTrainer):
             # Sync weights if training step changed
             if self.state.global_step != self._last_loaded_step:
                 with profiling_context(self, "sync_weights"):
-                    self.vllm_generation.sync_weights()
+                    if self.args.vllm_sync_strategy == "lora_adapter":
+                        with profiling_context(self, "sync_lora_adapter"):
+                            self.vllm_generation.sync_lora_adapter(self.args.output_dir)
+                    else:
+                        with profiling_context(self, "sync_weights"):
+                            self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
             # Generate using vLLM

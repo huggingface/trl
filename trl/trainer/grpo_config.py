@@ -538,7 +538,15 @@ class GRPOConfig(_BaseConfig):
             "Unless the port is occupied, there is no need to change it.",
         },
     )
-
+    vllm_sync_strategy: str = field(
+        default="weights",
+        metadata={
+            "help": 'Strategy for syncing model to vLLM server. "weights" (default): merge adapter '
+            'and push all parameters via NCCL (current behavior). "lora_adapter": save adapter to '
+            "disk and tell vLLM to reload it (requires vLLM --enable-lora). Only applies to "
+            'vllm_mode="server" with PEFT models.'
+        },
+    )
     # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
         default=0.3,
