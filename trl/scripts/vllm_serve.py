@@ -667,7 +667,7 @@ def main(script_args: ScriptArguments):
             elif isinstance(request.generation_kwargs.get("structured_outputs"), dict):
                 # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
                 # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
-                structured_outputs_dict = request.generation_kwargs.get("structured_outputs")
+                structured_outputs_dict = request.generation_kwargs.pop("structured_outputs")
                 structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
             else:
                 structured_outputs = None
@@ -683,8 +683,8 @@ def main(script_args: ScriptArguments):
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
-        generation_kwargs.update(request.generation_kwargs)
         generation_kwargs[structured_outputs_key] = structured_outputs
+        generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
@@ -819,7 +819,7 @@ def main(script_args: ScriptArguments):
             elif isinstance(request.generation_kwargs.get("structured_outputs"), dict):
                 # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
                 # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
-                structured_outputs_dict = request.generation_kwargs.get("structured_outputs")
+                structured_outputs_dict = request.generation_kwargs.pop("structured_outputs")
                 structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
             else:
                 structured_outputs = None
@@ -835,8 +835,8 @@ def main(script_args: ScriptArguments):
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
-        generation_kwargs.update(request.generation_kwargs)
         generation_kwargs[structured_outputs_key] = structured_outputs
+        generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
