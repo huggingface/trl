@@ -106,10 +106,6 @@ To train on multiple environments simultaneously, create a dataset with tasks fr
 
 Visit the NeMo Gym documentation to learn more about existing environments and how to build a new one!
 
-## Multi-Node Training with Slurm
-
-An example Slurm submission script is provided in `submit.sh`. Update it with your Slurm account, partition, and local paths, then submit with `sbatch submit.sh`.
-
 ## Resources
 
 - [NeMo Gym GitHub](https://github.com/NVIDIA-NeMo/Gym)
