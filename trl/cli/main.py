@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     if command.uses_accelerate:
         launch_args = resolve_accelerate_config_argument(launch_args)
 
-    context = CommandContext(parser=parser, argv=argv, launch_args=launch_args)
+    context = CommandContext(argv=argv, launch_args=launch_args)
     return command.run(args, context)
 
 
