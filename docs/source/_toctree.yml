@@ -69,6 +69,8 @@
     title: LoRA Without Regret
   title: Examples
 - sections:
+  - title: Base Trainer
+    local: base_trainer
   - sections:
     - local: chat_template_utils
       title: Chat Template Utilities
