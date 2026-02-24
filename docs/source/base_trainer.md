@@ -2,9 +2,9 @@
 
 ## BaseTrainer
 
-[[autodoc]] BaseTrainer
+[[autodoc]] trainer.base_trainer.BaseTrainer
     - create_model_card
 
 ## BaseConfig
 
-[[autodoc]] BaseConfig
+[[autodoc]] trainer.base_config.BaseConfig
