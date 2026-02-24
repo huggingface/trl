@@ -626,14 +626,17 @@ class VLLMGeneration:
             else:
                 if Version(vllm.__version__) <= Version("0.10.2"):
                     structured_outputs_key = "guided_decoding"
-                    if self.structured_outputs_regex:
+                    if self.structured_outputs_regex is not None:
                         structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
                     else:
                         structured_outputs = None
                 else:
                     structured_outputs_key = "structured_outputs"
-                    if self.structured_outputs_regex:
+                    if self.structured_outputs_regex is not None:
                         structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
+                    elif isinstance(self.generation_kwargs.get("structured_outputs"), dict):
+                        structured_outputs_dict = self.generation_kwargs.get("structured_outputs")
+                        structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
                     else:
                         structured_outputs = None
 
@@ -647,8 +650,8 @@ class VLLMGeneration:
                     "max_tokens": max_completion_length,
                     "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
                 }
-                generation_kwargs[structured_outputs_key] = structured_outputs
                 generation_kwargs.update(self.generation_kwargs)
+                generation_kwargs[structured_outputs_key] = structured_outputs
                 sampling_params = SamplingParams(**generation_kwargs)
 
                 if self.tensor_parallel_size > 1:

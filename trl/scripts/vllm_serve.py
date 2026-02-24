@@ -662,8 +662,8 @@ def main(script_args: ScriptArguments):
             elif isinstance(request.generation_kwargs.get("structured_outputs"), dict):
                 # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
                 # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
-                so_dict = request.generation_kwargs.get("structured_outputs")
-                structured_outputs = StructuredOutputsParams(**so_dict)
+                structured_outputs_dict = request.generation_kwargs.get("structured_outputs")
+                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
             else:
                 structured_outputs = None
 
@@ -809,8 +809,8 @@ def main(script_args: ScriptArguments):
             elif isinstance(request.generation_kwargs.get("structured_outputs"), dict):
                 # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
                 # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
-                so_dict = request.generation_kwargs.get("structured_outputs")
-                structured_outputs = StructuredOutputsParams(**so_dict)
+                structured_outputs_dict = request.generation_kwargs.get("structured_outputs")
+                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
             else:
                 structured_outputs = None
 
