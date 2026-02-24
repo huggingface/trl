@@ -103,9 +103,9 @@ $$
 \left[
 \log \sigma \left(
 \beta \left(
-\log \frac{\pi_{\theta}(y^{+} \mid x)}{\pi_{\mathrm{ref}}(y^{+} \mid x)}
+\log\frac{\pi_{\theta}(y^{+} \mid x)}{\pi_{\mathrm{ref}}(y^{+} \mid x)}
 -
-\log \frac{\pi_{\theta}(y^{-} \mid x)}{\pi_{\mathrm{ref}}(y^{-} \mid x)}
+\log\frac{\pi_{\theta}(y^{-} \mid x)}{\pi_{\mathrm{ref}}(y^{-} \mid x)}
 \right)
 \right)
 \right]
