@@ -79,7 +79,7 @@ async def _collect_rollouts(
         results.append(nemo_gym_result)
 
     sorted_results = [None] * nemo_gym_num_rows
-    for rowidx, result in zip(rowidxs, results, strict=False):
+    for rowidx, result in zip(rowidxs, results):
         sorted_results[rowidx] = result
 
     return sorted_results
@@ -110,9 +110,6 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         asyncio.set_event_loop(loop)
 
     responses = loop.run_until_complete(_collect_rollouts(dataset_items, rch, head_server_config))
-
-    tokenizer = trainer.processing_class
-    eos_token_id = tokenizer.eos_token_id or 0
 
     prompt_ids: list[list[int]] = []
     completion_ids: list[list[int]] = []
