@@ -37,7 +37,7 @@ cd trl/
 uv venv --python 3.12
 source .venv/bin/activate
 uv sync --extra vllm
-uv pip install fastapi uvicorn accelerate deepspeed wandb omegaconf
+uv pip install fastapi uvicorn accelerate deepspeed wandb omegaconf reasoning-gym
 
 git clone https://github.com/NVIDIA-NeMo/Gym
 uv pip install -e Gym/
@@ -45,27 +45,27 @@ uv pip install -e Gym/
 
 ### Prepare a Dataset
 
-In this example we will train a model on the workplace assistant environment, a multi-step tool use environment for common office scenarios. The dataset is available on Hugging Face. Use `ng_prepare_data` to download and prepare it:
+In this example we will train a model to play sudoku. First, generate a dataset: 
 
 ```bash
-cd Gym
-echo 'hf_token: YOUR_HF_TOKEN' > env.yaml
-ng_prepare_data \
-    "+config_paths=[responses_api_models/vllm_model/configs/vllm_model.yaml,resources_servers/workplace_assistant/configs/workplace_assistant.yaml]" \
-    +output_dirpath=resources_servers/workplace_assistant/data \
-    +mode=train_preparation \
-    +should_download=true \
-    +data_source=huggingface
+python3 Gym/resources_servers/reasoning_gym/scripts/create_dataset.py \
+    --task mini_sudoku \
+    --size 2000 \
+    --seed 42 \
+    --output data/train_mini_sudoku.jsonl
 
+python3 Gym/resources_servers/reasoning_gym/scripts/create_dataset.py \
+    --task mini_sudoku \
+    --size 50 \
+    --seed 24 \
+    --output data/val_mini_sudoku.jsonl
 ```
-
-Make sure you have `train.jsonl` and `validation.jsonl`.
 
 ## Interactive Training
 
 ### Setup
 
-Update path to the dataset in the config: `examples/scripts/nemo_gym/config.yaml`. 
+Update path to the generated datasets in the config: `examples/scripts/nemo_gym/config.yaml`. 
 
 ### Run Training
 
@@ -89,11 +89,16 @@ Now launch training!
    CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/nemo_gym/grpo_nemo_gym.py
    ```
 
-You should see training progress with completions logged to the terminal! Set up WandB or Trackio to monitor detailed metrics. 
+You should see training progress with completions logged to the terminal! Set up WandB or Trackio for detailed metrics. You should see training results like this:
+
+![nemo_gym_sudoku_train](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/nemo_gym_sudoku_train.png)
+
+![nemo_gym_sudoku_eval](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/nemo_gym_sudoku_eval.png)
+
 
 ## Using other environments
 
-Using other NeMo Gym environments in TRL is simple. First, update `gym_configs` in `config.yaml` to point to the new NeMo Gym config file. Next, download or create a new dataset. Note that NeMo Gym datasets require an `agent_ref` field so that rollouts are generated in the correct environment for each task. Visit the [NeMo Gym documentation](https://docs.nvidia.com/nemo/gym/latest/) to learn more about configuration files, datasets, and creating new NeMo Gym environments.
+Using other NeMo Gym environments in TRL is simple. First, update `gym_configs` in `config.yaml` to point to the new NeMo Gym config file. Next, [download](https://huggingface.co/collections/nvidia/nemo-gym) or create a new dataset. Note that NeMo Gym datasets require an `agent_ref` field so that rollouts are generated in the correct environment for each task. Visit the [NeMo Gym documentation](https://docs.nvidia.com/nemo/gym/latest/) to learn more about configuration files, datasets, and creating new NeMo Gym environments.
 
 ## Multi-Environment Training
 

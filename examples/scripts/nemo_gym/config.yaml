@@ -2,17 +2,17 @@
 model_name: "Qwen/Qwen2.5-1.5B-Instruct"
 
 # Data - Update these to your own paths!
-dataset_path: "/home/ubuntu/trl/Gym/resources_servers/workplace_assistant/data/train.jsonl"
-eval_dataset_path: "/home/ubuntu/trl/Gym/resources_servers/workplace_assistant/data/validation.jsonl"
+dataset_path: "/home/ubuntu/trl/data/train_mini_sudoku.jsonl"
+eval_dataset_path: "/home/ubuntu/trl/data/val_mini_sudoku.jsonl"
 
-# NeMo Gym server configs (relative to Gym repo root)
+# NeMo Gym server configs (relative to Gym repo)
 gym_configs:
-  - resources_servers/workplace_assistant/configs/workplace_assistant.yaml
+  - resources_servers/reasoning_gym/configs/reasoning_gym.yaml
   - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
 
 # Logging
 output_dir: "outputs/nemo_gym"
-task: "workplace"
+task: "sudoku"
 report_to: "none"
 project_name: "trl-nemo-gym"
 log_completions: true
