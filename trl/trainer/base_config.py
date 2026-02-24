@@ -26,7 +26,7 @@ class BaseConfig(TrainingArguments):
     contain unescaped "%" characters which would cause argparse to raise a `TypeError` when rendering `--help` output.
 
     Parameters:
-        logging_steps (`float`, *optional*, defaults to `10`):
+        logging_steps (`int` or `float`, *optional*, defaults to `10`):
             Number of update steps between two logs if `logging_strategy="steps"`. Should be an integer or a float in
             range `[0,1)`. If smaller than 1, will be interpreted as ratio of total training steps.
         gradient_checkpointing (`bool`, *optional*, defaults to `True`):

@@ -1014,9 +1014,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_vision
     def test_train_vlm(self, model_id):
         # Get the dataset
-        dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_preference", split="train", revision="refs/pr/11"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
 
         # Initialize the trainer
         training_args = DPOConfig(
@@ -1105,9 +1103,7 @@ class TestDPOTrainer(TrlTestCase):
     @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
     def test_train_vlm_gemma_3n(self):
         # Get the dataset
-        dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_preference", split="train", revision="refs/pr/11"
-        )
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
 
         # Initialize the trainer
         training_args = DPOConfig(
