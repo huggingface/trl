@@ -83,8 +83,6 @@
     title: Callbacks
   - local: rewards
     title: Reward Functions
-  - local: others
-    title: Others
   title: API
 - sections:
   - local: experimental_overview
