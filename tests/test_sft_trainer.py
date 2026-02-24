@@ -1549,7 +1549,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_vlm(self, model_id):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/8"
+            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train"
         )
 
         # Initialize the trainer
@@ -1644,7 +1644,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_prompt_completion", split="train", revision="refs/pr/10"
+            "trl-internal-testing/zen-image", "conversational_prompt_completion", split="train"
         )
 
         # Initialize the trainer
@@ -1682,7 +1682,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_vlm_gemma_3n(self):
         # Get the dataset
         dataset = load_dataset(
-            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train", revision="refs/pr/8"
+            "trl-internal-testing/zen-image", "conversational_language_modeling", split="train"
         )
 
         # Initialize the trainer
