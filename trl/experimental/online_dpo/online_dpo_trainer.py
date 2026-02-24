@@ -522,6 +522,11 @@ class OnlineDPOTrainer(BaseTrainer):
             if args.generation_kwargs is not None:
                 generation_params.update(args.generation_kwargs)
             if self.structured_outputs_regex is not None:
+                if generation_params.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `vllm_structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`vllm_structured_outputs_regex` takes precedence."
+                    )
                 generation_params["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
             elif isinstance(generation_params.get("structured_outputs"), dict):
                 structured_outputs_dict = generation_params.get("structured_outputs")

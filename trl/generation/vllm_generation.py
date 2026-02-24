@@ -627,12 +627,22 @@ class VLLMGeneration:
                 if Version(vllm.__version__) <= Version("0.10.2"):
                     structured_outputs_key = "guided_decoding"
                     if self.structured_outputs_regex is not None:
+                        if self.generation_kwargs.get("guided_decoding") is not None:
+                            logger.warning(
+                                "Both `structured_outputs_regex` and `generation_kwargs['guided_decoding']` are set; "
+                                "`structured_outputs_regex` takes precedence."
+                            )
                         structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
                     else:
                         structured_outputs = None
                 else:
                     structured_outputs_key = "structured_outputs"
                     if self.structured_outputs_regex is not None:
+                        if self.generation_kwargs.get("structured_outputs") is not None:
+                            logger.warning(
+                                "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are "
+                                "set; `structured_outputs_regex` takes precedence."
+                            )
                         structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
                     elif isinstance(self.generation_kwargs.get("structured_outputs"), dict):
                         structured_outputs_dict = self.generation_kwargs.get("structured_outputs")

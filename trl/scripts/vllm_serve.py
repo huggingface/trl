@@ -658,6 +658,11 @@ def main(script_args: ScriptArguments):
         else:
             structured_outputs_key = "structured_outputs"
             if request.structured_outputs_regex is not None:
+                if request.generation_kwargs.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
                 structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
             elif isinstance(request.generation_kwargs.get("structured_outputs"), dict):
                 # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
@@ -805,6 +810,11 @@ def main(script_args: ScriptArguments):
         else:
             structured_outputs_key = "structured_outputs"
             if request.structured_outputs_regex is not None:
+                if request.generation_kwargs.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
                 structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
             elif isinstance(request.generation_kwargs.get("structured_outputs"), dict):
                 # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
