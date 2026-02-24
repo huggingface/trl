@@ -266,7 +266,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     image processing on-the-fly to efficiently prepare batches.
 
     Each input example should be a dictionary containing at least:
-    - An `"images"` key holding the image data.
+    - An `"images"` key holding a list of images, or an `"image"` key holding a single image.
     - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
       key for standard text inputs.
     - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
@@ -354,6 +354,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
     def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        if "image" in examples[0]:
+            for example in examples:
+                example["images"] = [example.pop("image")]
         images = [example["images"] for example in examples]
         # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):
@@ -395,6 +398,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
                 "prompt-completion data."
             )
+        if "image" in examples[0]:
+            for example in examples:
+                example["images"] = [example.pop("image")]
         images = [example["images"] for example in examples]
         # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):
@@ -1167,7 +1173,7 @@ class SFTTrainer(BaseTrainer):
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
             if self._is_vision_dataset:
-                self._signature_columns = ["messages", "prompt", "completion", "images"]
+                self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
