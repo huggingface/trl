@@ -642,7 +642,28 @@ def is_chat_template_prefix_preserving(tokenizer: PreTrainedTokenizer) -> bool:
     text2 = tokenizer.apply_chat_template(messages2, tokenize=False)
     text3 = tokenizer.apply_chat_template(messages3, tokenize=False)
 
-    return text2.startswith(text1) and text3.startswith(text2)
+    if not (text2.startswith(text1) and text3.startswith(text2)):
+        return False
+
+    # Check tool-calling prefix preservation when supported by the template. Some templates (like GPT-OSS) render
+    # analysis text for an assistant tool-call turn only when no later assistant-final turn exists.
+    prompt_and_tool = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "Let me think about this...",
+            "tool_calls": [{"function": {"name": "calculator", "arguments": '{"a": 2, "b": 2}'}}],
+        },
+        {"role": "tool", "content": "4"},
+    ]
+    final = [{"role": "assistant", "content": "The answer is 4."}]
+    text1 = tokenizer.apply_chat_template(prompt_and_tool, tokenize=False, add_generation_prompt=True)
+    text2 = tokenizer.apply_chat_template(prompt_and_tool + final, tokenize=False)
+
+    if not text2.startswith(text1):
+        return False
+
+    return True
 
 
 # Modifications:
@@ -747,6 +768,11 @@ qwen3_training_chat_template = r"""{%- if tools %}
 # - {%- elif loop.last and not add_generation_prompt %}
 # + {%- elif true and not add_generation_prompt %}
 #   Always include thinking block during training. It's important to have a prefix-preserving template.
+# - {%- elif message.content and not future_final_message.found %}
+# + {%- elif message.content %}
+# - {%- elif message.thinking and not future_final_message.found %}
+# + {%- elif message.thinking %}
+#   Even if there is a final message after the tool calls, we want to keep the analysis for prefix preservation.
 # docstyle-ignore
 gpt_oss_training_chat_template = r"""{#-
   In addition to the normal inputs of `messages` and `tools`, this template also accepts the
@@ -1038,9 +1064,9 @@ gpt_oss_training_chat_template = r"""{#-
             {%- endif %}
             {%- if message.content and message.thinking %}
                 {{- raise_exception("Cannot pass both content and thinking in an assistant message with tool calls! Put the analysis message in one or the other, but not both.") }}
-            {%- elif message.content and not future_final_message.found %}
+            {%- elif message.content %}
                 {{- "<|start|>assistant<|channel|>analysis<|message|>" + message.content + "<|end|>" }}
-            {%- elif message.thinking and not future_final_message.found %}
+            {%- elif message.thinking %}
                 {{- "<|start|>assistant<|channel|>analysis<|message|>" + message.thinking + "<|end|>" }}
             {%- endif %}
             {{- "<|start|>assistant to=" }}

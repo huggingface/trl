@@ -212,6 +212,38 @@ class TestIsChatTemplatePrefixPreserving:
         {%- endif %}""")
         assert is_chat_template_prefix_preserving(tokenizer) is False
 
+    def test_non_prefix_preserving_tool_call_analysis_dropped_when_future_final_exists(self):
+        # Tokenizers like GPT-OSS would drop the analysis part of an assistant message with tool calls if there is a
+        # future assistant message without tool calls, which makes the template non-prefix-preserving. E.g.,:
+        # '<|user|>What is 2+2?<|end|><|analysis|>Let me think about this...<|end|><|tool_call|><|end|><|tool|>4<|end|><|assistant|>'
+        # '<|user|>What is 2+2?<|end|><|tool_call|><|end|><|tool|>4<|end|><|assistant|>The answer is 4.<|end|>'
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        tokenizer.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+            {%- if message.role == "user" %}
+                {{- "<|user|>" + message.content + "<|end|>" }}
+            {%- elif message.role == "assistant" and message.tool_calls %}
+                {%- set future_final_message = namespace(found=false) %}
+                {%- for future_message in messages[loop.index:] %}
+                    {%- if future_message.role == "assistant" and not future_message.tool_calls %}
+                        {%- set future_final_message.found = true %}
+                    {%- endif %}
+                {%- endfor %}
+                {%- if message.content and not future_final_message.found %}
+                    {{- "<|analysis|>" + message.content + "<|end|>" }}
+                {%- endif %}
+                {{- "<|tool_call|><|end|>" }}
+            {%- elif message.role == "tool" %}
+                {{- "<|tool|>" + message.content + "<|end|>" }}
+            {%- elif message.role == "assistant" %}
+                {{- "<|final|>" + message.content + "<|end|>" }}
+            {%- endif %}
+        {%- endfor %}
+        {%- if add_generation_prompt %}
+            {{- "<|assistant|>" }}
+        {%- endif %}""")
+        assert is_chat_template_prefix_preserving(tokenizer) is False
+
 
 @pytest.mark.parametrize(
     "tokenizer_name",
