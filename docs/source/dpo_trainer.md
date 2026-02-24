@@ -97,7 +97,18 @@ The [`DPOTrainer`] tokenizes each input using the model's tokenizer.
 
 The loss used in DPO is defined as follows:
 $$
-\mathcal{L}_{\mathrm{DPO}}(\theta) = -\mathbb{E}_{(x,y^{+},y^{-})}\!\left[\log \sigma\!\left(\beta\Big(\log\frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)}-\log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)}\Big)\right)\right]
+\mathcal{L}_{\mathrm{DPO}}(\theta)
+=
+- \mathbb{E}_{(x, y^{+}, y^{-})}
+\left[
+\log \sigma \left(
+\beta \left(
+\log \frac{\pi_{\theta}(y^{+} \mid x)}{\pi_{\mathrm{ref}}(y^{+} \mid x)}
+-
+\log \frac{\pi_{\theta}(y^{-} \mid x)}{\pi_{\mathrm{ref}}(y^{-} \mid x)}
+\right)
+\right)
+\right]
 $$
   
 where  \\( x \\)  is the prompt,  \\( y^+ \\) is the preferred completion and  \\( y^- \\)  is the dispreferred completion.  \\( \pi_{\theta} \\)  is the policy model being trained,  \\( \pi_{\mathrm{ref}} \\)  is the reference model,  \\( \sigma \\)  is the sigmoid function, and  \\( \beta > 0 \\)  is a hyperparameter that controls the strength of the preference signal.
