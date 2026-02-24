@@ -38,7 +38,6 @@ uv venv --python 3.12
 source .venv/bin/activate
 uv sync --extra vllm
 uv pip install fastapi uvicorn accelerate deepspeed wandb omegaconf reasoning-gym
-
 git clone https://github.com/NVIDIA-NeMo/Gym
 uv pip install -e Gym/
 ```
@@ -96,7 +95,7 @@ You should see training progress with completions logged to the terminal! Set up
 ![nemo_gym_sudoku_eval](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/nemo_gym_sudoku_eval.png)
 
 
-## Using other environments
+## Using Other NeMo Gym Environments
 
 Using other NeMo Gym environments in TRL is simple. First, update `gym_configs` in `config.yaml` to point to the new NeMo Gym config file. Next, [download](https://huggingface.co/collections/nvidia/nemo-gym) or create a new dataset. Note that NeMo Gym datasets require an `agent_ref` field so that rollouts are generated in the correct environment for each task. Visit the [NeMo Gym documentation](https://docs.nvidia.com/nemo/gym/latest/) to learn more about configuration files, datasets, and creating new NeMo Gym environments.
 
