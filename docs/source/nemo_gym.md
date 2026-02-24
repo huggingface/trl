@@ -87,7 +87,7 @@ Now launch training!
 1. **Run Training on GPU 1**
 
    ```bash
-   CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/nemo_gym/grpo_nemo_gym.py 2>&1 | tee output.log
+   CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/nemo_gym/grpo_nemo_gym.py
    ```
 
 You should see training progress with completions logged to the terminal! Set up WandB or Trackio to monitor detailed metrics. 
