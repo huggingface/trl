@@ -14,7 +14,6 @@
 
 import asyncio
 import json
-import math
 import os
 
 from datasets import Dataset
@@ -86,17 +85,6 @@ async def _collect_rollouts(
     return sorted_results
 
 
-def _has_nan_logprobs(responses: list[dict]) -> bool:
-    for response in responses:
-        if not isinstance(response, dict):
-            continue
-        for output_item in response.get("response", {}).get("output", []):
-            for lp in output_item.get("generation_log_probs", []):
-                if math.isnan(lp):
-                    return True
-    return False
-
-
 def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
     dataset_items = [json.loads(p) for p in prompts]
 
@@ -121,13 +109,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    max_attempts = 3
-    for _ in range(max_attempts):
-        responses = loop.run_until_complete(_collect_rollouts(dataset_items, rch, head_server_config))
-        if not _has_nan_logprobs(responses):
-            break
-    else:
-        print("WARNING: NaN logprobs persisted after all retries")
+    responses = loop.run_until_complete(_collect_rollouts(dataset_items, rch, head_server_config))
 
     tokenizer = trainer.processing_class
 
