@@ -181,9 +181,6 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         logprobs.append(rollout_logprobs)
         env_rewards.append(episode_reward)
 
-    if not prompt_ids:
-        raise RuntimeError("No valid rollouts. Check NeMo Gym and vLLM logs.")
-
     return {
         "prompt_ids": prompt_ids,
         "completion_ids": completion_ids,
