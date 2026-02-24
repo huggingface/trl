@@ -57,10 +57,9 @@ ng_prepare_data \
     +should_download=true \
     +data_source=huggingface
 
-tail -n 100  resources_servers/workplace_assistant/data/validation.jsonl > resources_servers/workplace_assistant/data/validation_100.jsonl
 ```
 
-Make sure you have `train.jsonl` and `validation_100.jsonl`.
+Make sure you have `train.jsonl` and `validation.jsonl`.
 
 ## Interactive Training
 

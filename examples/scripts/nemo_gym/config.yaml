@@ -3,7 +3,7 @@ model_name: "Qwen/Qwen2.5-1.5B-Instruct"
 
 # Data - Update these to your own paths!
 dataset_path: "/home/ubuntu/trl/Gym/resources_servers/workplace_assistant/data/train.jsonl"
-eval_dataset_path: "/home/ubuntu/trl/Gym/resources_servers/workplace_assistant/data/validation_100.jsonl"
+eval_dataset_path: "/home/ubuntu/trl/Gym/resources_servers/workplace_assistant/data/validation.jsonl"
 
 # NeMo Gym server configs (relative to Gym repo root)
 gym_configs:
@@ -21,10 +21,10 @@ num_completions_to_print: 2
 # Training hyperparameters
 learning_rate: 1.0e-5
 max_steps: 1000
-num_generations: 8
+num_generations: 16
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 1
-gradient_accumulation_steps: 64
+gradient_accumulation_steps: 256
 max_completion_length: 10000
 warmup_steps: 3
 lr_scheduler_type: "linear"
