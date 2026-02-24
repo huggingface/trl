@@ -136,7 +136,6 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
     completion_mask: list[list[int]] = []
     logprobs: list[list[float]] = []
     env_rewards: list[float] = []
-    num_turns_list: list[int] = []
 
     for i, response in enumerate(responses):
         eos_token_id = tokenizer.eos_token_id or 0
@@ -163,7 +162,6 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
             completion_mask.append([0])
             logprobs.append([0.0])
             env_rewards.append(0.0)
-            num_turns_list.append(0)
             continue
 
         episode_reward = response.get("reward", 0.0)
@@ -175,13 +173,11 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
 
         seen_token_ids: list[int] = []
         first_prompt = None
-        num_turns = 0
 
         for output_item_dict in output_items:
             if "generation_token_ids" not in output_item_dict:
                 continue
 
-            num_turns += 1
             item_prompt_ids = [int(t) for t in output_item_dict["prompt_token_ids"]]
             item_gen_ids = [int(t) for t in output_item_dict["generation_token_ids"]]
             item_logprobs = output_item_dict.get("generation_log_probs", [])
@@ -223,19 +219,9 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         completion_mask.append(rollout_mask)
         logprobs.append(rollout_logprobs)
         env_rewards.append(episode_reward)
-        num_turns_list.append(num_turns)
 
     if not prompt_ids:
         raise RuntimeError("No valid rollouts. Check NeMo Gym and vLLM logs.")
-
-    if num_turns_list:
-        trainer.log(
-            {
-                "num_turns_mean": sum(num_turns_list) / len(num_turns_list),
-                "num_turns_min": min(num_turns_list),
-                "num_turns_max": max(num_turns_list),
-            }
-        )
 
     return {
         "prompt_ids": prompt_ids,
@@ -243,7 +229,6 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         "env_mask": completion_mask,
         "logprobs": logprobs,
         "env_reward": env_rewards,
-        "num_turns": num_turns_list,
     }
 
 
