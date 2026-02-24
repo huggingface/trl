@@ -742,7 +742,7 @@ class GRPOTrainer(BaseTrainer):
                 # Chat/tool configuration
                 chat_template=self.chat_template,
                 chat_template_kwargs=self.chat_template_kwargs,
-                tools=self.tools if self.tools else None,
+                tools=self.tools,
                 rollout_func=rollout_func,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation

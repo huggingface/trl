@@ -679,7 +679,6 @@ def main(script_args: ScriptArguments):
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
         generation_kwargs.update(request.generation_kwargs)
-        # Ensure the reconstructed object takes precedence over the dict in generation_kwargs
         generation_kwargs[structured_outputs_key] = structured_outputs
         sampling_params = SamplingParams(**generation_kwargs)
 
@@ -827,7 +826,6 @@ def main(script_args: ScriptArguments):
             "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
         }
         generation_kwargs.update(request.generation_kwargs)
-        # Ensure the reconstructed object takes precedence over the dict in generation_kwargs
         generation_kwargs[structured_outputs_key] = structured_outputs
         sampling_params = SamplingParams(**generation_kwargs)
 
