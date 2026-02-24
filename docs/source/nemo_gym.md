@@ -110,5 +110,3 @@ Visit the NeMo Gym documentation to learn more about existing environments and h
 
 - [NeMo Gym GitHub](https://github.com/NVIDIA-NeMo/Gym)
 - [NeMo Gym Documentation](https://docs.nvidia.com/nemo/gym/latest/)
-- [Training Script](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/grpo_nemo_gym.py)
-- [TRL GRPO Trainer](grpo_trainer)
