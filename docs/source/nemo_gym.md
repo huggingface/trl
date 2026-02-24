@@ -1,10 +1,30 @@
 # NeMo Gym Integration
 
-NVIDIA NeMo Gym is a library for building RL environments for large language models. This integration enables training models in NeMo Gym environments using TRL's GRPOTrainer.
-
-The integration supports multi-step and multi-turn rollouts, multi-environment training, and any NeMo Gym environment.
+NVIDIA NeMo Gym is a library for building RL environments for large language models. This integration enables training models in NeMo Gym environments using TRL's GRPOTrainer. Multi-turn and multi-environment training are both supported!
 
 Note that a minimum of 2 GPUs is currently required, as this integration relies on TRL's vLLM server mode.  
+
+## Why NeMo Gym
+
+- **Tested at scale**: Battle-tested RL infra used in Nemotron post-training.
+- **Multi-environment training**: Supports parallel training of complex agents in diverse environments, such as coding agents, deep research, workplace tasks, math, science, and more.
+- **Decoupled architecture**: Build agents and environments independently from the training loop, no RL framework expertise required.
+- **OpenAI-Compatible API**: All environments use the standardized OpenAI Responses API for seamless integration with vLLM, OpenAI models, and other endpoints.
+
+## Available Environments
+
+NeMo Gym provides training-ready environments across multiple domains, including but not limited to:
+
+| Environment | Domain | Description |
+|-------------|--------|-------------|
+| Workplace Assistant | Agent | Multi-step tool calling in common office scenarios (calendar, email, and more) |
+| Math with Judge | Math | Math problems with algorithmic or judge-based verification |
+| Code Gen | Coding | Competitive programming problems with code execution |
+| MCQA | Knowledge | Multiple-choice question answering |
+| Instruction Following | Instruction Following | IFEval/IFBench style tasks |
+| Reasoning Gym | Multiple | Single-step procedurally generated verifiable tasks across domains |
+
+For a complete list of available training environments, refer to the [NeMo Gym repository](https://github.com/NVIDIA-NeMo/Gym).
 
 ## Quickstart
 
@@ -40,7 +60,7 @@ ng_prepare_data \
 tail -n 100  resources_servers/workplace_assistant/data/validation.jsonl > resources_servers/workplace_assistant/data/validation_100.jsonl
 ```
 
-This creates `train.jsonl` and `validation.jsonl`.
+Make sure you have `train.jsonl` and `validation_100.jsonl`.
 
 ## Interactive Training
 
@@ -76,13 +96,13 @@ Note that the workplace assistant environment is difficult for `Qwen/Qwen2.5-1.5
 
 ## Using other environments
 
-Using other NeMo Gym environments in TRL is simple. First, update `gym_configs` in `config.yaml` to point to the new NeMo Gym configuration file, such as the new resources server or agent. Next, download or create a new dataset. Note that NeMo Gym datasets require an `agent_ref` field so that rollouts are generated in the correct environment for each task. Visit the [NeMo Gym documentation](https://docs.nvidia.com/nemo/gym/latest/) to learn more about configuration files, datasets, and creating new NeMo Gym environments.
+Using other NeMo Gym environments in TRL is simple. First, update `gym_configs` in `config.yaml` to point to the new NeMo Gym config file. Next, download or create a new dataset. Note that NeMo Gym datasets require an `agent_ref` field so that rollouts are generated in the correct environment for each task. Visit the [NeMo Gym documentation](https://docs.nvidia.com/nemo/gym/latest/) to learn more about configuration files, datasets, and creating new NeMo Gym environments.
 
 ## Multi-Environment Training
 
-To train on multiple environments simultaneously, combine their datasets into a single JSONL file and add each environment's config to the `gym_configs` list in your training config. NeMo Gym automatically routes each example to the correct agent server based on its `agent_ref` field for effortless and scalable multi-environment training!
+To train on multiple environments simultaneously, create a dataset with tasks from both environments. Add each environment config to the `gym_configs` list in your training config. NeMo Gym automatically routes each example to the correct agent server based on its `agent_ref` field for effortless and scalable multi-environment training.
 
-Visit the NeMo Gym documentation to learn more about existing environments and how to build new ones! 
+Visit the NeMo Gym documentation to learn more about existing environments and how to build a new one!
 
 ## Multi-Node Training with Slurm
 
