@@ -15,7 +15,6 @@
 import sys
 
 from ..scripts.utils import TrlParser
-from .accelerate_config import resolve_accelerate_config_argument
 from .commands import get_commands
 from .commands.base import Command, CommandContext
 
@@ -37,17 +36,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser(commands)
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    args, launch_args = parser.parse_args_and_config(args=argv, return_remaining_strings=True)
+    args, remaining_args = parser.parse_args_and_config(args=argv, return_remaining_strings=True)
     command_name = getattr(args, "command", None)
     if command_name is None:
         parser.print_help()
         return 0
 
     command = commands_by_name[command_name]
-    if command.uses_accelerate:
-        launch_args = resolve_accelerate_config_argument(launch_args)
-
-    context = CommandContext(parser=parser, argv=argv, launch_args=launch_args)
+    context = CommandContext(parser=parser, argv=argv, remaining_args=remaining_args)
     return command.run(args, context)
 
 
