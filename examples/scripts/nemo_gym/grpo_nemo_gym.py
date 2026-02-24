@@ -54,7 +54,6 @@ def main():
     dataset_path = config.pop("dataset_path")
     eval_dataset_path = config.pop("eval_dataset_path", None)
     gym_configs = config.pop("gym_configs", None)
-    task = config.pop("task", None)
     project_name = config.pop("project_name", None)
 
     if "learning_rate" in config and isinstance(config["learning_rate"], str):
@@ -106,22 +105,6 @@ def main():
         ddp_timeout=7200,
         **config,
     )
-
-    if training_args.run_name is None:
-        task_name = task or os.path.basename(dataset_path).replace(".jsonl", "").replace(".json", "")
-        model_short = model_name.split("/")[-1]
-        is_corr = getattr(training_args, "vllm_importance_sampling_correction", None)
-        training_args.run_name = (
-            f"{task_name}_{model_short}"
-            f"_rpp{training_args.num_generations}"
-            f"_dbs{training_args.per_device_train_batch_size}"
-            f"_ga{training_args.gradient_accumulation_steps}"
-            f"{f'_IS{str(bool(is_corr)).lower()}' if is_corr is not None else ''}"
-            f"_maxlen{training_args.max_completion_length}"
-            f"_lr{training_args.learning_rate}"
-            f"_temp{training_args.temperature}"
-            f"_topp{training_args.top_p}"
-        )
 
     trainer = GRPOTrainer(
         model=model_name,

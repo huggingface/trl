@@ -12,7 +12,7 @@ gym_configs:
 
 # Logging
 output_dir: "outputs/nemo_gym"
-task: "sudoku"
+run_name: "sudoku"
 report_to: "none"
 project_name: "trl-nemo-gym"
 log_completions: true
