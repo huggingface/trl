@@ -16,7 +16,6 @@ import asyncio
 import json
 import math
 import os
-from typing import List
 
 from datasets import Dataset
 from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
@@ -28,7 +27,7 @@ from trl import GRPOTrainer
 
 
 def launch_nemo_gym(
-    config_paths: List[str],
+    config_paths: list[str],
     model_name: str,
     vllm_server_host: str = "127.0.0.1",
     vllm_server_port: int = 8000,
@@ -66,14 +65,12 @@ def reward_fn(completions: list[str], **kwargs) -> list[float]:
 
 
 async def _collect_rollouts(
-    examples: List[dict],
+    examples: list[dict],
     rch: RolloutCollectionHelper,
     head_server_config: BaseServerConfig,
-) -> List[dict]:
+) -> list[dict]:
     nemo_gym_num_rows = len(examples)
-    nemo_gym_result_iterator = rch.run_examples(
-        examples=examples, head_server_config=head_server_config
-    )
+    nemo_gym_result_iterator = rch.run_examples(examples=examples, head_server_config=head_server_config)
 
     rowidxs = []
     results = []
@@ -83,13 +80,13 @@ async def _collect_rollouts(
         results.append(nemo_gym_result)
 
     sorted_results = [None] * nemo_gym_num_rows
-    for rowidx, result in zip(rowidxs, results):
+    for rowidx, result in zip(rowidxs, results, strict=False):
         sorted_results[rowidx] = result
 
     return sorted_results
 
 
-def _has_nan_logprobs(responses: List[dict]) -> bool:
+def _has_nan_logprobs(responses: list[dict]) -> bool:
     for response in responses:
         if not isinstance(response, dict):
             continue
@@ -126,9 +123,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
 
     max_attempts = 3
     for _ in range(max_attempts):
-        responses = loop.run_until_complete(
-            _collect_rollouts(dataset_items, rch, head_server_config)
-        )
+        responses = loop.run_until_complete(_collect_rollouts(dataset_items, rch, head_server_config))
         if not _has_nan_logprobs(responses):
             break
     else:
@@ -136,12 +131,12 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
 
     tokenizer = trainer.processing_class
 
-    prompt_ids: List[list[int]] = []
-    completion_ids: List[list[int]] = []
-    completion_mask: List[list[int]] = []
-    logprobs: List[list[float]] = []
-    env_rewards: List[float] = []
-    num_turns_list: List[int] = []
+    prompt_ids: list[list[int]] = []
+    completion_ids: list[list[int]] = []
+    completion_mask: list[list[int]] = []
+    logprobs: list[list[float]] = []
+    env_rewards: list[float] = []
+    num_turns_list: list[int] = []
 
     for i, response in enumerate(responses):
         eos_token_id = tokenizer.eos_token_id or 0
@@ -155,8 +150,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
                 or (
                     item.get("type") == "message"
                     and any(
-                        c.get("type") == "output_text" and c.get("text", "").strip()
-                        for c in item.get("content", [])
+                        c.get("type") == "output_text" and c.get("text", "").strip() for c in item.get("content", [])
                     )
                 )
                 for item in output_items
@@ -179,7 +173,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         rollout_mask: list[int] = []
         rollout_logprobs: list[float] = []
 
-        seen_token_ids: List[int] = []
+        seen_token_ids: list[int] = []
         first_prompt = None
         num_turns = 0
 
@@ -196,10 +190,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
                 first_prompt = item_prompt_ids
                 seen_token_ids = list(item_prompt_ids)
             else:
-                assert (
-                    seen_token_ids
-                    == item_prompt_ids[: len(seen_token_ids)]
-                ), (
+                assert seen_token_ids == item_prompt_ids[: len(seen_token_ids)], (
                     f"Non-contiguous messages found! This may be a tokenization issue "
                     f"where certain tokens are combined when messages are concatenated, "
                     f"or it may be due to part of the chat history being truncated.\n"

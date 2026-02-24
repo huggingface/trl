@@ -26,10 +26,9 @@ from dataclasses import dataclass
 import yaml
 from nemo_gym.rollout_collection import RolloutCollectionHelper
 from nemo_gym.server_utils import BaseServerConfig
-from transformers import AutoTokenizer
+from nemo_gym_utils import launch_nemo_gym, load_dataset_from_jsonl, nemo_gym_rollout_func, reward_fn
 
 from trl import GRPOConfig, GRPOTrainer
-from nemo_gym_utils import launch_nemo_gym, load_dataset_from_jsonl, nemo_gym_rollout_func, reward_fn
 
 
 @dataclass
@@ -124,13 +123,8 @@ def main():
             f"_topp{training_args.top_p}"
         )
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name, truncation_side="left", padding_side="left"
-    )
-
     trainer = GRPOTrainer(
         model=model_name,
-        processing_class=tokenizer,
         reward_funcs=reward_fn,
         train_dataset=dataset,
         eval_dataset=eval_dataset,
