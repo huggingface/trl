@@ -92,8 +92,6 @@ Now launch training!
 
 You should see training progress with completions logged to the terminal! Set up WandB or Trackio to monitor detailed metrics. 
 
-Note that the workplace assistant environment is difficult for `Qwen/Qwen2.5-1.5B-Instruct`. To see quicker improvements, try an easier environment, such as `mini_sudoku` from the Reasoning Gym integration in NeMo Gym. Or, try using a larger model, such as `Qwen/Qwen3-4B-Instruct-2507` with a larger global batch size. 
-
 ## Using other environments
 
 Using other NeMo Gym environments in TRL is simple. First, update `gym_configs` in `config.yaml` to point to the new NeMo Gym config file. Next, download or create a new dataset. Note that NeMo Gym datasets require an `agent_ref` field so that rollouts are generated in the correct environment for each task. Visit the [NeMo Gym documentation](https://docs.nvidia.com/nemo/gym/latest/) to learn more about configuration files, datasets, and creating new NeMo Gym environments.
