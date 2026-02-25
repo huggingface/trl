@@ -25,6 +25,8 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     BartModel,
+    Cohere2Config,
+    Cohere2ForCausalLM,
     CohereConfig,
     CohereForCausalLM,
     DeepseekV3Config,
@@ -37,6 +39,8 @@ from transformers import (
     GemmaConfig,
     GemmaForCausalLM,
     GenerationConfig,
+    Glm4MoeConfig,
+    Glm4MoeForCausalLM,
     GPT2Config,
     GPT2LMHeadModel,
     GPTNeoXConfig,
@@ -158,6 +162,7 @@ def init_weights_tiny_model(model):
 for model_id, config_class, model_class, dtype, suffix in [
     # ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),  # loading fails with this model, see https://huggingface.co/bigscience/bloomz-560m/discussions/14
     ("CohereLabs/aya-expanse-8b", CohereConfig, CohereForCausalLM, torch.float16, None),
+    ("CohereLabs/tiny-aya-earth", Cohere2Config, Cohere2ForCausalLM, torch.bfloat16, None),
     ("deepseek-ai/DeepSeek-R1", DeepseekV3Config, DeepseekV3ForCausalLM, torch.bfloat16, None),
     # It's important to have R1-0528 as it doesn't have the same chat template
     ("deepseek-ai/DeepSeek-R1-0528", DeepseekV3Config, DeepseekV3ForCausalLM, torch.bfloat16, "0528"),
@@ -196,9 +201,16 @@ for model_id, config_class, model_class, dtype, suffix in [
 for model_id, config_class, model_class, dtype, suffix in [
     ("Qwen/Qwen3-30B-A3B", Qwen3MoeConfig, Qwen3MoeForCausalLM, torch.bfloat16, None),
     ("openai/gpt-oss-20b", GptOssConfig, GptOssForCausalLM, torch.bfloat16, None),
+    ("zai-org/GLM-4.5", Glm4MoeConfig, Glm4MoeForCausalLM, torch.bfloat16, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     generation_config = GenerationConfig.from_pretrained(model_id)
+    kwargs = {}
+    if model_id == "zai-org/GLM-4.5":
+        kwargs["n_routed_experts"] = 4
+    elif model_id in ("Qwen/Qwen3-30B-A3B", "openai/gpt-oss-20b"):
+        kwargs["num_experts"] = 4
+
     config = config_class(
         vocab_size=len(tokenizer.vocab),
         hidden_size=8,
@@ -206,8 +218,8 @@ for model_id, config_class, model_class, dtype, suffix in [
         num_key_value_heads=2,
         num_hidden_layers=2,
         intermediate_size=32,
-        num_experts=4,
         num_experts_per_tok=2,
+        **kwargs,
     )
     model = model_class(config).to(dtype=dtype)
     init_weights_tiny_model(model)

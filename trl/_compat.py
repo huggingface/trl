@@ -23,7 +23,8 @@ Each patch should be removed when minimum version requirements eliminate the nee
 import warnings
 
 from packaging.version import Version
-from transformers.utils.import_utils import _is_package_available
+
+from .import_utils import _is_package_available
 
 
 def _is_package_version_below(package_name: str, version_threshold: str) -> bool:
