@@ -28,12 +28,31 @@ from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
+from transformers.utils import is_torch_mlu_available, is_torch_npu_available, is_torch_xpu_available
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages_vllm
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
+
+
+def empty_cache() -> None:
+    """Empties the cache of the available torch device.
+
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
+    the first available device it finds.
+
+    If none of the specific devices are available, it defaults to emptying the CUDA cache.
+    """
+    if is_torch_xpu_available():
+        torch.xpu.empty_cache()
+    elif is_torch_mlu_available():
+        torch.mlu.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
+    else:
+        torch.cuda.empty_cache()
 
 
 logger = logging.getLogger(__name__)
@@ -409,6 +428,13 @@ class VLLMGeneration:
 
         Handles FSDP, DeepSpeed, PEFT weight synchronization.
         """
+        # Wake up vLLM weights before loading to ensure device memory is mapped. Without this, load_weights() writes to
+        # freed/unmapped memory when sleep mode is active, which crashes on backends with strict physical memory
+        # management (e.g., Ascend NPU). See https://github.com/huggingface/trl/issues/5142
+        if self.mode == "colocate" and self.enable_sleep_mode:
+            empty_cache()  # required to avoid OOM in some cases
+            self.llm.wake_up(tags=["weights"])
+
         model = self.model
         accelerator = self.accelerator
         is_fsdp_enabled = self.is_fsdp_enabled
@@ -511,12 +537,16 @@ class VLLMGeneration:
         tools = self.tools
         chat_template = self.chat_template
 
-        # Wake up colocated vLLM instances if needed
+        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
         if self.mode == "colocate" and self.enable_sleep_mode:
-            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
             # Work around for https://github.com/vllm-project/vllm/issues/29341
-            self.llm.collective_rpc("reload_weights")
+            try:
+                self.llm.collective_rpc("reload_weights")
+            except NotImplementedError:
+                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
+                pass
 
         if is_conversational({"prompt": prompts[0]}):
             prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
