@@ -627,6 +627,7 @@ class VLLMGeneration:
                 "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
             }
             generation_kwargs.update(self.generation_kwargs)
+
             if Version(vllm.__version__) <= Version("0.10.2"):
                 structured_outputs_key = "guided_decoding"
                 if self.structured_outputs_regex is not None:
