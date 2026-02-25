@@ -1594,30 +1594,6 @@ class GRPOTrainer(BaseTrainer):
             extra_fields,
         )
 
-    def _compute_advantages_with_dgae(
-        self,
-        rewards: torch.Tensor,
-        num_generations: int,
-        *,
-        use_group_mad: bool | None = None,
-    ) -> torch.Tensor:
-        """Compute advantages using MAD (DGAE) as denominator. Call only when use_dgpo_dgae is True."""
-        advantages = rewards - rewards.mean()
-        if self.scale_rewards != "none":
-            if use_group_mad is None:
-                use_group_mad = self.scale_rewards == "group" and num_generations > 1
-            if use_group_mad:
-                mad_rewards = (
-                    advantages.abs()
-                    .view(-1, num_generations)
-                    .mean(dim=1)
-                    .repeat_interleave(num_generations, dim=0)
-                )
-            else:
-                mad_rewards = advantages.abs().mean().expand_as(rewards)
-            advantages = advantages / (mad_rewards + 1e-4)
-        return advantages
-
     def _compute_valid_token_balancing_ratios(
         self,
         completion_mask: torch.Tensor,
@@ -1939,13 +1915,13 @@ class GRPOTrainer(BaseTrainer):
                     f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
                 )
 
-            if self.use_dgpo_dgae:
-                advantages = self._compute_advantages_with_dgae(
-                    rewards, num_generations
-                )
-            else:
-                advantages = rewards - mean_grouped_rewards
-                if self.scale_rewards != "none":
+            advantages = rewards - mean_grouped_rewards
+            if self.scale_rewards != "none":
+                if self.use_dgpo_dgae:
+                    mad_rewards = advantages.abs().view(-1, num_generations).mean(dim=1)
+                    mad_rewards = mad_rewards.repeat_interleave(num_generations, dim=0)
+                    advantages = advantages / (mad_rewards + 1e-4)
+                else:
                     advantages = advantages / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
@@ -1957,12 +1933,13 @@ class GRPOTrainer(BaseTrainer):
             reward_k = reward_k.view(-1, len(self.reward_funcs))
             rewards = (reward_k * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             std_rewards = rewards.std().expand_as(rewards) if rewards.numel() > 1 else torch.zeros_like(rewards)
+            advantages = rewards - rewards.mean()
             if self.use_dgpo_dgae:
-                advantages = self._compute_advantages_with_dgae(
-                    rewards, num_generations, use_group_mad=False
-                )
+                mad_rewards = advantages.abs().view(-1, num_generations).mean(dim=1)
+                mad_rewards = mad_rewards.repeat_interleave(num_generations, dim=0)
+                advantages = advantages / (mad_rewards + 1e-4)
             else:
-                advantages = (rewards - rewards.mean()) / (std_rewards + 1e-4)
+                advantages = advantages / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
         else:
