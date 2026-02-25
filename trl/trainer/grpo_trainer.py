@@ -1624,9 +1624,19 @@ class GRPOTrainer(BaseTrainer):
         is_std_zero: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute valid token-level balancing ratios (zero_mask_ratio and global_balancing_ratio).
-        Returns (zero_mask_ratio, global_balancing_ratio). Apply zero_mask_ratio to advantages before slice,
-        global_balancing_ratio after slice. Call only when use_dgpo_dgae or use_dgpo_dqw is True.
+        Compute token-level balancing ratios for distributed training with filtered questions.
+
+        When zero-variance questions are masked out, the effective number of valid tokens changes across
+        processes. This method produces two correction factors: `zero_mask_ratio` compensates for the tokens
+        lost by masking zero-variance questions, and `global_balancing_ratio` corrects for uneven token counts
+        across processes.
+
+        Args:
+            completion_mask: Boolean tensor of shape `(batch_size, seq_len)` indicating valid completion tokens.
+            is_std_zero: Boolean tensor of shape `(batch_size,)` indicating zero-variance questions.
+
+        Returns:
+            A tuple `(zero_mask_ratio, global_balancing_ratio)` of scalar tensors.
         """
         completion_length_local = completion_mask.sum(dim=1)
         completion_length_global = gather(completion_length_local)
@@ -1655,12 +1665,22 @@ class GRPOTrainer(BaseTrainer):
     ) -> torch.Tensor:
         """
         Compute question-level difficulty balancing weights (DQW).
-        Returns difficulty_balancing_weights (num_questions,); expand with repeat_interleave at call site.
-        Weights sum to num_questions; zero-variance questions get weight 1.
-        Call only when use_dgpo_dqw is True.
+
+        Assigns higher weight to harder questions (lower mean accuracy) using a temperature-scaled softmax over
+        per-question accuracy means. Zero-variance questions receive a neutral weight of 1.
+        The returned weights sum to `num_questions`.
+
+        Args:
+            rewards: Tensor of shape `(num_questions * num_generations,)` with per-generation rewards.
+            rewards_per_func: Tensor of shape `(num_questions * num_generations, num_reward_funcs)` with
+                per-reward-function scores; the column at `dgpo_dqw_acc_reward_index` is used as accuracy.
+            num_generations: Number of generations per question.
+
+        Returns:
+            Tensor of shape `(num_questions,)` with difficulty balancing weights.
         """
         num_questions = rewards.size(0) // num_generations
-        acc_rewards = rewards_per_func[:, self.dgpo_dqw_acc_reward_index]  # (N,)
+        acc_rewards = rewards_per_func[:, self.dgpo_dqw_acc_reward_index]
         mean_per_q_acc = acc_rewards.view(-1, num_generations).nanmean(dim=1)  # (num_questions,)
         std_per_q_acc = acc_rewards.view(-1, num_generations).std(dim=1)  # (num_questions,)
         is_std_zero_q = std_per_q_acc < 1e-8
@@ -1951,14 +1971,13 @@ class GRPOTrainer(BaseTrainer):
                 "'sum_then_normalize' or 'normalize_then_sum'."
             )
 
-        # Valid token-level loss averaging: zero_mask_ratio before slice, global_balancing_ratio after slice
+        # zero_mask_ratio must be applied before the process slice; global_balancing_ratio after
         if self.use_dgpo_dgae or self.use_dgpo_dqw:
             zero_mask_ratio, global_balancing_ratio = self._compute_valid_token_balancing_ratios(
                 completion_mask, is_std_zero
             )
             advantages = advantages * zero_mask_ratio
 
-        # DQW: multiply advantages by question-level weights; weights sum to num_questions, zero-variance questions get 1
         if self.use_dgpo_dqw:
             difficulty_balancing_weights = self._compute_dqw_weights(
                 rewards, rewards_per_func, num_generations
