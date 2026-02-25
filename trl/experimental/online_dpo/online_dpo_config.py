@@ -21,6 +21,7 @@ from ...trainer.base_config import BaseConfig
 
 @dataclass
 class OnlineDPOConfig(BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.online_dpo.OnlineDPOTrainer`].
 
@@ -149,6 +150,13 @@ class OnlineDPOConfig(BaseConfig):
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `5e-7` instead of `5e-5`.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
