@@ -21,6 +21,7 @@ from .base_config import BaseConfig
 
 @dataclass
 class GRPOConfig(BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`GRPOTrainer`].
 
@@ -311,6 +312,12 @@ class GRPOConfig(BaseConfig):
             `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
             created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
             unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
