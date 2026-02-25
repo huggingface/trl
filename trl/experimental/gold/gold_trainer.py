@@ -1736,7 +1736,7 @@ class GOLDTrainer(SFTTrainer):
             )
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
-            if self.vllm_structured_outputs_regex:
+            if self.vllm_structured_outputs_regex is None:
                 structured_outputs = StructuredOutputsParams(
                     backend="outlines", regex=self.vllm_structured_outputs_regex
                 )
