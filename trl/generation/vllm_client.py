@@ -352,7 +352,7 @@ class VLLMClient:
                 - `logprobs` (`list[list[float]]`):
                     List of lists of log probabilities for each generated token.
         """
-        if tools is not None:
+        if tools:
             raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
         if chat_template is not None:
             raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
@@ -512,82 +512,6 @@ class VLLMClient:
         url = f"{self.base_url}/reset_prefix_cache/"
         response = self.session.post(url)
         if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
-
-    def chat_completions(
-        self,
-        messages: list[dict],
-        model: str | None = None,
-        temperature: float = 1.0,
-        top_p: float = 1.0,
-        max_tokens: int | None = None,
-        n: int = 1,
-        tools: list[dict] | None = None,
-        **kwargs,
-    ) -> dict:
-        """
-        OpenAI-compatible chat completions endpoint.
-
-        Args:
-            messages (`list[dict]`):
-                List of messages in OpenAI format with "role" and "content" keys.
-            model (`str`, *optional*):
-                Model name to use.
-            temperature (`float`, *optional*, defaults to `1.0`):
-                Temperature for sampling.
-            top_p (`float`, *optional*, defaults to `1.0`):
-                Top-p sampling parameter.
-            max_tokens (`int`, *optional*):
-                Maximum number of tokens to generate.
-            n (`int`, *optional*, defaults to `1`):
-                Number of completions to generate.
-            tools (`list[dict]`, *optional*):
-                List of tool definitions for tool calling.
-            **kwargs:
-                Additional parameters to pass to the endpoint.
-
-        Returns:
-            `dict`:
-                OpenAI-compatible response with "choices", "usage", etc.
-        """
-        url = f"{self.base_url}/v1/chat/completions"
-        response = self.session.post(
-            url,
-            json={
-                "messages": messages,
-                "model": model,
-                "temperature": temperature,
-                "top_p": top_p,
-                "max_tokens": max_tokens,
-                "n": n,
-                "tools": tools,
-                **kwargs,
-            },
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
-
-    def tokenize(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
-        """
-        Tokenize messages to get token IDs.
-
-        Args:
-            messages (`list[dict]`):
-                List of messages to tokenize.
-            tools (`list[dict]`, *optional*):
-                List of tool definitions.
-
-        Returns:
-            `dict`:
-                Dictionary with "tokens" (list of token IDs) and "model" keys.
-        """
-        url = f"{self.base_url}/tokenize"
-        response = self.session.post(url, json={"messages": messages, "tools": tools})
-        if response.status_code == 200:
-            return response.json()
-        else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):
