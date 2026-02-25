@@ -119,6 +119,11 @@ class DPOConfig(BaseConfig):
         ref_model_sync_steps (`int`, *optional*, defaults to `512`):
             τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
             the reference policy. To use this parameter, you must set `sync_ref_model=True`.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]: > - `logging_steps`:
+    Defaults to `10` instead of `500`. > - `gradient_checkpointing`: Defaults to `True` instead of `False`. > - `bf16`:
+    Defaults to `True` if `fp16` is not set, instead of `False`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
