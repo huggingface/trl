@@ -46,7 +46,6 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 python examples/scripts/ppo/ppo_tldr.py \
     --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
-    --learning_rate 3e-6 \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
@@ -65,7 +64,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --dataset_name trl-lib/tldr \
     --dataset_test_split validation \
     --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-ppo \
-    --learning_rate 3e-6 \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 4 \
     --total_episodes 1000000 \
