@@ -796,15 +796,6 @@ class GRPOConfig(BaseConfig):
         },
     )
 
-    use_bias_correction_kl: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
-            "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
-            "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
-        },
-    )
-
     use_dgpo_dgae: bool = field(
         default=False,
         metadata={
