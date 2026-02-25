@@ -28,6 +28,7 @@ from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
+from transformers.utils import is_torch_mlu_available, is_torch_npu_available, is_torch_xpu_available
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages_vllm
 from ..extras.profiling import ProfilingContext
@@ -36,17 +37,20 @@ from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
 
 
-def _empty_device_cache():
-    """Empty the cache for the current accelerator device.
+def empty_cache() -> None:
+    """Empties the cache of the available torch device.
 
-    Handles non-CUDA backends (XPU, NPU, MLU) that don't have ``torch.cuda``.
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
+    the first available device it finds.
+
+    If none of the specific devices are available, it defaults to emptying the CUDA cache.
     """
-    if hasattr(torch, "xpu") and torch.xpu.is_available():
+    if is_torch_xpu_available():
         torch.xpu.empty_cache()
-    elif hasattr(torch, "npu") and torch.npu.is_available():
-        torch.npu.empty_cache()
-    elif hasattr(torch, "mlu") and torch.mlu.is_available():
+    elif is_torch_mlu_available():
         torch.mlu.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
     else:
         torch.cuda.empty_cache()
 
@@ -424,12 +428,11 @@ class VLLMGeneration:
 
         Handles FSDP, DeepSpeed, PEFT weight synchronization.
         """
-        # Wake up vLLM weights before loading to ensure device memory is mapped.
-        # Without this, load_weights() writes to freed/unmapped memory when sleep
-        # mode is active, which crashes on backends with strict physical memory
+        # Wake up vLLM weights before loading to ensure device memory is mapped. Without this, load_weights() writes to
+        # freed/unmapped memory when sleep mode is active, which crashes on backends with strict physical memory
         # management (e.g., Ascend NPU). See https://github.com/huggingface/trl/issues/5142
         if self.mode == "colocate" and self.enable_sleep_mode:
-            _empty_device_cache()
+            empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
 
         model = self.model
@@ -536,12 +539,13 @@ class VLLMGeneration:
 
         # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
         if self.mode == "colocate" and self.enable_sleep_mode:
-            _empty_device_cache()
+            empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
             # Work around for https://github.com/vllm-project/vllm/issues/29341
             try:
                 self.llm.collective_rpc("reload_weights")
             except NotImplementedError:
+                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
                 pass
 
         if is_conversational({"prompt": prompts[0]}):
