@@ -24,7 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13"
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14"
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -108,7 +109,7 @@ dev = [
     # kernels
     "kernels",
     # liger
-    "liger-kernel>=0.7.0",
+    #"liger-kernel>=0.7.0",
     # peft
     "peft>=0.8.0",
     # quality
