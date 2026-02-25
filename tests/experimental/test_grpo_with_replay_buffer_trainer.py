@@ -96,6 +96,7 @@ class TestReplayBuffer:
 @pytest.mark.low_priority
 class TestUpdateWithReplayBuffer:
     def setup_method(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         config = GRPOWithReplayBufferConfig(
             replay_buffer_size=5,
         )
@@ -103,7 +104,7 @@ class TestUpdateWithReplayBuffer:
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=config,
-            train_dataset=None,
+            train_dataset=dataset,
         )
         self.trainer.replay_buffer = ReplayBuffer(max_size=5)
         self.trainer.num_generations = 2
