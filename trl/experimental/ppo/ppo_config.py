@@ -20,6 +20,7 @@ from ...trainer.base_config import BaseConfig
 
 @dataclass
 class PPOConfig(BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.ppo.PPOTrainer`].
 
@@ -110,6 +111,12 @@ class PPOConfig(BaseConfig):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     """
 
     dataset_num_proc: int | None = field(
