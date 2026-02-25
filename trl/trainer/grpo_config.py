@@ -461,6 +461,12 @@ class GRPOConfig(BaseConfig):
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
+    pad_training_to_multiple_of: int | None = field(
+        default=None,
+        metadata={
+            "help": "If set, pad both prompt_ids and completion_ids to a multiple of this value before training."
+        },
+    )
 
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: bool = field(
