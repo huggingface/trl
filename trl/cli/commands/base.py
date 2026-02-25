@@ -16,14 +16,11 @@ from abc import ABC, abstractmethod
 from argparse import Namespace
 from dataclasses import dataclass
 
-from ...scripts.utils import TrlParser
-
 
 @dataclass(slots=True)
 class CommandContext:
     """Context shared by CLI commands during execution."""
 
-    parser: TrlParser
     argv: list[str]
     remaining_args: list[str]
 

@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     command = commands_by_name[command_name]
-    context = CommandContext(parser=parser, argv=argv, remaining_args=remaining_args)
+    context = CommandContext(argv=argv, remaining_args=remaining_args)
     return command.run(args, context)
 
 
