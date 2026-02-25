@@ -116,9 +116,13 @@ class TestRewardTrainer(TrlTestCase):
             # num_labels=2,  # Defaults to 2 num_labels for causal models
         )
 
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         with pytest.raises(ValueError, match=r"reward models require `num_labels=1`"):
-            RewardTrainer(model=model, args=training_args)
+            RewardTrainer(model=model, args=training_args, train_dataset=dataset)
 
     @pytest.mark.parametrize(
         "model_id",
