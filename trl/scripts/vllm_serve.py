@@ -412,17 +412,6 @@ def chunk_list(lst: list, n: int) -> list[list]:
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
-def sanitize_logprob(logprob):
-    import math
-
-    value = logprob.logprob
-    if math.isnan(value):
-        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
-        return None
-
-    return value
-
-
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
