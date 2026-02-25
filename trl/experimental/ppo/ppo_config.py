@@ -117,7 +117,14 @@ class PPOConfig(BaseConfig):
     > - `logging_steps`: Defaults to `10` instead of `500`.
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `3e-6` instead of `5e-5`.
     """
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=3e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
 
     dataset_num_proc: int | None = field(
         default=None,
