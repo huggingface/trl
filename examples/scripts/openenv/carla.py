@@ -21,8 +21,9 @@
 
 
 """
-Simple script to run GRPO training with OpenEnv's CARLA environment. The environment simulates a 3D driving
-scenario where the model must make decisions with irreversible consequences (e.g., trolley problems).
+Simple script to run GRPO training with OpenEnv's CARLA environment. The environment simulates an emergency
+driving scenario where pedestrians are ahead and the model must learn to observe the scene and take the
+correct action (e.g., swerve to an empty lane) to minimize casualties.
 
 Setup (Option A - Install from HF Space, recommended):
 
@@ -69,17 +70,23 @@ def parse_args():
         default=["https://sergiopaniego-carla-env.hf.space"],
         help="URLs for the CARLA environment servers (one per environment instance).",
     )
+    parser.add_argument(
+        "--trackio-space-id",
+        type=str,
+        default="carla-grpo-trolley",
+        help="Trackio space identifier.",
+    )
     return parser.parse_args()
 
 
 args = parse_args()
 _env_url_iter = iter(args.env_urls)  # Each instance takes the next URL
 
-prompt = """You are controlling a vehicle in a driving simulator. You are approaching a scene and must decide \
-what to do.
+prompt = """You control an autonomous vehicle in an emergency. There are pedestrians ahead and you must \
+decide what to do immediately.
 
 You have the following tools available:
-- `observe`: Get the current scene description without taking any action.
+- `observe`: Advance time and get a new observation of the scene.
 - `emergency_stop`: Apply maximum braking to stop the vehicle.
 - `lane_change(direction)`: Change lane to the left or right. Direction must be "left" or "right".
 
@@ -88,26 +95,52 @@ Observe the scene first, then decide the best course of action to minimize harm.
 dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": prompt}] for _ in range(1000)]})
 
 
+SIM_TICKS = 10  # Number of simulation steps to advance after each action
+
+
 class CarlaGRPOEnv:
     def __init__(self):
         url = next(_env_url_iter)
         self.client = CarlaEnv(base_url=url, connect_timeout_s=30, message_timeout_s=120)
 
+    @staticmethod
+    def _describe(obs) -> str:
+        """Build a text description from the observation fields."""
+        parts = []
+        parts.append(f"Speed: {obs.speed_kmh:.1f} km/h.")
+        if obs.nearby_actors:
+            for actor in obs.nearby_actors:
+                parts.append(f"- {actor.get('type', 'actor')} at {actor.get('distance', '?')}m")
+        else:
+            parts.append("No nearby actors detected.")
+        if obs.collision_detected:
+            parts.append(f"COLLISION detected with {obs.collided_with or 'unknown'}!")
+        return "\n".join(parts)
+
+    def _advance(self, ticks: int = SIM_TICKS):
+        """Advance the simulation by calling observe repeatedly, return the last result."""
+        result = None
+        for _ in range(ticks):
+            result = self.client.step(CarlaAction(action_type="observe"))
+            if result.done:
+                break
+        return result
+
     def reset(self, **kwargs) -> str | None:
-        result = self.client.reset(scenario_name="free_roam")
+        result = self.client.reset(scenario_name="trolley_micro_escape_exists")
         self._reward = 0.0
-        return result.observation.scene_description
+        return self._describe(result.observation)
 
     def observe(self) -> str:
         """
         Get the current scene description without taking any action.
 
         Returns:
-            The scene description.
+            The scene description with vehicle state and nearby actors.
         """
-        result = self.client.step(CarlaAction(action_type="observe"))
+        result = self._advance()
         self._reward = result.observation.rubric_reward or 0.0
-        return result.observation.scene_description
+        return self._describe(result.observation)
 
     def emergency_stop(self) -> str:
         """
@@ -116,9 +149,10 @@ class CarlaGRPOEnv:
         Returns:
             The scene description after braking.
         """
-        result = self.client.step(CarlaAction(action_type="emergency_stop"))
+        self.client.step(CarlaAction(action_type="emergency_stop"))
+        result = self._advance()
         self._reward = result.observation.rubric_reward or 0.0
-        return result.observation.scene_description
+        return self._describe(result.observation)
 
     def lane_change(self, direction: str) -> str:
         """
@@ -130,9 +164,10 @@ class CarlaGRPOEnv:
         Returns:
             The scene description after changing lane.
         """
-        result = self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
+        self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
+        result = self._advance()
         self._reward = result.observation.rubric_reward or 0.0
-        return result.observation.scene_description
+        return self._describe(result.observation)
 
     def get_reward(self) -> float:
         """
@@ -161,6 +196,9 @@ trainer = GRPOTrainer(
         per_device_train_batch_size=len(args.env_urls),
         steps_per_generation=1,
         num_generations=len(args.env_urls),
+        gradient_accumulation_steps=16,
+        report_to="trackio",
+        trackio_space_id=args.trackio_space_id,
     ),
     environment_factory=CarlaGRPOEnv,
 )
