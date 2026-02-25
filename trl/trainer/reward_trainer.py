@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -127,10 +128,10 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
     Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch.
 
-    This collator expects each example in the input list to be a dictionary containing the `"chosen_input_ids"` and
-    `"rejected_input_ids"` keys. The collator returns a dictionary containing the following keys:
+    This collator expects each example in the input list to be a dictionary containing the `"chosen_ids"` and
+    `"rejected_ids"` keys. The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first half of the batch
-        corresponds to the `"chosen_input_ids"` and the second half to the `"rejected_input_ids"`.
+        corresponds to the `"chosen_ids"` and the second half to the `"rejected_ids"`.
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
 
     Optionally, the examples can contain a `"margin"` key, in which case the returned dictionary will also contain a
@@ -150,8 +151,8 @@ class DataCollatorForPreference(DataCollatorMixin):
 
     >>> collator = DataCollatorForPreference(pad_token_id=0)
     >>> examples = [
-    ...     {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]},
-    ...     {"chosen_input_ids": [6, 7], "rejected_input_ids": [8]},
+    ...     {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]},
+    ...     {"chosen_ids": [6, 7], "rejected_ids": [8]},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[1, 2, 3],
@@ -164,8 +165,8 @@ class DataCollatorForPreference(DataCollatorMixin):
                                [1, 0, 0]])}
 
     >>> examples = [
-    ...     {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5], "margin": 0.5},
-    ...     {"chosen_input_ids": [6, 7], "rejected_input_ids": [8], "margin": 0.0},
+    ...     {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5], "margin": 0.5},
+    ...     {"chosen_ids": [6, 7], "rejected_ids": [8], "margin": 0.0},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[1, 2, 3],
@@ -186,11 +187,11 @@ class DataCollatorForPreference(DataCollatorMixin):
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
-        chosen_input_ids = [torch.tensor(example["chosen_input_ids"]) for example in examples]
-        rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
+        chosen_ids = [torch.tensor(example["chosen_ids"]) for example in examples]
+        rejected_ids = [torch.tensor(example["rejected_ids"]) for example in examples]
         if "margin" in examples[0]:
             margins = torch.tensor([example["margin"] for example in examples], dtype=torch.float)
-        input_ids = chosen_input_ids + rejected_input_ids
+        input_ids = chosen_ids + rejected_ids
         attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         output = {}
@@ -258,8 +259,8 @@ class RewardTrainer(BaseTrainer):
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
 
-            The trainer also supports processed datasets (tokenized) as long as they contain an `chosen_input_ids` and
-            `rejected_input_ids` fields.
+            The trainer also supports processed datasets (tokenized) as long as they contain `chosen_ids` and
+            `rejected_ids` fields.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
@@ -535,7 +536,18 @@ class RewardTrainer(BaseTrainer):
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = get_dataset_column_names(dataset)
-        is_processed = "chosen_input_ids" in column_names and "rejected_input_ids" in column_names
+        is_processed = "chosen_ids" in column_names and "rejected_ids" in column_names
+        has_legacy_processed_columns = "chosen_input_ids" in column_names and "rejected_input_ids" in column_names
+        if has_legacy_processed_columns and not is_processed:
+            warnings.warn(
+                "Detected legacy dataset columns `chosen_input_ids`/`rejected_input_ids`; they are deprecated and "
+                "will not be supported in v1. Please migrate to `chosen_ids`/`rejected_ids`.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            dataset = dataset.rename_column("chosen_input_ids", "chosen_ids")
+            dataset = dataset.rename_column("rejected_input_ids", "rejected_ids")
+            is_processed = True
 
         # Build the kwargs for the `map` function
         map_kwargs = {}
@@ -575,23 +587,23 @@ class RewardTrainer(BaseTrainer):
                         example["rejected"] = example["prompt"] + example["rejected"]
 
                     if is_conversational(example):
-                        chosen_input_ids = processing_class.apply_chat_template(
+                        chosen_ids = processing_class.apply_chat_template(
                             example["chosen"],
                             tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
-                        rejected_input_ids = processing_class.apply_chat_template(
+                        rejected_ids = processing_class.apply_chat_template(
                             example["rejected"],
                             tools=tools,
                             return_dict=True,
                             **example.get("chat_template_kwargs", {}),
                         )["input_ids"]
-                        output = {"chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids}
+                        output = {"chosen_ids": chosen_ids, "rejected_ids": rejected_ids}
                     else:
                         output = {
-                            "chosen_input_ids": processing_class(text=example["chosen"])["input_ids"],
-                            "rejected_input_ids": processing_class(text=example["rejected"])["input_ids"],
+                            "chosen_ids": processing_class(text=example["chosen"])["input_ids"],
+                            "rejected_ids": processing_class(text=example["rejected"])["input_ids"],
                         }
                     return output
 
@@ -602,8 +614,8 @@ class RewardTrainer(BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Filtering {dataset_name} >{args.max_length} tokens"
                 dataset = dataset.filter(
-                    lambda example: len(example["chosen_input_ids"]) <= args.max_length
-                    and len(example["rejected_input_ids"]) <= args.max_length,
+                    lambda example: len(example["chosen_ids"]) <= args.max_length
+                    and len(example["rejected_ids"]) <= args.max_length,
                     **map_kwargs,
                 )
 
@@ -614,7 +626,7 @@ class RewardTrainer(BaseTrainer):
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask").
         if self._signature_columns is None:
-            self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "margin"]
+            self._signature_columns = ["chosen_ids", "rejected_ids", "margin"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
