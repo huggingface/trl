@@ -1179,7 +1179,7 @@ def main(script_args: ScriptArguments):
                 if not request.parallel_tool_calls and tool_calls and len(tool_calls) > 1:
                     tool_calls = [tool_calls[0]]
 
-                logprobs_data = None
+                logprobs_data = {"content": []} if request.logprobs else None
                 if request.logprobs and hasattr(gen_output, "logprobs") and gen_output.logprobs:
                     logprobs_data = {
                         "content": [
