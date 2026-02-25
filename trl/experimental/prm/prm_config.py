@@ -19,6 +19,7 @@ from ...trainer.base_config import BaseConfig
 
 @dataclass
 class PRMConfig(BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.prm.PRMTrainer`].
 
@@ -43,6 +44,13 @@ class PRMConfig(BaseConfig):
             Whether to train only on the last step.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-5` instead of `5e-5`.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
