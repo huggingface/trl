@@ -555,7 +555,9 @@ class GRPOTrainer(BaseTrainer):
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
-        if (
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+        elif (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
             or (

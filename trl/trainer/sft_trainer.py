@@ -617,9 +617,11 @@ class SFTTrainer(BaseTrainer):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
-        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
-        # batches from multiple processes, leading to mismatch errors.
-        if isinstance(train_dataset, IterableDataset):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+        elif isinstance(train_dataset, IterableDataset):
+            # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+            # batches from multiple processes, leading to mismatch errors.
             if args.accelerator_config.dispatch_batches is True:
                 logger.warning(
                     "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
