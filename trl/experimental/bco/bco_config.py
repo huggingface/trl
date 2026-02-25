@@ -22,6 +22,7 @@ from ...trainer.base_config import BaseConfig
 
 @dataclass
 class BCOConfig(BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.bco.BCOTrainer`].
 
@@ -68,9 +69,22 @@ class BCOConfig(BaseConfig):
             Minimum value of the density ratio. The estimated density ratio is clamped to this value.
         max_density_ratio (`float`, *optional*, defaults to `10.0`):
             Maximum value of the density ratio. The estimated density ratio is clamped to this value.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `5e-7` instead of `5e-5`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=5e-7,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
 
     max_length: int | None = field(
         default=1024,
