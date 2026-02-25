@@ -740,6 +740,7 @@ class GRPOTrainer(BaseTrainer):
                 top_k=self.top_k,
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
+                logprobs=0,  # we only need the generated token logprobs for the importance sampling correction
                 generation_kwargs=args.generation_kwargs,
                 # Chat/tool configuration
                 chat_template=self.chat_template,
@@ -1229,9 +1230,11 @@ class GRPOTrainer(BaseTrainer):
 
             # Generate using vLLM
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, logprobs, extra_fields = self.vllm_generation.generate(
+            prompt_ids, completion_ids, logprobs, _, extra_fields = self.vllm_generation.generate(
                 prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
+            # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
+            logprobs = [[lp[0] for lp in seq] for seq in logprobs]
 
         elif self.use_transformers_paged:
             if is_conversational({"prompt": prompts[0]}):
