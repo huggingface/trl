@@ -29,6 +29,7 @@ class VllmServeCommand(Command):
         make_vllm_serve_parser(subparsers)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
-        (script_args,) = context.parser.parse_args_and_config(args=context.argv)
+        parser = make_vllm_serve_parser()
+        (script_args,) = parser.parse_args_and_config(args=context.argv_after(self.name))
         vllm_serve_main(script_args)
         return 0
