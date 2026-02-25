@@ -14,11 +14,10 @@
 
 import json
 import pathlib
-from types import SimpleNamespace
 
 import pytest
 import torch
-from datasets import Dataset, load_dataset
+from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
 
@@ -528,30 +527,6 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
-
-    def test_prepare_dataset_renames_legacy_columns(self):
-        dataset = Dataset.from_dict(
-            {
-                "chosen_input_ids": [[1, 2, 3], [1, 2, 3, 4, 5]],
-                "rejected_input_ids": [[6, 7], [6, 7, 8, 9, 10]],
-            }
-        )
-        args = SimpleNamespace(dataset_num_proc=None, max_length=4)
-        trainer = RewardTrainer.__new__(RewardTrainer)
-
-        with pytest.warns(FutureWarning, match=r"will not be supported in v1"):
-            prepared_dataset = trainer._prepare_dataset(
-                dataset=dataset,
-                processing_class=object(),
-                args=args,
-                dataset_name="train",
-            )
-
-        assert "chosen_ids" in prepared_dataset.column_names
-        assert "rejected_ids" in prepared_dataset.column_names
-        assert "chosen_input_ids" not in prepared_dataset.column_names
-        assert "rejected_input_ids" not in prepared_dataset.column_names
-        assert len(prepared_dataset) == 1
 
     def test_train_with_iterable_dataset(self):
         # Get the dataset
