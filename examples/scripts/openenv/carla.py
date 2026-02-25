@@ -76,6 +76,18 @@ def parse_args():
         default="carla-grpo-trolley",
         help="Trackio space identifier.",
     )
+    parser.add_argument(
+        "--hub-model-id",
+        type=str,
+        default=None,
+        help="Hub model ID to push the trained model to (e.g., sergiopaniego/Qwen3-0.6B-carla-trolley-escape).",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name for tracking.",
+    )
     return parser.parse_args()
 
 
@@ -197,6 +209,10 @@ trainer = GRPOTrainer(
         steps_per_generation=1,
         num_generations=len(args.env_urls),
         gradient_accumulation_steps=16,
+        max_steps=50,
+        push_to_hub=args.hub_model_id is not None,
+        hub_model_id=args.hub_model_id,
+        run_name=args.run_name,
         report_to="trackio",
         trackio_space_id=args.trackio_space_id,
     ),
