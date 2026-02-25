@@ -521,8 +521,16 @@ class OnlineDPOTrainer(BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_params.update(args.generation_kwargs)
-            if self.structured_outputs_regex:
+            if self.structured_outputs_regex is not None:
+                if generation_params.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `vllm_structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`vllm_structured_outputs_regex` takes precedence."
+                    )
                 generation_params["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(generation_params.get("structured_outputs"), dict):
+                structured_outputs_dict = generation_params.get("structured_outputs")
+                generation_params["structured_outputs"] = StructuredOutputsParams(**structured_outputs_dict)
             self.generation_config = SamplingParams(**generation_params)
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
