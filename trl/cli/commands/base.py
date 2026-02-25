@@ -22,7 +22,7 @@ class CommandContext:
     """Context shared by CLI commands during execution."""
 
     argv: list[str]
-    launch_args: list[str]
+    remaining_args: list[str]
 
     def argv_after(self, token: str) -> list[str]:
         """
@@ -48,14 +48,11 @@ class Command(ABC):
             Subcommand name exposed by the CLI.
         help_text (`str`):
             Short description displayed in help output.
-        uses_accelerate (`bool`, *optional*, defaults to `False`):
-            Whether this command uses `accelerate launch`.
     """
 
-    def __init__(self, name: str, help_text: str, uses_accelerate: bool = False):
+    def __init__(self, name: str, help_text: str):
         self.name = name
         self.help_text = help_text
-        self.uses_accelerate = uses_accelerate
 
     @abstractmethod
     def register(self, subparsers) -> None:
