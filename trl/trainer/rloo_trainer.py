@@ -57,7 +57,7 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import disable_gradient_checkpointing
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
 from .utils import (
@@ -101,7 +101,7 @@ logger = get_logger(__name__)
 RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 
 
-class RLOOTrainer(BaseTrainer):
+class RLOOTrainer(_BaseTrainer):
     """
     Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the paper [Back to
     Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in

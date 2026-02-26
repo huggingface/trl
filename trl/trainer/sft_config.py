@@ -17,11 +17,11 @@ from typing import Any
 
 from transformers import TrainingArguments
 
-from .base_config import BaseConfig
+from .base_config import _BaseConfig
 
 
 @dataclass
-class SFTConfig(BaseConfig):
+class SFTConfig(_BaseConfig):
     # docstyle-ignore
     r"""
     Configuration class for the [`SFTTrainer`].

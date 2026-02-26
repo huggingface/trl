@@ -49,7 +49,7 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
 from ..utils import (
     DPODataCollatorWithPadding,
@@ -82,7 +82,7 @@ def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
     return torch.where(x < t, torch.log1p(-torch.exp(x)), torch.log(-torch.expm1(x)))
 
 
-class ORPOTrainer(BaseTrainer):
+class ORPOTrainer(_BaseTrainer):
     r"""
     Initialize ORPOTrainer.
 

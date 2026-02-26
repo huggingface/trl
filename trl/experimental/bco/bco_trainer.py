@@ -58,7 +58,7 @@ from transformers.utils import is_peft_available
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_joblib_available
 from ...models.utils import prepare_deepspeed
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
 from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
 from .bco_config import BCOConfig
@@ -346,7 +346,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     return batch
 
 
-class BCOTrainer(BaseTrainer):
+class BCOTrainer(_BaseTrainer):
     r"""
     Initialize BCOTrainer from [BCO](https://huggingface.co/papers/2404.04656) paper.
 

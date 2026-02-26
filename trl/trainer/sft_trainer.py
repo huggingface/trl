@@ -54,7 +54,7 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import get_act_offloading_ctx_manager
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
     create_model_from_path,
@@ -508,7 +508,7 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     return loss
 
 
-class SFTTrainer(BaseTrainer):
+class SFTTrainer(_BaseTrainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
 

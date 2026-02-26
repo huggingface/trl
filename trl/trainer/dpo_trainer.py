@@ -48,7 +48,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ..data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import disable_gradient_checkpointing
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
@@ -355,7 +355,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         return output
 
 
-class DPOTrainer(BaseTrainer):
+class DPOTrainer(_BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method. This algorithm was initially proposed in the paper [Direct
     Preference Optimization: Your Language Model is Secretly a Reward Model](https://huggingface.co/papers/2305.18290).
