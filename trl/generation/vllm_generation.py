@@ -14,10 +14,13 @@
 
 """vLLM-based generation backend for TRL trainers."""
 
+import atexit
 import json
 import logging
 import math
 import os
+import shutil
+import tempfile
 from collections.abc import Callable
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
@@ -239,6 +242,7 @@ class VLLMGeneration:
         # vLLM configuration
         mode: str = "server",
         structured_outputs_regex: str | None = None,
+        sync_strategy: str = "weights",
         # Server mode configuration
         server_base_url: str | None = None,
         server_host: str = "0.0.0.0",
@@ -275,6 +279,7 @@ class VLLMGeneration:
         # vLLM configuration
         self.mode = mode
         self.structured_outputs_regex = structured_outputs_regex
+        self.sync_strategy = sync_strategy
 
         # Server mode configuration
         self.server_base_url = server_base_url
@@ -329,7 +334,8 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                if self.sync_strategy != "lora_adapter":
+                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
         elif self.mode == "colocate":
             # Make sure tensor_parallel_size group size evenly divides the world size - each group should have
@@ -457,6 +463,97 @@ class VLLMGeneration:
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights([(name, param)])
 
+    def _get_lora_adapter_dir(self, output_dir: str) -> str:
+        """Return the directory for storing the LoRA adapter, preferring in-memory filesystems.
+
+        Prefers ``/dev/shm`` (Linux tmpfs, RAM-backed) for speed, since the adapter is ephemeral and
+        small (~50-200 MB). Falls back to a temp directory (often tmpfs on Linux), then to
+        ``output_dir`` as a last resort. The chosen path is cached and an ``atexit`` handler is
+        registered to clean it up on exit.
+
+        Both the trainer and vLLM server must be on the same machine (shared filesystem) for the
+        path to be readable by both processes.
+        """
+        if hasattr(self, "_lora_adapter_dir"):
+            return self._lora_adapter_dir
+
+        # Use PID to avoid collisions between concurrent training runs on the same machine
+        subdir = f"trl_lora_{os.getpid()}"
+
+        # Try /dev/shm first (Linux RAM-backed tmpfs, almost always available)
+        dev_shm = "/dev/shm"
+        if os.path.isdir(dev_shm) and os.access(dev_shm, os.W_OK):
+            adapter_dir = os.path.join(dev_shm, subdir)
+        else:
+            # Fall back to system temp directory (often tmpfs on Linux, disk-backed elsewhere)
+            adapter_dir = os.path.join(tempfile.gettempdir(), subdir)
+
+        os.makedirs(adapter_dir, exist_ok=True)
+        self._lora_adapter_dir = adapter_dir
+        logger.info(f"LoRA adapter sync directory: {adapter_dir}")
+
+        # Clean up on exit so we don't leak files in /dev/shm or /tmp
+        def _cleanup():
+            if os.path.exists(adapter_dir):
+                shutil.rmtree(adapter_dir, ignore_errors=True)
+
+        atexit.register(_cleanup)
+        return adapter_dir
+
+    def sync_lora_adapter(self, output_dir: str):
+        """Save LoRA adapter and tell vLLM server to reload it.
+
+        This avoids the merge_adapter/unmerge_adapter cycle and NCCL weight transfer,
+        which is problematic for QLoRA (4-bit) models and slow for large models.
+
+        The adapter is written to an in-memory filesystem (``/dev/shm``) when available for speed,
+        falling back to the system temp directory or ``output_dir``.
+
+        Args:
+            output_dir: Trainer output directory, used as a fallback if no in-memory FS is available.
+        """
+        accelerator = self.accelerator
+
+        if (self.is_fsdp_enabled):
+            raise NotImplementedError("FSDP is not supported for LoRA adapter sync.")
+
+        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
+        deepspeed_plugin = accelerator.state.deepspeed_plugin
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        if zero_stage_3:
+            import deepspeed
+
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
+        else:
+            gather_if_zero3 = nullcontext
+
+        unwrapped = accelerator.unwrap_model(self.model)
+        with gather_if_zero3(list(unwrapped.parameters())):
+            if accelerator.is_main_process:
+                base_dir = self._get_lora_adapter_dir(output_dir)
+                adapter_dir = os.path.join(base_dir, "adapter")
+                tmp_dir = os.path.join(base_dir, "adapter_tmp")
+
+                # Clean up any stale tmp dir from a previous failed save
+                if os.path.exists(tmp_dir):
+                    shutil.rmtree(tmp_dir)
+
+                # Save adapter (only LoRA params, ~50-200MB)
+                unwrapped.save_pretrained(tmp_dir)
+
+                # Atomic swap to avoid vLLM reading a partially-written adapter
+                if os.path.exists(adapter_dir):
+                    shutil.rmtree(adapter_dir)
+                os.rename(tmp_dir, adapter_dir)
+
+                # Tell vLLM to reload
+                logger.info("Saved LoRA adapter snapshot to '%s'; requesting vLLM reload...", adapter_dir)
+                self.vllm_client.load_lora_adapter(lora_path=adapter_dir)
+
+        # Sync all processes
+        if accelerator.num_processes > 1:
+            accelerator.wait_for_everyone()
+
     def sync_weights(self):
         """Synchronize model weights to vLLM.
 
@@ -577,7 +674,7 @@ class VLLMGeneration:
         max_completion_length = self.max_completion_length
         processing_class = self.processing_class
         chat_template_kwargs = self.chat_template_kwargs
-        tools = self.tools
+        tools = self.tools or None
         chat_template = self.chat_template
 
         # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
