@@ -74,8 +74,6 @@
       title: Chat Template Utilities
     - local: data_utils
       title: Data Utilities
-    - local: model_utils
-      title: Model Utilities
     - local: script_utils
       title: Script Utilities
     title: Utilities
@@ -83,8 +81,6 @@
     title: Callbacks
   - local: rewards
     title: Reward Functions
-  - local: others
-    title: Others
   title: API
 - sections:
   - local: experimental_overview

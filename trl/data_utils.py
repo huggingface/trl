@@ -490,29 +490,9 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
     Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
     rejected completions.
 
-    For more details, see [`maybe_extract_prompt`].
-    """
-    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
-        if example["chosen"][idx] != example["rejected"][idx]:
-            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
-                idx -= 1
-            break
-    return {
-        "prompt": example["chosen"][:idx],
-        "chosen": example["chosen"][idx:],
-        "rejected": example["rejected"][idx:],
-    }
-
-
-def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
-    r"""
-    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
-    rejected completions.
-
-    If the example already contains a `"prompt"` key, the function returns the example as is. Else, the function
-    identifies the longest common sequence (prefix) of conversation turns between the "chosen" and "rejected"
-    completions and extracts this as the prompt. It then removes this prompt from the respective "chosen" and
-    "rejected" completions.
+    The function identifies the longest common sequence (prefix) of conversation turns between the "chosen" and
+    "rejected" completions and extracts this as the prompt. It then removes this prompt from the respective "chosen"
+    and "rejected" completions.
 
     Args:
         example (`dict[str, list]`):
@@ -578,6 +558,27 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     {'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
      'chosen': [{'role': 'assistant', 'content': 'It is blue.'}],
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
+    ```
+    """
+    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
+        if example["chosen"][idx] != example["rejected"][idx]:
+            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
+                idx -= 1
+            break
+    return {
+        "prompt": example["chosen"][:idx],
+        "chosen": example["chosen"][idx:],
+        "rejected": example["rejected"][idx:],
+    }
+
+
+def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
+    r"""
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
+    rejected completions.
+
+    If the example already contains a `"prompt"` key, the function returns the example as is. For more details, see
+    [`extract_prompt`].
     ```
     """
     # Some dataset add a `"prompt"` column, even though the prompt is implicit and included in the "chosen" and
