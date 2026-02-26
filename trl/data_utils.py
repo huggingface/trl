@@ -779,7 +779,7 @@ def pack_dataset(
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
-        strategy (`"bfd"`, `"bfd-split"` or `"wrapped"`, defaults to `"bfd"`):
+        strategy (`str`, *optional*, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
             - `"bfd"` (Best Fit Decreasing): Preserves sequence boundaries and truncates sequences that exceed
