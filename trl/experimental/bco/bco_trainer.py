@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import inspect
+import json
 import os
 import random
 import textwrap
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from operator import itemgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -28,9 +31,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState, logging
+import transformers
+from accelerate import Accelerator, PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
@@ -52,16 +57,10 @@ from transformers.utils import is_peft_available
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_joblib_available
-from ...models.utils import create_reference_model, peft_module_casting_to_bf16, prepare_deepspeed
-from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    RunningMoments,
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
-    pad_to_length,
-    selective_log_softmax,
-)
-from ..utils import DPODataCollatorWithPadding
+from ...models.utils import prepare_deepspeed
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
 from .bco_config import BCOConfig
 
 
@@ -84,6 +83,86 @@ logger = logging.get_logger(__name__)
 
 RUNNING_NAME = "running.json"
 CLF_NAME = "clf.pkl"
+
+
+@torch.no_grad()
+def get_global_statistics(
+    accelerator, xs: torch.Tensor, mask=None, device="cpu"
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """
+    Computes element-wise mean and variance of the tensor across processes. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
+    """
+    xs = xs.to(accelerator.device)
+    sum_and_count = torch.tensor([xs.sum(), (xs.numel() if mask is None else mask.sum())], device=xs.device)
+    sum_and_count = accelerator.reduce(sum_and_count)
+    global_sum, count = sum_and_count
+    global_mean = global_sum / count
+
+    sum_var = torch.sum(((xs - global_mean) ** 2).mul(1 if mask is None else mask))
+    sum_var = accelerator.reduce(sum_var)
+    global_var = sum_var / count
+
+    return global_mean.to(device), global_var.to(device), count.item()
+
+
+@dataclass
+class RunningMoments:
+    """
+    Calculates the running mean and standard deviation of a data stream. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+    """
+
+    accelerator: Accelerator
+    mean: float = 0
+    std: float = 1
+    var: float = 1
+    count: float = 1e-24
+
+    @torch.no_grad()
+    def update(self, xs: torch.Tensor) -> tuple[float, float]:
+        """
+        Updates running moments from batch's moments computed across ranks
+        """
+        if self.accelerator.use_distributed:
+            xs_mean, xs_var, xs_count = get_global_statistics(self.accelerator, xs)
+        else:
+            xs_count = xs.numel()
+            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
+        xs_mean, xs_var = xs_mean.float(), xs_var.float()
+
+        delta = xs_mean - self.mean
+        tot_count = self.count + xs_count
+
+        new_sum = xs_var * xs_count
+        # correct old_sum deviation accounting for the new mean
+        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
+        tot_sum = old_sum + new_sum
+
+        self.mean += (delta * xs_count / tot_count).item()
+        new_var = tot_sum / tot_count
+        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
+        self.var = new_var.item()
+        self.count = tot_count
+
+        return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
+
+    def save_to_json(self, json_path: str):
+        """Save the content of this instance in JSON format inside `json_path`."""
+        # save everything except accelerator
+        if self.accelerator.is_main_process:
+            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
+            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(json_string)
+
+    @classmethod
+    def load_from_json(cls, accelerator: Accelerator, json_path: str):
+        """Create an instance from the content of `json_path`."""
+        # load everything except accelerator
+        with open(json_path, encoding="utf-8") as f:
+            text = f.read()
+        return cls(accelerator=accelerator, **json.loads(text))
 
 
 def _tokenize(
@@ -145,7 +224,7 @@ def _tokenize(
     )
 
     if embedding_tokenizer is not None:
-        embedding_tokenized = embedding_tokenizer(batch["prompt"], truncation=True, add_special_tokens=False)
+        embedding_tokenized = embedding_tokenizer(batch["prompt"], add_special_tokens=False)
 
         output.update(
             {
@@ -205,20 +284,10 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         if eos_token_id != all_tokens["answer_input_ids"][-1]:
             max_length -= 1
 
-        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                if kwargs["truncation_mode"] == "keep_start":
-                    all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
-                elif kwargs["truncation_mode"] == "keep_end":
-                    all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
-
-        # if that's still too long, truncate the response
+        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the response
         if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
             for k in ["answer_input_ids", "answer_attention_mask"]:
-                all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
+                all_tokens[k] = all_tokens[k][: max_length - len(all_tokens["prompt_input_ids"])]
 
         # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
         batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
@@ -262,9 +331,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         completion_tokens = kwargs["tokenizer"](
             completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
         )
-        prompt_tokens = kwargs["tokenizer"](
-            prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
-        )
+        prompt_tokens = kwargs["tokenizer"](prompt, add_special_tokens=True)
 
         batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
         batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
@@ -279,7 +346,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     return batch
 
 
-class BCOTrainer(BaseTrainer):
+class BCOTrainer(_BaseTrainer):
     r"""
     Initialize BCOTrainer from [BCO](https://huggingface.co/papers/2404.04656) paper.
 
@@ -290,7 +357,7 @@ class BCOTrainer(BaseTrainer):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        args ([`BCOConfig`]):
+        args ([`experimental.bco.BCOConfig`]):
             The arguments to use for training.
         train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
@@ -396,31 +463,11 @@ class BCOTrainer(BaseTrainer):
                 model_init_kwargs["dtype"] = dtype
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
-        if args.ref_model_init_kwargs is None:
-            ref_model_init_kwargs = {}
-        elif not isinstance(ref_model, str):
-            raise ValueError(
-                "You passed ref_model_kwargs to the BCOTrainer. But your ref_model is already instantiated."
-            )
-        else:
-            ref_model_init_kwargs = args.ref_model_init_kwargs
-            dtype = ref_model_init_kwargs.get("dtype", "auto")
-            if dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `dtype` passed to the BCOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
-                    )
-                ref_model_init_kwargs["dtype"] = dtype
-            ref_model_init_kwargs["device_map"] = ref_model_init_kwargs.get("device_map", "auto")
-
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if isinstance(ref_model, str):
-            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **model_init_kwargs)
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
@@ -521,15 +568,6 @@ class BCOTrainer(BaseTrainer):
         if args.max_length is not None:
             max_length = args.max_length
 
-        if args.max_prompt_length is None:
-            logger.warning(
-                "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the `BCOConfig`. "
-                "It will be set to `128` by default, but you should do it yourself in the future.",
-            )
-            max_prompt_length = 128
-        if args.max_prompt_length is not None:
-            max_prompt_length = args.max_prompt_length
-
         max_completion_length = None
         if args.max_completion_length is None and self.is_encoder_decoder:
             logger.warning(
@@ -566,7 +604,6 @@ class BCOTrainer(BaseTrainer):
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
-        self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
@@ -594,15 +631,6 @@ class BCOTrainer(BaseTrainer):
         # Underlying Distribution Matching argument
         self.embedding_func = embedding_func
         self.embedding_tokenizer = embedding_tokenizer
-
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in BCO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys are "prompt_input_ids" and "completion_input_ids". As a result,
-        # the trainer issues the warning: "Could not estimate the number of tokens of the input, floating-point
-        # operations will not be computed." To suppress this warning, we set the "estimate_tokens" key in the model's
-        # "warnings_issued" dictionary to True. This acts as a flag to indicate that the warning has already been
-        # issued.
-        model.warnings_issued["estimate_tokens"] = True
 
         with PartialState().main_process_first():
             # Extract the prompt if needed
@@ -648,7 +676,6 @@ class BCOTrainer(BaseTrainer):
                 "tokenizer": processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
-                "max_prompt_length": self.max_prompt_length,
                 "max_completion_length": self.max_completion_length,
             }
             train_dataset = train_dataset.map(
@@ -675,7 +702,6 @@ class BCOTrainer(BaseTrainer):
                     "tokenizer": processing_class,
                     "max_length": self.max_length,
                     "truncation_mode": self.truncation_mode,
-                    "max_prompt_length": self.max_prompt_length,
                     "max_completion_length": self.max_completion_length,
                 }
                 eval_dataset = eval_dataset.map(
@@ -691,6 +717,14 @@ class BCOTrainer(BaseTrainer):
             undesirable = train_dataset.filter(
                 lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
             )
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,

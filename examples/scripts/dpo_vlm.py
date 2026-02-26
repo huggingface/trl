@@ -104,14 +104,7 @@ if __name__ == "__main__":
         **model_kwargs,
     )
     peft_config = get_peft_config(model_args)
-    if peft_config is None:
-        ref_model = AutoModelForImageTextToText.from_pretrained(
-            model_args.model_name_or_path,
-            trust_remote_code=model_args.trust_remote_code,
-            **model_kwargs,
-        )
-    else:
-        ref_model = None
+
     processor = AutoProcessor.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, do_image_splitting=False
     )
@@ -136,7 +129,6 @@ if __name__ == "__main__":
     ################
     trainer = DPOTrainer(
         model,
-        ref_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

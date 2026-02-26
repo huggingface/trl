@@ -211,7 +211,6 @@ class TestBCOTrainer(TrlTestCase):
             "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
             "truncation_mode": trainer.truncation_mode,
-            "max_prompt_length": trainer.max_prompt_length,
         }
         processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs)
         assert processed_dataset["prompt"][:] == dataset["prompt"][:]

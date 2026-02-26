@@ -53,34 +53,34 @@ judge.judge(
 
 ### PairRMJudge
 
-[[autodoc]] trl.experimental.judges.PairRMJudge
+[[autodoc]] experimental.judges.PairRMJudge
 
 ### HfPairwiseJudge
 
-[[autodoc]] trl.experimental.judges.HfPairwiseJudge
+[[autodoc]] experimental.judges.HfPairwiseJudge
 
 ### OpenAIPairwiseJudge
 
-[[autodoc]] trl.experimental.judges.OpenAIPairwiseJudge
+[[autodoc]] experimental.judges.OpenAIPairwiseJudge
 
 ### AllTrueJudge
 
-[[autodoc]] trl.experimental.judges.AllTrueJudge
+[[autodoc]] experimental.judges.AllTrueJudge
 
 ## Base classes
 
 ### BaseJudge
 
-[[autodoc]] trl.experimental.judges.BaseJudge
+[[autodoc]] experimental.judges.BaseJudge
 
 ### BaseBinaryJudge
 
-[[autodoc]] trl.experimental.judges.BaseBinaryJudge
+[[autodoc]] experimental.judges.BaseBinaryJudge
 
 ### BaseRankJudge
 
-[[autodoc]] trl.experimental.judges.BaseRankJudge
+[[autodoc]] experimental.judges.BaseRankJudge
 
 ### BasePairwiseJudge
 
-[[autodoc]] trl.experimental.judges.BasePairwiseJudge
+[[autodoc]] experimental.judges.BasePairwiseJudge

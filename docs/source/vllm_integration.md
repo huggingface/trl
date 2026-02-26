@@ -105,7 +105,7 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from trl import XPOTrainer, XPOConfig
+from trl.experimental.xpo import XPOTrainer, XPOConfig
 from trl.rewards import accuracy_reward
 
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
