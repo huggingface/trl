@@ -120,7 +120,6 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    # Handle eval dataset - check if test split exists, fallback to validation or None
     eval_dataset = None
     if training_args.eval_strategy != "no":
         if script_args.dataset_test_split in dataset:

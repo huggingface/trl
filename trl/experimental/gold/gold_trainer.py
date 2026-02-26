@@ -1131,9 +1131,7 @@ class GOLDTrainer(SFTTrainer):
         return inputs
 
     def _decode_completion_texts_from_labels(self, slice_inputs: dict[str, torch.Tensor | Any]) -> list[str] | None:
-        """
-        Decode completion-only text from labels for cross-tokenizer ULD when raw text is not available.
-        """
+        """Decode completion text from labels when raw text is absent."""
         labels = slice_inputs.get("labels")
         if labels is None or not isinstance(labels, torch.Tensor):
             return None
@@ -1153,9 +1151,7 @@ class GOLDTrainer(SFTTrainer):
         )
 
     def _ensure_original_text_fields(self, slice_inputs: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
-        """
-        Ensure original prompt/completion text fields are available for ULD loss.
-        """
+        """Populate original prompt/completion text fields when missing."""
         if "original_prompt_text" in slice_inputs and "original_completion_text" in slice_inputs:
             return slice_inputs
 
@@ -1562,24 +1558,15 @@ class GOLDTrainer(SFTTrainer):
         formatting_func: Callable[[dict], str] | None,
         dataset_name: str,
     ) -> Dataset | IterableDataset:
-        """
-        Override dataset preparation to preserve original text for cross-tokenizer distillation and ensure
-        attention_mask is always added for DataCollatorForChatML compatibility.
-        """
-        # Check if dataset is already processed
+        """Preserve original text fields for ULD when needed."""
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
 
-        # Use our enhanced dataset preparation for:
-        # 1. ULD loss with cross-tokenizer (need original text preservation)
-        # 2. Any unprocessed dataset (need attention_mask for DataCollatorForChatML)
         if not is_processed or (self.use_uld_loss and self.teacher_tokenizer is not None):
-            # For unprocessed datasets, use our enhanced tokenization
             return self._prepare_dataset_with_original_text(
                 dataset, processing_class, args, packing, formatting_func, dataset_name
             )
 
-        # Use parent implementation for all other cases
         return super()._prepare_dataset(dataset, processing_class, args, packing, formatting_func, dataset_name)
 
     def _prepare_dataset_with_original_text(
@@ -1978,32 +1965,23 @@ class GOLDTrainer(SFTTrainer):
                         use_cache=False,
                     )
 
-                # hidden states (shifted)
                 student_hidden = student_outputs.last_hidden_state[:, :-1]
                 teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
 
-                # Release full outputs to free memory
                 del student_outputs, teacher_outputs
 
-                # Flatten to (batch_size * seq_len, hidden_size) so liger_jsd_loss chunks
-                # on the token dimension (shape[0]) rather than the batch dimension.
-                # Without this, num_chunks = max(1, batch_size // 1024) = 1, meaning the
-                # full [batch_size, seq_len, vocab_size] logit tensor is materialised at once.
                 student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
                 teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
 
-                # labels mask and labels (shifted)
                 labels_mask = inputs["labels"] != -100
                 masked_input_ids = torch.where(
                     labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
                 )
                 true_labels = masked_input_ids[:, 1:].contiguous().reshape(-1)
 
-                # heads
                 student_head = unwrapped_student.get_output_embeddings()
                 teacher_head = unwrapped_teacher.get_output_embeddings()
 
-                # liger fused jsd loss
                 loss = self.liger_jsd_loss(
                     student_input=student_hidden,
                     student_weight=student_head.weight,
@@ -2014,10 +1992,8 @@ class GOLDTrainer(SFTTrainer):
                     teacher_bias=getattr(teacher_head, "bias", None),
                 )
 
-                # Release hidden states after loss computation
                 del student_hidden, teacher_hidden, true_labels
             else:
-                # Original behavior for same tokenizer or when teacher_tokenizer is not provided
                 outputs_student = model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
@@ -2045,16 +2021,13 @@ class GOLDTrainer(SFTTrainer):
         if self.use_uld_loss:
             student_input_ids = inputs["input_ids"]
 
-            # Use the *teacher* labels created above, not the student's.
             teacher_labels_for_loss = teacher_labels if "teacher_labels" in locals() else inputs["labels"]
             teacher_input_ids_for_loss = teacher_input_ids if "teacher_input_ids" in locals() else inputs["input_ids"]
 
-            # Create properly masked student labels (fixing batch size > 1 issue)
             student_labels = inputs["labels"].clone()
             if hasattr(self.processing_class, "pad_token_id") and self.processing_class.pad_token_id is not None:
                 student_labels[student_labels == self.processing_class.pad_token_id] = -100
 
-            # Also mask pad tokens in teacher labels for consistency
             if (
                 hasattr(self, "teacher_tokenizer")
                 and hasattr(self.teacher_tokenizer, "pad_token_id")
@@ -2071,15 +2044,9 @@ class GOLDTrainer(SFTTrainer):
                 teacher_input_ids=teacher_input_ids_for_loss,
             )
 
-            # If ULD hybrid mode produced per-step matched/unmatched components, accumulate them for logging.
-            # Use gradient_accumulation_steps to mirror Trainer's windowing behavior.
             if hasattr(self.uld_loss_fn, "last_matched_loss") and hasattr(self.uld_loss_fn, "last_unmatched_loss"):
-                try:
-                    ga = max(1, int(self.args.gradient_accumulation_steps))
-                except Exception:
-                    ga = 1
+                ga = max(1, int(self.args.gradient_accumulation_steps))
                 step_eq = 1.0 / ga
-                # read scalar values for logging
                 matched_val = (
                     self.uld_loss_fn.last_matched_loss.item()
                     if self.uld_loss_fn.last_matched_loss is not None
@@ -2290,11 +2257,6 @@ class GOLDTrainer(SFTTrainer):
         else:
             raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
 
-        # We need to combine prompt and completion for new_input_ids
-        # Tokenize prompts again to get prompt_ids on the correct device and format
-        # Use prompts_text_for_vllm (without special tokens) for tokenization since vLLM expects clean text
-        # Ensure add_special_tokens=False as vLLM typically handles prompts as raw text
-        # Calculate max_length for prompts, ensuring it's positive
         prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
         prompt_tokenized = self.processing_class(
             prompts_text_for_vllm,
@@ -2307,14 +2269,11 @@ class GOLDTrainer(SFTTrainer):
         prompt_ids = prompt_tokenized.input_ids
 
         completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids]
-        # Manually pad/truncate completions to max_completion_length length before using pad function
         padded_completion_ids_list = []
         for completion_tensor in completion_ids_tensors:
             if len(completion_tensor) > max_completion_length:
-                # Truncate if longer than max_completion_length
                 padded_completion_ids_list.append(completion_tensor[:max_completion_length])
             elif len(completion_tensor) < max_completion_length:
-                # Pad if shorter than max_completion_length
                 padding_needed = max_completion_length - len(completion_tensor)
                 padded_tensor = torch.cat(
                     [
@@ -2324,10 +2283,8 @@ class GOLDTrainer(SFTTrainer):
                 )
                 padded_completion_ids_list.append(padded_tensor)
             else:
-                # Already the right length
                 padded_completion_ids_list.append(completion_tensor)
 
-        # Now all tensors are the same length, so we can stack them
         padded_completion_ids = torch.stack(padded_completion_ids_list)
 
         # Ensure prompt_ids and padded_completion_ids are 2D
@@ -2505,7 +2462,6 @@ class GOLDTrainer(SFTTrainer):
 
         if mode == "train":
             device = self.accelerator.device if hasattr(self.accelerator, "device") else torch.device("cpu")
-            # include matched/unmatched accumulators for distributed reduction
             vec = torch.tensor(
                 [
                     self._on_policy_loss_total,
@@ -2521,7 +2477,6 @@ class GOLDTrainer(SFTTrainer):
                 device=device,
             )
 
-            # Sum across processes so we mirror Trainer's distributed reduction
             if (
                 getattr(self.accelerator, "distributed_type", DistributedType.NO) != DistributedType.NO
                 and dist.is_available()
@@ -2540,20 +2495,16 @@ class GOLDTrainer(SFTTrainer):
                 unmatched_eq,
             ) = vec.tolist()
 
-            # Compute category averages over the *same window* as Trainer's logs
-            # (avoid div-by-zero if, e.g., no on-policy steps in the window)
             if on_eq > 0:
                 logs["on_policy_loss"] = round(on_sum / on_eq, 4)
             if off_eq > 0:
                 logs["off_policy_loss"] = round(off_sum / off_eq, 4)
 
-            # matched/unmatched averaged over same logging window (if present)
             if matched_eq > 0:
                 logs["matched_loss"] = round(matched_sum / matched_eq, 4)
             if unmatched_eq > 0:
                 logs["unmatched_loss"] = round(unmatched_sum / unmatched_eq, 4)
 
-            # Reset window accumulators after logging (just like Trainer resets its window)
             self._on_policy_loss_total = self._off_policy_loss_total = 0.0
             self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
             self._matched_sum = self._unmatched_sum = 0.0
