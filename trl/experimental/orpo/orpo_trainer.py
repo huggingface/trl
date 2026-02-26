@@ -26,8 +26,10 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
 from datasets import Dataset
+from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
@@ -47,15 +49,15 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from ...models.utils import peft_module_casting_to_bf16
-from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import (
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ..utils import (
+    DPODataCollatorWithPadding,
+    add_bos_token_if_needed,
+    add_eos_token_if_needed,
     pad_to_length,
-    selective_log_softmax,
+    peft_module_casting_to_bf16,
 )
-from ..utils import DPODataCollatorWithPadding, add_bos_token_if_needed, add_eos_token_if_needed
 from .orpo_config import ORPOConfig
 
 
@@ -80,7 +82,7 @@ def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
     return torch.where(x < t, torch.log1p(-torch.exp(x)), torch.log(-torch.expm1(x)))
 
 
-class ORPOTrainer(BaseTrainer):
+class ORPOTrainer(_BaseTrainer):
     r"""
     Initialize ORPOTrainer.
 
@@ -329,6 +331,14 @@ class ORPOTrainer(BaseTrainer):
                     num_proc=args.dataset_num_proc,
                 )
                 eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
         super().__init__(
             model=model,

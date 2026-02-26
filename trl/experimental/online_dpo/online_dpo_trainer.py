@@ -55,11 +55,18 @@ from ...data_utils import apply_chat_template, is_conversational, maybe_apply_ch
 from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
-from ...models.utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, empty_cache, ensure_master_addr_port, get_config_model_id, pad
+from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_config_model_id, pad
 from ..judges import BasePairwiseJudge
-from ..utils import SIMPLE_CHAT_TEMPLATE, DPODataCollatorWithPadding, prepare_peft_model, truncate_right
+from ..utils import (
+    SIMPLE_CHAT_TEMPLATE,
+    DPODataCollatorWithPadding,
+    create_reference_model,
+    empty_cache,
+    prepare_peft_model,
+    truncate_right,
+)
 from .online_dpo_config import OnlineDPOConfig
 
 
@@ -76,6 +83,10 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
+if Version(transformers.__version__) >= Version("5.2.0"):
+    from transformers.trainer_pt_utils import nested_gather
+
+
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -90,7 +101,7 @@ logger = logging.get_logger(__name__)
 RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 
 
-class OnlineDPOTrainer(BaseTrainer):
+class OnlineDPOTrainer(_BaseTrainer):
     r"""
     Initialize OnlineDPOTrainer.
 
@@ -399,6 +410,14 @@ class OnlineDPOTrainer(BaseTrainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=self.pad_token_id)
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -502,8 +521,16 @@ class OnlineDPOTrainer(BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_params.update(args.generation_kwargs)
-            if self.structured_outputs_regex:
+            if self.structured_outputs_regex is not None:
+                if generation_params.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `vllm_structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`vllm_structured_outputs_regex` takes precedence."
+                    )
                 generation_params["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(generation_params.get("structured_outputs"), dict):
+                structured_outputs_dict = generation_params.get("structured_outputs")
+                generation_params["structured_outputs"] = StructuredOutputsParams(**structured_outputs_dict)
             self.generation_config = SamplingParams(**generation_params)
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
@@ -1439,7 +1466,10 @@ class OnlineDPOTrainer(BaseTrainer):
             logs: dict[str, float] = {}
 
             # all_gather + mean() to get average loss over all processes
-            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+            if Version(transformers.__version__) >= Version("5.2.0"):
+                tr_loss_scalar = nested_gather(tr_loss, self.args.parallel_mode).mean().item()
+            else:
+                tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
 
             # reset tr_loss to zero
             tr_loss -= tr_loss

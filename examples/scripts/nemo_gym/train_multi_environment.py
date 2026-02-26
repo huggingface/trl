@@ -177,7 +177,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
 
     prompt_ids: list[list[int]] = []
     completion_ids: list[list[int]] = []  # list of rollouts
-    completion_mask: list[list[int]] = []  # only train on assistant turns
+    env_mask: list[list[int]] = []  # only train on assistant turns
 
     logprobs: list[list[float]] = []
     env_rewards: list[float] = []
@@ -205,7 +205,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
         if rollout_failed:
             prompt_ids.append([eos_token_id])
             completion_ids.append([eos_token_id])
-            completion_mask.append([0])
+            env_mask.append([0])
             logprobs.append([0.0])
             env_rewards.append(0.0)
             num_turns_list.append(0)
@@ -263,7 +263,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
 
         prompt_ids.append(first_prompt)  # list of prompts
         completion_ids.append(rollout_ids)  # list of rollouts
-        completion_mask.append(rollout_mask)
+        env_mask.append(rollout_mask)
         logprobs.append(rollout_logprobs)
         env_rewards.append(episode_reward)
         num_turns_list.append(num_turns)
@@ -285,7 +285,7 @@ def nemo_gym_rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str,
     return {
         "prompt_ids": unique_prompt_ids,
         "completion_ids": completion_ids,
-        "completion_mask": completion_mask,
+        "env_mask": env_mask,
         "logprobs": logprobs,
         "env_reward": env_rewards,
         "num_turns": num_turns_list,

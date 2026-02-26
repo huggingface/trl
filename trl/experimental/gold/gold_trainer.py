@@ -53,14 +53,8 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import (
-    create_model_from_path,
-    disable_dropout_in_model,
-    empty_cache,
-    ensure_master_addr_port,
-    pad,
-)
-from ..utils import DataCollatorForChatML
+from ...trainer.utils import create_model_from_path, disable_dropout_in_model, ensure_master_addr_port, pad
+from ..utils import DataCollatorForChatML, empty_cache
 from .gold_config import GOLDConfig
 
 
@@ -1736,7 +1730,7 @@ class GOLDTrainer(SFTTrainer):
             )
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
-            if self.vllm_structured_outputs_regex:
+            if self.vllm_structured_outputs_regex is not None:
                 structured_outputs = StructuredOutputsParams(
                     backend="outlines", regex=self.vllm_structured_outputs_regex
                 )

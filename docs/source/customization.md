@@ -1,32 +1,27 @@
 # Training customization
 
-TRL is designed with modularity in mind so that users are able to efficiently customize the training loop for their needs. Below are examples on how you can apply and test different techniques. 
+TRL is designed with modularity in mind so that users are able to efficiently customize the training loop for their needs. Below are examples on how you can apply and test different techniques.
 
 > [!NOTE]
 > Although these examples use the [`DPOTrainer`], these customization methods apply to most (if not all) trainers in TRL.
 
 ## Use different optimizers and schedulers
 
-By default, the `DPOTrainer` creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to `DPOTrainer` as follows:
+By default, the [`DPOTrainer`] creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to [`DPOTrainer`] as follows:
 
 ```python
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from torch import optim
-from trl import DPOConfig, DPOTrainer
+from transformers import AutoModelForCausalLM
+from trl import DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-
-optimizer = optim.SGD(model.parameters(), lr=training_args.learning_rate)
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+optimizer = optim.SGD(model.parameters(), lr=1e-6)
 
 trainer = DPOTrainer(
     model=model,
-    args=training_args,
     train_dataset=dataset,
-    tokenizer=tokenizer,
     optimizers=(optimizer, None),
 )
 trainer.train()
@@ -39,7 +34,7 @@ You can also add learning rate schedulers by passing both optimizer and schedule
 ```python
 from torch import optim
 
-optimizer = optim.AdamW(model.parameters(), lr=training_args.learning_rate)
+optimizer = optim.AdamW(model.parameters(), lr=1e-6)
 lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
 trainer = DPOTrainer(..., optimizers=(optimizer, lr_scheduler))
@@ -50,7 +45,7 @@ trainer = DPOTrainer(..., optimizers=(optimizer, lr_scheduler))
 Another tool you can use for more memory efficient fine-tuning is to share layers between the reference model and the model you want to train.
 
 ```python
-from trl import create_reference_model
+from trl.experimental.utils import create_reference_model
 
 ref_model = create_reference_model(model, num_shared_layers=6)
 
