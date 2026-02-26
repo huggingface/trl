@@ -46,7 +46,7 @@ Cite TRL as:
     
 ```bibtex
 {% raw %}@software{vonwerra2020trl,
-  title   = {{TRL: Transformers Reinforcement Learning}},
+  title   = {{TRL: Transformer Reinforcement Learning}},
   author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
   license = {Apache-2.0},
   url     = {https://github.com/huggingface/trl},
