@@ -18,7 +18,7 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class BaseConfig(TrainingArguments):
+class _BaseConfig(TrainingArguments):
     """
     Base configuration class for all TRL trainer configurations.
 
