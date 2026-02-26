@@ -39,7 +39,7 @@ class TrainingCommand(Command):
         self._make_parser = make_parser
 
     def register(self, subparsers) -> None:
-        self._make_parser(subparsers)
+        subparsers.add_parser(self.name, help=self.help_text, add_help=False)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
         all_args = context.argv_after(self.name)

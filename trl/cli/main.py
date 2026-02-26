@@ -15,14 +15,13 @@
 import sys
 from argparse import ArgumentParser
 
-from ..scripts.utils import TrlParser
 from .commands import get_commands
 from .commands.base import Command, CommandContext
 
 
 def _build_parser(commands: list[Command]) -> ArgumentParser:
     parser = ArgumentParser(prog="trl", allow_abbrev=False)
-    subparsers = parser.add_subparsers(help="available commands", dest="command", parser_class=TrlParser)
+    subparsers = parser.add_subparsers(help="available commands", dest="command")
 
     for command in commands:
         command.register(subparsers)
