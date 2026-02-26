@@ -118,3 +118,22 @@ class TestCLI(TrlTestCase):
 
         # Verify that output directory was created
         assert os.path.exists(output_dir)
+
+    def test_vllm_serve_config_file(self):
+        """
+        Test `trl vllm-serve --config config.yaml` must not raise "the following arguments are required: --model" when
+        the required field is satisfied by the config file rather than the command line.
+        """
+        from trl.cli import main
+
+        config_path = os.path.join(self.tmp_dir, "config.yaml")
+        with open(config_path, "w") as f:
+            yaml.dump({"model": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"}, f)
+
+        with patch("trl.cli.commands.vllm_serve.vllm_serve_main") as mock_serve:
+            with patch("sys.argv", ["trl", "vllm-serve", "--config", config_path]):
+                main()
+
+        mock_serve.assert_called_once()
+        script_args = mock_serve.call_args.args[0]
+        assert script_args.model == "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

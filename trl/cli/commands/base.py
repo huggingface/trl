@@ -22,7 +22,6 @@ class CommandContext:
     """Context shared by CLI commands during execution."""
 
     argv: list[str]
-    remaining_args: list[str]
 
     def argv_after(self, token: str) -> list[str]:
         """
