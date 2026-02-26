@@ -612,7 +612,7 @@ def _check_if_columns_can_be_packed(columns: list[pa.Array]):
     first_column_offsets = None
     for idx, column in enumerate(columns):
         if not (pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type)):
-            raise TypeError("Packing requires all columns to be list-like.")
+            raise TypeError("Packing requires all columns to be lists of lists.")
 
         if idx == 0:
             first_column_offsets = column.offsets
