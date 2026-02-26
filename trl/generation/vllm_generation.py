@@ -674,7 +674,7 @@ class VLLMGeneration:
         max_completion_length = self.max_completion_length
         processing_class = self.processing_class
         chat_template_kwargs = self.chat_template_kwargs
-        tools = self.tools or None
+        tools = self.tools
         chat_template = self.chat_template
 
         # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
