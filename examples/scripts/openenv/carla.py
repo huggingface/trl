@@ -140,7 +140,7 @@ class CarlaGRPOEnv:
 
     def reset(self, **kwargs) -> str | None:
         result = self.client.reset(scenario_name="trolley_micro_escape_exists")
-        self._reward = 0.0
+        self.reward = 0.0
         return self._describe(result.observation)
 
     def observe(self) -> str:
@@ -151,7 +151,7 @@ class CarlaGRPOEnv:
             The scene description with vehicle state and nearby actors.
         """
         result = self._advance()
-        self._reward = result.observation.rubric_reward or 0.0
+        self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)
 
     def emergency_stop(self) -> str:
@@ -163,7 +163,7 @@ class CarlaGRPOEnv:
         """
         self.client.step(CarlaAction(action_type="emergency_stop"))
         result = self._advance()
-        self._reward = result.observation.rubric_reward or 0.0
+        self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)
 
     def lane_change(self, direction: str) -> str:
@@ -178,21 +178,11 @@ class CarlaGRPOEnv:
         """
         self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
         result = self._advance()
-        self._reward = result.observation.rubric_reward or 0.0
+        self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)
 
-    def get_reward(self) -> float:
-        """
-        Get the reward from the last step.
-
-        Returns:
-            The rubric reward value.
-        """
-        return self._reward
-
-
 def reward_func(completions, environments, **kwargs):
-    return [environment.get_reward() for environment in environments]
+    return [environment.reward for environment in environments]
 
 
 trainer = GRPOTrainer(
