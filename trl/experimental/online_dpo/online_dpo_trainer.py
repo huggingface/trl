@@ -56,7 +56,7 @@ from ...extras.profiling import profiling_context
 from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_config_model_id, pad
 from ..judges import BasePairwiseJudge
 from ..utils import (
@@ -101,7 +101,7 @@ logger = logging.get_logger(__name__)
 RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 
 
-class OnlineDPOTrainer(BaseTrainer):
+class OnlineDPOTrainer(_BaseTrainer):
     r"""
     Initialize OnlineDPOTrainer.
 
@@ -521,8 +521,16 @@ class OnlineDPOTrainer(BaseTrainer):
             }
             if args.generation_kwargs is not None:
                 generation_params.update(args.generation_kwargs)
-            if self.structured_outputs_regex:
+            if self.structured_outputs_regex is not None:
+                if generation_params.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `vllm_structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`vllm_structured_outputs_regex` takes precedence."
+                    )
                 generation_params["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(generation_params.get("structured_outputs"), dict):
+                structured_outputs_dict = generation_params.get("structured_outputs")
+                generation_params["structured_outputs"] = StructuredOutputsParams(**structured_outputs_dict)
             self.generation_config = SamplingParams(**generation_params)
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process

@@ -52,7 +52,7 @@ from transformers.utils import is_peft_available
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ...import_utils import is_liger_kernel_available
 from ...models.utils import prepare_deepspeed
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
@@ -245,7 +245,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     return batch
 
 
-class KTOTrainer(BaseTrainer):
+class KTOTrainer(_BaseTrainer):
     r"""
     Initialize KTOTrainer.
 

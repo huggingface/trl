@@ -15,6 +15,7 @@
 from argparse import Namespace
 from collections.abc import Callable
 
+from ..accelerate_config import resolve_accelerate_config_argument
 from ..accelerate_launcher import launch_training_script
 from .base import Command, CommandContext
 
@@ -33,17 +34,21 @@ class TrainingCommand(Command):
     """
 
     def __init__(self, name: str, script_name: str, make_parser: Callable):
-        super().__init__(name=name, help_text=f"Run the {name} training script", uses_accelerate=True)
+        super().__init__(name=name, help_text=f"Run the {name} training script")
         self._script_name = script_name
         self._make_parser = make_parser
 
     def register(self, subparsers) -> None:
-        self._make_parser(subparsers)
+        subparsers.add_parser(self.name, help=self.help_text, add_help=False)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
+        all_args = context.argv_after(self.name)
+        parser = self._make_parser()
+        *_, accelerate_args = parser.parse_args_and_config(all_args, return_remaining_strings=True)
+        launch_args = resolve_accelerate_config_argument(accelerate_args)
         launch_training_script(
             script_name=self._script_name,
-            launch_args=context.launch_args,
-            training_script_args=context.argv_after(self.name),
+            launch_args=launch_args,
+            training_script_args=all_args,
         )
         return 0

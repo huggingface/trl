@@ -26,9 +26,10 @@ class VllmServeCommand(Command):
         super().__init__(name="vllm-serve", help_text="Serve a model with vLLM")
 
     def register(self, subparsers) -> None:
-        make_vllm_serve_parser(subparsers)
+        subparsers.add_parser(self.name, help=self.help_text, add_help=False)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
-        (script_args,) = context.parser.parse_args_and_config(args=context.argv)
+        parser = make_vllm_serve_parser()
+        (script_args,) = parser.parse_args_and_config(args=context.argv_after(self.name))
         vllm_serve_main(script_args)
         return 0

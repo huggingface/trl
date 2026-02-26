@@ -97,7 +97,7 @@ The [`DPOTrainer`] tokenizes each input using the model's tokenizer.
 
 The loss used in DPO is defined as follows:
 $$
-\mathcal{L}_{\mathrm{DPO}}(\theta) = -\mathbb{E}_{(x,y^{+},y^{-})}\!\left[\log \sigma\!\left(\beta\Big(\log\frac{{\pi_{\theta}(y^{+}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{+}\!\mid x)}}-\log \frac{{\pi_{\theta}(y^{-}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{-}\!\mid x)}}\Big)\right)\right]
+\mathcal{L}_{\mathrm{DPO}}(\theta) = -\mathbb{E}_{(x,y^{+},y^{-})}\!\left[\log \sigma\!\left(\beta\Big(\log\frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)}-\log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)}\Big)\right)\right]
 $$
   
 where  \\( x \\)  is the prompt,  \\( y^+ \\) is the preferred completion and  \\( y^- \\)  is the dispreferred completion.  \\( \pi_{\theta} \\)  is the policy model being trained,  \\( \pi_{\mathrm{ref}} \\)  is the reference model,  \\( \sigma \\)  is the sigmoid function, and  \\( \beta > 0 \\)  is a hyperparameter that controls the strength of the preference signal.
@@ -137,8 +137,8 @@ While training and evaluating we record the following reward metrics:
 * `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
 * `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
 * `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
-* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{{\pi_{\theta}(y^{+}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{+}\!\mid x)}} \\).
-* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{{\pi_{\theta}(y^{-}\!\mid x)}}{{\pi_{\mathrm{ref}}(y^{-}\!\mid x)}} \\).
+* `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)} \\).
+* `rewards/rejected`: The average implicit reward computed for the rejected completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{-}\!\mid x)}{\pi_{\mathrm{ref}}(y^{-}\!\mid x)} \\).
 * `rewards/margins`: The average implicit reward margin between the chosen and rejected completions.
 * `rewards/accuracies`: The proportion of examples where the implicit reward for the chosen completion is higher than that for the rejected completion.
 
