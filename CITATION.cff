@@ -37,5 +37,5 @@ keywords:
   - language model alignment
   - post-training
 license: Apache-2.0
-version: '0.28'
+version: '0.29'
 date-released: '2020-03-27'

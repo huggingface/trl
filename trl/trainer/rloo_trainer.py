@@ -520,6 +520,7 @@ class RLOOTrainer(BaseTrainer):
                 top_k=self.top_k,
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
+                logprobs=None,  # we don't need logprobs from vLLM in RLOO
                 generation_kwargs=args.generation_kwargs,
                 # Chat/tool configuration
                 chat_template_kwargs=self.chat_template_kwargs,
@@ -696,6 +697,7 @@ class RLOOTrainer(BaseTrainer):
         pixel_attention_mask=None,
         image_sizes=None,
         token_type_ids=None,
+        mm_token_type_ids=None,
     ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -725,6 +727,8 @@ class RLOOTrainer(BaseTrainer):
                 model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
             if token_type_ids is not None:
                 model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
+            if mm_token_type_ids is not None:
+                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -893,7 +897,7 @@ class RLOOTrainer(BaseTrainer):
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, _, _ = self.vllm_generation.generate(
+            prompt_ids, completion_ids, _, _, _ = self.vllm_generation.generate(
                 prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
 
