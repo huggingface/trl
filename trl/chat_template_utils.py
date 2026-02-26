@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -112,17 +112,18 @@ def clone_chat_template(
 # Adapted and corrected versions of the schemas from:
 # https://github.com/huggingface/transformers/blob/main/tests/utils/test_chat_parsing_utils.py
 qwen3_schema = {
-    "x-regex": r"^(?:<think>\n?(?P<reasoning_content>.+?)\n?</think>\s*)?(?P<content>.*?)(?=(?:<tool_call>|<\|im_end\|>|$))(?:<tool_call>(?P<tool_calls>.+?)</tool_call>)?\s*(?:<\|im_end\|>|$)",
+    "x-regex": r"^(?:<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>.*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|<\|im_end\|>|$))(?P<tool_calls>(?:<tool_call>.+?</tool_call>\s*)+)?\s*(?:<\|im_end\|>|$)",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
         "content": {"type": "string"},
         "reasoning_content": {"type": "string"},
         "tool_calls": {
-            "x-parser": "json",
-            "x-parser-args": {"transform": "[{type: 'function', function: @}]"},
             "type": "array",
+            "x-regex-iterator": r"<tool_call>\s*(.+?)\s*</tool_call>",
             "items": {
+                "x-parser": "json",
+                "x-parser-args": {"transform": "{type: 'function', function: @}"},
                 "type": "object",
                 "properties": {
                     "type": {"const": "function"},
@@ -456,6 +457,42 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
         )
 
 
+def _validate_tool_calls(tool_calls: list | None) -> None:
+    """
+    Validate tool_calls to ensure all required fields exist with valid values.
+
+    Raises ValueError when the model generates malformed tool calls (e.g., missing 'arguments' field) that are
+    partially parsed.
+
+    Args:
+        tool_calls: List of tool call dictionaries, or None.
+    """
+    if tool_calls is None:
+        return None
+    if not isinstance(tool_calls, list):
+        raise ValueError("tool_calls must be a list or None.")
+
+    for idx, tool_call in enumerate(tool_calls):
+        if not isinstance(tool_call, dict):
+            raise ValueError(f"tool_calls[{idx}] must be a dict.")
+
+        # Handle nested function structure: {"type": "function", "function": {"name": ..., "arguments": ...}}
+        if "function" in tool_call:
+            func = tool_call["function"]
+            if not isinstance(func, dict):
+                raise ValueError(f"tool_calls[{idx}]['function'] must be a dict.")
+            if not isinstance(func.get("name"), str):
+                raise ValueError(f"tool_calls[{idx}]['function']['name'] must be a string.")
+            if "arguments" not in func or func["arguments"] is None:
+                raise ValueError(f"tool_calls[{idx}]['function']['arguments'] must be present and non-null.")
+        else:
+            # Handle flat structure: {"name": ..., "arguments": ...}
+            if not isinstance(tool_call.get("name"), str):
+                raise ValueError(f"tool_calls[{idx}]['name'] must be a string.")
+            if "arguments" not in tool_call or tool_call["arguments"] is None:
+                raise ValueError(f"tool_calls[{idx}]['arguments'] must be present and non-null.")
+
+
 def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
@@ -463,7 +500,8 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     Attempts to parse the sequence using `tokenizer.parse_response()`. If parsing fails (e.g., due to malformed tool
     calls like `<tool_call>{"type":"function"</tool_call>`), falls back to decoding as plain text.
 
-    Also removes incorrectly appended EOS tokens from tool call content when present.
+    Also removes incorrectly appended EOS tokens from tool call content when present, and validates tool_calls to
+    ensure all required fields exist.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -493,7 +531,10 @@ def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
         # Hotfix: remove incorrectly appended EOS token from tool calls
         # See https://github.com/huggingface/transformers/issues/42249
         parsed["content"] = parsed["content"].removesuffix(tokenizer.eos_token)
-    except ValueError:
+        # Validate tool_calls to prevent Jinja2 Undefined errors when fields are missing
+        if "tool_calls" in parsed:
+            _validate_tool_calls(parsed["tool_calls"])
+    except (ValueError, TypeError):
         # Fallback: decode as plain text if parsing fails. This happens if the model outputs malformed tool calls.
         content = tokenizer.decode(ids, skip_special_tokens=True)
         parsed = {"role": "assistant", "content": content}

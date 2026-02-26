@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,9 +26,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import Accelerator, logging
-from accelerate.utils import broadcast, gather_object
+from accelerate.utils import gather_object
 from datasets import Dataset
+from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import (
     BaseImageProcessor,
@@ -46,18 +48,22 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
-from ...models.utils import create_reference_model, unwrap_model_for_generation
-from ...trainer.base_trainer import BaseTrainer
+from ...models.utils import unwrap_model_for_generation
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
-    empty_cache,
     log_table_to_comet_experiment,
     pad,
-    peft_module_casting_to_bf16,
     prepare_deepspeed,
     selective_log_softmax,
 )
-from ..utils import first_true_indices, get_reward
+from ..utils import (
+    create_reference_model,
+    empty_cache,
+    first_true_indices,
+    get_reward,
+    peft_module_casting_to_bf16,
+)
 from .ppo_config import PPOConfig
 
 
@@ -289,7 +295,7 @@ class PolicyAndValueWrapper(nn.Module):
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(BaseTrainer):
+class PPOTrainer(_BaseTrainer):
     """Trainer for Proximal Policy Optimization (PPO).
 
     For details on PPO, see the paper: [Proximal Policy Optimization
@@ -367,6 +373,14 @@ class PPOTrainer(BaseTrainer):
         self.processing_class = processing_class
         self.policy_model = model
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         # Define the collator if not provided
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
@@ -398,9 +412,12 @@ class PPOTrainer(BaseTrainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_confg, we merge and unload it first
             if isinstance(self.policy_model, PeftModel):
-                self.policy_model = self.policy_model.merge_and_unload()
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first "
+                    "merge and unload the existing adapter, save the resulting base model, and then pass that base "
+                    "model along with the new `peft_config` to the trainer."
+                )
 
             # get peft model with the given config
             self.policy_model = get_peft_model(self.policy_model, peft_config)
@@ -453,9 +470,6 @@ class PPOTrainer(BaseTrainer):
         args.num_total_batches = math.ceil(
             args.total_episodes / args.batch_size
         )  # we may train for more than `total_episodes`
-        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
-        time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
@@ -571,8 +585,8 @@ class PPOTrainer(BaseTrainer):
 
     def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
         backup_model = self.model
-        self.model = self.model.policy  # save only the policy
-
+        if hasattr(self.model, "policy"):
+            self.model = self.model.policy  # save only the policy for inference
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
@@ -580,7 +594,6 @@ class PPOTrainer(BaseTrainer):
         super().save_model(output_dir, _internal_call)
 
         self.model = backup_model
-
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
 
@@ -931,6 +944,8 @@ class PPOTrainer(BaseTrainer):
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
+        if self.eval_dataset is None:
+            return  # no eval set to sample from (pass eval_dataset and eval_strategy != "no" for sample generations)
         args = self.args
         processing_class = self.processing_class
         generation_kwargs = {

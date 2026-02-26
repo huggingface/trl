@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ python examples/scripts/xpo.py \
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
     --max_new_tokens 64 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --push_to_hub
 """

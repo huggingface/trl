@@ -33,8 +33,8 @@ git checkout -b release-v{major}.{minor}
 - `CITATION.cff`
 
   ```diff
-  - version: "{major}.{minor-1}"
-  + version: "{major}.{minor}"
+  - version: '{major}.{minor-1}'
+  + version: '{major}.{minor}'
   ```
 
 - `VERSION`

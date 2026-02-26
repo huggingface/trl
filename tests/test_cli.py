@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,9 +16,22 @@ import os
 from io import StringIO
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from .testing_utils import TrlTestCase
+
+
+@pytest.mark.parametrize("command", ["dpo", "grpo", "kto", "reward", "rloo", "sft"])
+def test_help_no_type_error(command):
+    # Regression test for https://github.com/huggingface/trl/issues/5099:
+    # TrainingArguments help strings with unescaped "%" caused TypeError in argparse.
+    from trl.cli import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        with patch("sys.argv", ["trl", command, "--help"]), patch("sys.stdout", new_callable=StringIO):
+            main()
+    assert exc_info.value.code == 0
 
 
 class TestCLI(TrlTestCase):
@@ -62,7 +75,7 @@ class TestCLI(TrlTestCase):
     def test_reward(self):
         from trl.cli import main
 
-        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none"
+        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 

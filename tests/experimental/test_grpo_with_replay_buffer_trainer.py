@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -96,6 +96,7 @@ class TestReplayBuffer:
 @pytest.mark.low_priority
 class TestUpdateWithReplayBuffer:
     def setup_method(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         config = GRPOWithReplayBufferConfig(
             replay_buffer_size=5,
         )
@@ -103,7 +104,7 @@ class TestUpdateWithReplayBuffer:
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=config,
-            train_dataset=None,
+            train_dataset=dataset,
         )
         self.trainer.replay_buffer = ReplayBuffer(max_size=5)
         self.trainer.num_generations = 2
@@ -264,7 +265,7 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
 
         training_args = GRPOWithReplayBufferConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=4,  # reduce the batch size to reduce memory usage
             num_generations=4,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage

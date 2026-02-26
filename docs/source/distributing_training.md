@@ -294,7 +294,6 @@ training_args = SFTConfig(
     # to get the most out of SP
     max_seq_length=4096,
     packing=True,
-    gradient_checkpointing=True,
     attn_implementation="flash_attention_2",
     per_device_train_batch_size=1,
     ...
@@ -345,7 +344,6 @@ accelerate launch --config_file examples/accelerate_configs/alst_ulysses_4gpu.ya
     --packing \
     --packing_strategy wrapped \
     --torch_dtype bfloat16 \
-    --gradient_checkpointing \
     --attn_implementation flash_attention_2 \
     --output_dir output-alst-4gpu \
     --logging_steps 10 \
@@ -376,4 +374,72 @@ This command automatically:
 
 ## Multi-Node Training
 
-We're working on a guide for multi-node training. Stay tuned! 🚀
+When a single machine doesn't have enough GPUs, TRL can scale training across multiple machines (nodes) using [🤗 Accelerate](https://huggingface.co/docs/accelerate/basic_tutorials/launch#multi-node-training).
+
+### Accelerate Configuration
+Create an `accelerate` config file (e.g., `multi_node.yaml`) for multi-node training. Key fields:
+
+```yaml
+compute_environment: LOCAL_MACHINE
+distributed_type: MULTI_GPU
+num_machines: 2
+machine_rank: 0  # 0 for main node, 1 for second node
+main_process_ip: 10.0.0.1  # IP of rank 0 node
+main_process_port: 29500
+num_processes: 16  # total processes across nodes
+mixed_precision: bf16
+use_cpu: false
+same_network: true
+```
+
+Adjust `num_processes` to match the total number of GPUs across all nodes.
+
+> [!NOTE]
+> Replace `10.0.0.1` with the actual IP address of the rank 0 (main) node.
+
+### Launching
+
+#### Option 1: Manual Launch (Non-HPC)
+
+Run the following on each node manually:
+```bash
+# Node 0 (main node)
+accelerate launch --config_file multi_node.yaml --machine_rank 0 train.py
+
+# Node 1
+accelerate launch --config_file multi_node.yaml --machine_rank 1 train.py
+```
+#### Option 2: SLURM Launch (HPC Clusters)
+
+For clusters using SLURM job scheduler, create a job script (e.g., `slurm_job.sh`):
+```bash
+#!/bin/bash
+#SBATCH --nodes=2
+#SBATCH --gpus-per-node=8
+#SBATCH --job-name=trl_multi
+
+srun accelerate launch --config_file multi_node.yaml train.py
+```
+
+Then submit the job:
+```bash
+sbatch slurm_job.sh
+```
+
+SLURM automatically distributes the training across all requested nodes and GPUs, and `srun` configures the necessary environment variables for multi-node communication.
+
+**Key SLURM directives:**
+- `--nodes=2`: Request 2 compute nodes
+- `--gpus-per-node=8`: Allocate 8 GPUs per node (16 total)
+- `--job-name`: Label for tracking in the job queue
+
+You can combine multi-node with DeepSpeed by setting `distributed_type: DEEPSPEED` and adding a `deepspeed_config` block. See the [DeepSpeed integration guide](https://huggingface.co/docs/trl/en/deepspeed_integration).
+
+### Further Reading
+
+- [Accelerate: Launching Scripts](https://huggingface.co/docs/accelerate/basic_tutorials/launch)
+- [Accelerate: Example Zoo](https://huggingface.co/docs/accelerate/usage_guides/training_zoo)
+- [SLURM Workload Manager Documentation](https://slurm.schedmd.com/) - For cluster job scheduling
+
+
+

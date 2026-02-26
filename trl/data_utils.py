@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -177,7 +177,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
             # Each message must a list of dictionaries with keys "role" and "content"
-            if isinstance(maybe_message, dict) and "role" in maybe_message and "content" in maybe_message:
+            if isinstance(maybe_message, dict) and "role" in maybe_message:
                 return True
 
     return False
@@ -665,7 +665,9 @@ class _SegmentTree:
         return self.tree[i]
 
 
-def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
+def _pack_bfd(
+    examples: pa.Table, seq_length: int, on_seq_length_overflow: Literal["truncate", "split"] = "truncate"
+) -> pa.Table:
     """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
     columns = [column.chunks[0] for column in examples.combine_chunks().columns]
     _check_if_columns_can_be_packed(columns)
@@ -673,18 +675,23 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     lengths = pc.list_value_length(columns[0]).to_numpy()
 
-    # Split the sequences longer than `seq_length` into chunks (of length `seq_length` or less) while respecting sequence boundaries
-    num_fragments = np.ceil(lengths / seq_length).astype(int)
-    offsets = np.arange(np.sum(num_fragments) + 1, dtype=columns[0].offsets.type.to_pandas_dtype()) * seq_length
-    # "Left-shift" the offsets to account for the last fragment of each original sequence possibly being shorter than `seq_length`
-    diff = np.zeros_like(offsets)
-    diff[np.cumsum(num_fragments)] = -lengths % seq_length
-    diff = np.cumsum(diff)
-    offsets -= diff
-    columns = [
-        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
-        for column in columns
-    ]
+    if on_seq_length_overflow == "truncate":
+        columns = [pc.list_slice(column, 0, seq_length) for column in columns]
+    elif on_seq_length_overflow == "split":
+        # Split the sequences longer than `seq_length` into chunks (of length `seq_length` or less) while respecting sequence boundaries
+        num_fragments = np.ceil(lengths / seq_length).astype(int)
+        offsets = np.arange(np.sum(num_fragments) + 1, dtype=columns[0].offsets.type.to_pandas_dtype()) * seq_length
+        # "Left-shift" the offsets to account for the last fragment of each original sequence possibly being shorter than `seq_length`
+        diff = np.zeros_like(offsets)
+        diff[np.cumsum(num_fragments)] = -lengths % seq_length
+        diff = np.cumsum(diff)
+        offsets -= diff
+        columns = [
+            type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
+            for column in columns
+        ]
+    else:
+        raise ValueError(f"Invalid `on_seq_length_overflow`: {on_seq_length_overflow}. Use 'truncate' or 'split'.")
 
     examples = pa.Table.from_arrays(columns, names=examples.column_names)
     lengths = pc.list_value_length(columns[0])
@@ -761,7 +768,7 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 def pack_dataset(
     dataset: DatasetType,
     seq_length: int,
-    strategy: Literal["bfd", "wrapped"] = "bfd",
+    strategy: Literal["bfd", "bfd-split", "wrapped"] = "bfd",
     map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
@@ -772,11 +779,15 @@ def pack_dataset(
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
-        strategy (`"bfd"` or `"wrapped"`, defaults to `"bfd"`):
+        strategy (`"bfd"`, `"bfd-split"` or `"wrapped"`, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
-            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries inside each packed sample. If a
-                single sequence exceeds `seq_length` it is split into multiple samples.
+            - `"bfd"` (Best Fit Decreasing): Preserves sequence boundaries and truncates sequences that exceed
+                `seq_length`, discarding overflow tokens. Ideal for SFT and conversational datasets where maintaining
+                conversation structure is important.
+            - `"bfd-split"`: Similar to `"bfd"` but splits overflow sequences for packing into other
+                examples. Prevents token loss for pre-training or long documents, but may break conversation structure
+                in SFT datasets.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
         map_kwargs (`dict`, *optional*):
@@ -796,10 +807,18 @@ def pack_dataset(
     ...     "attention_mask": [[1, 1, 1, 0, 0], [1, 0], [1, 1, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
+    >>> # Default "bfd" strategy (SFT-friendly): truncates long sequences
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
+    {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7]],
+     'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 1], [1, 0]],
+     'seq_lengths': [[4], [3, 1], [2]]}
+
+    >>> # "bfd-split" strategy: preserves all tokens
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd-split")
+    >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 5], [6, 7, 11]],
-     'attention_mask': [[1, 1, 1, 0], [0, 1, 1, 0], [1, 1, 1]],
+     'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 0], [1, 0, 1]],
      'seq_lengths': [[4], [3, 1], [2, 1]]}
     ```
     """
@@ -807,12 +826,24 @@ def pack_dataset(
         map_kwargs = {}
     format = _get_dataset_format(dataset)
     dataset = dataset.with_format("arrow")
-    if strategy == "bfd":
-        dataset = dataset.map(_pack_bfd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    if strategy in {"bfd", "bfd-truncate"}:
+        dataset = dataset.map(
+            _pack_bfd,
+            batched=True,
+            fn_kwargs={"seq_length": seq_length, "on_seq_length_overflow": "truncate"},
+            **map_kwargs,
+        )
+    elif strategy in {"bfd-split", "bfd-requeue"}:
+        dataset = dataset.map(
+            _pack_bfd,
+            batched=True,
+            fn_kwargs={"seq_length": seq_length, "on_seq_length_overflow": "split"},
+            **map_kwargs,
+        )
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd', 'bfd-split', or 'wrapped'.")
     dataset = dataset.with_format(**format)
     return dataset
 
