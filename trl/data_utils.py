@@ -673,16 +673,18 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     lengths = pc.list_value_length(columns[0]).to_numpy()
 
-    # Split sequences longer than `seq_length` into chunks (of length `seq_length` or less) while respecting sequence boundaries
+    # Split the sequences longer than `seq_length` into chunks (of length `seq_length` or less) while respecting sequence boundaries
     num_fragments = np.ceil(lengths / seq_length).astype(int)
     offsets = np.arange(np.sum(num_fragments) + 1, dtype=columns[0].offsets.type.to_pandas_dtype()) * seq_length
-    # Adjust the offsets to account for the last fragment of each original sequence being possibly shorter than `seq_length`
+    # "Left-shift" the offsets to account for the last fragment of each original sequence possibly being shorter than `seq_length`
     diff = np.zeros_like(offsets)
-    padding = lengths % seq_length
-    diff[np.cumsum(num_fragments)] = padding - seq_length * (padding != 0)
+    diff[np.cumsum(num_fragments)] = -lengths % seq_length
     diff = np.cumsum(diff)
-    offsets += diff
-    columns = [type(column).from_arrays(offsets, column.values) for column in columns]
+    offsets -= diff
+    columns = [
+        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
+        for column in columns
+    ]
 
     examples = pa.Table.from_arrays(columns, names=examples.column_names)
     lengths = pc.list_value_length(columns[0])
@@ -744,17 +746,16 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using a wrapped strategy."""
     columns = [column.chunks[0] for column in examples.combine_chunks().columns]
     _check_if_columns_can_be_packed(columns)
-    packed_columns = []
-    for column in columns:
-        offsets, values = column.offsets, column.values
-        values = values[offsets[0].as_py() : offsets[-1].as_py()]
-        num_elements = len(values)
-        dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
-        offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
-        offsets = np.concatenate((offsets, [num_elements]))
-        column = type(column).from_arrays(offsets, values)
-        packed_columns.append(column)
-    return pa.Table.from_arrays(packed_columns, names=examples.column_names)
+    offsets, values = columns[0].offsets, columns[0].values
+    values = values[offsets[0].as_py() : offsets[-1].as_py()]
+    num_elements = len(values)
+    offsets = np.arange(0, num_elements, seq_length, dtype=columns[0].offsets.type.to_pandas_dtype())
+    offsets = np.concatenate((offsets, [num_elements]))
+    columns = [
+        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
+        for column in columns
+    ]
+    return pa.Table.from_arrays(columns, names=examples.column_names)
 
 
 def pack_dataset(

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from transformers import TrainingArguments
 
@@ -69,7 +69,7 @@ class SFTConfig(TrainingArguments):
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
-        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
+        packing_strategy (`"bfd"` or `"wrapped"`, defaults to `"bfd"`):
             Strategy for packing sequences. Can be either `"bfd"` (best-fit decreasing, default), or `"wrapped"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
@@ -210,7 +210,7 @@ class SFTConfig(TrainingArguments):
             "and reduce padding. Uses `max_length` to define sequence length."
         },
     )
-    packing_strategy: str = field(
+    packing_strategy: Literal["bfd", "wrapped"] = field(
         default="bfd",
         metadata={
             "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
