@@ -740,6 +740,7 @@ class GRPOTrainer(BaseTrainer):
                 top_k=self.top_k,
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
+                logprobs=0,  # we only need the generated token logprobs for the importance sampling correction
                 generation_kwargs=args.generation_kwargs,
                 # Chat/tool configuration
                 chat_template=self.chat_template,
@@ -1027,6 +1028,7 @@ class GRPOTrainer(BaseTrainer):
         pixel_attention_mask=None,
         image_sizes=None,
         token_type_ids=None,
+        mm_token_type_ids=None,
     ) -> dict[str, torch.Tensor | None]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1056,6 +1058,8 @@ class GRPOTrainer(BaseTrainer):
                 model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
             if token_type_ids is not None:
                 model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
+            if mm_token_type_ids is not None:
+                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1226,9 +1230,11 @@ class GRPOTrainer(BaseTrainer):
 
             # Generate using vLLM
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, logprobs, extra_fields = self.vllm_generation.generate(
+            prompt_ids, completion_ids, logprobs, _, extra_fields = self.vllm_generation.generate(
                 prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
+            # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
+            logprobs = [[lp[0] for lp in seq] for seq in logprobs]
 
         elif self.use_transformers_paged:
             if is_conversational({"prompt": prompts[0]}):
