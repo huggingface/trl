@@ -36,8 +36,8 @@ class TestDataCollatorForPreference(TrlTestCase):
         """Test basic padding functionality without completion masks."""
         collator = DataCollatorForPreference(pad_token_id=0)
         examples = [
-            {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]},
-            {"chosen_input_ids": [6, 7], "rejected_input_ids": [8]},
+            {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]},
+            {"chosen_ids": [6, 7], "rejected_ids": [8]},
         ]
 
         result = collator(examples)
@@ -51,8 +51,8 @@ class TestDataCollatorForPreference(TrlTestCase):
         """Test padding to multiple of specified value."""
         collator = DataCollatorForPreference(pad_token_id=0, pad_to_multiple_of=4)
         examples = [
-            {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]},
-            {"chosen_input_ids": [6, 7], "rejected_input_ids": [8]},
+            {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]},
+            {"chosen_ids": [6, 7], "rejected_ids": [8]},
         ]
 
         result = collator(examples)
@@ -67,7 +67,7 @@ class TestDataCollatorForPreference(TrlTestCase):
     def test_single_example(self):
         """Test collator with a single example."""
         collator = DataCollatorForPreference(pad_token_id=0)
-        examples = [{"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]}]
+        examples = [{"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]}]
 
         result = collator(examples)
 
@@ -78,8 +78,8 @@ class TestDataCollatorForPreference(TrlTestCase):
         """Test with different pad token ID."""
         collator = DataCollatorForPreference(pad_token_id=999)
         examples = [
-            {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]},
-            {"chosen_input_ids": [6, 7], "rejected_input_ids": [8]},
+            {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5]},
+            {"chosen_ids": [6, 7], "rejected_ids": [8]},
         ]
 
         result = collator(examples)
@@ -94,8 +94,8 @@ class TestDataCollatorForPreference(TrlTestCase):
     def test_collate_with_margin(self):
         collator = DataCollatorForPreference(pad_token_id=0)
         examples = [
-            {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5], "margin": 0.1},
-            {"chosen_input_ids": [6, 7], "rejected_input_ids": [8], "margin": 0.2},
+            {"chosen_ids": [1, 2, 3], "rejected_ids": [4, 5], "margin": 0.1},
+            {"chosen_ids": [6, 7], "rejected_ids": [8], "margin": 0.2},
         ]
 
         result = collator(examples)
@@ -479,7 +479,14 @@ class TestRewardTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
-    def test_train_with_pretokenized_data(self):
+    @pytest.mark.parametrize(
+        "chosen_column,rejected_column,expect_deprecation_warning",
+        [
+            ("chosen_ids", "rejected_ids", False),
+            ("chosen_input_ids", "rejected_input_ids", True),
+        ],
+    )
+    def test_train_with_pretokenized_data(self, chosen_column, rejected_column, expect_deprecation_warning):
         # Get the dataset
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -487,8 +494,8 @@ class TestRewardTrainer(TrlTestCase):
 
         def tokenize_example(example):
             return {
-                "chosen_input_ids": tokenizer(example["chosen"]).input_ids,
-                "rejected_input_ids": tokenizer(example["rejected"]).input_ids,
+                chosen_column: tokenizer(example["chosen"]).input_ids,
+                rejected_column: tokenizer(example["rejected"]).input_ids,
             }
 
         # Apply tokenization
@@ -496,7 +503,16 @@ class TestRewardTrainer(TrlTestCase):
 
         # Initialize the trainer
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
-        trainer = RewardTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
+        if expect_deprecation_warning:
+            with pytest.warns(FutureWarning, match=r"will not be supported in v1"):
+                trainer = RewardTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
+        else:
+            trainer = RewardTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
+
+        assert "chosen_ids" in trainer.train_dataset.column_names
+        assert "rejected_ids" in trainer.train_dataset.column_names
+        assert "chosen_input_ids" not in trainer.train_dataset.column_names
+        assert "rejected_input_ids" not in trainer.train_dataset.column_names
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -574,8 +590,8 @@ class TestRewardTrainer(TrlTestCase):
                 f"<|im_start|>{role}\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>"
             )
             system_prompt_ids = trainer.processing_class(system_prompt)["input_ids"]
-            assert trainer.train_dataset[i]["chosen_input_ids"][: len(system_prompt_ids)] == system_prompt_ids
-            assert trainer.train_dataset[i]["rejected_input_ids"][: len(system_prompt_ids)] == system_prompt_ids
+            assert trainer.train_dataset[i]["chosen_ids"][: len(system_prompt_ids)] == system_prompt_ids
+            assert trainer.train_dataset[i]["rejected_ids"][: len(system_prompt_ids)] == system_prompt_ids
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

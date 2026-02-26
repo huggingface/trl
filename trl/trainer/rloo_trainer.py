@@ -520,6 +520,7 @@ class RLOOTrainer(BaseTrainer):
                 top_k=self.top_k,
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
+                logprobs=None,  # we don't need logprobs from vLLM in RLOO
                 generation_kwargs=args.generation_kwargs,
                 # Chat/tool configuration
                 chat_template_kwargs=self.chat_template_kwargs,
@@ -896,7 +897,7 @@ class RLOOTrainer(BaseTrainer):
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, _, _ = self.vllm_generation.generate(
+            prompt_ids, completion_ids, _, _, _ = self.vllm_generation.generate(
                 prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
 
