@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
 import asyncio
 import copy
 import math
 import textwrap
+from collections.abc import Callable
 from contextlib import nullcontext
 from copy import copy as shallow_copy
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
 import transformers
@@ -28,7 +27,14 @@ from accelerate.utils import gather_object
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers import PreTrainedTokenizerBase, Trainer
+from transformers import (
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    Trainer,
+    TrainerCallback,
+)
+from transformers.utils import is_peft_available
 
 from ...chat_template_utils import parse_response
 from ...data_utils import (
@@ -39,7 +45,7 @@ from ...data_utils import (
 from ...extras.profiling import profiling_context, profiling_decorator
 from ...models import unwrap_model_for_generation
 from ...models.utils import disable_gradient_checkpointing
-from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc
+from ...trainer.grpo_trainer import EnvironmentFactory, GRPOTrainer, RewardFunc, RolloutFunc
 from ...trainer.utils import (
     entropy_from_logits,
     nanstd,
@@ -50,9 +56,8 @@ from ...trainer.utils import (
 from .dppo_config import DPPOConfig
 
 
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin
-
+if is_peft_available():
+    from peft import PeftConfig, PeftModel
 
 SAFETY_CLAMP_MAX = 20
 
@@ -183,16 +188,19 @@ class DPPOTrainer(GRPOTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: "str | PreTrainedModel | PeftModel",
         reward_funcs: RewardFunc | list[RewardFunc],
         args: DPPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
-        callbacks=None,
-        optimizers=(None, None),
-        peft_config=None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        peft_config: "PeftConfig | None" = None,
+        tools: list[Callable] | None = None,
+        rollout_func: RolloutFunc | None = None,
+        environment_factory: EnvironmentFactory | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -214,6 +222,9 @@ class DPPOTrainer(GRPOTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
             peft_config=peft_config,
+            tools=tools,
+            rollout_func=rollout_func,
+            environment_factory=environment_factory,
         )
 
         if self.divergence_type in ["topk_tv", "topk_kl"] and self.use_vllm:
