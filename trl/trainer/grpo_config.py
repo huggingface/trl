@@ -68,6 +68,8 @@ class GRPOConfig(_BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value.
 
         > Parameters that control generation
 
@@ -106,8 +108,6 @@ class GRPOConfig(_BaseConfig):
             parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the prompts ids and completions ids will be padded to a multiple of this value.
 
         > Parameters that control generation acceleration powered by vLLM
 
