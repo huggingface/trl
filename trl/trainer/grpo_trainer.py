@@ -525,6 +525,7 @@ class GRPOTrainer(_BaseTrainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_transformers_paged = args.use_transformers_paged
+        self.pad_to_multiple_of = args.pad_to_multiple_of
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
@@ -1649,10 +1650,10 @@ class GRPOTrainer(_BaseTrainer):
             prompt_ids,
             padding_value=self.pad_token_id,
             padding_side="left",
-            pad_to_multiple_of=self.args.pad_training_to_multiple_of,
+            pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
         prompt_mask = pad(
-            prompt_mask, padding_value=0, padding_side="left", pad_to_multiple_of=self.args.pad_training_to_multiple_of
+            prompt_mask, padding_value=0, padding_side="left", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
@@ -1660,13 +1661,10 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids,
             padding_value=self.pad_token_id,
             padding_side="right",
-            pad_to_multiple_of=self.args.pad_training_to_multiple_of,
+            pad_to_multiple_of=self.pad_to_multiple_of,
         ).to(device=device)
         completion_mask = pad(
-            completion_mask,
-            padding_value=0,
-            padding_side="right",
-            pad_to_multiple_of=self.args.pad_training_to_multiple_of,
+            completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         ).to(device=device)
         if sampling_per_token_logps_list is not None:
             sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
@@ -1674,17 +1672,14 @@ class GRPOTrainer(_BaseTrainer):
                 sampling_per_token_logps,
                 padding_value=0.0,
                 padding_side="right",
-                pad_to_multiple_of=self.args.pad_training_to_multiple_of,
+                pad_to_multiple_of=self.pad_to_multiple_of,
             ).to(device=device)
         else:
             sampling_per_token_logps = None
         if tool_mask_list is not None:
             tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
             tool_mask = pad(
-                tool_mask,
-                padding_value=1,
-                padding_side="right",
-                pad_to_multiple_of=self.args.pad_training_to_multiple_of,
+                tool_mask, padding_value=1, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             ).to(device=device)
         else:
             tool_mask = None
