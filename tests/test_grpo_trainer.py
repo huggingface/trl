@@ -2447,14 +2447,16 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         ],
     )
+    @pytest.mark.parametrize("importance_sampling_level", ["token", "sequence"])
     @require_liger_kernel
-    def test_training_with_liger_grpo_kernel(self, model_name):
+    def test_training_with_liger_grpo_kernel(self, model_name, importance_sampling_level):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,
             num_generations=3,
             use_liger_kernel=True,
             max_completion_length=self.max_length,
+            importance_sampling_level=importance_sampling_level,
             report_to="none",
             logging_strategy="no",
         )
@@ -2492,9 +2494,10 @@ class TestGRPOTrainerSlow(TrlTestCase):
             "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         ],
     )
+    @pytest.mark.parametrize("importance_sampling_level", ["token", "sequence"])
     @require_liger_kernel
     @require_peft
-    def test_training_with_liger_grpo_kernel_and_peft(self, model_name):
+    def test_training_with_liger_grpo_kernel_and_peft(self, model_name, importance_sampling_level):
         from peft import LoraConfig, TaskType
 
         training_args = GRPOConfig(
@@ -2503,6 +2506,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             num_generations=3,
             use_liger_kernel=True,
             max_completion_length=self.max_length,
+            importance_sampling_level=importance_sampling_level,
             report_to="none",
             logging_strategy="no",
         )
