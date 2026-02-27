@@ -49,7 +49,7 @@ from transformers.trainer_callback import CallbackHandler, ExportableState, Prin
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ...models.utils import unwrap_model_for_generation
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     log_table_to_comet_experiment,
@@ -295,7 +295,7 @@ class PolicyAndValueWrapper(nn.Module):
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(BaseTrainer):
+class PPOTrainer(_BaseTrainer):
     """Trainer for Proximal Policy Optimization (PPO).
 
     For details on PPO, see the paper: [Proximal Policy Optimization

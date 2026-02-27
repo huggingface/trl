@@ -1,9 +1,5 @@
 # Callbacks
 
-## SyncRefModelCallback
-
-[[autodoc]] SyncRefModelCallback
-
 ## RichProgressCallback
 
 [[autodoc]] RichProgressCallback

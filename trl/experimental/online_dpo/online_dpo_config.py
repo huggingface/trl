@@ -16,11 +16,11 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...trainer.base_config import BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class OnlineDPOConfig(BaseConfig):
+class OnlineDPOConfig(_BaseConfig):
     # docstyle-ignore
     r"""
     Configuration class for the [`experimental.online_dpo.OnlineDPOTrainer`].

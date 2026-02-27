@@ -232,7 +232,3 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 ## RewardConfig
 
 [[autodoc]] RewardConfig
-
-## DataCollatoForPreference
-
-[[autodoc]] trainer.reward_trainer.DataCollatorForPreference

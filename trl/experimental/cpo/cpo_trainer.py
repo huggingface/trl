@@ -48,7 +48,7 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
 from ..utils import (
     DPODataCollatorWithPadding,
@@ -71,7 +71,7 @@ if is_wandb_available():
 logger = logging.get_logger(__name__)
 
 
-class CPOTrainer(BaseTrainer):
+class CPOTrainer(_BaseTrainer):
     r"""
     Initialize CPOTrainer.
 
