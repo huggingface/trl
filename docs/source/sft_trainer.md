@@ -329,11 +329,3 @@ trainer.train()
 ## SFTConfig
 
 [[autodoc]] SFTConfig
-
-## DataCollatorForLanguageModeling
-
-[[autodoc]] trainer.sft_trainer.DataCollatorForLanguageModeling
-
-## DataCollatorForVisionLanguageModeling
-
-[[autodoc]] trainer.sft_trainer.DataCollatorForVisionLanguageModeling
