@@ -209,6 +209,7 @@ class VLLMClient:
         top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        logprobs: int | None = 0,
         truncate_prompt_tokens: int | None = None,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
@@ -235,6 +236,9 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
+            logprobs (`int` or `None`, *optional*, defaults to `0`):
+                Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
+                N>0, returns the top-N logprobs sorted by descending probability.
             truncate_prompt_tokens (`int`, *optional*):
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
@@ -252,8 +256,11 @@ class VLLMClient:
                     List of lists of token IDs representing the tokenized input prompts.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each prompt.
-                - `logprobs` (`list[list[float]]`):
-                    List of lists of log probabilities for each generated token.
+                - `logprobs` (`list[list[list[float]]]`):
+                    Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
+                    probability.
+                - `logprob_token_ids` (`list[list[list[int]]]`):
+                    Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
         url = f"{self.base_url}/generate/"
 
@@ -272,6 +279,7 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "logprobs": logprobs,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
@@ -283,6 +291,7 @@ class VLLMClient:
                 "prompt_ids": json_response["prompt_ids"],
                 "completion_ids": json_response["completion_ids"],
                 "logprobs": json_response["logprobs"],
+                "logprob_token_ids": json_response["logprob_token_ids"],
             }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -297,6 +306,7 @@ class VLLMClient:
         top_k: int = 0,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        logprobs: int | None = 0,
         truncate_prompt_tokens: int | None = None,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
@@ -325,6 +335,9 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each message list.
+            logprobs (`int` or `None`, *optional*, defaults to `0`):
+                Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
+                N>0, returns the top-N logprobs sorted by descending probability.
             truncate_prompt_tokens (`int`, *optional*):
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
@@ -349,10 +362,13 @@ class VLLMClient:
                     List of lists of token IDs representing the tokenized input messages.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each message list.
-                - `logprobs` (`list[list[float]]`):
-                    List of lists of log probabilities for each generated token.
+                - `logprobs` (`list[list[list[float]]]`):
+                    Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
+                    probability.
+                - `logprob_token_ids` (`list[list[list[int]]]`):
+                    Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        if tools is not None:
+        if tools:
             raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
         if chat_template is not None:
             raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
@@ -379,6 +395,7 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "logprobs": logprobs,
                 "truncate_prompt_tokens": truncate_prompt_tokens,
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
@@ -391,6 +408,7 @@ class VLLMClient:
                 "prompt_ids": json_response["prompt_ids"],
                 "completion_ids": json_response["completion_ids"],
                 "logprobs": json_response["logprobs"],
+                "logprob_token_ids": json_response["logprob_token_ids"],
             }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -512,82 +530,6 @@ class VLLMClient:
         url = f"{self.base_url}/reset_prefix_cache/"
         response = self.session.post(url)
         if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
-
-    def chat_completions(
-        self,
-        messages: list[dict],
-        model: str | None = None,
-        temperature: float = 1.0,
-        top_p: float = 1.0,
-        max_tokens: int | None = None,
-        n: int = 1,
-        tools: list[dict] | None = None,
-        **kwargs,
-    ) -> dict:
-        """
-        OpenAI-compatible chat completions endpoint.
-
-        Args:
-            messages (`list[dict]`):
-                List of messages in OpenAI format with "role" and "content" keys.
-            model (`str`, *optional*):
-                Model name to use.
-            temperature (`float`, *optional*, defaults to `1.0`):
-                Temperature for sampling.
-            top_p (`float`, *optional*, defaults to `1.0`):
-                Top-p sampling parameter.
-            max_tokens (`int`, *optional*):
-                Maximum number of tokens to generate.
-            n (`int`, *optional*, defaults to `1`):
-                Number of completions to generate.
-            tools (`list[dict]`, *optional*):
-                List of tool definitions for tool calling.
-            **kwargs:
-                Additional parameters to pass to the endpoint.
-
-        Returns:
-            `dict`:
-                OpenAI-compatible response with "choices", "usage", etc.
-        """
-        url = f"{self.base_url}/v1/chat/completions"
-        response = self.session.post(
-            url,
-            json={
-                "messages": messages,
-                "model": model,
-                "temperature": temperature,
-                "top_p": top_p,
-                "max_tokens": max_tokens,
-                "n": n,
-                "tools": tools,
-                **kwargs,
-            },
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
-
-    def tokenize(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
-        """
-        Tokenize messages to get token IDs.
-
-        Args:
-            messages (`list[dict]`):
-                List of messages to tokenize.
-            tools (`list[dict]`, *optional*):
-                List of tool definitions.
-
-        Returns:
-            `dict`:
-                Dictionary with "tokens" (list of token IDs) and "model" keys.
-        """
-        url = f"{self.base_url}/tokenize"
-        response = self.session.post(url, json={"messages": messages, "tools": tools})
-        if response.status_code == 200:
-            return response.json()
-        else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):

@@ -225,7 +225,7 @@ def main(test_size, push_to_hub, repo_id):
         [{"role": "assistant", "content": [{"type": "text", "text": "It means it's a good idea."}]}],
         [{"role": "assistant", "content": [{"type": "text", "text": "It means it's a bad idea."}]}],
         [{"role": "assistant", "content": [{"type": "text", "text": "Recursion."}]}],
-    ],
+    ]
     # Create the images
     number_of_images = [sum(1 for part in row[0]["content"] if part.get("type") == "image") for row in prompt]
     sizes = [np.random.randint(32, 64, size=(num_images, 2)) for num_images in number_of_images]

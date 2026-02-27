@@ -16,9 +16,22 @@ import os
 from io import StringIO
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from .testing_utils import TrlTestCase
+
+
+@pytest.mark.parametrize("command", ["dpo", "grpo", "kto", "reward", "rloo", "sft"])
+def test_help_no_type_error(command):
+    # Regression test for https://github.com/huggingface/trl/issues/5099:
+    # TrainingArguments help strings with unescaped "%" caused TypeError in argparse.
+    from trl.cli import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        with patch("sys.argv", ["trl", command, "--help"]), patch("sys.stdout", new_callable=StringIO):
+            main()
+    assert exc_info.value.code == 0
 
 
 class TestCLI(TrlTestCase):
@@ -105,3 +118,23 @@ class TestCLI(TrlTestCase):
 
         # Verify that output directory was created
         assert os.path.exists(output_dir)
+
+    def test_vllm_serve_config_file(self):
+        """
+        Test `trl vllm-serve --config config.yaml` must not raise "the following arguments are required: --model" when
+        the required field is satisfied by the config file rather than the command line.
+        """
+        from trl.cli import main
+
+        config_path = os.path.join(self.tmp_dir, "config.yaml")
+        with open(config_path, "w") as f:
+            yaml.dump({"model": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"}, f)
+
+        # Patch the actual function that `VllmServeCommand.run` imports as `vllm_serve_main`
+        with patch("trl.scripts.vllm_serve.main") as mock_serve:
+            with patch("sys.argv", ["trl", "vllm-serve", "--config", config_path]):
+                main()
+
+        mock_serve.assert_called_once()
+        script_args = mock_serve.call_args.args[0]
+        assert script_args.model == "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
