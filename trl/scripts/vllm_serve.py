@@ -532,8 +532,9 @@ def main(script_args: ScriptArguments):
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
-                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
-                  descending probability.
+                  only the sampled token's logprob is returned. When N>0, returns up to N+1 logprobs sorted by
+                  descending probability, because vLLM always includes the sampled token's logprob (which may fall
+                  outside the top-N).
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
@@ -696,8 +697,9 @@ def main(script_args: ScriptArguments):
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
-                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
-                  descending probability.
+                  only the sampled token's logprob is returned. When N>0, returns up to N+1 logprobs sorted by
+                  descending probability, because vLLM always includes the sampled token's logprob (which may fall
+                  outside the top-N).
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.

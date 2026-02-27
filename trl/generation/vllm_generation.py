@@ -223,9 +223,9 @@ class VLLMGeneration:
         tools (`list`, *optional*):
             Tools available for tool calling during chat generation.
         rollout_func (`Callable`, *optional*): Optional custom rollout function that accepts prompts and returns
-            a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields. Should be a
-            single-argument callable: rollout_func(prompts) -> dict. To pass additional context (e.g., trainer), use a
-            closure or functools.partial:
+            a dict with 'prompt_ids', 'completion_ids', 'logprobs', optional 'logprob_token_ids', and optional extra
+            fields. Should be a single-argument callable: rollout_func(prompts) -> dict. To pass additional
+            context (e.g., trainer), use a closure or functools.partial:
                 rollout_func = lambda prompts: my_custom_rollout(prompts, trainer)
             The closure will hold a reference to trainer and see its state updates.
     """

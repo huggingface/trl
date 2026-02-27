@@ -96,8 +96,8 @@ class VLLMClient:
                         [40451, 752, 264, 21646]],
          'completion_ids': [[11479, 752, 5046, 279, 1465, 304, 419, 23670, 2038, 358, 2776, 4378, 369, 847, 15549, 6733],
                             [911, 19654, 382, 3838, 1558, 279, 16158, 1977, 979, 498, 2299, 4460, 311, 10542, 432, 518]],
-         'logprobs': [[-5.193126201629639, -0.05592319369316101, -4.861808776855469, -1.673396110534668, -2.6316866874694824, -0.2861405313014984, -0.35006725788116455, -5.23351526260376, -0.1447441577911377, -5.21489953994751, -1.6022650003433228, -1.9649192094802856, -2.1338791847229004, -1.2775304317474365, -10.004860877990723, -4.171003818511963],
-                      [-0.012896230444312096, -5.747106552124023, -1.5248860120773315, -1.9286258220672607, -2.8512537479400635, -2.8055880069732666, -3.019822835922241, -0.37132859230041504, -0.6311739087104797, -2.562908411026001, -3.1664533615112305, -2.685293436050415, -0.007259538397192955, -7.339841842651367, -1.188662052154541, -3.54781436920166]]}
+         'logprobs': [[[-5.19], [-0.05], [-4.86]], [[-0.01], [-5.74], [-1.52]]],
+         'logprob_token_ids': [[[11479], [752], [5046]], [[911], [19654], [382]]]}
 
         >>> from transformers import AutoModelForCausalLM
 
@@ -238,7 +238,8 @@ class VLLMClient:
                 Maximum number of tokens to generate for each prompt.
             logprobs (`int` or `None`, *optional*, defaults to `0`):
                 Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
-                N>0, returns the top-N logprobs sorted by descending probability.
+                N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
+                sampled token's logprob (which may fall outside the top-N).
             truncate_prompt_tokens (`int`, *optional*):
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
@@ -337,7 +338,8 @@ class VLLMClient:
                 Maximum number of tokens to generate for each message list.
             logprobs (`int` or `None`, *optional*, defaults to `0`):
                 Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
-                N>0, returns the top-N logprobs sorted by descending probability.
+                N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM always includes the
+                sampled token's logprob (which may fall outside the top-N).
             truncate_prompt_tokens (`int`, *optional*):
                 If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
                 only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
