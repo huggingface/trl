@@ -176,7 +176,7 @@ class GFPOTrainer(_GRPOTrainer):
                 padding_size = prompt_ids.size(1) - token_type_ids.size(1)
                 if padding_size > 0:
                     token_type_ids = torch.cat(
-                        [token_type_ids, token_type_ids.new_zeros((token_type_ids.size(0), padding_size))], dim=1
+                        [token_type_ids.new_zeros((token_type_ids.size(0), padding_size)), token_type_ids], dim=1
                     )
             forward_kwargs["token_type_ids"] = torch.cat(
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
@@ -189,7 +189,7 @@ class GFPOTrainer(_GRPOTrainer):
                 padding_size = prompt_ids.size(1) - mm_token_type_ids.size(1)
                 if padding_size > 0:
                     mm_token_type_ids = torch.cat(
-                        [mm_token_type_ids, mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size))],
+                        [mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size)), mm_token_type_ids],
                         dim=1,
                     )
             forward_kwargs["mm_token_type_ids"] = torch.cat(
