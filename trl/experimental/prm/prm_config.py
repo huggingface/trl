@@ -14,11 +14,11 @@
 
 from dataclasses import dataclass, field
 
-from ...trainer.base_config import BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class PRMConfig(BaseConfig):
+class PRMConfig(_BaseConfig):
     # docstyle-ignore
     r"""
     Configuration class for the [`experimental.prm.PRMTrainer`].
