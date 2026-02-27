@@ -812,7 +812,7 @@ class TestSFTTrainer(TrlTestCase):
             "attention_mask": torch.tensor([[1, 1, 1, 1, 1]]),
         }
 
-        with patch("trl.trainer.sft_trainer.BaseTrainer.compute_loss", side_effect=mock_super_compute_loss):
+        with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
             trainer.compute_loss(trainer.model, inputs)
 
         assert captured["skip_logits"] is True
@@ -846,7 +846,7 @@ class TestSFTTrainer(TrlTestCase):
             dummy_outputs = (dummy_loss, torch.randn(1, 5, trainer.model.config.vocab_size))
             return (dummy_loss, dummy_outputs)
 
-        with patch("trl.trainer.sft_trainer.BaseTrainer.compute_loss", side_effect=mock_super_compute_loss):
+        with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
             trainer.predict(trainer.train_dataset)
 
         assert captured["skip_logits"] is False
