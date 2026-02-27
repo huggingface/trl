@@ -871,4 +871,3 @@ class GRPOConfig(_BaseConfig):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
-

@@ -1922,7 +1922,7 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_vision
     @require_liger_kernel
-    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo"])
+    @pytest.mark.parametrize("loss_type", ["grpo", "bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo"])
     def test_training_vlm_and_liger(self, model_id, loss_type):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1938,6 +1938,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             use_liger_kernel=True,  # enable Liger kernel
             loss_type=loss_type,
+            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
             report_to="none",
         )
         trainer = GRPOTrainer(
