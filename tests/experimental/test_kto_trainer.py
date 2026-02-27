@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import multiprocess
 import pytest
 import torch
 from datasets import load_dataset
@@ -98,6 +99,11 @@ class TestKTOTrainer(TrlTestCase):
             )
 
     def test_tokenize_and_process_tokens(self):
+        # Pytest/CI often starts background threads before tests run. Under Python 3.12+,
+        # using "fork" in a multi-threaded process emits a DeprecationWarning and may deadlock.
+        # Force "spawn" to keep this multiprocessing test safe while still exercising `num_proc=2`.
+        multiprocess.set_start_method("spawn", force=True)
+
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
