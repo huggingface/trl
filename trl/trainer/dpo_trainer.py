@@ -48,7 +48,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ..data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import disable_gradient_checkpointing
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
@@ -355,7 +355,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         return output
 
 
-class DPOTrainer(BaseTrainer):
+class DPOTrainer(_BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method. This algorithm was initially proposed in the paper [Direct
     Preference Optimization: Your Language Model is Secretly a Reward Model](https://huggingface.co/papers/2305.18290).
@@ -470,9 +470,11 @@ class DPOTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
-        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
-        # batches from multiple processes, leading to mismatch errors.
-        if isinstance(train_dataset, IterableDataset):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+        elif isinstance(train_dataset, IterableDataset):
+            # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+            # batches from multiple processes, leading to mismatch errors.
             if args.accelerator_config.dispatch_batches is True:
                 logger.warning(
                     "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "

@@ -54,7 +54,7 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import get_act_offloading_ctx_manager
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
     create_model_from_path,
@@ -440,11 +440,25 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             prompt_token_type_ids = processed_prompts["token_type_ids"]
             completion_token_type_ids = processed_completions["token_type_ids"]
             token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
+        if "mm_token_type_ids" in processed_prompts:  # special case for ERNIE-VL
+            prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
+            completion_mm_token_type_ids = processed_completions.get(
+                "mm_token_type_ids", torch.zeros_like(completion_ids)
+            )
+            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, completion_mm_token_type_ids), dim=1)
 
         # Flush left to reduce padding
-        if "token_type_ids" in processed_prompts:
+        if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids
+            )
+        elif "token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, token_type_ids
+            )
+        elif "mm_token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, mm_token_type_ids
             )
         else:
             attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
@@ -456,6 +470,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             completion_mask = completion_mask[:, : self.max_length]
             if "token_type_ids" in processed_prompts:
                 token_type_ids = token_type_ids[:, : self.max_length]
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
         # Create labels and mask padding tokens
         labels = input_ids.clone()
@@ -470,6 +486,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         output["labels"] = labels
         if "token_type_ids" in processed_prompts:
             output["token_type_ids"] = token_type_ids
+        if "mm_token_type_ids" in processed_prompts:
+            output["mm_token_type_ids"] = mm_token_type_ids
         return output
 
 
@@ -490,7 +508,7 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     return loss
 
 
-class SFTTrainer(BaseTrainer):
+class SFTTrainer(_BaseTrainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
 
@@ -617,9 +635,11 @@ class SFTTrainer(BaseTrainer):
                 dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
-        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
-        # batches from multiple processes, leading to mismatch errors.
-        if isinstance(train_dataset, IterableDataset):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+        elif isinstance(train_dataset, IterableDataset):
+            # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+            # batches from multiple processes, leading to mismatch errors.
             if args.accelerator_config.dispatch_batches is True:
                 logger.warning(
                     "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "

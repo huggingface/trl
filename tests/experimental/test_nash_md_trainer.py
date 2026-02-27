@@ -20,7 +20,7 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from trl.experimental.nash_md.nash_md_trainer import GeometricMixtureWrapper
-from trl.models.utils import create_reference_model
+from trl.experimental.utils import create_reference_model
 
 from ..testing_utils import TrlTestCase, require_llm_blender, require_peft
 from .testing_utils import RandomPairwiseJudge
