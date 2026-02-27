@@ -130,7 +130,8 @@ class TestCLI(TrlTestCase):
         with open(config_path, "w") as f:
             yaml.dump({"model": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"}, f)
 
-        with patch("trl.cli.commands.vllm_serve.vllm_serve_main") as mock_serve:
+        # Patch the actual function that `VllmServeCommand.run` imports as `vllm_serve_main`
+        with patch("trl.scripts.vllm_serve.main") as mock_serve:
             with patch("sys.argv", ["trl", "vllm-serve", "--config", config_path]):
                 main()
 

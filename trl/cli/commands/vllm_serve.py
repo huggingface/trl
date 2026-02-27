@@ -14,8 +14,6 @@
 
 from argparse import Namespace
 
-from ...scripts.vllm_serve import main as vllm_serve_main
-from ...scripts.vllm_serve import make_parser as make_vllm_serve_parser
 from .base import Command, CommandContext
 
 
@@ -29,6 +27,9 @@ class VllmServeCommand(Command):
         subparsers.add_parser(self.name, help=self.help_text, add_help=False)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
+        from ...scripts.vllm_serve import main as vllm_serve_main
+        from ...scripts.vllm_serve import make_parser as make_vllm_serve_parser
+
         parser = make_vllm_serve_parser()
         (script_args,) = parser.parse_args_and_config(args=context.argv_after(self.name))
         vllm_serve_main(script_args)
