@@ -1221,6 +1221,9 @@ class GRPOTrainer(_BaseTrainer):
                     self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
+            # Pass prompts to rollout_func preserving structured messages.
+            # Chat templating must happen inside rollout_func, at the backend boundary, so that
+            # multimodal content (images, typed content blocks) is not lost before rollout logic runs.
             output = self.rollout_func(prompts, self)
             required_keys = {"prompt_ids", "completion_ids", "logprobs"}
             missing_keys = required_keys - output.keys()
