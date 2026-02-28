@@ -1822,8 +1822,7 @@ class GRPOTrainer(_BaseTrainer):
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
             if self.scale_rewards in ["group", "none", "mean"]:
                 # For "none" and "mean", std_rewards is not used for advantage scaling but is computed
-                # for observability (is_std_zero logging). "mean" uses the group mean as denominator
-                # instead (MaxRL, https://arxiv.org/abs/2602.02710).
+                # for observability (is_std_zero logging).
                 if num_generations > 1:
                     std_rewards = rewards.view(-1, num_generations).std(dim=1)
                     std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
@@ -1842,7 +1841,6 @@ class GRPOTrainer(_BaseTrainer):
 
             advantages = rewards - mean_grouped_rewards
             if self.scale_rewards == "mean":
-                # MaxRL: A_i = (r_i - mean(r)) / (mean(r) + eps)
                 advantages = advantages / (mean_grouped_rewards + 1e-4)
             elif self.scale_rewards != "none":
                 advantages = advantages / (std_rewards + 1e-4)
