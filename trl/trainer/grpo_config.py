@@ -807,7 +807,6 @@ class GRPOConfig(_BaseConfig):
             "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
         },
     )
-
     use_dgpo_dgae: bool = field(
         default=False,
         metadata={
