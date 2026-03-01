@@ -37,14 +37,14 @@ class DPPOConfig(GRPOConfig):
         divergence_topk (`int`, *optional*, defaults to `20`):
             K for top-K divergence approximations. Only used when `divergence_type` starts with `"topk_"`.
 
-        clip_ratio_c (`float`, *optional*, defaults to `10.0`):
+        clip_ratio_c (`float`, *optional*, defaults to `20.0`):
             Upper bound on the importance-sampling ratio for stability. The IS ratio is clamped to [0, clip_ratio_c].
 
-        epsilon (`float`, inherited from GRPOConfig, default overridden to `0.2`):
+        epsilon (`float`, inherited from GRPOConfig, default overridden to `0.15`):
             Divergence threshold δ_low. Tokens whose divergence exceeds this when the policy moves in the
             advantage-decreasing direction are masked.
 
-        epsilon_high (`float`, inherited from GRPOConfig, default overridden to `0.28`):
+        epsilon_high (`float`, inherited from GRPOConfig, default overridden to `0.15`):
             Divergence threshold δ_high. Tokens whose divergence exceeds this when the policy moves in the
             advantage-increasing direction are masked. The paper recommends asymmetric thresholds.
     """
@@ -64,15 +64,15 @@ class DPPOConfig(GRPOConfig):
         },
     )
     clip_ratio_c: float = field(
-        default=10.0,
+        default=20.0,
         metadata={"help": "Upper bound on the importance-sampling ratio for stability."},
     )
     epsilon: float = field(
-        default=0.2,
+        default=0.15,
         metadata={"help": "Divergence threshold δ_low for the trust-region mask."},
     )
     epsilon_high: float = field(
-        default=0.28,
+        default=0.15,
         metadata={"help": "Divergence threshold δ_high for the trust-region mask (asymmetric)."},
     )
 

@@ -602,11 +602,11 @@ DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region
 from trl.experimental.dppo import DPPOConfig, DPPOTrainer
 
 training_args = DPPOConfig(
-    divergence_type="binary_kl",  # divergence approximation (Section 3.2 of the paper)
-    divergence_topk=20,  # K for top-K divergence modes (Section 3.2 of the paper)
-    epsilon=0.2,  # δ_low threshold (Section 3.2 of the paper)
-    epsilon_high=0.28,  # δ_high threshold (Section 3.2 of the paper)
-    clip_ratio_c=3.0,  # IS ratio upper bound C (Section 3.2 of the paper)
+    divergence_type="binary_tv",  # divergence approximation
+    divergence_topk=20,  # K for top-K divergence modes (Section 7 / Appendix G.2 of the paper)
+    epsilon=0.15,  # δ_low threshold (Appendix F of the paper)
+    epsilon_high=0.15,  # δ_high threshold (Appendix F of the paper)
+    clip_ratio_c=20.0,  # IS ratio upper bound C (Section 5.4 of the paper)
     beta=0.0,  # KL regularization coefficient
     use_vllm=True,
 )
