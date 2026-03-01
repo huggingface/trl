@@ -547,10 +547,6 @@ class GRPOTrainer(_BaseTrainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-        if self.use_liger_kernel and not self.importance_sampling_level == "token":
-            raise NotImplementedError(
-                "Liger Kernels currently only support token-level importance sampling. Please set"
-                "`importance_sampling_level` to 'token'."
         if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
             raise ValueError(
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
