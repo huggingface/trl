@@ -687,6 +687,7 @@ class DPPOTrainer(GRPOTrainer):
         pixel_attention_mask=None,
         image_sizes=None,
         token_type_ids=None,
+        mm_token_type_ids=None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
         """Compute per-token log-probs, (optionally) entropies, and top-K log-probs in one forward pass.
 
@@ -729,6 +730,8 @@ class DPPOTrainer(GRPOTrainer):
                 model_inputs["image_sizes"] = image_sizes[start:end]
             if token_type_ids is not None:
                 model_inputs["token_type_ids"] = token_type_ids[start:end]
+            if mm_token_type_ids is not None:
+                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
             if "logits_to_keep" in self.model_kwarg_keys:
                 model_inputs["logits_to_keep"] = logits_to_keep + 1
@@ -862,6 +865,12 @@ class DPPOTrainer(GRPOTrainer):
             token_type_ids = forward_kwargs["token_type_ids"]
             forward_kwargs["token_type_ids"] = torch.cat(
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
+        # If mm_token_type_ids are used, extend them with zeros for the completion part
+        if "mm_token_type_ids" in forward_kwargs:
+            mm_token_type_ids = forward_kwargs["mm_token_type_ids"]
+            forward_kwargs["mm_token_type_ids"] = torch.cat(
+                [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
 
         # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
@@ -1012,6 +1021,8 @@ class DPPOTrainer(GRPOTrainer):
             output["image_sizes"] = forward_kwargs["image_sizes"]
         if "token_type_ids" in forward_kwargs:
             output["token_type_ids"] = forward_kwargs["token_type_ids"]
+        if "mm_token_type_ids" in forward_kwargs:
+            output["mm_token_type_ids"] = forward_kwargs["mm_token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
         if tool_mask is not None:
@@ -1121,6 +1132,7 @@ class DPPOTrainer(GRPOTrainer):
             "pixel_attention_mask": inputs.get("pixel_attention_mask"),
             "image_sizes": inputs.get("image_sizes"),
             "token_type_ids": inputs.get("token_type_ids"),
+            "mm_token_type_ids": inputs.get("mm_token_type_ids"),
         }
 
         sampling_topk_token_ids = inputs.get("sampling_topk_token_ids")

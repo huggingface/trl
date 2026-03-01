@@ -35,45 +35,59 @@ class DPPOConfig(GRPOConfig):
             during training.
 
         divergence_topk (`int`, *optional*, defaults to `20`):
-            K for top-K divergence approximations. Only used when `divergence_type` starts with `"topk_"`.
+            K for top-K divergence approximations. Only used when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
 
         clip_ratio_c (`float`, *optional*, defaults to `20.0`):
             Upper bound on the importance-sampling ratio for stability. The IS ratio is clamped to [0, clip_ratio_c].
 
         epsilon (`float`, inherited from GRPOConfig, default overridden to `0.15`):
             Divergence threshold δ_low. Tokens whose divergence exceeds this when the policy moves in the
-            advantage-decreasing direction are masked.
+            advantage-decreasing direction are masked. The paper recommends 0.15 for TV divergence
+            and 0.05 for KL divergence.
 
         epsilon_high (`float`, inherited from GRPOConfig, default overridden to `0.15`):
             Divergence threshold δ_high. Tokens whose divergence exceeds this when the policy moves in the
-            advantage-increasing direction are masked. The paper recommends asymmetric thresholds.
+            advantage-increasing direction are masked. The paper recommends 0.15 for TV divergence
+            and 0.05 for KL divergence.
     """
 
     divergence_type: Literal["binary_tv", "binary_kl", "topk_tv", "topk_kl"] = field(
         default="binary_tv",
         metadata={
-            "help": "Divergence approximation for the trust-region mask. 'binary_tv': absolute probability "
-            "difference. 'binary_kl': Bernoulli KL divergence. 'topk_tv': TV over top-K tokens. "
-            "'topk_kl': KL over top-K tokens."
+            "help": "Divergence approximation used for the trust-region mask. Binary variants use only per-token "
+            "log-probs; top-K variants require storing top-K token IDs and log-probs during rollout generation plus "
+            "full logits during training."
         },
     )
     divergence_topk: int = field(
         default=20,
         metadata={
-            "help": "K for top-K divergence approximations. Only used when divergence_type starts with 'topk_'."
+            "help": "K for top-K divergence approximations. Only used when `divergence_type` is `'topk_tv'` or "
+            "`'topk_kl'`."
         },
     )
     clip_ratio_c: float = field(
         default=20.0,
-        metadata={"help": "Upper bound on the importance-sampling ratio for stability."},
+        metadata={
+            "help": "Upper bound on the importance-sampling ratio for stability. The IS ratio is clamped to "
+            "[0, clip_ratio_c]."
+        },
     )
     epsilon: float = field(
         default=0.15,
-        metadata={"help": "Divergence threshold δ_low for the trust-region mask."},
+        metadata={
+            "help": "Divergence threshold δ_low. Tokens whose divergence exceeds this when the policy moves in the "
+            "advantage-decreasing direction are masked. The paper recommends 0.15 for TV divergence and 0.05 for KL "
+            "divergence."
+        },
     )
     epsilon_high: float = field(
         default=0.15,
-        metadata={"help": "Divergence threshold δ_high for the trust-region mask (asymmetric)."},
+        metadata={
+            "help": "Divergence threshold δ_high. Tokens whose divergence exceeds this when the policy moves in the "
+            "advantage-increasing direction are masked. The paper recommends 0.15 for TV divergence and 0.05 for KL "
+            "divergence."
+        },
     )
 
     def __post_init__(self):
