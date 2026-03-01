@@ -207,7 +207,7 @@ peft_config = LoraConfig(
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
-    target_modules=["q_proj", "v_proj"],  # Optional: specify target modules
+    target_modules=["q_proj", "v_proj"],  # optional: specify target modules
 )
 
 # Configure training with higher learning rate for LoRA
@@ -218,12 +218,11 @@ training_args = SFTConfig(
 
 # Create trainer with PEFT config
 trainer = SFTTrainer(
-    model=model,
+    model="Qwen/Qwen2-0.5B",  # can pass model name or loaded model
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
-
 trainer.train()
 ```
 
@@ -232,7 +231,7 @@ trainer.train()
 
 ### Direct Preference Optimization (DPO)
 
-The `DPOTrainer` implements preference learning from human feedback.
+The [`DPOTrainer`] implements preference learning from human feedback.
 
 #### With LoRA
 
@@ -272,13 +271,11 @@ training_args = DPOConfig(
 
 # Create trainer with PEFT config
 trainer = DPOTrainer(
-    model=model,
-    ref_model=None,  # Not needed when using PEFT
+    model="Qwen/Qwen2-0.5B",  # can pass model name or loaded model
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
-
 trainer.train()
 ```
 
@@ -328,12 +325,11 @@ training_args = GRPOConfig(
 
 # Create trainer with PEFT config
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B",  # Can pass model name or loaded model
+    model="Qwen/Qwen2-0.5B",  # can pass model name or loaded model
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
-
 trainer.train()
 ```
 
@@ -587,7 +583,7 @@ trainer = SFTTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config,  # Pass PEFT config here
+    peft_config=peft_config,  # pass PEFT config here
 )
 
 trainer.train()

@@ -20,7 +20,7 @@ from transformers.utils import is_peft_available
 
 from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
 from trl.experimental.nash_md.nash_md_trainer import GeometricMixtureWrapper
-from trl.models.utils import create_reference_model
+from trl.experimental.utils import create_reference_model
 
 from ..testing_utils import TrlTestCase, require_llm_blender, require_peft
 from .testing_utils import RandomPairwiseJudge
@@ -65,7 +65,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
             self.mixture_coef * ref_model_output.logits + (1 - self.mixture_coef) * model_output.logits, dim=-1
         )
 
-        assert torch.allclose(wrapper_output.logits, expected_logits, atol=1e-5)
+        torch.testing.assert_close(wrapper_output.logits, expected_logits)
 
     def test_prepare_inputs_for_generation(self):
         input_ids = torch.tensor([[1, 2, 3, 4, 5]], device=self.device)

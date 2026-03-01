@@ -195,7 +195,7 @@ hf jobs uv run \
     --output_dir grpo-full-qwen3-0.6b \
     --learning_rate 1.0e-6 \
     --lr_scheduler_type cosine \
-    --warmup_ratio 0.0 \
+    --warmup_steps 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
     --max_completion_length 4096 \
@@ -229,7 +229,7 @@ uv run "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/
     --output_dir grpo-full-qwen3-0.6b \
     --learning_rate 1.0e-6 \
     --lr_scheduler_type cosine \
-    --warmup_ratio 0.0 \
+    --warmup_steps 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
     --max_completion_length 4096 \
@@ -277,7 +277,6 @@ Here are the parameters we used to train the above models
 | `--model_name_or_path` | HuggingFaceTB/SmolLM3-3B | HuggingFaceTB/SmolLM3-3B |
 | `--dataset_name` | HuggingFaceH4/OpenR1-Math-220k-default-verified | HuggingFaceH4/OpenR1-Math-220k-default-verified |
 | `--learning_rate` | 1.0e-5 | 1.0e-6 |
-| `--max_prompt_length` | 1024 | 1024 |
 | `--max_completion_length` | 4096 | 4096 |
 | `--lora_r` | 1 | - |
 | `--lora_alpha` | 32 | - |
