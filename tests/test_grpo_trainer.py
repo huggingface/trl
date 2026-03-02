@@ -37,6 +37,7 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
@@ -1980,7 +1981,14 @@ class TestGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    (Version("5.2.0") < Version(transformers.__version__))
+                    and not is_liger_kernel_available(min_version="0.8.0"),
+                    reason="Upstream issue tracked at https://github.com/linkedin/Liger-Kernel/issues/1117",
+                ),
+            ),
         ],
     )
     @require_vision
