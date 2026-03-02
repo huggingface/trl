@@ -404,7 +404,7 @@ for model_id, model_class, dtype in [
                 layer.linear_attn.A_log.data = layer.linear_attn.A_log.data.float()
                 layer.linear_attn.norm.weight.data = layer.linear_attn.norm.weight.data.float()
 
-    push_to_hub(model, processor, generation_config, "tiny", force=True)
+    push_to_hub(model, processor, generation_config, "tiny")
 
 # PEFT models
 model = Qwen3ForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="auto")
