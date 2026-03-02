@@ -1197,6 +1197,26 @@ class GOLDTrainer(SFTTrainer):
         updated_slice["original_completion_text"] = completion_texts
         return updated_slice
 
+    @staticmethod
+    def _build_sequence_batch(
+        new_input_ids: torch.Tensor, prompt_lengths: torch.Tensor, pad_token_id: int | None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build attention mask and labels from full sequences and prompt lengths."""
+        prompt_lengths = prompt_lengths.to(device=new_input_ids.device, dtype=torch.long)
+        positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
+        completion_mask = positions >= prompt_lengths.unsqueeze(1)
+
+        new_attention_mask = torch.ones_like(new_input_ids)
+        if pad_token_id is not None:
+            new_attention_mask[new_input_ids == pad_token_id] = 0
+
+        new_labels = torch.full_like(new_input_ids, -100)
+        new_labels[completion_mask] = new_input_ids[completion_mask]
+        if pad_token_id is not None:
+            new_labels[new_input_ids == pad_token_id] = -100
+
+        return new_attention_mask, new_labels
+
     @profiling_decorator
     def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
         slices = split_tensor_dict(generation_batch, buffer_steps)
@@ -1236,12 +1256,12 @@ class GOLDTrainer(SFTTrainer):
         self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
     ):
         local_prompts = []
-        local_slice_info = []
+        local_slice_indices = []
         for slice_idx in on_policy_indices:
             slice_inputs = slices[slice_idx]
-            for j in range(slice_inputs["prompts"].shape[0]):
-                local_prompts.append(slice_inputs["prompts"][j])
-                local_slice_info.append((slice_idx, j))
+            for prompt in slice_inputs["prompts"]:
+                local_prompts.append(prompt)
+                local_slice_indices.append(slice_idx)
 
         prompts_text_for_vllm = self.processing_class.batch_decode(
             torch.stack(local_prompts) if local_prompts else torch.empty(0, dtype=torch.long),
@@ -1294,7 +1314,7 @@ class GOLDTrainer(SFTTrainer):
         self._process_completions_to_buffer(
             slices,
             on_policy_indices,
-            local_slice_info,
+            local_slice_indices,
             completion_ids,
             prompts_text_for_vllm,
             prompts_text_with_special,
@@ -1448,13 +1468,13 @@ class GOLDTrainer(SFTTrainer):
         self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
     ):
         """Fallback generation without vLLM (uses model.generate per slice)."""
-        for slice_idx in on_policy_indices:
-            slice_inputs = slices[slice_idx]
-            with unwrap_model_for_generation(
-                self.model,
-                self.accelerator,
-                generation_kwargs=self.generation_kwargs,
-            ) as unwrapped_model:
+        with unwrap_model_for_generation(
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+        ) as unwrapped_model:
+            for slice_idx in on_policy_indices:
+                slice_inputs = slices[slice_idx]
                 result = self.generate_on_policy_outputs(
                     unwrapped_model,
                     slice_inputs,
@@ -1463,21 +1483,21 @@ class GOLDTrainer(SFTTrainer):
                 )
                 new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts = result
 
-            updated_slice = dict(slice_inputs)
-            updated_slice["input_ids"] = new_input_ids
-            updated_slice["attention_mask"] = new_attention_mask
-            updated_slice["labels"] = new_labels
-            updated_slice["original_prompt_text"] = prompt_texts
-            updated_slice["original_completion_text"] = completion_texts
+                updated_slice = dict(slice_inputs)
+                updated_slice["input_ids"] = new_input_ids
+                updated_slice["attention_mask"] = new_attention_mask
+                updated_slice["labels"] = new_labels
+                updated_slice["original_prompt_text"] = prompt_texts
+                updated_slice["original_completion_text"] = completion_texts
 
-            self._buffered_inputs[slice_idx] = updated_slice
-            self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+                self._buffered_inputs[slice_idx] = updated_slice
+                self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
 
     def _process_completions_to_buffer(
         self,
         slices: list[dict[str, torch.Tensor | Any]],
         on_policy_indices: list[int],
-        local_slice_info: list[tuple[int, int]],
+        local_slice_indices: list[int],
         completion_ids: list,
         prompts_text: list[str],
         prompts_text_with_special: list[str],
@@ -1493,7 +1513,7 @@ class GOLDTrainer(SFTTrainer):
         slice_prompts = {idx: [] for idx in on_policy_indices}
         slice_prompts_special = {idx: [] for idx in on_policy_indices}
 
-        for i, (slice_idx, _) in enumerate(local_slice_info):
+        for i, slice_idx in enumerate(local_slice_indices):
             slice_completions[slice_idx].append(completion_ids[i])
             slice_prompts[slice_idx].append(prompts_text[i])
             slice_prompts_special[slice_idx].append(prompts_text_with_special[i])
@@ -1545,17 +1565,10 @@ class GOLDTrainer(SFTTrainer):
             completion_ids_padded = torch.stack(padded_completion_ids_list)
 
             new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
-            new_attention_mask = torch.ones_like(new_input_ids)
-            if self.processing_class.pad_token_id is not None:
-                new_attention_mask[new_input_ids == self.processing_class.pad_token_id] = 0
-
             prompt_lengths = (prompt_ids != pad_token_id).sum(dim=1)
-            new_labels = torch.full_like(new_input_ids, -100)
-            for idx in range(new_input_ids.shape[0]):
-                length = int(prompt_lengths[idx].item())
-                new_labels[idx, length:] = new_input_ids[idx, length:]
-            if self.processing_class.pad_token_id is not None:
-                new_labels[new_input_ids == self.processing_class.pad_token_id] = -100
+            new_attention_mask, new_labels = self._build_sequence_batch(
+                new_input_ids, prompt_lengths, self.processing_class.pad_token_id
+            )
 
             completion_texts = self.processing_class.batch_decode(
                 completion_ids_for_text,
@@ -2143,17 +2156,7 @@ class GOLDTrainer(SFTTrainer):
                 )
 
         new_input_ids = generated_tokens
-        new_attention_mask = torch.ones_like(new_input_ids)
-        if pad_token_id is not None:
-            new_attention_mask[new_input_ids == pad_token_id] = 0
-
-        new_labels = torch.full_like(new_input_ids, -100)
-        for idx in range(batch_size):
-            length = int(prompt_lengths[idx].item())
-            new_labels[idx, length:] = new_input_ids[idx, length:]
-
-        if pad_token_id is not None:
-            new_labels[new_input_ids == pad_token_id] = -100
+        new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
 
         prompt_texts = []
         completion_texts = []
@@ -2181,164 +2184,6 @@ class GOLDTrainer(SFTTrainer):
             )
 
         return new_input_ids, new_attention_mask, new_labels, prompt_texts, completion_texts
-
-    @profiling_decorator
-    def _generate_on_policy_outputs_vllm(self, inputs, generation_config, pad_token_id=None):
-        device = self.accelerator.device
-
-        # Decode prompts for vLLM (without special tokens - vLLM expects clean text)
-        prompts_text_for_vllm = self.processing_class.batch_decode(
-            inputs["prompts"],
-            skip_special_tokens=True,
-            # clean_up_tokenization_spaces=False # Keep this commented unless specific issues arise
-        )
-        # Remove padding token text if it appears, as vLLM expects clean prompts
-        if self.processing_class.pad_token:
-            prompts_text_for_vllm = [p.replace(self.processing_class.pad_token, "") for p in prompts_text_for_vllm]
-
-        # Also decode prompts WITH special tokens for ULD loss computation
-        prompts_text_with_special = self.processing_class.batch_decode(
-            inputs["prompts"],
-            skip_special_tokens=False,
-        )
-
-        # system_prompt = "Please reason step by step, and put your final answer within \\boxed{}."
-        # target_system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
-        # prompts_text = [p.replace(target_system_prompt, system_prompt) for p in prompts_text]
-        # Add system prompt to prompts
-
-        max_completion_length = generation_config.max_new_tokens
-        temperature = generation_config.temperature
-        # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
-        top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
-        # top_p, repetition_penalty, min_p are not directly in generation_config, get from trainer args
-        top_p = self.args.top_p if hasattr(self.args, "top_p") else 1.0
-        repetition_penalty = self.args.repetition_penalty if hasattr(self.args, "repetition_penalty") else 1.0
-        min_p = self.args.min_p if hasattr(self.args, "min_p") else 0.0
-
-        if self.vllm_mode == "server":
-            all_prompts_text = gather_object(prompts_text_for_vllm)
-            if self.accelerator.is_main_process:
-                completion_ids = self.vllm_client.generate(
-                    prompts=all_prompts_text,
-                    n=1,  # In GKD, we generate 1 completion per prompt from student
-                    repetition_penalty=repetition_penalty,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=min_p,
-                    max_tokens=max_completion_length,
-                    structured_outputs_regex=self.vllm_structured_outputs_regex,
-                )["completion_ids"]
-            else:
-                completion_ids = [None] * len(all_prompts_text)
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
-            process_slice = slice(
-                self.accelerator.process_index * len(prompts_text_for_vllm),
-                (self.accelerator.process_index + 1) * len(prompts_text_for_vllm),
-            )
-            completion_ids = completion_ids[process_slice]
-        elif self.vllm_mode == "colocate":
-            if self.vllm_structured_outputs_regex is not None:
-                structured_outputs = StructuredOutputsParams(
-                    backend="outlines", regex=self.vllm_structured_outputs_regex
-                )
-            else:
-                structured_outputs = None
-            sampling_params = SamplingParams(
-                n=1,
-                repetition_penalty=repetition_penalty,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                max_tokens=max_completion_length,
-                structured_outputs=structured_outputs,
-            )
-
-            if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
-                # Gather prompts from all ranks in the TP group and flatten.
-                # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
-                orig_size = len(prompts_text_for_vllm)
-                gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
-                torch.distributed.all_gather_object(gathered_prompts, prompts_text_for_vllm, group=self.vllm_tp_group)
-                all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
-            else:
-                all_prompts_text = prompts_text_for_vllm
-
-            all_outputs = self.vllm_engine.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
-            completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-
-            if hasattr(self, "vllm_tp_group") and self.vllm_tensor_parallel_size > 1:
-                # Slice completions for this rank within its TP group.
-                # Each rank generates all outputs — we keep only our share.
-                local_rank_in_group = torch.distributed.get_rank(group=self.vllm_tp_group)
-                tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
-                completion_ids = completion_ids[tp_slice]
-
-            if self.vllm_enable_sleep_mode:
-                self.vllm_engine.sleep(level=2)
-        else:
-            raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
-
-        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
-        prompt_tokenized = self.processing_class(
-            prompts_text_for_vllm,
-            return_tensors="pt",
-            padding="longest",
-            truncation=True if prompt_max_length else False,
-            max_length=prompt_max_length,
-            add_special_tokens=False,
-        ).to(device)
-        prompt_ids = prompt_tokenized.input_ids
-
-        completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids]
-        padded_completion_ids_list = []
-        for completion_tensor in completion_ids_tensors:
-            if len(completion_tensor) > max_completion_length:
-                padded_completion_ids_list.append(completion_tensor[:max_completion_length])
-            elif len(completion_tensor) < max_completion_length:
-                padding_needed = max_completion_length - len(completion_tensor)
-                padded_tensor = torch.cat(
-                    [
-                        completion_tensor,
-                        torch.full((padding_needed,), pad_token_id, device=device, dtype=completion_tensor.dtype),
-                    ]
-                )
-                padded_completion_ids_list.append(padded_tensor)
-            else:
-                padded_completion_ids_list.append(completion_tensor)
-
-        padded_completion_ids = torch.stack(padded_completion_ids_list)
-
-        # Ensure prompt_ids and padded_completion_ids are 2D
-        if prompt_ids.ndim == 1:
-            prompt_ids = prompt_ids.unsqueeze(0)
-        if padded_completion_ids.ndim == 1:
-            padded_completion_ids = padded_completion_ids.unsqueeze(0)
-
-        new_input_ids = torch.cat([prompt_ids, padded_completion_ids], dim=1)
-
-        new_attention_mask = torch.ones_like(new_input_ids, device=device)
-        new_labels = new_input_ids.clone()
-
-        if pad_token_id is not None:
-            new_labels[new_labels == pad_token_id] = -100
-            new_attention_mask[new_input_ids == pad_token_id] = 0
-
-        # Mask prompt tokens in labels
-        prompt_lengths = prompt_ids.shape[1]
-        new_labels[:, :prompt_lengths] = -100
-
-        # IMPORTANT: Preserve original text for cross-tokenizer ULD loss
-        # Use prompts_text_with_special (with special tokens) for ULD loss computation
-        # Extract completion texts from the generated completion IDs
-        completion_texts = []
-        for comp_ids in completion_ids:
-            completion_text = self.processing_class.decode(comp_ids, skip_special_tokens=False)
-            completion_texts.append(completion_text)
-
-        return new_input_ids, new_attention_mask, new_labels, prompts_text_with_special, completion_texts
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with student vLLM."""
