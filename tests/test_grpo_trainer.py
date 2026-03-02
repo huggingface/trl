@@ -36,8 +36,8 @@ from transformers import (
 from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
-from import_utils import is_liger_kernel_available
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_liger_kernel_available
 from trl.trainer.utils import get_kbit_device_map
 
 from .testing_utils import (
