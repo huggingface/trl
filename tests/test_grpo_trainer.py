@@ -2621,6 +2621,47 @@ class TestGRPOTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
+    @require_liger_kernel
+    def test_liger_grpo_kernel_importance_sampling(self):
+        model_name = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            use_liger_kernel=True,
+            max_completion_length=self.max_length,
+            importance_sampling_level="sequence",
+            report_to="none",
+            logging_strategy="no",
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            processing_class=tokenizer,
+        )
+        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+
+        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+
+        previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
+
+        trainer.train()
+
+        for n, param in previous_trainable_params.items():
+            new_param = model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+        release_memory(model, trainer)
+
     @pytest.mark.parametrize(
         "model_name",
         [
