@@ -1985,8 +1985,8 @@ class TestGRPOTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
                 marks=pytest.mark.xfail(
                     (Version("5.2.0") < Version(transformers.__version__))
-                    and is_liger_kernel_available(min_version="0.8.0"),
-                    reason=("Upstream issue tracked at https://github.com/linkedin/Liger-Kernel/issues/1117"),
+                    and not is_liger_kernel_available(min_version="0.8.0"),
+                    reason="Upstream issue tracked at https://github.com/linkedin/Liger-Kernel/issues/1117",
                 ),
             ),
         ],
