@@ -2030,6 +2030,9 @@ class GOLDTrainer(SFTTrainer):
                 teacher_head = unwrapped_teacher.get_output_embeddings()
 
                 # liger fused jsd loss
+                # Note: with ZeRO-3 the lm_head weights are partitioned. The
+                # gathering is handled in training_step() which wraps both
+                # forward and backward in a GatheredParameters context.
                 loss = self.liger_jsd_loss(
                     student_input=student_hidden,
                     student_weight=student_head.weight,
@@ -2501,7 +2504,30 @@ class GOLDTrainer(SFTTrainer):
         buffer_steps = max(1, int(self.args.gradient_accumulation_steps))
         ga = max(1, int(self.args.gradient_accumulation_steps))
 
-        loss = super().training_step(model, inputs, num_items_in_batch)
+        # With Liger + ZeRO-3, the lm_head weights are partitioned across
+        # ranks.  The Liger fused kernel saves weight references during forward
+        # and reads them during backward; both must see the full (gathered)
+        # weight.  Wrapping super().training_step() (which runs compute_loss +
+        # accelerator.backward) keeps the weights gathered for both passes.
+        _gather_ctx = nullcontext()
+        if self.use_liger_gkd_loss:
+            deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+            if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+                import deepspeed
+
+                unwrapped = self.accelerator.unwrap_model(model)
+                unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+                student_head = unwrapped.get_output_embeddings()
+                teacher_head = unwrapped_teacher.get_output_embeddings()
+                params = [student_head.weight, teacher_head.weight]
+                if getattr(student_head, "bias", None) is not None:
+                    params.append(student_head.bias)
+                if getattr(teacher_head, "bias", None) is not None:
+                    params.append(teacher_head.bias)
+                _gather_ctx = deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+
+        with _gather_ctx:
+            loss = super().training_step(model, inputs, num_items_in_batch)
 
         slice_idx = (self._step - 1) % buffer_steps
 
