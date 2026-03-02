@@ -223,6 +223,11 @@ class RLOOConfig(_BaseConfig):
         metadata={"help": "The initial learning rate for AdamW."},
     )
 
+    advantage_estimator: str = field(
+        default="rloo",  # "rloo" | "reinforce_baseline" | "reinforce"
+        metadata={"help": "Advantage estimation method."},
+    )
+
     # Parameters that control the model and reference model
     model_init_kwargs: dict | str | None = field(
         default=None,

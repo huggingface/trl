@@ -1232,14 +1232,27 @@ class RLOOTrainer(_BaseTrainer):
         else:  # doesn't occur during training, but could occur in eval when num_generations_eval=1
             std_rewards = torch.zeros_like(mean_grouped_rewards)
 
-        # RLOO advantages computation
-        grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
-        if num_generations > 1:
-            baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
-            baselines = baselines.view(-1)  # Flatten back to match rewards shape
-            advantages = rewards - baselines
-        else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
-            advantages = torch.zeros_like(rewards)
+        # Compute advantages based on the estimator
+        if self.args.advantage_estimator == "rloo":
+            # RLOO advantages computation
+            grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
+            if num_generations > 1:
+                baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)  # (num_prompts, num_generations)
+                baselines = baselines.view(-1)  # Flatten back to match rewards shape
+                advantages = rewards - baselines
+            else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
+                advantages = torch.zeros_like(rewards)
+        elif self.args.advantage_estimator == "reinforce":
+            # REINFORCE++: global z-score normalization over the flat batch
+            advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        elif self.args.advantage_estimator == "reinforce_baseline":
+            # REINFORCE++ with baseline: group mean subtraction then global z-score normalization
+            # No /std at the group step — global whitening handles scale
+            group_mean = grouped_rewards.mean(dim=1, keepdim=True)
+            advantages = (grouped_rewards - group_mean).flatten()
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        else:
+            raise ValueError(f"Unknown advantage_estimator: {self.args.advantage_estimator}")
 
         # Normalize advantages
         if self.normalize_advantages:
