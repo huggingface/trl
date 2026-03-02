@@ -29,8 +29,8 @@ messages). Important configuration flags on [`GOLDConfig`] include:
   matched/unmatched loss.
 * `beta`, `lmbda`, `seq_kd` – inherited from [`experimental.gkd.GKDConfig`], controlling the generalized JSD interpolation and on-policy
   sampling ratio.
-* `steps_per_generation`, `num_generations`, `generation_batch_size` – control buffered rollout generation across
-  gradient accumulation windows, including multi-generation sampling per prompt.
+* `num_generations`, `generation_batch_size` – control buffered rollout generation across gradient accumulation windows.
+  `generation_batch_size` is the number of unique prompts per worker per optimizer step.
 
 A minimal end-to-end example:
 
