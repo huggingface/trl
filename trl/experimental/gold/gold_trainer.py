@@ -60,12 +60,11 @@ from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    empty_cache,
     ensure_master_addr_port,
     pad,
     split_tensor_dict,
 )
-from ..utils import DataCollatorForChatML
+from ..utils import DataCollatorForChatML, empty_cache
 from .gold_config import GOLDConfig
 
 
@@ -2240,7 +2239,7 @@ class GOLDTrainer(SFTTrainer):
             )
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
-            if self.vllm_structured_outputs_regex:
+            if self.vllm_structured_outputs_regex is not None:
                 structured_outputs = StructuredOutputsParams(
                     backend="outlines", regex=self.vllm_structured_outputs_regex
                 )
