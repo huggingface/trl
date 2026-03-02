@@ -114,6 +114,14 @@ class TestCloneChatTemplate(TrlTestCase):
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+            id="qwen35",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.2.0"),
+                reason="Qwen3.5 models were introduced in transformers-5.2.0",
+            ),
+        ),
     ],
 )
 @pytest.mark.xfail(
@@ -388,6 +396,14 @@ class TestGetTrainingChatTemplate:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+            id="qwen35",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.2.0"),
+                reason="Qwen3.5 models were introduced in transformers-5.2.0",
+            ),
+        ),
     ],
 )
 @pytest.mark.xfail(
@@ -417,9 +433,13 @@ class TestParseResponse:
             {"role": "user", "content": "What is 3*4?"},
             {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
         ]
-        prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
-        text = tokenizer.apply_chat_template(messages).input_ids
-        response = text[len(prefix) :]
+        prompt_text = tokenizer.apply_chat_template(messages[:1], tokenize=False)
+        full_text = tokenizer.apply_chat_template(messages, tokenize=False)
+        response_text = full_text[len(prompt_text) :]
+        assistant_prefix = "<|im_start|>assistant\n"
+        if response_text.startswith(assistant_prefix):
+            response_text = response_text[len(assistant_prefix) :]
+        response = tokenizer(response_text, add_special_tokens=False).input_ids
         parsed = parse_response(tokenizer, response)
         assert parsed == messages[-1]
 
