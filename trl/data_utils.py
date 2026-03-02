@@ -86,13 +86,17 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
             elif isinstance(message["content"], str) and images_included:
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "assistant":
-            if isinstance(message["content"], str):
+            if message.get("content") and isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
         else:
             raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
 
     # Then, check that the number of image placeholders matches the number of images provided
-    num_placeholders = sum(sum(1 for part in message["content"] if part["type"] == "image") for message in messages)
+    num_placeholders = sum(
+        sum(1 for part in message["content"] if part["type"] == "image")
+        for message in messages
+        if "content" in message
+    )
     if num_placeholders != len(images):
         raise ValueError(
             f"Number of images provided ({len(images)}) does not match number of image placeholders ({num_placeholders})."
@@ -101,6 +105,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     # Then, fill in the actual images in the placeholders
     img_idx = 0
     for message in messages:
+        if "content" not in message:
+            continue
         for part in message["content"]:
             if part["type"] == "image":
                 part["image"] = images[img_idx]
