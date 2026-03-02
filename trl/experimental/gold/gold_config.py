@@ -187,7 +187,7 @@ class GOLDConfig(SFTConfig):
     num_generations: int = field(
         default=1,
         metadata={
-            "help": "Number of generations per prompt. Each prompt is repeated this many times in the batch."
+            "help": "Number of generations per prompt. Increasing this will decrease the number of unique prompts per optimization step."
         },
     )
     generation_batch_size: int | None = field(
