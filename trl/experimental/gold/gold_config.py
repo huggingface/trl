@@ -396,12 +396,11 @@ class GOLDConfig(SFTConfig):
                 f"to leave room for the prompt. Consider increasing max_length or reducing max_completion_length."
             )
 
+        if self.num_generations < 1:
+            raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
         local_sequence_batch_size = self.per_device_train_batch_size * self.gradient_accumulation_steps
         if self.generation_batch_size is None:
             self.generation_batch_size = local_sequence_batch_size // self.num_generations
-
-        if self.num_generations < 1:
-            raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
         if self.generation_batch_size < 1:
             raise ValueError(
                 "generation_batch_size must be at least 1. "
