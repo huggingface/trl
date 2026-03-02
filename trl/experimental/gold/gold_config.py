@@ -409,15 +409,14 @@ class GOLDConfig(SFTConfig):
         if self.generation_batch_size * self.num_generations != local_sequence_batch_size:
             raise ValueError(
                 "generation_batch_size and num_generations must exactly partition the local optimizer-step batch. "
-                f"Expected generation_batch_size * num_generations == per_device_train_batch_size * "
-                f"gradient_accumulation_steps, but got {self.generation_batch_size} * {self.num_generations} != "
-                f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps} ({local_sequence_batch_size})."
+                "Expected generation_batch_size * num_generations == per_device_train_batch_size * "
+                f"gradient_accumulation_steps, got {self.generation_batch_size} * {self.num_generations} != "
+                f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
             )
         if self.num_generations > 1 and self.lmbda < 1.0:
             warnings.warn(
-                f"num_generations={self.num_generations} with lmbda={self.lmbda} means off-policy batches will "
-                f"contain {self.num_generations} identical copies of each dataset sample. Consider setting "
-                f"lmbda=1.0 (fully on-policy) when using num_generations > 1.",
+                f"num_generations={self.num_generations} with lmbda={self.lmbda} means off-policy batches include "
+                f"{self.num_generations} copies of each sample; consider lmbda=1.0 when num_generations > 1.",
                 UserWarning,
                 stacklevel=2,
             )

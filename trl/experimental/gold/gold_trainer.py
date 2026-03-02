@@ -1106,9 +1106,8 @@ class GOLDTrainer(SFTTrainer):
         Override Trainer.get_train_dataloader to load one generation batch per optimizer window.
 
         The base dataloader yields local batches of size
-        `per_device_train_batch_size * gradient_accumulation_steps`. Each base batch is then repeated
-        `gradient_accumulation_steps` times so Trainer still executes one mini-step per accumulation slot without
-        re-sampling prompts.
+        `per_device_train_batch_size * gradient_accumulation_steps`, then repeats each batch
+        `gradient_accumulation_steps` times so Trainer can run accumulation mini-steps without re-sampling prompts.
         """
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
@@ -1147,7 +1146,7 @@ class GOLDTrainer(SFTTrainer):
         if not self.model.training:
             return generation_batch
 
-        buffer_steps = max(1, int(self.args.gradient_accumulation_steps))
+        buffer_steps = self.args.gradient_accumulation_steps
         if self._step % buffer_steps == 0 or self._buffered_inputs is None:
             self._fill_buffer(generation_batch, buffer_steps)
 
@@ -2522,8 +2521,7 @@ class GOLDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the offline original inputs.
         """
-        buffer_steps = max(1, int(self.args.gradient_accumulation_steps))
-        ga = max(1, int(self.args.gradient_accumulation_steps))
+        buffer_steps = self.args.gradient_accumulation_steps
 
         # Keep lm_head gathered across forward+backward for Liger + ZeRO-3.
         with self._get_liger_zero3_lm_head_gather_ctx(model):
@@ -2541,7 +2539,7 @@ class GOLDTrainer(SFTTrainer):
             self._textual_logs["completion"].extend(gather_object(completion_texts))
 
         loss_scalar = float(loss.detach())
-        step_equiv = 1.0 / ga
+        step_equiv = 1.0 / self.args.gradient_accumulation_steps
 
         if on_policy:
             self._on_policy_loss_total += loss_scalar
