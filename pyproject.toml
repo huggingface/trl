@@ -109,7 +109,7 @@ dev = [
     # kernels
     "kernels",
     # liger
-    #"liger-kernel>=0.7.0",
+    "liger-kernel>=0.7.0",
     # peft
     "peft>=0.8.0",
     # quality
