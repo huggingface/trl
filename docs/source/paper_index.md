@@ -592,7 +592,8 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     loss_type="vespo",
-    importance_sampling_level="token",
+    use_vllm=True, # or False if not using any token-level `vllm_importance_sampling_correction` methods
+    vllm_importance_sampling_mode="token_truncate", # default correction mode for VESPO, `token_mask` also supported
     vespo_k_pos=2.0,  # Power exponent (c1 in paper Section 3.4) for positive advantages
     vespo_lambda_pos=3.0,  # Decay factor (c2 in paper Section 3.4) for positive advantages
     vespo_k_neg=3.0,  # Power exponent (c1 in paper Section 3.4) for negative advantages
