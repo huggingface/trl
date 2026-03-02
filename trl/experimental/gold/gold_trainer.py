@@ -234,6 +234,31 @@ def build_teacher_inputs_from_texts(
     return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
 
 
+class _RepeatEachBatchDataLoader:
+    """Repeats each dataloader batch `repeat_count` times without re-sampling."""
+
+    def __init__(self, dataloader, repeat_count: int):
+        if repeat_count < 1:
+            raise ValueError(f"repeat_count must be at least 1, got {repeat_count}.")
+        self.dataloader = dataloader
+        self.repeat_count = repeat_count
+
+    def __iter__(self):
+        for batch in self.dataloader:
+            for _ in range(self.repeat_count):
+                yield batch
+
+    def __len__(self):
+        return len(self.dataloader) * self.repeat_count
+
+    def set_epoch(self, epoch: int):
+        if hasattr(self.dataloader, "set_epoch"):
+            self.dataloader.set_epoch(epoch)
+
+    def __getattr__(self, attr):
+        return getattr(self.dataloader, attr)
+
+
 class ULDLoss(nn.Module):
     """
     Universal Logit Distillation Loss.
@@ -951,7 +976,7 @@ class GOLDTrainer(SFTTrainer):
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.steps_per_generation
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
@@ -1070,20 +1095,19 @@ class GOLDTrainer(SFTTrainer):
         return RepeatSampler(
             data_source=dataset,
             mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.args.steps_per_generation,
+            batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
+            repeat_count=1,
             shuffle=True,
             seed=self.args.seed,
         )
 
     def get_train_dataloader(self):
         """
-        Override Trainer.get_train_dataloader to load a generation batch covering one optimizer window.
+        Override Trainer.get_train_dataloader to load one generation batch per optimizer window.
 
-        Instead of returning a standard per-step batch (i.e., `per_device_batch_size`), this dataloader loads
-        a batch of size `per_device_batch_size * steps_per_generation`. Combined with the `RepeatSampler`
-        (which inflates the sampler length by `steps_per_generation`), this prevents the Trainer from
-        double-dividing by `gradient_accumulation_steps` when computing optimizer steps per epoch.
+        The base dataloader yields local batches of size
+        `per_device_train_batch_size * gradient_accumulation_steps`, then repeats each batch
+        `gradient_accumulation_steps` times so Trainer can run accumulation mini-steps without re-sampling prompts.
         """
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
@@ -1096,7 +1120,7 @@ class GOLDTrainer(SFTTrainer):
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
 
         dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.steps_per_generation,
+            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
@@ -1114,18 +1138,19 @@ class GOLDTrainer(SFTTrainer):
             if self.args.dataloader_num_workers > 0:
                 dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+        base_dataloader = self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+        return _RepeatEachBatchDataLoader(base_dataloader, repeat_count=self.args.gradient_accumulation_steps)
 
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         if not self.model.training:
             return generation_batch
 
-        spg = self.args.steps_per_generation
-        if self._step % spg == 0 or self._buffered_inputs is None:
-            self._fill_buffer(generation_batch, spg)
+        buffer_steps = self.args.gradient_accumulation_steps
+        if self._step % buffer_steps == 0 or self._buffered_inputs is None:
+            self._fill_buffer(generation_batch, buffer_steps)
 
-        slice_idx = self._step % spg
+        slice_idx = self._step % buffer_steps
         inputs = self._buffered_inputs[slice_idx]
         self._step += 1
         return inputs
@@ -1174,20 +1199,20 @@ class GOLDTrainer(SFTTrainer):
         return updated_slice
 
     @profiling_decorator
-    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], spg: int):
-        slices = split_tensor_dict(generation_batch, spg)
+    def _fill_buffer(self, generation_batch: dict[str, torch.Tensor | Any], buffer_steps: int):
+        slices = split_tensor_dict(generation_batch, buffer_steps)
 
         if self.accelerator.is_main_process:
-            on_policy_flags = [random.random() <= self.lmbda for _ in range(spg)]
+            on_policy_flags = [random.random() <= self.lmbda for _ in range(buffer_steps)]
         else:
-            on_policy_flags = [False] * spg
+            on_policy_flags = [False] * buffer_steps
 
         on_policy_flags = broadcast_object_list(on_policy_flags, from_process=0)
         on_policy_indices = [i for i, flag in enumerate(on_policy_flags) if flag]
 
-        self._buffered_inputs = [None] * spg
+        self._buffered_inputs = [None] * buffer_steps
         self._buffered_on_policy = on_policy_flags
-        self._buffered_text_logs = [None] * spg
+        self._buffered_text_logs = [None] * buffer_steps
 
         for i, flag in enumerate(on_policy_flags):
             if not flag:
@@ -2418,6 +2443,27 @@ class GOLDTrainer(SFTTrainer):
             empty_cache()
             self.vllm_engine.wake_up(tags=["kv_cache"])
 
+    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
+        if not self.use_liger_gkd_loss:
+            return nullcontext()
+
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
+            return nullcontext()
+
+        import deepspeed
+
+        unwrapped_student = self.accelerator.unwrap_model(model)
+        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+        student_head = unwrapped_student.get_output_embeddings()
+        teacher_head = unwrapped_teacher.get_output_embeddings()
+        params = [student_head.weight, teacher_head.weight]
+        if student_head.bias is not None:
+            params.append(student_head.bias)
+        if teacher_head.bias is not None:
+            params.append(teacher_head.bias)
+        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
+
     @profiling_decorator
     def training_step(
         self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
@@ -2429,12 +2475,13 @@ class GOLDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the offline original inputs.
         """
-        spg = self.args.steps_per_generation
-        ga = max(1, int(self.args.gradient_accumulation_steps))
+        buffer_steps = self.args.gradient_accumulation_steps
 
-        loss = super().training_step(model, inputs, num_items_in_batch)
+        # Keep lm_head gathered across forward+backward for Liger + ZeRO-3.
+        with self._get_liger_zero3_lm_head_gather_ctx(model):
+            loss = super().training_step(model, inputs, num_items_in_batch)
 
-        slice_idx = (self._step - 1) % spg
+        slice_idx = (self._step - 1) % buffer_steps
 
         on_policy = False
         if self._buffered_on_policy is not None and slice_idx < len(self._buffered_on_policy):
@@ -2446,7 +2493,7 @@ class GOLDTrainer(SFTTrainer):
             self._textual_logs["completion"].extend(gather_object(completion_texts))
 
         loss_scalar = float(loss.detach())
-        step_equiv = 1.0 / ga
+        step_equiv = 1.0 / self.args.gradient_accumulation_steps
 
         if on_policy:
             self._on_policy_loss_total += loss_scalar

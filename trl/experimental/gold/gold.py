@@ -51,6 +51,7 @@ python trl/experimental/gold/gold.py \
 """
 
 import logging
+import os
 
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
@@ -128,6 +129,20 @@ if __name__ == "__main__":
             eval_dataset = dataset["validation"]
         elif "dev" in dataset:
             eval_dataset = dataset["dev"]
+
+    if isinstance(training_args.report_to, str):
+        report_to = {training_args.report_to}
+    else:
+        report_to = set(training_args.report_to or [])
+    if "wandb" in report_to:
+        if training_args.wandb_project is not None:
+            os.environ.setdefault("WANDB_PROJECT", training_args.wandb_project)
+        if training_args.wandb_entity is not None:
+            os.environ.setdefault("WANDB_ENTITY", training_args.wandb_entity)
+        if training_args.wandb_run_group is not None:
+            os.environ.setdefault("WANDB_RUN_GROUP", training_args.wandb_run_group)
+        if training_args.run_name is not None:
+            os.environ.setdefault("WANDB_NAME", training_args.run_name)
 
     trainer = GOLDTrainer(
         model=model_args.model_name_or_path,

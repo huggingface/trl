@@ -13,19 +13,17 @@ set -euo pipefail
 
 if [[ "$*" == *"--help"* ]]; then
   cat <<'EOF'
-Usage: sbatch scripts/slurm/gold_buffer_test.slurm [options]
+Usage: sbatch scripts/slurm/gold.slurm [options]
 
 Required:
-  --config PATH             YAML config passed to gold_buffer_test.py
+  --config PATH             YAML config passed to gold.py
 
 Optional:
   --accelerator NAME|PATH   Accelerate config name (default: zero3) or explicit YAML path
-  --dp N                    vLLM server data parallel size (default: 1)
-  --tp N                    vLLM server tensor parallel size (default: 1)
-  --args "ARGS"             Extra args appended to gold_buffer_test.py
+  --args "ARGS"             Extra args appended to gold.py
 
 Examples:
-  sbatch scripts/slurm/gold_buffer_test.slurm \
+  sbatch scripts/slurm/gold.slurm \
     --config /path/to/config.yaml \
     --accelerator zero3 \
     --args "--bf16 --logging_steps 1"
@@ -33,7 +31,6 @@ EOF
   exit 0
 fi
 
-# Cluster/environment setup (same style as internal launcher)
 module load cuda/12.9 || true
 source ~/.bashrc || true
 
@@ -42,11 +39,8 @@ echo "START TIME: $(date)"
 
 CONFIG_FILE=""
 ACCELERATOR="zero3"
-DP=1
-TP=1
 GPUS_PER_NODE=8
 OPTIONAL_ARGS=""
-VENV_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,14 +50,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --accelerator)
       ACCELERATOR="$2"
-      shift 2
-      ;;
-    --dp)
-      DP="$2"
-      shift 2
-      ;;
-    --tp)
-      TP="$2"
       shift 2
       ;;
     --args)
@@ -100,7 +86,6 @@ if ! command -v trl >/dev/null 2>&1; then
   exit 1
 fi
 
-# Resolve accelerate config.
 if [[ -f "$ACCELERATOR" ]]; then
   ACCEL_CONFIG="$ACCELERATOR"
 elif [[ -f "trl/accelerate_configs/${ACCELERATOR}.yaml" ]]; then
@@ -115,18 +100,11 @@ fi
 GRAD_ACC_STEPS=$(grep -E '^\s*gradient_accumulation_steps:' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
 GRAD_ACC_STEPS=${GRAD_ACC_STEPS:-1}
 
-# Allow CLI override from --args.
 if [[ "$OPTIONAL_ARGS" =~ --gradient_accumulation_steps=([0-9]+) ]]; then
   GRAD_ACC_STEPS="${BASH_REMATCH[1]}"
 fi
 if [[ "$OPTIONAL_ARGS" =~ --gradient_accumulation_steps[[:space:]]+([0-9]+) ]]; then
   GRAD_ACC_STEPS="${BASH_REMATCH[1]}"
-fi
-
-STUDENT_MODEL=$(grep -E '^\s*model_name_or_path:' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
-REVISION=$(grep -E '^\s*model_revision:' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
-if [[ -z "${REVISION:-}" ]]; then
-  REVISION=$(grep -E '^\s*student_model_revision:' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
 fi
 
 if [[ -z "${SLURM_JOB_NODELIST:-}" ]]; then
@@ -140,11 +118,6 @@ NODELIST=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
 MASTER_ADDR=${NODELIST[0]}
 MASTER_PORT=${MASTER_PORT:-6000}
 TRAIN_NODES=("${NODELIST[@]}")
-
-USE_VLLM="false"
-if grep -qE '^\s*use_vllm:\s*true' "$CONFIG_FILE" && grep -qE '^\s*vllm_mode:\s*server' "$CONFIG_FILE"; then
-  USE_VLLM="true"
-fi
 
 NODELIST_CSV=$(IFS=,; echo "${TRAIN_NODES[*]}")
 
