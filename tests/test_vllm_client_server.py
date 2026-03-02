@@ -179,6 +179,22 @@ class TestVLLMClientServer(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_generate_with_logprobs_none(self):
+        outputs = self.client.generate(["Hello, AI!"], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
+
+    def test_chat_with_logprobs_none(self):
+        outputs = self.client.chat([[{"role": "user", "content": "Hello, AI!"}]], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
+
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
         completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[

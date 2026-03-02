@@ -506,8 +506,8 @@ def main(script_args: ScriptArguments):
     class GenerateResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[list[float]]]
-        logprob_token_ids: list[list[list[int]]]
+        logprobs: list[list[list[float | None]]] | None
+        logprob_token_ids: list[list[list[int]]] | None
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -672,8 +672,8 @@ def main(script_args: ScriptArguments):
     class ChatResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[list[float]]]
-        logprob_token_ids: list[list[list[int]]]
+        logprobs: list[list[list[float | None]]] | None
+        logprob_token_ids: list[list[list[int]]] | None
 
     @app.post("/chat/", response_model=ChatResponse)
     async def chat(request: ChatRequest):
