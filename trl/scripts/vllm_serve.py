@@ -338,6 +338,14 @@ class ScriptArguments:
             "model implementation."
         },
     )
+    enable_lora: bool = field(
+        default=False,
+        metadata={"help": "Enable LoRA adapter serving. Required for vllm_sync_strategy='lora_adapter'."},
+    )
+    max_lora_rank: int = field(
+        default=64,
+        metadata={"help": "Maximum LoRA rank. Must be >= the rank of any adapter that will be loaded."},
+    )
 
 
 def llm_worker(
@@ -349,25 +357,30 @@ def llm_worker(
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
 
-    llm = LLM(
-        model=script_args.model,
-        revision=script_args.revision,
-        tensor_parallel_size=script_args.tensor_parallel_size,
-        gpu_memory_utilization=script_args.gpu_memory_utilization,
-        enforce_eager=script_args.enforce_eager,
-        dtype=script_args.dtype,
+    llm_kwargs = {
+        "model": script_args.model,
+        "revision": script_args.revision,
+        "tensor_parallel_size": script_args.tensor_parallel_size,
+        "gpu_memory_utilization": script_args.gpu_memory_utilization,
+        "enforce_eager": script_args.enforce_eager,
+        "dtype": script_args.dtype,
         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
         # This is particularly useful here because we generate completions from the same prompts.
-        enable_prefix_caching=script_args.enable_prefix_caching,
-        kv_cache_dtype=script_args.kv_cache_dtype,
-        max_model_len=script_args.max_model_len,
-        worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
-        trust_remote_code=script_args.trust_remote_code,
-        model_impl=script_args.vllm_model_impl,
+        "enable_prefix_caching": script_args.enable_prefix_caching,
+        "kv_cache_dtype": script_args.kv_cache_dtype,
+        "max_model_len": script_args.max_model_len,
+        "worker_extension_cls": "trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        "trust_remote_code": script_args.trust_remote_code,
+        "model_impl": script_args.vllm_model_impl,
         # Important so temperature scaling/logit tweaking affects the TIS log probs
-        logprobs_mode="processed_logprobs",
-    )
+        "logprobs_mode": "processed_logprobs",
+    }
+    if script_args.enable_lora:
+        llm_kwargs["enable_lora"] = True
+        llm_kwargs["max_lora_rank"] = script_args.max_lora_rank
+        llm_kwargs["max_loras"] = 2
+    llm = LLM(**llm_kwargs)
 
     # Send ready signal to parent process
     connection.send({"status": "ready"})
@@ -463,6 +476,9 @@ def main(script_args: ScriptArguments):
                 process.join()  # ensure process termination after calling terminate()
 
     app = FastAPI(lifespan=lifespan)
+
+    # Track the current LoRA request for adapter-based weight sync
+    lora_state = {"request": None}  # mutable container for nonlocal access
 
     # Define the endpoints for the model server
     @app.get("/health/")
@@ -632,6 +648,8 @@ def main(script_args: ScriptArguments):
             if not prompts:
                 prompts = ["<placeholder>"]
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
+            if lora_state["request"] is not None:
+                kwargs["lora_request"] = lora_state["request"]
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results
@@ -803,6 +821,9 @@ def main(script_args: ScriptArguments):
                 "sampling_params": sampling_params,
                 "chat_template_kwargs": request.chat_template_kwargs,
             }
+            if lora_state["request"] is not None:
+                kwargs["lora_request"] = lora_state["request"]
+
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 
         # Receive results
@@ -906,6 +927,40 @@ def main(script_args: ScriptArguments):
         for connection in connections:
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
         return {"message": "Request received, closing communicator"}
+
+    class LoadLoRARequest(BaseModel):
+        lora_path: str
+
+    @app.post("/load_lora_adapter/")
+    async def load_lora_adapter(request: LoadLoRARequest):
+        """
+        Loads or reloads a LoRA adapter from disk. Uses an incrementing ID to force vLLM to re-read from disk.
+        """
+        from vllm.lora.request import LoRARequest as VLLMLoRARequest
+
+        lora_name = "policy"
+        logger.info(
+            "Received LoRA load request: lora_name='%s', lora_path='%s', path_exists=%s",
+            lora_name,
+            request.lora_path,
+            os.path.isdir(request.lora_path),
+        )
+
+        # Increment version to force vLLM to reload from disk (vLLM caches by lora_int_id)
+        prev = lora_state["request"]
+        new_id = (prev.lora_int_id + 1) if prev is not None else 1
+        lora_state["request"] = VLLMLoRARequest(
+            lora_name=lora_name,
+            lora_int_id=new_id,
+            lora_path=request.lora_path,
+        )
+        logger.info(
+            "LoRA adapter registered for reload: lora_name='%s', lora_int_id=%s, lora_path='%s'",
+            lora_name,
+            new_id,
+            request.lora_path,
+        )
+        return {"status": "success", "lora_int_id": new_id}
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
