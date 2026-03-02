@@ -594,7 +594,7 @@ class RLOOConfig(_BaseConfig):
                 f"({self.num_generations})."
             )
 
-        if self.num_generations < 2:
+        if self.advantage_estimator != "reinforce" and self.num_generations < 2:
             raise ValueError(
                 "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
