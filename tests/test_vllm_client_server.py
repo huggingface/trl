@@ -17,7 +17,7 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient
@@ -178,6 +178,28 @@ class TestVLLMClientServer(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert any("Multiplies two integers." in decoded_prompt)
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -361,6 +383,28 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert any("Multiplies two integers." in decoded_prompt)
+
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
         completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
@@ -464,6 +508,28 @@ class TestVLLMClientServerTP(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert any("Multiplies two integers." in decoded_prompt)
+
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
@@ -546,6 +612,28 @@ class TestVLLMClientServerDP(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert any("Multiplies two integers." in decoded_prompt)
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
