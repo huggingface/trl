@@ -333,7 +333,7 @@ class RLOOTrainer(_BaseTrainer):
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
 
-        self._has_async_reward_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs)
+        self._has_async_reward_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
         if self._has_async_reward_funcs:
             self.async_reward_loop_thread, self.async_reward_loop, self.async_reward_loop_ready_event = (
                 start_event_loop_in_daemon(name="RLOOTrainer-AsyncRewardLoop")
@@ -835,7 +835,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif asyncio.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function
