@@ -232,8 +232,10 @@ class GRPOTrainer(_BaseTrainer):
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
-            `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
-            and may change or be removed at any time without prior notice.
+            `"logprobs"` fields. Any other fields are forwarded to the reward functions. The function receives the raw
+            per-process prompt slice with no duplication; it is responsible for returning the correct number of
+            completions per prompt (see `num_generations` / `num_generations_eval` on the trainer). This feature is
+            experimental and may change or be removed at any time without prior notice.
         environment_factory (`EnvironmentFactory`, *optional*):
             A callable that creates and returns an environment instance. The environment class should define methods
             that can be invoked as tools during generation. Each method should comply with the same requirements as the
@@ -705,13 +707,6 @@ class GRPOTrainer(_BaseTrainer):
 
         if self.use_vllm:
             # Initialize vLLM generation backend
-            # Wrap rollout_func to capture trainer context if provided
-            rollout_func = None
-            if self.rollout_func is not None:
-
-                def rollout_func(prompts):
-                    return self.rollout_func(prompts, self)
-
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
@@ -748,7 +743,6 @@ class GRPOTrainer(_BaseTrainer):
                 chat_template=self.chat_template,
                 chat_template_kwargs=self.chat_template_kwargs,
                 tools=self.tools,
-                rollout_func=rollout_func,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
@@ -1221,6 +1215,25 @@ class GRPOTrainer(_BaseTrainer):
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
+
+        if self.rollout_func is not None:
+            # Keep vLLM weights in sync for custom rollouts that rely on vLLM utilities.
+            if self.use_vllm and self.state.global_step != self._last_loaded_step:
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
+                self._last_loaded_step = self.state.global_step
+
+            # Pass prompts to rollout_func preserving structured messages.
+            # Chat templating must happen inside rollout_func, at the backend boundary, so that
+            # multimodal content (images, typed content blocks) is not lost before rollout logic runs.
+            output = self.rollout_func(prompts, self)
+            required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+            missing_keys = required_keys - output.keys()
+            if missing_keys:
+                missing_keys_list = sorted(missing_keys)
+                raise ValueError(f"rollout_func must return keys {missing_keys_list} in its output dict.")
+            extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+            return output["prompt_ids"], output["completion_ids"], output["logprobs"], extra_fields
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
