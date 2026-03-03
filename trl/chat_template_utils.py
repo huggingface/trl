@@ -590,13 +590,28 @@ qwen3_training_chat_template = r"""{%- if tools %}
     {%- endif %}
 {%- endif %}"""
 
+# Modifications:
+# - {%- if '</think>' in content %}
+# + {%- if '<think>' in content and '</think>' in content %}
+#   Always check for both tags to avoid edge cases where the model generates only one tag, which would otherwise be parsed incorrectly
+# - {{- '<|im_start|>' + message.role + '\n' + content }}
+# + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content }}
+#   Always include thinking block during training. It's important to have a prefix-preserving template.
+qwen35_training_chat_template = qwen35_chat_template.replace(
+    "{%- if '</think>' in content %}",
+    "{%- if '<think>' in content and '</think>' in content %}",
+).replace(
+    "{{- '<|im_start|>' + message.role + '\\n' + content }}",
+    "{{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}",
+)
+
 
 def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
     r"""
     Get a prefix-preserving chat template for training, if needed.
 
-    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently only Qwen3
-    supported). Otherwise, returns `None`.
+    If the tokenizer's template isn't prefix-preserving, returns a training-compatible template (currently Qwen3 and
+    Qwen3.5 supported). Otherwise, returns `None`.
 
     Args:
         tokenizer (`PreTrainedTokenizer`):
@@ -643,6 +658,8 @@ def get_training_chat_template(tokenizer: PreTrainedTokenizer) -> str | None:
 
     if tokenizer.chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
+    if tokenizer.chat_template == qwen35_chat_template:
+        return qwen35_training_chat_template
     else:
         raise ValueError(
             "The tokenizer's chat template is not prefix-preserving and patching is not supported for this template. "

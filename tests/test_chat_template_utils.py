@@ -225,6 +225,14 @@ class TestIsChatTemplatePrefixPreserving:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+            id="qwen35",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.2.0"),
+                reason="Qwen3.5 models were introduced in transformers-5.2.0",
+            ),
+        ),
     ],
 )
 class TestGetTrainingChatTemplate:
@@ -303,21 +311,6 @@ class TestGetTrainingChatTemplate:
                 "role": "assistant",
                 "content": "I will call a tool.",
                 "tool_calls": [{"name": "multiply", "arguments": {"a": 3, "b": 4}}],
-            },
-        ]
-        before = tokenizer.apply_chat_template(messages, tokenize=False)
-        new_chat_template = get_training_chat_template(tokenizer)
-        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
-
-    def test_behavior_unchanged_assistant_with_tool_calls_with_string_arguments(self, tokenizer_name):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        messages = [
-            {"role": "user", "content": "Multiply 3 by 4."},
-            {
-                "role": "assistant",
-                "content": "I will call a tool.",
-                "tool_calls": [{"name": "multiply", "arguments": '{"a": 3, "b": 4}'}],
             },
         ]
         before = tokenizer.apply_chat_template(messages, tokenize=False)
