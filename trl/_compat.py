@@ -211,6 +211,24 @@ def _patch_transformers_hybrid_cache() -> None:
             warnings.warn(f"Failed to patch transformers HybridCache compatibility: {e}", stacklevel=2)
 
 
+def _ensure_transformers_parallelism_config() -> None:
+    """
+    Ensure that ``transformers.training_args`` always defines the symbol `ParallelismConfig` so that Python's
+    `typing.get_type_hints` can resolve annotations on `transformers.TrainingArguments` without raising a `NameError`.
+
+    This is needed when running with ``accelerate<1.10.1``, where the module ``accelerate.parallelism_config`` did not
+    exist and therefore the type alias is not imported by Transformers.
+
+    See upstream fix PR in transformers#40818.
+    """
+    from typing import Any
+
+    import transformers.training_args
+
+    if not hasattr(transformers.training_args, "ParallelismConfig"):
+        transformers.training_args.ParallelismConfig = Any
+
+
 # Apply vLLM patches
 _patch_vllm_logging()
 _patch_vllm_disabled_tqdm()
@@ -218,3 +236,4 @@ _patch_vllm_cached_tokenizer()
 
 # Apply transformers patches
 _patch_transformers_hybrid_cache()
+_ensure_transformers_parallelism_config()  # before creating HfArgumentParser
