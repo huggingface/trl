@@ -25,9 +25,9 @@ from dataclasses import dataclass, field
 import datasets
 import yaml
 from datasets import DatasetDict, concatenate_datasets
-from transformers import HfArgumentParser
-from transformers.hf_argparser import DataClass, DataClassType
 from transformers.utils import is_rich_available
+
+from trl.scripts._hf_argparser import DataClass, DataClassType, HfArgumentParser
 
 
 def _ensure_transformers_parallelism_config() -> None:
