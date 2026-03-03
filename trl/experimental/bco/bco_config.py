@@ -15,15 +15,16 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-import transformers
-from packaging.version import Version
 from transformers import TrainingArguments
+
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class BCOConfig(TrainingArguments):
+class BCOConfig(_BaseConfig):
+    # docstyle-ignore
     r"""
-    Configuration class for the [`BCOTrainer`].
+    Configuration class for the [`experimental.bco.BCOTrainer`].
 
     This class includes only the parameters that are specific to BCO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
@@ -37,16 +38,12 @@ class BCOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
-        label_pad_token_id (`int`,  *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
@@ -62,11 +59,8 @@ class BCOConfig(TrainingArguments):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
-        ref_model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
-            from a string.
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model and
+            reference model from strings.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         prompt_sample_size (`int`, *optional*, defaults to `1024`):
@@ -75,54 +69,27 @@ class BCOConfig(TrainingArguments):
             Minimum value of the density ratio. The estimated density ratio is clamped to this value.
         max_density_ratio (`float`, *optional*, defaults to `10.0`):
             Maximum value of the density ratio. The estimated density ratio is clamped to this value.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `5e-7` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
-    # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
-    # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
-    # workaround here, which can be removed once we drop support for versions older than 4.57.5.
-    lr_scheduler_kwargs: dict | str | None = field(
-        default=None,
-        metadata={
-            "help": "Additional parameters for the lr_scheduler, such as {'num_cycles': 1} for cosine with hard "
-            "restarts."
-        },
+    learning_rate: float = field(
+        default=5e-7,
+        metadata={"help": "The initial learning rate for AdamW."},
     )
 
     max_length: int | None = field(
         default=1024,
         metadata={
             "help": "Maximum length of the sequences (prompt + completion) in the batch. "
-            "This argument is required if you want to use the default data collator."
-        },
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={
-            "help": "Maximum length of the prompt. "
             "This argument is required if you want to use the default data collator."
         },
     )
@@ -138,12 +105,6 @@ class BCOConfig(TrainingArguments):
         metadata={
             "help": "Parameter controlling the deviation from the reference model. "
             "Higher β means less deviation from the reference model."
-        },
-    )
-    label_pad_token_id: int = field(
-        default=-100,
-        metadata={
-            "help": "Label pad token id. This argument is required if you want to use the default data collator."
         },
     )
     truncation_mode: str = field(
@@ -188,13 +149,6 @@ class BCOConfig(TrainingArguments):
             "model from a string."
         },
     )
-    ref_model_init_kwargs: dict[str, Any] | None = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "reference model from a string."
-        },
-    )
     dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
@@ -211,16 +165,3 @@ class BCOConfig(TrainingArguments):
         default=10.0,
         metadata={"help": "Maximum value of the density ratio. The estimated density ratio is clamped to this value."},
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
-        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
-        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
-        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
-        if self.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
-            self.gradient_checkpointing_kwargs = self.gradient_checkpointing_kwargs or {}
-            self.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
-
-        super().__post_init__()

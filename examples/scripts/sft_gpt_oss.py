@@ -36,12 +36,11 @@ accelerate launch \
     --attn_implementation kernels-community/vllm-flash-attn3 \
     --dataset_num_proc 12 \
     --dataset_name HuggingFaceH4/Multilingual-Thinking \
-    --gradient_checkpointing \
     --max_length 4096 \
     --per_device_train_batch_size 2 \
     --num_train_epochs 1 \
     --logging_steps 1 \
-    --warmup_ratio 0.03 \
+    --warmup_steps 0.03 \
     --lr_scheduler_type cosine_with_min_lr \
     --lr_scheduler_kwargs '{"min_lr_rate": 0.1}' \
     --output_dir gpt-oss-20b-multilingual-reasoner \

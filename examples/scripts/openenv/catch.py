@@ -27,13 +27,13 @@
 Simple script to run GRPO training with OpenEnv's Catch environment (OpenSpiel) and vLLM. The reward function
 is based on the catch game where the agent tries to catch falling balls.
 
-Setup (Option A - Install from HF Space):
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/openenv/openspiel_env
 ```
 
-Setup (Option B - Clone OpenEnv repo):
+Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
 git clone https://github.com/meta-pytorch/OpenEnv.git

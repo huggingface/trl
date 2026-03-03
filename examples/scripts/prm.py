@@ -28,7 +28,6 @@ python examples/scripts/prm.py \
     --output_dir Qwen2-0.5B-Reward \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --gradient_checkpointing True \
     --learning_rate 1.0e-5 \
     --eval_strategy steps \
     --eval_steps 50
@@ -40,7 +39,6 @@ python examples/scripts/prm.py \
     --output_dir Qwen2-0.5B-Reward-LoRA \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --gradient_checkpointing True \
     --learning_rate 1.0e-4 \
     --eval_strategy steps \
     --eval_steps 50

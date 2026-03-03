@@ -17,7 +17,9 @@ import textwrap
 from time import strftime
 
 import pytest
+import transformers
 from datasets import Dataset, DatasetDict
+from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
@@ -295,6 +297,7 @@ class TestPrepareMultimodalMessagesVLLM:
 
 
 class TestIsConversational(TrlTestCase):
+    # fmt: off
     conversational_examples = [
         {  # Language modeling
             "messages": [
@@ -322,6 +325,30 @@ class TestIsConversational(TrlTestCase):
             "rejected": [
                 {"role": "user", "content": "What color is the sky?"},
                 {"role": "assistant", "content": "It is green."},
+            ],
+        },
+        {  # Preference with tool calls
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            "chosen": [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_color", "arguments": {"what": "sky"}}}]},
+                {"role": "tool", "name": "get_color", "content": "blue"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_color", "arguments": {"what": "tree"}}}]},
+                {"role": "tool", "name": "get_color", "content": "green"},
+                {"role": "assistant", "content": "It is green."},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "description": "Gets the color.",
+                        "name": "get_color",
+                        "parameters": {"properties": {"what": {"description": "What to get the color of.", "type": "string"}}, "required": ["what"], "type": "object"},
+                        "return": {"description": "The color.", "type": "string"},
+                    },
+                },
             ],
         },
         {  # Unpaired preference
@@ -386,6 +413,7 @@ class TestIsConversational(TrlTestCase):
             "label": True,
         },
     ]
+    # fmt: on
 
     non_conversational_examples = [
         {"prompt": "The sky is", "completion": " blue."},
@@ -431,12 +459,20 @@ class TestIsConversationalFromValue(TrlTestCase):
 class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
+        "trl-internal-testing/tiny-Cohere2ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
         "trl-internal-testing/tiny-GptOssForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="GLM4 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
@@ -445,6 +481,13 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-Phi3ForCausalLM",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
     ]
 
     conversational_examples = [
@@ -1033,7 +1076,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
             "seq_lengths": [[4], [4], [2, 1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
         assert dataset.to_dict() == expected_output
 
     def test_with_overlong_two_coluns(self):
@@ -1048,7 +1091,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
             "seq_lengths": [[4], [4], [3], [3], [2]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
         assert dataset.to_dict() == expected_output
 
     def test_with_non_power_of_2(self):
@@ -1060,6 +1103,21 @@ class TestPackDatasetBfd(TrlTestCase):
         expected_output = {
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
             "seq_lengths": [[5], [4, 1], [3]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        assert dataset.to_dict() == expected_output
+
+    def test_default_no_requeue(self):
+        """Test default 'bfd' strategy for SFT datasets (truncates overflow)."""
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        # With default 'bfd' strategy, overflow tokens are discarded
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
+            "seq_lengths": [[4], [4], [2, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output

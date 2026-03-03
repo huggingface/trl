@@ -49,12 +49,15 @@ class TrainerWithRefModel(Trainer):
             eval_dataset=eval_dataset,
             processing_class=processing_class,
         )
-        self.ref_model = ref_model
+        # Prepare ref_model like TRL trainers do (DPOTrainer, GRPOTrainer, etc.)
+        self.ref_model = self.accelerator.prepare_model(ref_model, evaluation_mode=True)
 
 
 class TestWinRateCallback(TrlTestCase):
     def setup_method(self):
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        self.model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
+        )
         self.ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer.pad_token = self.tokenizer.eos_token

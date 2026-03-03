@@ -32,7 +32,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
         cls.device = "cuda" if torch.cuda.is_available() else "cpu"
         cls.tokenizer = AutoTokenizer.from_pretrained(model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.model = AutoModelForCausalLM.from_pretrained(model_id).to(cls.device)
+        cls.model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32").to(cls.device)
         cls.generation_config = GenerationConfig(
             max_new_tokens=20,
             num_return_sequences=1,
@@ -55,6 +55,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             num_return_sequences=1,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
+            do_sample=False,
             temperature=0.0,
         )
 
@@ -200,7 +201,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
 class TestGKDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token

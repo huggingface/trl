@@ -32,6 +32,7 @@ from trl.trainer.utils import (
     forward_masked_logits,
     generate_model_card,
     get_peft_config,
+    hash_module,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -187,6 +188,56 @@ class TestPad(TrlTestCase):
         assert torch.equal(output, expected)
 
 
+class TestHashModule(TrlTestCase):
+    def test_hash_module_deterministic_across_order(self):
+        class ModAB(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.a = torch.nn.Parameter(a)
+                self.b = torch.nn.Parameter(b)
+
+        class ModBA(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.b = torch.nn.Parameter(b)
+                self.a = torch.nn.Parameter(a)
+
+        a = torch.tensor([[1.0, 2.0]])
+        b = torch.tensor([3.0])
+        assert hash_module(ModAB(a, b)) == hash_module(ModBA(a, b))
+
+    def test_hash_module_changes_with_value(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, value: float):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([value, 2.0]))
+
+        assert hash_module(Mod(1.0)) != hash_module(Mod(1.5))
+
+    def test_hash_module_includes_dtype(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, dtype: torch.dtype):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0, 2.0], dtype=dtype))
+
+        assert hash_module(Mod(torch.float32)) != hash_module(Mod(torch.float16))
+
+    def test_hash_module_tiny_model_twice(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_a = AutoModelForCausalLM.from_pretrained(model_id)
+        model_b = AutoModelForCausalLM.from_pretrained(model_id)
+        assert hash_module(model_a) == hash_module(model_b)
+
+    def test_hash_module_tiny_model_change_layer(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        h1 = hash_module(model)
+        with torch.no_grad():
+            model.lm_head.weight.add_(0.01)
+        h2 = hash_module(model)
+        assert h1 != h2
+
+
 @require_peft
 class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
@@ -225,13 +276,13 @@ class TestNanStd(TrlTestCase):
     def test_nanstd_ignores_nans(self):
         x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
         result = nanstd(x)
-        assert torch.allclose(result, torch.tensor(1.0))
+        torch.testing.assert_close(result, torch.tensor(1.0))
 
     def test_nanstd_dim_and_keepdim(self):
         x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
         result = nanstd(x, dim=1, keepdim=True)
         assert torch.isnan(result[0, 0])
-        assert torch.allclose(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
 
     def test_nanstd_all_nan(self):
         x = torch.tensor([float("nan"), float("nan")])
@@ -248,6 +299,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name="username/my_dataset",
             tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            trackio_url="https://huggingface.co/spaces/username/space_id",
             comet_url="https://www.comet.com/username/project_id/experiment_id",
             trainer_name="My Trainer",
             trainer_citation="@article{my_trainer, ...}",
@@ -260,6 +312,7 @@ class TestGenerateModelCard(TrlTestCase):
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "](https://huggingface.co/spaces/username/space_id)" in card_text
         assert "](https://www.comet.com/username/project_id/experiment_id" in card_text
         assert "My Trainer" in card_text
         assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
@@ -273,6 +326,7 @@ class TestGenerateModelCard(TrlTestCase):
             dataset_name=None,
             tags=[],
             wandb_url=None,
+            trackio_url=None,
             comet_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,
@@ -674,6 +728,27 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("k", [1, 8])
+    def test_selective_log_softmax_multi_index(self, dtype, k):
+        """Test selective_log_softmax with logits of different dtypes and index widths"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        index = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len, k))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
+        actual_output = selective_log_softmax(logits, index)
+
+        assert actual_output.shape == (batch_size, seq_len, k)
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            assert torch.equal(actual_output, expected_output)
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
 
 class TestShuffleSequenceDict(TrlTestCase):
     def test_shuffle_preserves_shape(self):
@@ -853,7 +928,7 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
         result = unsplit_pixel_values_by_grid(batch)
         assert isinstance(result["pixel_values"], torch.Tensor)
-        assert torch.allclose(result["pixel_values"], pixel_values_merged)
+        torch.testing.assert_close(result["pixel_values"], pixel_values_merged)
         assert isinstance(result["image_grid_thw"], torch.Tensor)
         assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
         assert "other_key" in result
@@ -870,10 +945,12 @@ class TestForwardMaskedLogits:
         "model_id",
         [
             "trl-internal-testing/tiny-CohereForCausalLM",
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             "trl-internal-testing/tiny-GemmaForCausalLM",
+            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
             "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
@@ -921,10 +998,17 @@ class TestForwardMaskedLogits:
                         reason="Qwen3-VL series were introduced in transformers-4.57.0",
                     ),
                     pytest.mark.xfail(
-                        Version(transformers.__version__) >= Version("5.0.0.dev0"),
-                        reason="Blocked by upstream transformers bug (transformers#43334)",
+                        Version("5.0.0") <= Version(transformers.__version__) < Version("5.1.0"),
+                        reason="Upstream transformers bug (transformers#43334) in 5.0.x; fixed in 5.1.0",
                     ),
                 ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )

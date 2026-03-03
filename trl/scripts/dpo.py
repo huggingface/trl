@@ -32,7 +32,6 @@ python trl/scripts/dpo.py \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
     --gradient_accumulation_steps 8 \
-    --gradient_checkpointing \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
@@ -49,7 +48,6 @@ python trl/scripts/dpo.py \
     --per_device_train_batch_size 2 \
     --max_steps 1000 \
     --gradient_accumulation_steps 8 \
-    --gradient_checkpointing \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
@@ -108,12 +106,6 @@ def main(script_args, training_args, model_args, dataset_args):
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
     peft_config = get_peft_config(model_args)
-    if peft_config is None:
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-        )
-    else:
-        ref_model = None
     if script_args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -139,7 +131,6 @@ def main(script_args, training_args, model_args, dataset_args):
     # Initialize the DPO trainer
     trainer = DPOTrainer(
         model,
-        ref_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

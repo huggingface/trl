@@ -27,7 +27,7 @@ from trl.chat_template_utils import (
     parse_response,
 )
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_jmespath
 
 
 class TestCloneChatTemplate(TrlTestCase):
@@ -110,23 +110,36 @@ class TestCloneChatTemplate(TrlTestCase):
         assert modified_tokenizer.eos_token == "<|im_end|>"
 
 
+@pytest.mark.parametrize(
+    "tokenizer_name",
+    [
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+    ],
+)
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Response parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_jmespath
 class TestAddResponseSchema:
-    @pytest.mark.xfail(
-        condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-        reason="Response parsing is not supported in transformers versions below 5.0.0",
-        strict=True,
-    )
-    def test_add_response_schema(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+    def test_add_response_schema(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer = add_response_schema(tokenizer)
-        assistant_text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-        parsed = tokenizer.parse_response(assistant_text)
-        expected = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
-        }
-        assert parsed == expected
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+            },
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], tokenize=False, add_generation_prompt=True)
+        text = tokenizer.apply_chat_template(messages, tokenize=False)
+        response = text[len(prefix) :]
+        # Here, we just test that the parsing doesn't raise an error.
+        # The correctness of the parsing is tested in TestParseResponse
+        tokenizer.parse_response(response)
 
 
 class TestIsChatTemplatePrefixPreserving:
@@ -200,75 +213,265 @@ class TestIsChatTemplatePrefixPreserving:
         assert is_chat_template_prefix_preserving(tokenizer) is False
 
 
+@pytest.mark.parametrize(
+    "tokenizer_name",
+    [
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+    ],
+)
 class TestGetTrainingChatTemplate:
-    def test_qwen3(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+    def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         assert is_chat_template_prefix_preserving(tokenizer) is False
         tokenizer.chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
+    def test_behavior_unchanged_single_user_no_generation_prompt(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
 
+    def test_behavior_unchanged_single_user_with_generation_prompt(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        before = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            chat_template=new_chat_template,
+        )
+        assert before == after
+
+    def test_behavior_unchanged_single_user_and_final_assistant_plain_content(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {
+                "role": "assistant",
+                "content": "It is blue.",
+                "reasoning_content": "The sky appears blue due to Rayleigh scattering.",
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {
+                "role": "assistant",
+                "content": "<think>\nThe sky scatters shorter wavelengths.\n</think>\n\nIt is blue.",
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Multiply 3 by 4."},
+            {
+                "role": "assistant",
+                "content": "I will call a tool.",
+                "tool_calls": [{"name": "multiply", "arguments": {"a": 3, "b": 4}}],
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_assistant_with_tool_calls_with_string_arguments(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "Multiply 3 by 4."},
+            {
+                "role": "assistant",
+                "content": "I will call a tool.",
+                "tool_calls": [{"name": "multiply", "arguments": '{"a": 3, "b": 4}'}],
+            },
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "multiply",
+                    "description": "Multiply two numbers.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "number"},
+                            "b": {"type": "number"},
+                        },
+                        "required": ["a", "b"],
+                    },
+                },
+            }
+        ]
+        messages = [{"role": "user", "content": "Multiply 3 by 4."}]
+        before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_with_tools_with_system_message(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "multiply",
+                    "description": "Multiply two numbers.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                        "required": ["a", "b"],
+                    },
+                },
+            }
+        ]
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Multiply 3 by 4."},
+        ]
+        before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
+        assert before == after
+
+    def test_behavior_unchanged_generation_prompt_with_enable_thinking_false(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        before = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+            chat_template=new_chat_template,
+        )
+        assert before == after
+
+
+@pytest.mark.parametrize(
+    "tokenizer_name",
+    [
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
+    ],
+)
 @pytest.mark.xfail(
-    condition=Version(transformers.__version__) < Version("5.0.0.dev0"),
-    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Response parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
+@require_jmespath
 class TestParseResponse:
-    def test_parse_response(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+    def test_parse_response(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer = add_response_schema(tokenizer)
-        # docstyle-ignore
-        text = textwrap.dedent("""\
-            <tool_call>
-            {"name": "multiply", "arguments": {"a": 3, "b": 4}}
-            </tool_call><|im_end|>""")
-        assistant_text = tokenizer(text)["input_ids"]
-        parsed = parse_response(tokenizer, assistant_text)
-        expected = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
-        }
-        assert parsed == expected
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "12"},
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
+        text = tokenizer.apply_chat_template(messages).input_ids
+        response = text[len(prefix) :]
+        parsed = parse_response(tokenizer, response)
+        assert parsed == messages[-1]
 
-    def test_parse_response_multiple_tool_calls(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+    def test_parse_response_with_reasoning_content(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer = add_response_schema(tokenizer)
-        # docstyle-ignore
-        text = textwrap.dedent("""\
-            <tool_call>
-            {"name": "multiply", "arguments": {"a": 3, "b": 4}}
-            </tool_call>
-            <tool_call>
-            {"name": "addition", "arguments": {"a": 3, "b": 4}}
-            </tool_call><|im_end|>""")
-        assistant_text = tokenizer(text)["input_ids"]
-        parsed = parse_response(tokenizer, assistant_text)
-        expected = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
-                {"type": "function", "function": {"name": "addition", "arguments": {"a": 3, "b": 4}}},
-            ],
-        }
-        assert parsed == expected
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
+        text = tokenizer.apply_chat_template(messages).input_ids
+        response = text[len(prefix) :]
+        parsed = parse_response(tokenizer, response)
+        assert parsed == messages[-1]
 
-    def test_parse_response_no_tool_call(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+    def test_parse_response_tool_call(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer = add_response_schema(tokenizer)
-        text = "Here is the answer to your question.<|im_end|>"
-        assistant_text = tokenizer(text)["input_ids"]
-        parsed = parse_response(tokenizer, assistant_text)
-        expected = {
-            "role": "assistant",
-            "content": "Here is the answer to your question.",
-        }
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
+        text = tokenizer.apply_chat_template(messages).input_ids
+        response = text[len(prefix) :]
+        parsed = parse_response(tokenizer, response)
+        assert parsed == messages[-1]
 
-        assert parsed == expected
+    def test_parse_response_tool_call_with_content(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "Let's call the tool.", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
+        text = tokenizer.apply_chat_template(messages).input_ids
+        response = text[len(prefix) :]
+        parsed = parse_response(tokenizer, response)
+        assert parsed == messages[-1]
 
-    def test_parse_response_malformed_tool_call(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+    def test_parse_response_multiple_tool_calls(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [
+            {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
+            {"type": "function", "function": {"name": "addition", "arguments": {"a": 4, "b": 3}}},
+        ]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
+        text = tokenizer.apply_chat_template(messages).input_ids
+        response = text[len(prefix) :]
+        parsed = parse_response(tokenizer, response)
+        assert parsed == messages[-1]
+
+    def test_parse_response_malformed_tool_call(self, tokenizer_name):
+        if tokenizer_name != "trl-internal-testing/tiny-Qwen3MoeForSequenceClassification":
+            pytest.skip("For simplicity, we only test the malformed tool call case on one tokenizer.")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer = add_response_schema(tokenizer)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
         assistant_text = tokenizer(text)["input_ids"]

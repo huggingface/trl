@@ -34,7 +34,6 @@ python examples/scripts/mpo_vlm.py \
     --dataset_num_proc 1 \
     --output_dir dpo_idefics_rlaif-v \
     --dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj \
     --loss_type sigmoid bco_pair sft \
@@ -90,13 +89,6 @@ if __name__ == "__main__":
         **model_kwargs,
     )
     peft_config = get_peft_config(model_args)
-    if peft_config is None:
-        ref_model = AutoModelForImageTextToText.from_pretrained(
-            model_args.model_name_or_path,
-            **model_kwargs,
-        )
-    else:
-        ref_model = None
 
     ################
     # Dataset
@@ -128,7 +120,6 @@ if __name__ == "__main__":
     ################
     trainer = DPOTrainer(
         model=model,
-        ref_model=ref_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,

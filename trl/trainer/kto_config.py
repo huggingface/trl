@@ -31,6 +31,6 @@ class KTOConfig(_KTOConfig):
             "https://github.com/huggingface/trl/issues/4223. Promoting KTO to the stable API is a high-priority task. "
             "Until then, this current path (`from trl import KTOConfig`) will remain, but API changes may occur.",
             FutureWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
         super().__post_init__()

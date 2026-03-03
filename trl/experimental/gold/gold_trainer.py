@@ -48,19 +48,13 @@ from transformers.utils import (
 
 from ...data_utils import is_conversational, maybe_convert_to_chatml, pack_dataset, truncate_dataset
 from ...extras.profiling import profiling_decorator
-from ...extras.vllm_client import VLLMClient
+from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
-from ...trainer.utils import (
-    create_model_from_path,
-    disable_dropout_in_model,
-    empty_cache,
-    ensure_master_addr_port,
-    pad,
-)
-from ..utils import DataCollatorForChatML
+from ...trainer.utils import create_model_from_path, disable_dropout_in_model, ensure_master_addr_port, pad
+from ..utils import DataCollatorForChatML, empty_cache
 from .gold_config import GOLDConfig
 
 
@@ -234,8 +228,9 @@ class ULDLoss(nn.Module):
     Universal Logit Distillation Loss.
     """
 
-    def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None):
+    def __init__(self, config: GOLDConfig, student_tokenizer=None, teacher_tokenizer=None, device=None):
         super().__init__()
+        self.device = device
         self.crossentropy_weight = config.uld_crossentropy_weight
         self.distillation_weight = config.uld_distillation_weight
         self.student_temperature = config.uld_student_temperature
@@ -320,6 +315,13 @@ class ULDLoss(nn.Module):
         self._vocab_mapping = vocab_mapping
         self._teacher_matched_ids = teacher_matched_ids
         self._student_matched_ids = student_matched_ids
+
+        max_matched_teacher_id = max(self._vocab_mapping.keys())
+        self.mapping_tensor = torch.full((max_matched_teacher_id + 1,), -1, dtype=torch.long)  # -1 for unmapped ids
+        for k, v in self._vocab_mapping.items():
+            self.mapping_tensor[k] = v
+        if self.device is not None:
+            self.mapping_tensor = self.mapping_tensor.to(self.device)
 
     def _compute_distillation_loss(
         self, student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
@@ -616,9 +618,7 @@ class ULDLoss(nn.Module):
         # Convert sets to sorted tensors for indexing
         if self._teacher_matched_ids:
             teacher_matched_indices = torch.tensor(sorted(self._teacher_matched_ids), dtype=torch.long, device=device)
-            student_matched_indices = torch.tensor(
-                [self._vocab_mapping[tid.item()] for tid in teacher_matched_indices], dtype=torch.long, device=device
-            )
+            student_matched_indices = self.mapping_tensor[teacher_matched_indices]
         else:
             teacher_matched_indices = torch.tensor([], dtype=torch.long, device=device)
             student_matched_indices = torch.tensor([], dtype=torch.long, device=device)
@@ -902,6 +902,7 @@ class GOLDTrainer(SFTTrainer):
                 config=args,
                 student_tokenizer=processing_class,
                 teacher_tokenizer=self.teacher_tokenizer,
+                device=self.accelerator.device,
             )
 
         generation_kwargs = {
@@ -1145,10 +1146,12 @@ class GOLDTrainer(SFTTrainer):
 
                     if is_conversational(example):
                         prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"], **example.get("chat_template_kwargs", {})
+                            example["prompt"], return_dict=False, **example.get("chat_template_kwargs", {})
                         )
                         prompt_completion_ids = processing_class.apply_chat_template(
-                            example["prompt"] + example["completion"], **example.get("chat_template_kwargs", {})
+                            example["prompt"] + example["completion"],
+                            return_dict=False,
+                            **example.get("chat_template_kwargs", {}),
                         )
                     else:
                         prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -1188,16 +1191,16 @@ class GOLDTrainer(SFTTrainer):
                             # Apply chat template to get the prompt (everything up to assistant)
                             prompt_text = processing_class.apply_chat_template(
                                 user_messages,
+                                add_generation_prompt=True,  # add assistant prompt
                                 tokenize=False,
-                                add_generation_prompt=True,  # Add assistant prompt
                                 **example.get("chat_template_kwargs", {}),
                             )
 
                             # Get the full conversation with assistant response
                             full_text = processing_class.apply_chat_template(
                                 messages,
-                                tokenize=False,
                                 add_generation_prompt=False,
+                                tokenize=False,
                                 **example.get("chat_template_kwargs", {}),
                             )
 
@@ -1727,7 +1730,7 @@ class GOLDTrainer(SFTTrainer):
             )
             completion_ids = completion_ids[process_slice]
         elif self.vllm_mode == "colocate":
-            if self.vllm_structured_outputs_regex:
+            if self.vllm_structured_outputs_regex is not None:
                 structured_outputs = StructuredOutputsParams(
                     backend="outlines", regex=self.vllm_structured_outputs_regex
                 )

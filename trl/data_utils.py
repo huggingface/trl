@@ -177,7 +177,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
             # Each message must a list of dictionaries with keys "role" and "content"
-            if isinstance(maybe_message, dict) and "role" in maybe_message and "content" in maybe_message:
+            if isinstance(maybe_message, dict) and "role" in maybe_message:
                 return True
 
     return False
@@ -490,29 +490,9 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
     Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
     rejected completions.
 
-    For more details, see [`maybe_extract_prompt`].
-    """
-    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
-        if example["chosen"][idx] != example["rejected"][idx]:
-            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
-                idx -= 1
-            break
-    return {
-        "prompt": example["chosen"][:idx],
-        "chosen": example["chosen"][idx:],
-        "rejected": example["rejected"][idx:],
-    }
-
-
-def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
-    r"""
-    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
-    rejected completions.
-
-    If the example already contains a `"prompt"` key, the function returns the example as is. Else, the function
-    identifies the longest common sequence (prefix) of conversation turns between the "chosen" and "rejected"
-    completions and extracts this as the prompt. It then removes this prompt from the respective "chosen" and
-    "rejected" completions.
+    The function identifies the longest common sequence (prefix) of conversation turns between the "chosen" and
+    "rejected" completions and extracts this as the prompt. It then removes this prompt from the respective "chosen"
+    and "rejected" completions.
 
     Args:
         example (`dict[str, list]`):
@@ -580,6 +560,27 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
     """
+    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
+        if example["chosen"][idx] != example["rejected"][idx]:
+            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
+                idx -= 1
+            break
+    return {
+        "prompt": example["chosen"][:idx],
+        "chosen": example["chosen"][idx:],
+        "rejected": example["rejected"][idx:],
+    }
+
+
+def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
+    r"""
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
+    rejected completions.
+
+    If the example already contains a `"prompt"` key, the function returns the example as is. For more details, see
+    [`extract_prompt`].
+    ```
+    """
     # Some dataset add a `"prompt"` column, even though the prompt is implicit and included in the "chosen" and
     # "rejected" completions. E.g.:
     # {"prompt": "What color is the sky?",
@@ -642,7 +643,7 @@ class _SegmentTree:
         return self.tree[i]
 
 
-def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
+def _pack_bfd(examples: pa.Table, seq_length: int, requeue_truncated_sequences: bool = False) -> pa.Table:
     """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
     # Identify the list column and prepare all columns
     columns = []
@@ -669,6 +670,12 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
         length = row_end - row_start
         for split_start in range(0, length, seq_length):
             frag_len = min(seq_length, length - split_start)
+            # When requeue_truncated_sequences is False, only keep the first fragment (truncate overflow)
+            if not requeue_truncated_sequences and split_start > 0:
+                continue
+            # Clamp the first fragment to seq_length when not re-queuing
+            if not requeue_truncated_sequences and frag_len > seq_length:
+                frag_len = seq_length
             frag_lengths.append(frag_len)
             frag_info.append((row_idx, split_start, frag_len))
             expanded_indices.append(row_idx)
@@ -776,7 +783,10 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 
 
 def pack_dataset(
-    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: dict[str, Any] | None = None
+    dataset: DatasetType,
+    seq_length: int,
+    strategy: str = "bfd",
+    map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
@@ -787,10 +797,14 @@ def pack_dataset(
         seq_length (`int`):
             Target sequence length to pack to.
         strategy (`str`, *optional*, defaults to `"bfd"`):
-            Packing strategy to use. Can be either:
+            Packing strategy to use. Can be one of:
 
-            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries inside each packed sample. If a
-                single sequence exceeds `seq_length` it is split into multiple samples.
+            - `"bfd"` (Best Fit Decreasing): Preserves sequence boundaries and truncates sequences that exceed
+                `seq_length`, discarding overflow tokens. Ideal for SFT and conversational datasets where maintaining
+                conversation structure is important.
+            - `"bfd-requeue"`: Similar to `"bfd"` but re-queues truncated overflow tokens for packing into other
+                sequences. Prevents token loss for pre-training or long documents, but may break conversation structure
+                in SFT datasets.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
         map_kwargs (`dict`, *optional*):
@@ -810,10 +824,18 @@ def pack_dataset(
     ...     "attention_mask": [[1, 1, 1, 0, 0], [1, 0], [1, 1, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
+    >>> # Default "bfd" strategy (SFT-friendly): truncates long sequences
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
+    {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7]],
+     'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 1], [1, 0]],
+     'seq_lengths': [[4], [3, 1], [2]]}
+
+    >>> # "bfd-requeue" strategy: preserves all tokens
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd-requeue")
+    >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 5], [6, 7, 11]],
-     'attention_mask': [[1, 1, 1, 0], [0, 1, 1, 0], [1, 1, 1]],
+     'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 0], [1, 0, 1]],
      'seq_lengths': [[4], [3, 1], [2, 1]]}
     ```
     """
@@ -822,11 +844,23 @@ def pack_dataset(
     # Fast packing with pyarrow
     dataset = dataset.with_format("arrow")
     if strategy == "bfd":
-        dataset = dataset.map(_pack_bfd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+        dataset = dataset.map(
+            _pack_bfd,
+            batched=True,
+            fn_kwargs={"seq_length": seq_length, "requeue_truncated_sequences": False},
+            **map_kwargs,
+        )
+    elif strategy == "bfd-requeue":
+        dataset = dataset.map(
+            _pack_bfd,
+            batched=True,
+            fn_kwargs={"seq_length": seq_length, "requeue_truncated_sequences": True},
+            **map_kwargs,
+        )
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd', 'bfd-requeue', or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 
