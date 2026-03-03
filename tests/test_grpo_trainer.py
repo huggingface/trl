@@ -1808,6 +1808,13 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
     )
@@ -2452,11 +2459,11 @@ class TestGRPOTrainer(TrlTestCase):
             completion_ids = torch.tensor(
                 [
                     # '<tool_call>\n{"arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-                    [151657, 198, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
-                    # '<tool_call>\n{"name": "multiply_tool"}\n</tool_call><|im_end|>'
-                    [151657, 198, 4913, 606, 788, 330, 64648, 22785, 16707, 151658, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                    # "<tool_call>\n{}\n</tool_call><|im_end|>"
-                    [151657, 198, 16094, 151658, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    [151657, 198, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645, 151643, 151643, 151643, 151643, 151643],
+                    # '<toolcall>\n{"arguments": {"a": 3, "b": 4}}\n</toolcall><|im_end|>'
+                    [27, 14172, 6659, 397, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 522, 14172, 6659, 29, 151645],
+                    # '<tool_call>\n{"arguments": {a: 3, b: 4}}\n</tool_call><|im_end|>'
+                    [151657, 198, 4913, 16370, 788, 314, 64, 25, 220, 18, 11, 293, 25, 220, 19, 11248, 151658, 151645, 151643, 151643, 151643, 151643, 151643, 151643],
                 ],
                 device=input_ids.device,
             )
