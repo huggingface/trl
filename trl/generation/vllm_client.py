@@ -383,8 +383,8 @@ class VLLMClient:
                         if part["type"] == "image_pil":
                             part["image_pil"] = pil_to_base64(part["image_pil"])
 
-        if isinstance(tools, list) and len(tools) > 0 and callable(tools[0]):
-            tools = [get_json_schema(tool) for tool in tools]
+        if isinstance(tools, list) and len(tools) > 0:
+            tools = [get_json_schema(tool) if callable(tool) else tool for tool in tools]
 
         response = self.session.post(
             url,
