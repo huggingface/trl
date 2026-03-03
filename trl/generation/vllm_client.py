@@ -26,6 +26,7 @@ import torch.distributed.distributed_c10d as c10d
 from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers import is_torch_xpu_available
+from transformers.utils import get_json_schema
 from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
@@ -350,7 +351,7 @@ class VLLMClient:
                 will override them.
             chat_template_kwargs (`dict`, *optional*):
                 Additional keyword arguments to customize the chat template used by the model.
-            tools (`list`, *optional*):
+            tools (`list[dict | Callable]`, *optional*):
                 List of tool functions available for tool calling during chat generation.
             chat_template (`str`, *optional*):
                 Template to use for structuring the chat. If not provided, the model's default chat template will be
@@ -381,6 +382,9 @@ class VLLMClient:
                     for part in message["content"]:
                         if part["type"] == "image_pil":
                             part["image_pil"] = pil_to_base64(part["image_pil"])
+
+        if isinstance(tools, list) and len(tools) > 0 and callable(tools[0]):
+            tools = [get_json_schema(tool) for tool in tools]
 
         response = self.session.post(
             url,
