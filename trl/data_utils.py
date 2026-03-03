@@ -36,15 +36,17 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
 
     Args:
         messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content may be a raw string before transformation. List of messages
-            a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing either a string or
-            a list of structured blocks if already prepared.
+            Messages with `"role"`, `"content"` (or `"tool_calls"`). Content may be a raw string before transformation.
+            List of messages a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing
+            either a string or a list of structured blocks if already prepared. Optionally, the `"content"` might
+            be `None` or not provided in favour of e.g., `"tool_calls"`.
         images (`list`):
-            List of image objects to insert.
+            List of image objects to insert. Can be empty if no images are included in the messages.
 
     Returns:
         `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
-        content blocks, and all `"image"` placeholders are populated with the corresponding image objects.
+        content blocks, and all `"image"` placeholders are populated with the corresponding image objects. In the
+        assistant turns contains `"tool_calls"`, then the `"content"` might be empty in such turns.
 
     Notes:
         - When the input `messages` isn't already in the structured format, (i.e., all `"content"` values are strings),
