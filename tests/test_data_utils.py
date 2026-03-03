@@ -481,6 +481,13 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-Phi3ForCausalLM",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
     ]
 
     conversational_examples = [
