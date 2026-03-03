@@ -221,12 +221,16 @@ def _ensure_transformers_parallelism_config() -> None:
 
     See upstream fix PR in transformers#40818.
     """
-    from typing import Any
+    if _is_package_version_below("transformers", "4.57.0") and _is_package_version_below("accelerate", "1.10.1"):
+        try:
+            from typing import Any
 
-    import transformers.training_args
+            import transformers.training_args
 
-    if not hasattr(transformers.training_args, "ParallelismConfig"):
-        transformers.training_args.ParallelismConfig = Any
+            if not hasattr(transformers.training_args, "ParallelismConfig"):
+                transformers.training_args.ParallelismConfig = Any
+        except Exception as e:
+            warnings.warn(f"Failed to patch transformers ParallelismConfig compatibility: {e}", stacklevel=2)
 
 
 # Apply vLLM patches
