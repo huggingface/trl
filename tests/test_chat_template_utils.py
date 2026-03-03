@@ -426,13 +426,13 @@ class TestParseResponse:
             {"role": "user", "content": "What is 3*4?"},
             {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
         ]
-        prompt_text = tokenizer.apply_chat_template(messages[:1], tokenize=False)
-        full_text = tokenizer.apply_chat_template(messages, tokenize=False)
-        response_text = full_text[len(prompt_text) :]
-        assistant_prefix = "<|im_start|>assistant\n"
-        if response_text.startswith(assistant_prefix):
-            response_text = response_text[len(assistant_prefix) :]
-        response = tokenizer(response_text, add_special_tokens=False).input_ids
+        # enable_thinking=True is required here because for Qwen3.5, the thinking is disabled by default for the
+        # generation prompt.
+        prefix = tokenizer.apply_chat_template(
+            messages[:1], add_generation_prompt=True, enable_thinking=True
+        ).input_ids
+        text = tokenizer.apply_chat_template(messages).input_ids
+        response = text[len(prefix) :]
         parsed = parse_response(tokenizer, response)
         assert parsed == messages[-1]
 
