@@ -481,6 +481,7 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-Phi3ForCausalLM",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         "trl-internal-testing/tiny-Qwen3ForCausalLM",
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
     ]
 
     conversational_examples = [

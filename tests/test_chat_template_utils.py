@@ -114,14 +114,7 @@ class TestCloneChatTemplate(TrlTestCase):
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
-        pytest.param(
-            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-            id="qwen35",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.2.0"),
-                reason="Qwen3.5 models were introduced in transformers-5.2.0",
-            ),
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
     ],
 )
 @pytest.mark.xfail(
@@ -225,14 +218,7 @@ class TestIsChatTemplatePrefixPreserving:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
-        pytest.param(
-            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-            id="qwen35",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.2.0"),
-                reason="Qwen3.5 models were introduced in transformers-5.2.0",
-            ),
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
     ],
 )
 class TestGetTrainingChatTemplate:
@@ -389,14 +375,7 @@ class TestGetTrainingChatTemplate:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
-        pytest.param(
-            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-            id="qwen35",
-            marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.2.0"),
-                reason="Qwen3.5 models were introduced in transformers-5.2.0",
-            ),
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration", id="qwen35"),
     ],
 )
 @pytest.mark.xfail(
