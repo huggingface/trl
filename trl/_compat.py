@@ -211,8 +211,10 @@ def _patch_transformers_hybrid_cache() -> None:
             warnings.warn(f"Failed to patch transformers HybridCache compatibility: {e}", stacklevel=2)
 
 
-def _ensure_transformers_parallelism_config() -> None:
+def _patch_transformers_parallelism_config() -> None:
     """
+    Fix ParallelismConfig for transformers compatibility.
+
     Ensure that ``transformers.training_args`` always defines the symbol `ParallelismConfig` so that Python's
     `typing.get_type_hints` can resolve annotations on `transformers.TrainingArguments` without raising a `NameError`.
 
@@ -220,6 +222,11 @@ def _ensure_transformers_parallelism_config() -> None:
     exist and therefore the type alias is not imported by Transformers.
 
     See upstream fix PR in transformers#40818.
+
+    - Issue: transformers imports ParallelismConfig only if accelerate>=1.10.1 and raises NameError if
+      accelerate<1.10.1
+    - Fixed in transformers: https://github.com/huggingface/transformers/pull/40818 (released in v4.57.0)
+    - This can be removed when TRL requires transformers>=4.57.0 or accelerate>=1.10.1
     """
     if _is_package_version_below("transformers", "4.57.0") and _is_package_version_below("accelerate", "1.10.1"):
         try:
@@ -240,4 +247,4 @@ _patch_vllm_cached_tokenizer()
 
 # Apply transformers patches
 _patch_transformers_hybrid_cache()
-_ensure_transformers_parallelism_config()  # before creating HfArgumentParser
+_patch_transformers_parallelism_config()  # before creating HfArgumentParser
