@@ -706,7 +706,6 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-
 def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
