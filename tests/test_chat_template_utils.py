@@ -443,6 +443,20 @@ class TestParseResponse:
         parsed = parse_response(tokenizer, response)
         assert parsed == messages[-1]
 
+    def test_parse_response_tool_call_without_arguments(self, tokenizer_name):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [{"type": "function", "function": {"name": "ping", "arguments": {}}}]
+        messages = [
+            {"role": "user", "content": "Ping the service."},
+            {"role": "assistant", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True).input_ids
+        text = tokenizer.apply_chat_template(messages).input_ids
+        response = text[len(prefix) :]
+        parsed = parse_response(tokenizer, response)
+        assert parsed == {"role": "assistant", "content": "", "tool_calls": tool_calls}
+
     def test_parse_response_multiple_tool_calls(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer = add_response_schema(tokenizer)

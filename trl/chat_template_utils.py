@@ -164,6 +164,7 @@ qwen35_schema = {
                             "arguments": {
                                 "type": "object",
                                 "x-regex-key-value": r"<parameter=(?P<key>[^>\n]+)>\n(?P<value>.*?)\n</parameter>",
+                                "default": {},
                                 "additionalProperties": {
                                     "x-parser": "json",
                                     "x-parser-args": {"allow_non_json": True},
@@ -693,14 +694,17 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 raise ValueError(f"tool_calls[{idx}]['function'] must be a dict.")
             if not isinstance(func.get("name"), str):
                 raise ValueError(f"tool_calls[{idx}]['function']['name'] must be a string.")
+            # Some templates (e.g. Qwen3.5) omit arguments for valid no-arg calls; normalize to {}.
             if "arguments" not in func or func["arguments"] is None:
-                raise ValueError(f"tool_calls[{idx}]['function']['arguments'] must be present and non-null.")
+                func["arguments"] = {}
         else:
             # Handle flat structure: {"name": ..., "arguments": ...}
             if not isinstance(tool_call.get("name"), str):
                 raise ValueError(f"tool_calls[{idx}]['name'] must be a string.")
+            # Some templates (e.g. Qwen3.5) omit arguments for valid no-arg calls; normalize to {}.
             if "arguments" not in tool_call or tool_call["arguments"] is None:
-                raise ValueError(f"tool_calls[{idx}]['arguments'] must be present and non-null.")
+                tool_call["arguments"] = {}
+
 
 
 def parse_response(tokenizer: PreTrainedTokenizer, ids: list[int]) -> dict:
