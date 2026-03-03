@@ -265,7 +265,7 @@ class HfArgumentParser(ArgumentParser):
                 f"Type resolution failed for {dtype}. Try declaring the class in global scope or "
                 "removing line of `from __future__ import annotations` which opts in Postponed "
                 "Evaluation of Annotations (PEP 563)"
-            )
+            ) from None
 
         for field in dataclasses.fields(dtype):
             if not field.init:
