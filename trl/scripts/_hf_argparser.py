@@ -14,6 +14,7 @@
 
 
 # Copied from: https://github.com/huggingface/transformers/blob/3a275d3581c0ecf962f7412aa764c2047331fd6b/src/transformers/hf_argparser.py
+# - Moved yaml import inside function
 
 
 import dataclasses
@@ -28,8 +29,6 @@ from enum import Enum
 from inspect import isclass
 from pathlib import Path
 from typing import Any, Literal, NewType, Union, get_type_hints
-
-import yaml
 
 
 DataClass = NewType("DataClass", Any)
@@ -426,5 +425,7 @@ class HfArgumentParser(ArgumentParser):
 
                 - the dataclass instances in the same order as they were passed to the initializer.
         """
+        import yaml
+
         outputs = self.parse_dict(yaml.safe_load(Path(yaml_file).read_text()), allow_extra_keys=allow_extra_keys)
         return tuple(outputs)
