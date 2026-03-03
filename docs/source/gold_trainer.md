@@ -31,6 +31,8 @@ messages). Important configuration flags on [`GOLDConfig`] include:
   sampling ratio.
 * `num_generations`, `generation_batch_size` – control buffered rollout generation across gradient accumulation windows.
   `generation_batch_size` is the number of unique prompts per worker per optimizer step.
+* `student_model_revision` and `model_revision` – if `student_model_revision` is unset, GOLD uses `model_revision`.
+  If both are set and differ, GOLD raises an error to avoid loading different revisions for training vs generation.
 
 A minimal end-to-end example:
 
@@ -81,7 +83,7 @@ train_dataset = load_dataset(
 training_args = GOLDConfig(
     output_dir="gold-model",
     per_device_train_batch_size=1,
-    teacher_model=teacher_name,
+    teacher_model_name_or_path=teacher_name,
     teacher_tokenizer_name_or_path=teacher_name,
     use_uld_loss=True,
     uld_use_hybrid_loss=True,
@@ -96,6 +98,11 @@ trainer = GOLDTrainer(
 )
 trainer.train()
 ```
+
+> [!NOTE]
+> GOLD buffers one full optimizer-window generation batch (`per_device_train_batch_size * gradient_accumulation_steps`)
+> and reuses it across accumulation steps. If the final batch is undersized, GOLD warns and drops that last batch
+> (`Dropping last batch due to unexpected batch size`). Set `dataloader_drop_last=True` to avoid this warning.
 
 ### Expected dataset type
 
