@@ -484,7 +484,7 @@ class GRPOTrainer(_BaseTrainer):
         self._async_tool_dicts = [{} for _ in range(generation_batch_size)]
         for i in range(generation_batch_size):
             for tool in tools + (environment_methods[i] if self.environments is not None else []):
-                if asyncio.iscoroutinefunction(tool):
+                if inspect.iscoroutinefunction(tool):
                     self._async_tool_dicts[i][tool.__name__] = tool
                 else:
                     self._sync_tool_dicts[i][tool.__name__] = tool
@@ -492,7 +492,7 @@ class GRPOTrainer(_BaseTrainer):
         self.tools = tools + (environment_methods[0] if self.environments is not None else [])
 
         # Check for async functions to start an event loop on a daemon thread
-        self._has_async_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
+        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
 
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
@@ -1161,7 +1161,7 @@ class GRPOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif asyncio.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function
