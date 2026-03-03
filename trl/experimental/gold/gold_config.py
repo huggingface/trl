@@ -146,10 +146,10 @@ class GOLDConfig(SFTConfig):
         default=128,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
-    student_model_revision: str = field(
-        default="main",
+    student_model_revision: str | None = field(
+        default=None,
         metadata={
-            "help": "Revision of the student model to use. If not specified, the default revision of the model will be used."
+            "help": "Revision of the student model to use. If not specified, `model_revision` is used."
         },
     )
     teacher_model_name_or_path: str | None = field(
