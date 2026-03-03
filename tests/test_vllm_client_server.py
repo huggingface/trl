@@ -199,7 +199,7 @@ class TestVLLMClientServer(TrlTestCase):
         # Decode prompt and check that "Multiplies two integers." is in the prompt.
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
-        assert any("Multiplies two integers." in decoded_prompt)
+        assert "Multiplies two integers." in decoded_prompt
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -403,7 +403,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         # Decode prompt and check that "Multiplies two integers." is in the prompt.
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
-        assert any("Multiplies two integers." in decoded_prompt)
+        assert "Multiplies two integers." in decoded_prompt
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -528,7 +528,7 @@ class TestVLLMClientServerTP(TrlTestCase):
         # Decode prompt and check that "Multiplies two integers." is in the prompt.
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
-        assert any("Multiplies two integers." in decoded_prompt)
+        assert "Multiplies two integers." in decoded_prompt
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
@@ -633,7 +633,7 @@ class TestVLLMClientServerDP(TrlTestCase):
         # Decode prompt and check that "Multiplies two integers." is in the prompt.
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
-        assert any("Multiplies two integers." in decoded_prompt)
+        assert "Multiplies two integers." in decoded_prompt
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
