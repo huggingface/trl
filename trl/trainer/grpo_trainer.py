@@ -232,8 +232,10 @@ class GRPOTrainer(_BaseTrainer):
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
-            `"logprobs"` fields. Any other fields are forwarded to the reward functions. This feature is experimental
-            and may change or be removed at any time without prior notice.
+            `"logprobs"` fields. Any other fields are forwarded to the reward functions. The function receives the raw
+            per-process prompt slice with no duplication; it is responsible for returning the correct number of
+            completions per prompt (see `num_generations` / `num_generations_eval` on the trainer). This feature is
+            experimental and may change or be removed at any time without prior notice.
         environment_factory (`EnvironmentFactory`, *optional*):
             A callable that creates and returns an environment instance. The environment class should define methods
             that can be invoked as tools during generation. Each method should comply with the same requirements as the
@@ -482,7 +484,7 @@ class GRPOTrainer(_BaseTrainer):
         self._async_tool_dicts = [{} for _ in range(generation_batch_size)]
         for i in range(generation_batch_size):
             for tool in tools + (environment_methods[i] if self.environments is not None else []):
-                if asyncio.iscoroutinefunction(tool):
+                if inspect.iscoroutinefunction(tool):
                     self._async_tool_dicts[i][tool.__name__] = tool
                 else:
                     self._sync_tool_dicts[i][tool.__name__] = tool
@@ -490,7 +492,7 @@ class GRPOTrainer(_BaseTrainer):
         self.tools = tools + (environment_methods[0] if self.environments is not None else [])
 
         # Check for async functions to start an event loop on a daemon thread
-        self._has_async_funcs = any(asyncio.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
+        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
 
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
@@ -525,6 +527,7 @@ class GRPOTrainer(_BaseTrainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_transformers_paged = args.use_transformers_paged
+        self.pad_to_multiple_of = args.pad_to_multiple_of
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
@@ -546,7 +549,11 @@ class GRPOTrainer(_BaseTrainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-        # Liger Kernels now support both "token" and "sequence" importance sampling levels
+        if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
+            raise ValueError(
+                f"Unknown importance sampling level: {self.importance_sampling_level}. "
+                "Possible values are 'token' and 'sequence'."
+            )
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -686,13 +693,6 @@ class GRPOTrainer(_BaseTrainer):
 
         if self.use_vllm:
             # Initialize vLLM generation backend
-            # Wrap rollout_func to capture trainer context if provided
-            rollout_func = None
-            if self.rollout_func is not None:
-
-                def rollout_func(prompts):
-                    return self.rollout_func(prompts, self)
-
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
@@ -729,7 +729,6 @@ class GRPOTrainer(_BaseTrainer):
                 chat_template=self.chat_template,
                 chat_template_kwargs=self.chat_template_kwargs,
                 tools=self.tools,
-                rollout_func=rollout_func,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
@@ -1103,7 +1102,7 @@ class GRPOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif asyncio.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function
@@ -1157,6 +1156,25 @@ class GRPOTrainer(_BaseTrainer):
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
+
+        if self.rollout_func is not None:
+            # Keep vLLM weights in sync for custom rollouts that rely on vLLM utilities.
+            if self.use_vllm and self.state.global_step != self._last_loaded_step:
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
+                self._last_loaded_step = self.state.global_step
+
+            # Pass prompts to rollout_func preserving structured messages.
+            # Chat templating must happen inside rollout_func, at the backend boundary, so that
+            # multimodal content (images, typed content blocks) is not lost before rollout logic runs.
+            output = self.rollout_func(prompts, self)
+            required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+            missing_keys = required_keys - output.keys()
+            if missing_keys:
+                missing_keys_list = sorted(missing_keys)
+                raise ValueError(f"rollout_func must return keys {missing_keys_list} in its output dict.")
+            extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+            return output["prompt_ids"], output["completion_ids"], output["logprobs"], extra_fields
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1581,22 +1599,43 @@ class GRPOTrainer(_BaseTrainer):
         ) = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
-        prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
+        prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-        prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
-        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
-        completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+        prompt_ids = pad(
+            prompt_ids,
+            padding_value=self.pad_token_id,
+            padding_side="left",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        ).to(device=device)
+        prompt_mask = pad(
+            prompt_mask, padding_value=0, padding_side="left", pad_to_multiple_of=self.pad_to_multiple_of
+        ).to(device=device)
+        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
-        completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
-        completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
+        completion_ids = pad(
+            completion_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        ).to(device=device)
+        completion_mask = pad(
+            completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        ).to(device=device)
         if sampling_per_token_logps_list is not None:
-            sampling_per_token_logps = [torch.tensor(logps, device=device) for logps in sampling_per_token_logps_list]
-            sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
+            sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+            sampling_per_token_logps = pad(
+                sampling_per_token_logps,
+                padding_value=0.0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            ).to(device=device)
         else:
             sampling_per_token_logps = None
         if tool_mask_list is not None:
-            tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
-            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")
+            tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
+            tool_mask = pad(
+                tool_mask, padding_value=1, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            ).to(device=device)
         else:
             tool_mask = None
 
@@ -1636,12 +1675,27 @@ class GRPOTrainer(_BaseTrainer):
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
             token_type_ids = forward_kwargs["token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - token_type_ids.size(1)
+                if padding_size > 0:
+                    token_type_ids = torch.cat(
+                        [token_type_ids.new_zeros((token_type_ids.size(0), padding_size)), token_type_ids], dim=1
+                    )
             forward_kwargs["token_type_ids"] = torch.cat(
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
         # If mm_token_type_ids are used, extend them with zeros for the completion part
         if "mm_token_type_ids" in forward_kwargs:
             mm_token_type_ids = forward_kwargs["mm_token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                # Needed only with pad_to_multiple_of: otherwise prompt_ids and mm_token_type_ids must have equal len
+                padding_size = prompt_ids.size(1) - mm_token_type_ids.size(1)
+                if padding_size > 0:
+                    mm_token_type_ids = torch.cat(
+                        [mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size)), mm_token_type_ids],
+                        dim=1,
+                    )
             forward_kwargs["mm_token_type_ids"] = torch.cat(
                 [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
