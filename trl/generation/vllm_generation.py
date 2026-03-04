@@ -682,28 +682,28 @@ class VLLMGeneration:
             if Version(vllm.__version__) <= Version("0.10.2"):
                 structured_outputs_key = "guided_decoding"
                 if self.structured_outputs_regex is not None:
-                    if generation_kwargs.get("guided_decoding") is not None:
+                    if generation_kwargs.get(structured_outputs_key) is not None:
                         logger.warning(
-                            "Both `structured_outputs_regex` and `generation_kwargs['guided_decoding']` are set; "
+                            f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
                             "`structured_outputs_regex` takes precedence."
                         )
                     structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
                 else:
-                    structured_outputs = generation_kwargs.get("guided_decoding")
+                    structured_outputs = generation_kwargs.get(structured_outputs_key)
             else:
                 structured_outputs_key = "structured_outputs"
                 if self.structured_outputs_regex is not None:
-                    if generation_kwargs.get("structured_outputs") is not None:
+                    if generation_kwargs.get(structured_outputs_key) is not None:
                         logger.warning(
-                            "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are "
+                            f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are "
                             "set; `structured_outputs_regex` takes precedence."
                         )
                     structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
-                elif isinstance(generation_kwargs.get("structured_outputs"), dict):
-                    structured_outputs_dict = generation_kwargs.get("structured_outputs")
+                elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
+                    structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
                     structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
                 else:
-                    structured_outputs = generation_kwargs.get("structured_outputs")
+                    structured_outputs = generation_kwargs.get(structured_outputs_key)
 
             generation_kwargs[structured_outputs_key] = structured_outputs
             sampling_params = SamplingParams(**generation_kwargs)
