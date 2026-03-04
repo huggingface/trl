@@ -19,12 +19,60 @@
 # ]
 # ///
 
+
+"""
+Simple script to run GRPO training with OpenEnv's Echo environment. The environment echoes back the message
+sent to it and rewards longer completions.
+
+Setup (Option A - Install from HF Space, recommended):
+
+```sh
+uv pip install git+https://huggingface.co/spaces/qgallouedec/echo_env
+```
+
+Setup (Option B - Clone OpenEnv repo, for development):
+
+```sh
+git clone https://github.com/meta-pytorch/OpenEnv.git
+cd OpenEnv/envs/echo_env
+uv pip install -e .
+```
+
+Usage:
+
+```sh
+python examples/scripts/openenv/echo.py
+python examples/scripts/openenv/echo.py --model Qwen/Qwen2.5-0.5B-Instruct --env-host https://qgallouedec-echo-env.hf.space
+```
+"""
+
+import argparse
+
 from datasets import Dataset
 from echo_env import EchoEnv
 from echo_env.models import EchoAction
 
 from trl import GRPOConfig, GRPOTrainer
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run GRPO training with Echo environment.")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="Qwen/Qwen3-0.6B",
+        help="Model to use for training.",
+    )
+    parser.add_argument(
+        "--env-host",
+        type=str,
+        default="https://qgallouedec-echo-env.hf.space",
+        help="URL for the Echo environment HF Space.",
+    )
+    return parser.parse_args()
+
+
+args = parse_args()
 
 dataset = Dataset.from_dict(
     {
@@ -45,7 +93,7 @@ def reward_func(completions, environments, **kwargs):
 
 class MyEchoEnv:
     def __init__(self):
-        self.env = EchoEnv(base_url="https://qgallouedec-echo-env.hf.space")
+        self.env = EchoEnv(base_url=args.env_host)
 
     def reset(self, **kwargs) -> None | str:
         self._reward = None
@@ -76,7 +124,7 @@ class MyEchoEnv:
 
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen3-0.6B",
+    model=args.model,
     train_dataset=dataset,
     reward_funcs=reward_func,
     args=GRPOConfig(

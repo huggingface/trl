@@ -84,8 +84,8 @@ python examples/scripts/openenv/sudoku.py \
 
 from __future__ import annotations
 
+# ruff: noqa: T201
 import argparse
-import re
 import sys
 import time
 from collections import defaultdict
@@ -93,10 +93,8 @@ from datetime import datetime
 from pathlib import Path
 
 from datasets import Dataset
-from transformers import AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openenv import generate_rollout_completions
 
 
 # Ensure src/ is on the path
@@ -129,7 +127,6 @@ def parse_args() -> argparse.Namespace:
 
     # Game settings
     parser.add_argument("--max-turns", type=int, default=100)
-    parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument(
         "--difficulty",
         type=str,
@@ -154,6 +151,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--num-generations", type=int, default=2)
     parser.add_argument("--num-epochs", type=int, default=1)
+    parser.add_argument("--max-completion-length", type=int, default=2048)
 
     # Checkpoints
     parser.add_argument("--save-interval", type=int, default=10)
@@ -165,7 +163,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project", default=None)
     parser.add_argument("--trackio-space-id", default="Sudoku-GRPO")
     parser.add_argument("--logging-steps", type=int, default=1)
-    parser.add_argument("--debug", action="store_true", default=False)
     parser.add_argument(
         "--gradient-checkpointing",
         action="store_true",
@@ -195,23 +192,6 @@ def resolve_system_prompt(path: str) -> str:
 
 def sanitize_name(name: str) -> str:
     return name.replace("/", "-")
-
-
-def extract_sudoku_move(text: str) -> str:
-    """Extract a Sudoku move [row col number] from text."""
-    # Try with spaces
-    match = re.search(r"\[(\d)\s+(\d)\s+(\d)\]", text)
-    if match:
-        row, col, num = match.groups()
-        return f"[{row} {col} {num}]"
-
-    # Try without spaces
-    match = re.search(r"\[(\d)(\d)(\d)\]", text)
-    if match:
-        row, col, num = match.groups()
-        return f"[{row} {col} {num}]"
-
-    return ""
 
 
 def is_valid_board_state(board_str: str) -> bool:
@@ -350,84 +330,6 @@ def extract_board_only(text: str) -> str:
     return "\n".join(board_lines) if board_lines else ""
 
 
-def make_compact_prompt(
-    board: str,
-    step: int,
-    successful_moves: list[str],
-    failed_moves: list[str],
-    difficulty: str = "hard",
-) -> str:
-    """Create a compact prompt with only essential info (saves tokens!).
-
-    Args:
-        difficulty: Training difficulty level:
-            - "easy": Show guaranteed moves (naked singles) + other options
-            - "medium": Only show other options (hints where to look, not exact answers)
-            - "hard": No hints (model must learn Sudoku rules by itself)
-    """
-
-    # Summary line
-    cells_filled = len(successful_moves)
-    summary = f"Step {step}. Progress: {cells_filled} cells filled."
-
-    # Board (only show the grid, stripped down)
-    board_only = extract_board_only(board) if board else "No board available."
-
-    # Moves already tried (for learning what NOT to do)
-    tried_moves_hint = ""
-    all_tried = successful_moves + failed_moves
-    if all_tried:
-        tried_moves_hint = f"\n\n⚠️ MOVES ALREADY TRIED (do not repeat): {', '.join(all_tried)}"
-
-    # Hints based on difficulty
-    hints = ""
-    if difficulty == "easy" and board:
-        # Easy: sorted by difficulty, show guaranteed moves + other easy options
-        cells_with_candidates = extract_empty_cells_with_candidates(board, sort_by_difficulty=True)
-        if cells_with_candidates:
-            guaranteed = []
-            other_hints = []
-            for row, col, candidates in cells_with_candidates[:10]:
-                if len(candidates) == 1:
-                    num = list(candidates)[0]
-                    guaranteed.append(f"[{row} {col} {num}]")
-                elif len(candidates) <= 3:
-                    nums = ",".join(str(n) for n in sorted(candidates))
-                    other_hints.append(f"({row},{col})→{nums}")
-
-            if guaranteed:
-                hints = f"\n\n🎯 GUARANTEED MOVES: {', '.join(guaranteed[:5])}"
-            if other_hints:
-                hints += f"\nOther options: {' | '.join(other_hints[:5])}"
-
-    elif difficulty == "medium" and board:
-        # Medium: NOT sorted, just show empty cells with candidates (no ordering hints)
-        cells_with_candidates = extract_empty_cells_with_candidates(board, sort_by_difficulty=False)
-        if cells_with_candidates:
-            cell_hints = []
-            for row, col, candidates in cells_with_candidates[:10]:
-                nums = ",".join(str(n) for n in sorted(candidates))
-                cell_hints.append(f"({row},{col})→{nums}")
-            if cell_hints:
-                hints = f"\n\nEmpty cells: {' | '.join(cell_hints)}"
-
-    return f"{summary}\n\nBoard:\n{board_only}{tried_moves_hint}{hints}\n\nYour move:"
-
-
-def check_move_targets_empty_cell(move: str, board_str: str) -> bool:
-    """Check if the move targets an empty cell on the board."""
-    if not move or not board_str:
-        return False
-
-    match = re.search(r"\[(\d)\s+(\d)\s+(\d)\]", move)
-    if not match:
-        return False
-
-    row, col = int(match.group(1)), int(match.group(2))
-    empty_cells = extract_empty_cells(board_str)
-    return (row, col) in empty_cells
-
-
 def extract_feedback(observation) -> dict:
     """Extract feedback from environment observation."""
     feedback = {"valid_move": True, "got_warning": False, "board_state": ""}
@@ -450,262 +352,33 @@ def extract_feedback(observation) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Rollout
-# ---------------------------------------------------------------------------
-
-
-def rollout_once(
-    trainer: GRPOTrainer,
-    env: TextArenaEnv,
-    tokenizer: AutoTokenizer,
-    system_prompt: str,
-    max_turns: int,
-    debug: bool = False,
-    difficulty: str = "hard",
-    api_delay: float = 0.0,
-) -> dict[str, list]:
-    result = env.reset()
-    time.sleep(api_delay)  # Avoid rate limiting
-    observation = result.observation
-
-    # Only store the LAST turn for backprop (much more efficient!)
-    last_turn_data: dict | None = None
-
-    valid_move_scores: list[float] = []
-    empty_cell_scores: list[float] = []
-    correct_scores: list[float] = []
-    repetition_scores: list[float] = []
-
-    move_counts: defaultdict[str, int] = defaultdict(int)
-
-    # Track successful and failed moves for summary
-    successful_moves: list[str] = []
-    failed_moves: list[str] = []
-
-    # Extract initial board state
-    last_board_state = ""
-    initial_filled = 0
-    for message in observation.messages:
-        if message.content and is_valid_board_state(message.content):
-            last_board_state = message.content
-            initial_filled = count_filled_cells(last_board_state)
-            break
-
-    max_filled = initial_filled  # Track max progress
-
-    for turn in range(max_turns):
-        if result.done:
-            break
-
-        # Build COMPACT prompt (saves tokens!)
-        user_prompt = make_compact_prompt(
-            board=last_board_state,
-            step=turn + 1,
-            successful_moves=successful_moves,
-            failed_moves=failed_moves,
-            difficulty=difficulty,
-        )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        prompt_text = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=False, enable_thinking=False
-        )
-
-        if debug:
-            print(f"\n{'=' * 60}")
-            print(f"STEP {turn + 1}")
-            print(f"{'=' * 60}")
-            print(f"USER PROMPT:\n{user_prompt}")
-            print(f"{'=' * 60}")
-
-        # Generate
-        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
-
-        # Store ONLY this turn's data (replace previous)
-        last_turn_data = {
-            "prompt_ids": rollout_outputs["prompt_ids"],
-            "completion_ids": rollout_outputs["completion_ids"],
-            "logprobs": rollout_outputs["logprobs"],
-        }
-
-        if debug:
-            step_tokens = len(rollout_outputs["prompt_ids"]) + len(rollout_outputs["completion_ids"])
-            print(f"TOKENS: this_step={step_tokens} (only last turn used for backprop)")
-
-        completion_text = rollout_outputs.get("text") or tokenizer.decode(
-            rollout_outputs["completion_ids"], skip_special_tokens=True
-        )
-
-        # Extract move
-        move = extract_sudoku_move(completion_text)
-
-        if debug:
-            print(f"MODEL OUTPUT: {completion_text}")
-            print(f"EXTRACTED MOVE: {move}")
-
-        # Step environment
-        result = env.step(TextArenaAction(message=move))
-        time.sleep(api_delay)  # Avoid rate limiting
-        observation = result.observation
-        correct_score = float(result.reward or 0.0)
-
-        # Get feedback
-        feedback = extract_feedback(observation)
-
-        # Get environment response
-        env_response = ""
-        for msg in observation.messages:
-            if msg.sender_id == -1:  # Environment message
-                env_response = msg.content
-                break
-
-        if debug:
-            print(
-                f"ENV RESPONSE: {env_response[:200]}..."
-                if len(env_response) > 200
-                else f"ENV RESPONSE: {env_response}"
-            )
-            print(f"VALID: {feedback['valid_move']}, WARNING: {feedback['got_warning']}, REWARD: {correct_score}")
-
-        # Calculate empty_cell_score
-        if last_board_state and move:
-            targets_empty = check_move_targets_empty_cell(move, last_board_state)
-            empty_cell_score = 1.0 if targets_empty else -1.0
-        else:
-            empty_cell_score = 0.0
-
-        # Calculate valid_move_score and repetition_score
-        is_new_move = move_counts[move] == 0
-        repetition_count = move_counts[move]
-        move_counts[move] += 1
-
-        # Exponential penalty for repetitions: -2^(n-1) capped at -10
-        # 1st repeat: -1, 2nd: -2, 3rd: -4, 4th+: -10 (capped)
-        if repetition_count > 0:
-            repetition_score = -min(2 ** (repetition_count - 1), 10.0)
-        else:
-            repetition_score = 0.0
-
-        if debug:
-            print(
-                f"SCORES: empty_cell={empty_cell_score}, is_new={is_new_move}, repetitions={repetition_count}, rep_penalty={repetition_score}"
-            )
-
-        if not debug:
-            print(f"Step {turn + 1}: {move}")
-
-        if feedback["valid_move"] and is_new_move:
-            valid_move_score = 1.0
-            if move:
-                successful_moves.append(move)  # Track for summary
-        elif feedback["got_warning"]:
-            valid_move_score = -0.5
-            if move:
-                failed_moves.append(move)  # Track for summary
-        else:
-            valid_move_score = 0.0
-
-        # Update board state and track progress
-        if feedback["board_state"] and is_valid_board_state(feedback["board_state"]):
-            last_board_state = feedback["board_state"]
-            current_filled = count_filled_cells(last_board_state)
-            if current_filled > max_filled:
-                max_filled = current_filled
-
-        valid_move_scores.append(valid_move_score)
-        empty_cell_scores.append(empty_cell_score)
-        correct_scores.append(correct_score)
-        repetition_scores.append(repetition_score)
-
-    # Aggregate rewards
-    correct_reward = correct_scores[-1] if correct_scores else 0.0
-    valid_move_reward = sum(valid_move_scores) / len(valid_move_scores) if valid_move_scores else 0.0
-    empty_cell_reward = sum(empty_cell_scores) / len(empty_cell_scores) if empty_cell_scores else 0.0
-    repetition_reward = sum(repetition_scores) / len(repetition_scores) if repetition_scores else 0.0
-
-    # Progress reward: how many cells we filled beyond initial state (normalized to 0-1)
-    # 81 total cells, so (max_filled - initial_filled) / (81 - initial_filled) gives progress
-    remaining_to_fill = 81 - initial_filled
-    if remaining_to_fill > 0:
-        progress_reward = (max_filled - initial_filled) / remaining_to_fill
-    else:
-        progress_reward = 1.0  # Already complete
-
-    # Use ONLY last turn for backpropagation (much more efficient!)
-    if last_turn_data:
-        prompt_ids = last_turn_data["prompt_ids"]
-        completion_ids = last_turn_data["completion_ids"]
-        logprobs = last_turn_data["logprobs"]
-    else:
-        prompt_ids = []
-        completion_ids = []
-        logprobs = []
-
-    total_tokens = len(prompt_ids) + len(completion_ids)
-    cells_filled = max_filled - initial_filled
-    print(
-        f"Episode: empty_cell={empty_cell_reward:.2f}, valid={valid_move_reward:.2f}, "
-        f"repetition={repetition_reward:.2f}, progress={progress_reward:.2f} ({cells_filled} cells), "
-        f"correct={correct_reward:.2f}, tokens={total_tokens}"
-    )
-
-    return {
-        "prompt_ids": prompt_ids,
-        "completion_ids": completion_ids,
-        "logprobs": logprobs,
-        "correct_reward": correct_reward,
-        "valid_move_reward": valid_move_reward,
-        "empty_cell_reward": empty_cell_reward,
-        "repetition_reward": repetition_reward,
-        "progress_reward": progress_reward,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Reward functions
 # ---------------------------------------------------------------------------
 
 
-def reward_empty_cell(completions: list[str], **kwargs) -> list[float]:
+def reward_empty_cell(completions: list[str], environments, **kwargs) -> list[float]:
     """Reward for targeting empty cells (learn to pick valid positions first)."""
-    rewards = kwargs.get("empty_cell_reward")
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+    return [env.empty_cell_reward for env in environments]
 
 
-def reward_valid_moves(completions: list[str], **kwargs) -> list[float]:
+def reward_valid_moves(completions: list[str], environments, **kwargs) -> list[float]:
     """Reward for making valid moves."""
-    rewards = kwargs.get("valid_move_reward")
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+    return [env.valid_move_reward for env in environments]
 
 
-def reward_correct(completions: list[str], **kwargs) -> list[float]:
+def reward_correct(completions: list[str], environments, **kwargs) -> list[float]:
     """Reward for solving the puzzle."""
-    rewards = kwargs.get("correct_reward")
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+    return [env.correct_reward for env in environments]
 
 
-def reward_repetition(completions: list[str], **kwargs) -> list[float]:
+def reward_repetition(completions: list[str], environments, **kwargs) -> list[float]:
     """Penalty for repeating moves."""
-    rewards = kwargs.get("repetition_reward")
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+    return [env.repetition_reward for env in environments]
 
 
-def reward_progress(completions: list[str], **kwargs) -> list[float]:
+def reward_progress(completions: list[str], environments, **kwargs) -> list[float]:
     """Reward for filling more cells in the board."""
-    rewards = kwargs.get("progress_reward")
-    if rewards is None:
-        return [0.0 for _ in completions]
-    return [float(r) for r in rewards]
+    return [env.progress_reward for env in environments]
 
 
 # ---------------------------------------------------------------------------
@@ -716,22 +389,213 @@ def reward_progress(completions: list[str], **kwargs) -> list[float]:
 def main() -> None:
     args = parse_args()
 
-    # Setup environment
+    # Setup environment — all modes resolve to env_url
     if args.env_mode == "docker-local":
-        client = TextArenaEnv(base_url=f"http://{args.env_host}:{args.env_port}")
+        env_url = f"http://{args.env_host}:{args.env_port}"
     elif args.env_mode == "docker-image":
-        client = TextArenaEnv.from_docker_image(args.env_image)
+        _bootstrap = TextArenaEnv.from_docker_image(args.env_image)
+        env_url = _bootstrap.base_url
     elif args.env_mode == "docker-hub":
-        client = TextArenaEnv.from_hub(args.env_image)
+        _bootstrap = TextArenaEnv.from_hub(args.env_image)
+        env_url = _bootstrap.base_url
     elif args.env_mode == "space":
-        client = TextArenaEnv(base_url=args.env_host)
+        env_url = args.env_host
     else:
         raise ValueError(f"Unknown environment mode: {args.env_mode}")
 
-    print(f"🌍 Environment: {args.env_mode}")
+    print(f"Environment: {args.env_mode} ({env_url})")
 
     system_prompt = resolve_system_prompt(args.system_prompt_path)
-    dataset = Dataset.from_dict({"prompt": [args.dataset_prompt] * args.dataset_size})
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": args.dataset_prompt},
+                ]
+            ]
+            * args.dataset_size
+        }
+    )
+
+    # Capture args for use in the environment class closure
+    difficulty = args.difficulty
+    max_turns = args.max_turns
+    api_delay = args.api_delay
+
+    class SudokuEnv:
+        def __init__(self):
+            self.client = TextArenaEnv(base_url=env_url)
+            self._difficulty = difficulty
+            self._max_turns = max_turns
+            self._api_delay = api_delay
+            self._reset_state()
+
+        def _reset_state(self):
+            self._move_counts: defaultdict[str, int] = defaultdict(int)
+            self._successful_moves: list[str] = []
+            self._failed_moves: list[str] = []
+            self._valid_move_scores: list[float] = []
+            self._empty_cell_scores: list[float] = []
+            self._correct_scores: list[float] = []
+            self._repetition_scores: list[float] = []
+            self._last_board_state = ""
+            self._initial_filled = 0
+            self._max_filled = 0
+            self._turn = 0
+            self._done = False
+
+        def reset(self, **kwargs) -> str:
+            self._reset_state()
+            result = self.client.reset()
+            time.sleep(self._api_delay)
+            observation = result.observation
+            self._done = result.done
+
+            for message in observation.messages:
+                if message.content and is_valid_board_state(message.content):
+                    self._last_board_state = message.content
+                    self._initial_filled = count_filled_cells(self._last_board_state)
+                    break
+            self._max_filled = self._initial_filled
+
+            board = extract_board_only(self._last_board_state) if self._last_board_state else "No board available."
+            hints = self._format_hints()
+            return f"Board:\n{board}{hints}"
+
+        def place(self, row: int, col: int, number: int) -> str:
+            """Place a number on the Sudoku board.
+
+            Args:
+                row: Row number (1-9).
+                col: Column number (1-9).
+                number: Number to place (1-9).
+
+            Returns:
+                The result of the move and updated board state.
+            """
+            if self._done:
+                raise ValueError("Game is over.")
+
+            self._turn += 1
+            move = f"[{row} {col} {number}]"
+
+            # Step environment
+            result = self.client.step(TextArenaAction(message=move))
+            time.sleep(self._api_delay)
+            observation = result.observation
+            correct_score = float(result.reward or 0.0)
+            self._done = result.done
+
+            feedback = extract_feedback(observation)
+
+            # Empty cell score: did the model target an empty cell?
+            if self._last_board_state:
+                empty_cells = extract_empty_cells(self._last_board_state)
+                targets_empty = (row, col) in empty_cells
+                empty_cell_score = 1.0 if targets_empty else -1.0
+            else:
+                empty_cell_score = 0.0
+
+            # Repetition tracking
+            is_new_move = self._move_counts[move] == 0
+            repetition_count = self._move_counts[move]
+            self._move_counts[move] += 1
+            repetition_score = -min(2 ** (repetition_count - 1), 10.0) if repetition_count > 0 else 0.0
+
+            # Valid move score
+            if feedback["valid_move"] and is_new_move:
+                valid_move_score = 1.0
+                self._successful_moves.append(move)
+            elif feedback["got_warning"]:
+                valid_move_score = -0.5
+                self._failed_moves.append(move)
+            else:
+                valid_move_score = 0.0
+
+            # Update board state and track progress
+            if feedback["board_state"] and is_valid_board_state(feedback["board_state"]):
+                self._last_board_state = feedback["board_state"]
+                current_filled = count_filled_cells(self._last_board_state)
+                if current_filled > self._max_filled:
+                    self._max_filled = current_filled
+
+            self._valid_move_scores.append(valid_move_score)
+            self._empty_cell_scores.append(empty_cell_score)
+            self._correct_scores.append(correct_score)
+            self._repetition_scores.append(repetition_score)
+
+            # Enforce max turns
+            if self._turn >= self._max_turns:
+                self._done = True
+
+            # Build response
+            board = extract_board_only(self._last_board_state) if self._last_board_state else "No board available."
+            status = "valid" if feedback["valid_move"] else "invalid"
+            hints = self._format_hints()
+
+            if self._done:
+                return f"Move {move}: {status}. Game over.\n\nFinal board:\n{board}"
+            return f"Move {move}: {status}\n\nBoard:\n{board}{hints}"
+
+        def _format_hints(self) -> str:
+            if not self._last_board_state:
+                return ""
+
+            if self._difficulty == "easy":
+                cells = extract_empty_cells_with_candidates(self._last_board_state, sort_by_difficulty=True)
+                if cells:
+                    guaranteed = []
+                    other = []
+                    for r, c, candidates in cells[:10]:
+                        if len(candidates) == 1:
+                            guaranteed.append(f"[{r} {c} {list(candidates)[0]}]")
+                        elif len(candidates) <= 3:
+                            nums = ",".join(str(n) for n in sorted(candidates))
+                            other.append(f"({r},{c})->{nums}")
+                    hints = ""
+                    if guaranteed:
+                        hints += f"\nGuaranteed moves: {', '.join(guaranteed[:5])}"
+                    if other:
+                        hints += f"\nOther options: {' | '.join(other[:5])}"
+                    return hints
+
+            elif self._difficulty == "medium":
+                cells = extract_empty_cells_with_candidates(self._last_board_state, sort_by_difficulty=False)
+                if cells:
+                    cell_hints = []
+                    for r, c, candidates in cells[:10]:
+                        nums = ",".join(str(n) for n in sorted(candidates))
+                        cell_hints.append(f"({r},{c})->{nums}")
+                    return f"\nEmpty cells: {' | '.join(cell_hints)}"
+
+            return ""
+
+        # Reward properties — properties are not detected by inspect.ismethod,
+        # so they won't be exposed as tools.
+
+        @property
+        def correct_reward(self) -> float:
+            return self._correct_scores[-1] if self._correct_scores else 0.0
+
+        @property
+        def valid_move_reward(self) -> float:
+            return sum(self._valid_move_scores) / len(self._valid_move_scores) if self._valid_move_scores else 0.0
+
+        @property
+        def empty_cell_reward(self) -> float:
+            return sum(self._empty_cell_scores) / len(self._empty_cell_scores) if self._empty_cell_scores else 0.0
+
+        @property
+        def repetition_reward(self) -> float:
+            return sum(self._repetition_scores) / len(self._repetition_scores) if self._repetition_scores else 0.0
+
+        @property
+        def progress_reward(self) -> float:
+            remaining = 81 - self._initial_filled
+            if remaining > 0:
+                return (self._max_filled - self._initial_filled) / remaining
+            return 1.0
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = Path(args.output_dir or f"outputs/sudoku-grpo-{sanitize_name(args.model_id)}-{timestamp}")
@@ -740,9 +604,7 @@ def main() -> None:
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
-        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization
-        if args.vllm_gpu_memory_utilization
-        else 0.2,  # Lower to leave more VRAM for backpropagation
+        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization or 0.2,
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
@@ -751,7 +613,7 @@ def main() -> None:
         per_device_train_batch_size=args.per_device_batch_size,
         warmup_steps=args.warmup_steps,
         num_generations=args.num_generations,
-        max_completion_length=args.max_new_tokens,
+        max_completion_length=args.max_completion_length,
         logging_steps=args.logging_steps,
         save_strategy="steps",
         save_steps=args.save_interval,
@@ -760,54 +622,12 @@ def main() -> None:
         top_k=args.top_k,
         top_p=args.top_p,
         report_to="trackio",
-        # chat_template_kwargs={"enable_thinking": False},
     )
 
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
     grpo_config.trackio_space_id = args.trackio_space_id
     grpo_config.gradient_checkpointing = args.gradient_checkpointing
-
-    def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
-        all_prompt_ids = []
-        all_completion_ids = []
-        all_logprobs = []
-        all_correct = []
-        all_valid = []
-        all_empty_cell = []
-        all_repetition = []
-        all_progress = []
-
-        for _ in prompts:
-            episode = rollout_once(
-                trainer=trainer,
-                env=client,
-                tokenizer=trainer.processing_class,
-                system_prompt=system_prompt,
-                max_turns=args.max_turns,
-                debug=args.debug,
-                difficulty=args.difficulty,
-                api_delay=args.api_delay,
-            )
-            all_prompt_ids.append(episode["prompt_ids"])
-            all_completion_ids.append(episode["completion_ids"])
-            all_logprobs.append(episode["logprobs"])
-            all_correct.append(episode["correct_reward"])
-            all_valid.append(episode["valid_move_reward"])
-            all_empty_cell.append(episode["empty_cell_reward"])
-            all_repetition.append(episode["repetition_reward"])
-            all_progress.append(episode["progress_reward"])
-
-        return {
-            "prompt_ids": all_prompt_ids,
-            "completion_ids": all_completion_ids,
-            "logprobs": all_logprobs,
-            "correct_reward": all_correct,
-            "valid_move_reward": all_valid,
-            "empty_cell_reward": all_empty_cell,
-            "repetition_reward": all_repetition,
-            "progress_reward": all_progress,
-        }
 
     trainer = GRPOTrainer(
         model=args.model_id,
@@ -820,15 +640,11 @@ def main() -> None:
         ],
         train_dataset=dataset,
         args=grpo_config,
-        rollout_func=rollout_func,
+        environment_factory=SudokuEnv,
     )
 
-    print(f"🚀 Starting GRPO training: {args.num_generations} generations, {args.max_turns} max turns")
-
-    try:
-        trainer.train()
-    finally:
-        client.close()
+    print(f"Starting GRPO training: {args.num_generations} generations, {args.max_turns} max turns")
+    trainer.train()
 
 
 if __name__ == "__main__":
