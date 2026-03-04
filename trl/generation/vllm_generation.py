@@ -37,7 +37,7 @@ from .vllm_client import VLLMClient
 
 
 if is_vllm_available():
-    from vllm import RequestOutput
+    from vllm import LLM, RequestOutput, SamplingParams
 
 
 logger = logging.getLogger(__name__)
@@ -97,15 +97,6 @@ if TYPE_CHECKING:
     from accelerate import Accelerator
     from peft import PeftModel
 
-
-if is_vllm_available():
-    import vllm
-    from vllm import LLM, SamplingParams
-
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
@@ -557,6 +548,17 @@ class VLLMGeneration:
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
         """
+        import vllm
+
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+
+            structured_outputs_key = "guided_decoding"
+        else:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            structured_outputs_key = "structured_outputs"
+
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
         temperature = self.temperature
@@ -679,9 +681,6 @@ class VLLMGeneration:
             }
             generation_kwargs.update(self.generation_kwargs)
 
-            structured_outputs_key = (
-                "guided_decoding" if Version(vllm.__version__) <= Version("0.10.2") else "structured_outputs"
-            )
             if self.structured_outputs_regex is not None:
                 if generation_kwargs.get(structured_outputs_key) is not None:
                     logger.warning(
