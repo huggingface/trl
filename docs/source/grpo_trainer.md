@@ -695,7 +695,8 @@ trainer.train()
 
 Tested with:
 
-- **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
+- [**Qwen3**](https://huggingface.co/collections/Qwen/qwen3) — e.g., `Qwen/Qwen3-0.6B`
+- [**Qwen3.5**](https://huggingface.co/collections/Qwen/qwen35) — e.g., `Qwen/Qwen3.5-2B`
 
 > [!TIP]
 > Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
