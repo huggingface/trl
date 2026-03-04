@@ -37,16 +37,16 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     Args:
         messages (`list[dict[str, Any]]`):
             Messages with `"role"`, `"content"` (or `"tool_calls"`). Content may be a raw string before transformation.
-            List of messages a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing
+            List of messages a `"role"` key (`"system"`, `"user"`, `"assistant"`, or `"tool"`) and a `"content"` key containing
             either a string or a list of structured blocks if already prepared. Optionally, the `"content"` might
-            be `None` or not provided in favour of e.g., `"tool_calls"`.
+            be `None` or not provided in favour of `"tool_calls"` in the `"assistant"` turns if applicable.
         images (`list`):
             List of image objects to insert. Can be empty if no images are included in the messages.
 
     Returns:
         `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
-        content blocks, and all `"image"` placeholders are populated with the corresponding image objects. In the
-        assistant turns contains `"tool_calls"`, then the `"content"` might be empty in such turns.
+        content blocks, and all `"image"` placeholders are populated with the corresponding image objects. If the
+        assistant turns contains `"tool_calls"`, then the `"content"` might be empty.
 
     Notes:
         - When the input `messages` isn't already in the structured format, (i.e., all `"content"` values are strings),
@@ -55,6 +55,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
         - When the input `messages` is already in the structured format (i.e., all `"content"` values are lists of
           structured blocks), the function only fills in the actual images in the existing `{"type": "image"}`
           placeholders. If the number of placeholders does not match the number of provided images, an error is raised.
+        - When the input `messages` contain either `"tool_calls"` in the `"assistant"` turns, or `"tool"` roles with
+          `"content"` and `"name"` those are left as-is, since those don't require any specific handling for multimodal data.
 
     Example:
     ```python
@@ -90,14 +92,20 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
         elif message["role"] == "assistant":
             if message.get("content") and isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
+        elif message["role"] == "tool":
+            # NOTE: `tool` contains `name` (name of the tool used) and `content` (output of the tool call as a string)
+            # but there's no need to prepare it for multimodal specifically but rather leave it as-is
+            continue
         else:
-            raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
+            raise ValueError(
+                f"Invalid role in message: {message['role']}. Expected 'system', 'user', 'assistant', or 'tool'."
+            )
 
     # Then, check that the number of image placeholders matches the number of images provided
     num_placeholders = sum(
         sum(1 for part in message["content"] if part["type"] == "image")
         for message in messages
-        if "content" in message
+        if "content" in message and message["role"] != "tool"
     )
     if num_placeholders != len(images):
         raise ValueError(
@@ -107,7 +115,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     # Then, fill in the actual images in the placeholders
     img_idx = 0
     for message in messages:
-        if "content" not in message:
+        if "content" not in message or message["role"] == "tool":
             continue
         for part in message["content"]:
             if part["type"] == "image":
