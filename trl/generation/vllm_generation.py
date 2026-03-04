@@ -688,6 +688,9 @@ class VLLMGeneration:
                             "`structured_outputs_regex` takes precedence."
                         )
                     structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
+                elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
+                    structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
+                    structured_outputs = GuidedDecodingParams(**structured_outputs_dict)
                 else:
                     structured_outputs = generation_kwargs.get(structured_outputs_key)
             else:
