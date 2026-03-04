@@ -17,6 +17,7 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import torch_device
 
@@ -35,7 +36,12 @@ from .testing_utils import (
 
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
+
+    _is_vllm_ge_014 = Version(vllm.__version__) >= Version("0.14.0")
+else:
+    _is_vllm_ge_014 = False
 
 
 class TestChunkList(TrlTestCase):
@@ -530,6 +536,26 @@ class TestVLLMClientServerTP(TrlTestCase):
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
         assert "Multiplies two integers." in decoded_prompt
 
+    def test_generate_with_params(self):
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
+
+        # Check that the output is a list
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of generated sequences is 2 times the number of prompts
+        assert len(completion_ids) == 2 * len(prompts)
+
+        # Check that the generated sequences are lists of integers
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
+        # Check that the length of the generated sequences is less than or equal to 32
+        for seq in completion_ids:
+            assert len(seq) <= 32
+
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
@@ -549,6 +575,10 @@ class TestVLLMClientServerTP(TrlTestCase):
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    _is_vllm_ge_014,
+    reason="Skipping DP server test for vLLM>=0.14.0 (PR vllm#30739: DP for non-MoE/dense models no longer supported).",
+)
 @require_3_accelerators
 @require_vllm
 class TestVLLMClientServerDP(TrlTestCase):
@@ -634,6 +664,26 @@ class TestVLLMClientServerDP(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
         assert "Multiplies two integers." in decoded_prompt
+
+    def test_generate_with_params(self):
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
+
+        # Check that the output is a list
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of generated sequences is 2 times the number of prompts
+        assert len(completion_ids) == 2 * len(prompts)
+
+        # Check that the generated sequences are lists of integers
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
+        # Check that the length of the generated sequences is less than or equal to 32
+        for seq in completion_ids:
+            assert len(seq) <= 32
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
