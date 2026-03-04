@@ -682,33 +682,18 @@ class VLLMGeneration:
             structured_outputs_key = (
                 "guided_decoding" if Version(vllm.__version__) <= Version("0.10.2") else "structured_outputs"
             )
-            if Version(vllm.__version__) <= Version("0.10.2"):
-                if self.structured_outputs_regex is not None:
-                    if generation_kwargs.get(structured_outputs_key) is not None:
-                        logger.warning(
-                            f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
-                            "`structured_outputs_regex` takes precedence."
-                        )
-                    structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
-                elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
-                    structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
-                    structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
-                else:
-                    structured_outputs = generation_kwargs.get(structured_outputs_key)
+            if self.structured_outputs_regex is not None:
+                if generation_kwargs.get(structured_outputs_key) is not None:
+                    logger.warning(
+                        f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
+                structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
+            elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
+                structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
+                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
             else:
-                if self.structured_outputs_regex is not None:
-                    if generation_kwargs.get(structured_outputs_key) is not None:
-                        logger.warning(
-                            f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are "
-                            "set; `structured_outputs_regex` takes precedence."
-                        )
-                    structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
-                elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
-                    structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
-                    structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
-                else:
-                    structured_outputs = generation_kwargs.get(structured_outputs_key)
-
+                structured_outputs = generation_kwargs.get(structured_outputs_key)
             generation_kwargs[structured_outputs_key] = structured_outputs
             sampling_params = SamplingParams(**generation_kwargs)
 
