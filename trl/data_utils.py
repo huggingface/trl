@@ -37,7 +37,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     Args:
         messages (`list[dict[str, Any]]`):
             Messages with `"role"`, `"content"` (or `"tool_calls"`). Content may be a raw string before transformation.
-            List of messages a `"role"` key (`"system"`, `"user"`, `"assistant"`, or `"tool"`) and a `"content"` key containing
+            List of messages with a `"role"` key (`"system"`, `"user"`, `"assistant"`, or `"tool"`) and a `"content"` key containing
             either a string or a list of structured blocks if already prepared. Optionally, the `"content"` might
             be `None` or not provided in favour of `"tool_calls"` in the `"assistant"` turns if applicable.
         images (`list`):
@@ -52,10 +52,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
         - When the input `messages` isn't already in the structured format, (i.e., all `"content"` values are strings),
           the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
           and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
-        - When the input `messages` is already in the structured format (i.e., all `"content"` values are lists of
-          structured blocks), the function only fills in the actual images in the existing `{"type": "image"}`
-          placeholders. If the number of placeholders does not match the number of provided images, an error is raised.
-        - When the input `messages` contain either `"tool_calls"` in the `"assistant"` turns, or `"tool"` roles with
+          If the number of placeholders does not match the number of provided images, an error is raised.
+        - When the input `messages` contains either `"tool_calls"` in the `"assistant"` turns, or `"tool"` roles with
           `"content"` and `"name"` those are left as-is, since those don't require any specific handling for multimodal data.
 
     Example:
@@ -105,7 +103,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     num_placeholders = sum(
         sum(1 for part in message["content"] if part["type"] == "image")
         for message in messages
-        if "content" in message and message["role"] != "tool"
+        if message.get("content") and message["role"] != "tool"
     )
     if num_placeholders != len(images):
         raise ValueError(
@@ -115,7 +113,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     # Then, fill in the actual images in the placeholders
     img_idx = 0
     for message in messages:
-        if "content" not in message or message["role"] == "tool":
+        if message.get("content") or message["role"] == "tool":
             continue
         for part in message["content"]:
             if part["type"] == "image":
