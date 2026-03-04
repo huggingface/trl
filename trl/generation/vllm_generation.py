@@ -679,8 +679,10 @@ class VLLMGeneration:
             }
             generation_kwargs.update(self.generation_kwargs)
 
+            structured_outputs_key = (
+                "guided_decoding" if Version(vllm.__version__) <= Version("0.10.2") else "structured_outputs"
+            )
             if Version(vllm.__version__) <= Version("0.10.2"):
-                structured_outputs_key = "guided_decoding"
                 if self.structured_outputs_regex is not None:
                     if generation_kwargs.get(structured_outputs_key) is not None:
                         logger.warning(
@@ -694,7 +696,6 @@ class VLLMGeneration:
                 else:
                     structured_outputs = generation_kwargs.get(structured_outputs_key)
             else:
-                structured_outputs_key = "structured_outputs"
                 if self.structured_outputs_regex is not None:
                     if generation_kwargs.get(structured_outputs_key) is not None:
                         logger.warning(
