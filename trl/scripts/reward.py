@@ -24,28 +24,19 @@
 import argparse
 import os
 
-from accelerate import logging
-from datasets import load_dataset
-
-from trl import (
-    DatasetMixtureConfig,
-    ModelConfig,
-    RewardConfig,
-    RewardTrainer,
-    ScriptArguments,
-    TrlParser,
-    get_dataset,
-    get_peft_config,
-)
-
-
-logger = logging.get_logger(__name__)
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    from accelerate import logging
+    from datasets import load_dataset
+
+    from trl import RewardTrainer, get_dataset, get_peft_config
+
+    logger = logging.get_logger(__name__)
+
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
@@ -87,6 +78,8 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None):
+    from trl import DatasetMixtureConfig, ModelConfig, RewardConfig, ScriptArguments, TrlParser
+
     dataclass_types = (ScriptArguments, RewardConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser(
