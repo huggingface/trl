@@ -1337,8 +1337,13 @@ class GRPOTrainer(_BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
+            # It's important to move the whole tensor from GPU->CPU before per-element boolean indexing + .tolist().
+            # Each p[m].tolist() on a CUDA tensor triggers a sync; this can be significant if batch size is large 
+            # or if there is a lot of contention for throughput (e.g, multiple processes)
+            p_cpu, pm_cpu = prompt_ids.cpu(), prompt_mask.bool().cpu()
+            prompt_ids = [p[m].tolist() for p, m in zip(p_cpu, pm_cpu, strict=True)]
+            c_cpu, cm_cpu = completion_ids.cpu(), completion_mask.bool().cpu()
+            completion_ids = [c[m].tolist() for c, m in zip(c_cpu, cm_cpu, strict=True)]
             logprobs = None  # not used in this case
             extra_fields = {}  # No extra fields for non-rollout_func paths
 
