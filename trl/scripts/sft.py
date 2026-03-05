@@ -63,32 +63,21 @@ python trl/scripts/sft.py \
 import argparse
 import os
 
-from accelerate import logging
-from datasets import load_dataset
-from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
-
-from trl import (
-    DatasetMixtureConfig,
-    ModelConfig,
-    ScriptArguments,
-    SFTConfig,
-    SFTTrainer,
-    TrlParser,
-    get_dataset,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-
-
-logger = logging.get_logger(__name__)
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    from accelerate import logging
+    from datasets import load_dataset
+    from transformers import AutoConfig, AutoModelForCausalLM
+    from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
+
+    from trl import SFTTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
+
+    logger = logging.get_logger(__name__)
+
     ################
     # Model init kwargs
     ################
@@ -156,6 +145,8 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import DatasetMixtureConfig, ModelConfig, ScriptArguments, SFTConfig, TrlParser
+
     dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)

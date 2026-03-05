@@ -27,37 +27,11 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-import torch
-from accelerate import logging
-from datasets import load_dataset
+from trl import ScriptArguments
 
-from trl import (
-    DatasetMixtureConfig,
-    GRPOConfig,
-    GRPOTrainer,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_dataset,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
-
-
-logger = logging.get_logger(__name__)
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
-reward_funcs_registry = {
-    "accuracy_reward": accuracy_reward,
-    "reasoning_accuracy_reward": reasoning_accuracy_reward,
-    "think_format_reward": think_format_reward,
-    "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
-}
 
 
 @dataclass
@@ -96,6 +70,27 @@ class GRPOScriptArguments(ScriptArguments):
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    import torch
+    from accelerate import logging
+    from datasets import load_dataset
+
+    from trl import GRPOTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
+    from trl.rewards import (
+        accuracy_reward,
+        get_soft_overlong_punishment,
+        reasoning_accuracy_reward,
+        think_format_reward,
+    )
+
+    logger = logging.get_logger(__name__)
+
+    reward_funcs_registry = {
+        "accuracy_reward": accuracy_reward,
+        "reasoning_accuracy_reward": reasoning_accuracy_reward,
+        "think_format_reward": think_format_reward,
+        "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
+    }
+
     # Get the reward models and functions
     reward_funcs = []
     if script_args.reward_model_name_or_path:
@@ -174,6 +169,8 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import DatasetMixtureConfig, GRPOConfig, ModelConfig, TrlParser
+
     dataclass_types = (GRPOScriptArguments, GRPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)
