@@ -41,7 +41,7 @@ class TrainingCommand(Command):
 
         module = importlib.import_module(f"...scripts.{self.name}", package=__package__)
         all_args = context.argv_after(self.name)
-        parser = module.make_parser()
+        parser = module.make_parser(prog=f"trl {self.name}")
         *_, accelerate_args = parser.parse_args_and_config(all_args, return_remaining_strings=True)
         launch_args = resolve_accelerate_config_argument(accelerate_args)
         launch_training_script(

@@ -145,12 +145,12 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
     dataclass_types = (ScriptArguments, KTOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("kto", help="Run the KTO training script", dataclass_types=dataclass_types)
     else:
-        parser = TrlParser(dataclass_types, prog="trl kto")
+        parser = TrlParser(dataclass_types, prog=prog)
     return parser
 
 
