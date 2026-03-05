@@ -233,58 +233,6 @@ def build_teacher_inputs_from_texts(
     return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
 
 
-class _RepeatEachBatchDataLoader:
-    """Repeats each dataloader batch `repeat_count` times without re-sampling."""
-
-    @staticmethod
-    def _infer_batch_size(batch: dict[str, torch.Tensor | Any]) -> int | None:
-        for value in batch.values():
-            if value is None:
-                continue
-            if isinstance(value, torch.Tensor):
-                if value.ndim == 0:
-                    continue
-                return int(value.shape[0])
-            if isinstance(value, (list, tuple)):
-                return len(value)
-        return None
-
-    def __init__(self, dataloader, repeat_count: int, expected_batch_size: int | None = None):
-        if repeat_count < 1:
-            raise ValueError(f"repeat_count must be at least 1, got {repeat_count}.")
-        self.dataloader = dataloader
-        self.repeat_count = repeat_count
-        self.expected_batch_size = expected_batch_size
-        self._dropped_partial_batch = False
-
-    def __iter__(self):
-        self._dropped_partial_batch = False
-        for batch in self.dataloader:
-            if self.expected_batch_size is not None:
-                batch_size = self._infer_batch_size(batch)
-                if batch_size is not None and batch_size != self.expected_batch_size:
-                    if not self._dropped_partial_batch:
-                        warnings.warn(
-                            "Dropping last batch due to unexpected batch size: "
-                            f"got {batch_size}, expected {self.expected_batch_size}.",
-                            UserWarning,
-                            stacklevel=2,
-                        )
-                        self._dropped_partial_batch = True
-                    break
-            for _ in range(self.repeat_count):
-                yield batch
-
-    def __len__(self):
-        return len(self.dataloader) * self.repeat_count
-
-    def set_epoch(self, epoch: int):
-        if hasattr(self.dataloader, "set_epoch"):
-            self.dataloader.set_epoch(epoch)
-
-    def __getattr__(self, attr):
-        return getattr(self.dataloader, attr)
-
 
 class ULDLoss(nn.Module):
     """
@@ -1123,7 +1071,7 @@ class GOLDTrainer(SFTTrainer):
             data_source=dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
-            repeat_count=1,
+            repeat_count=self.args.gradient_accumulation_steps,
             shuffle=True,
             seed=self.args.seed,
         )
@@ -1132,9 +1080,10 @@ class GOLDTrainer(SFTTrainer):
         """
         Override Trainer.get_train_dataloader to load one generation batch per optimizer window.
 
-        The base dataloader yields local batches of size
-        `per_device_train_batch_size * gradient_accumulation_steps`, then repeats each batch
-        `gradient_accumulation_steps` times so Trainer can run accumulation mini-steps without re-sampling prompts.
+        The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`.
+        The `RepeatSampler` (with `repeat_count=gradient_accumulation_steps`) ensures each generation batch is
+        sampled `gradient_accumulation_steps` times so Trainer's loop iterates the correct number of times.
+        Only the first batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`.
         """
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
@@ -1165,12 +1114,7 @@ class GOLDTrainer(SFTTrainer):
             if self.args.dataloader_num_workers > 0:
                 dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
-        base_dataloader = self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-        return _RepeatEachBatchDataLoader(
-            base_dataloader,
-            repeat_count=self.args.gradient_accumulation_steps,
-            expected_batch_size=self._train_batch_size * self.args.gradient_accumulation_steps,
-        )
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
