@@ -23,6 +23,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+# Temporarily import from the local module instead of transformers to avoid an upstream latency issue
+# See: https://github.com/huggingface/transformers/issues/44273
+# This workaround can be reverted once the fix is included in the minimum required transformers version
 from trl.scripts._hf_argparser import DataClass, DataClassType, HfArgumentParser
 
 
