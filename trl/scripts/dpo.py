@@ -61,32 +61,21 @@ python trl/scripts/dpo.py \
 import argparse
 import os
 
-import torch
-from accelerate import logging
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM
-
-from trl import (
-    DatasetMixtureConfig,
-    DPOConfig,
-    DPOTrainer,
-    ModelConfig,
-    ScriptArguments,
-    TrlParser,
-    get_dataset,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-
-
-logger = logging.get_logger(__name__)
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    import torch
+    from accelerate import logging
+    from datasets import load_dataset
+    from transformers import AutoModelForCausalLM
+
+    from trl import DPOTrainer, get_dataset, get_kbit_device_map, get_peft_config, get_quantization_config
+
+    logger = logging.get_logger(__name__)
+
     ################
     # Model
     ###################
@@ -158,6 +147,8 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None):
+    from trl import DatasetMixtureConfig, DPOConfig, ModelConfig, ScriptArguments, TrlParser
+
     dataclass_types = (ScriptArguments, DPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)
