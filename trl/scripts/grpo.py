@@ -184,10 +184,5 @@ def make_parser(subparsers: argparse._SubParsersAction | None = None):
 
 if __name__ == "__main__":
     parser = make_parser()
-    # When using the trl cli, this script may be run with additional arguments, corresponding accelerate arguments.
-    # To ensure that their parsing does not interfere with the script arguments, parse the arguments with
-    # `return_remaining_strings=True`, then ignore the remaining strings.
-    script_args, training_args, model_args, dataset_args, _ = parser.parse_args_and_config(
-        return_remaining_strings=True
-    )
+    script_args, training_args, model_args, dataset_args = parser.parse_args_and_config()
     main(script_args, training_args, model_args, dataset_args)
