@@ -77,7 +77,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
     from trl import DatasetMixtureConfig, ModelConfig, RewardConfig, ScriptArguments, TrlParser
 
     dataclass_types = (ScriptArguments, RewardConfig, ModelConfig, DatasetMixtureConfig)
@@ -86,7 +86,7 @@ def make_parser(subparsers: argparse._SubParsersAction | None = None):
             "reward", help="Run the reward training script", dataclass_types=dataclass_types
         )
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(dataclass_types, prog=prog)
     return parser
 
 
