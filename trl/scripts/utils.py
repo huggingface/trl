@@ -307,6 +307,7 @@ class TrlParser(HfArgumentParser):
         import yaml
 
         args = list(args) if args is not None else sys.argv[1:]
+        config = {}
         if "--config" in args:
             # Get the config file path from
             config_index = args.index("--config")
@@ -335,7 +336,7 @@ class TrlParser(HfArgumentParser):
         if return_remaining_strings:
             args_remaining_strings = output[-1]
             if separate_remaining_strings:
-                return output[:-1] + (config_remaining_strings, args_remaining_strings)
+                return output[:-1] + (config, config_remaining_strings, args_remaining_strings)
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
         elif fail_with_unknown_args and config_remaining_strings:
             raise ValueError(

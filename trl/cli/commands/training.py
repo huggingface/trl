@@ -56,9 +56,9 @@ class TrainingCommand(Command):
         all_args = context.argv_after(self.name)
         parser = module.make_parser()
 
-        # Handles -h (exits). Returns config_remaining and cli_remaining separately.
-        # cli_remaining is an ordered subsequence of all_args; config_remaining is not.
-        *_, config_remaining, cli_remaining = parser.parse_args_and_config(
+        # Handles -h (exits). Returns config, config_remaining, and cli_remaining separately.
+        # cli_remaining is an ordered subsequence of all_args; config_remaining and config are not.
+        *_, config, config_remaining, cli_remaining = parser.parse_args_and_config(
             all_args, return_remaining_strings=True, separate_remaining_strings=True
         )
         launch_args = resolve_accelerate_config_argument(config_remaining + cli_remaining)
