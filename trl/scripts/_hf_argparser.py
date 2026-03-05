@@ -14,6 +14,7 @@
 
 
 # Copied from: https://github.com/huggingface/transformers/blob/3a275d3581c0ecf962f7412aa764c2047331fd6b/src/transformers/hf_argparser.py
+# This avoids an upstream latency issue: https://github.com/huggingface/transformers/issues/44273
 # - Moved yaml import inside function
 
 
