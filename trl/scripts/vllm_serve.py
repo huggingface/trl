@@ -495,9 +495,8 @@ def main(script_args: ScriptArguments):
         return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str] | None = None
+        prompts: list[str] | list[list[int]]
         images: list[str] | None = None
-        prompt_token_ids: list[list[int]] | None = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -585,10 +584,8 @@ def main(script_args: ScriptArguments):
         }
         ```
         """
-        if request.prompt_token_ids is not None and request.prompts is not None:
-            raise ValueError("Only one of 'prompts' or 'prompt_token_ids' can be provided, not both.")
-        if request.prompt_token_ids is None and request.prompts is None:
-            raise ValueError("Either 'prompts' or 'prompt_token_ids' must be provided.")
+        # Detect whether prompts are text strings or pre-tokenized token ID lists
+        is_token_ids = request.prompts and isinstance(request.prompts[0], list)
 
         generation_kwargs = {
             "n": request.n,
@@ -635,11 +632,11 @@ def main(script_args: ScriptArguments):
         generation_kwargs[structured_outputs_key] = structured_outputs
         sampling_params = SamplingParams(**generation_kwargs)
 
-        if request.prompt_token_ids is not None:
-            # Token IDs path: pass pre-tokenized prompts directly to vLLM workers
-            chunked_inputs = chunk_list(request.prompt_token_ids, script_args.data_parallel_size)
-            input_key = "prompt_token_ids"
-            placeholder = [[0]]
+        if is_token_ids:
+            # Token IDs path: wrap each list of token IDs as a TokensPrompt dict for vLLM
+            prompts = [{"prompt_token_ids": ids} for ids in request.prompts]
+            chunked_inputs = chunk_list(prompts, script_args.data_parallel_size)
+            placeholder = [{"prompt_token_ids": [0]}]
         else:
             # Text prompts path: build prompt dicts with optional images
             request.images = request.images or [None] * len(request.prompts)
@@ -650,7 +647,6 @@ def main(script_args: ScriptArguments):
                     row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
                 prompts.append(row)
             chunked_inputs = chunk_list(prompts, script_args.data_parallel_size)
-            input_key = "prompts"
             placeholder = ["<placeholder>"]
 
         # Send inputs to each worker
@@ -660,7 +656,7 @@ def main(script_args: ScriptArguments):
             # with vLLM's requirement, and we later ignore the result.
             if not chunk:
                 chunk = placeholder
-            kwargs = {input_key: chunk, "sampling_params": sampling_params}
+            kwargs = {"prompts": chunk, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results

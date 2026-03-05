@@ -211,7 +211,7 @@ class TestVLLMClientServer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         prompts = ["Hello, AI!", "Tell me a joke"]
         prompt_token_ids = tokenizer(prompts)["input_ids"]
-        outputs = self.client.generate(prompt_token_ids=prompt_token_ids)
+        outputs = self.client.generate(prompt_token_ids)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 
@@ -440,7 +440,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         prompts = ["Hello, AI!", "Tell me a joke"]
         prompt_token_ids = tokenizer(prompts)["input_ids"]
-        outputs = self.client.generate(prompt_token_ids=prompt_token_ids)
+        outputs = self.client.generate(prompt_token_ids)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 
@@ -590,7 +590,7 @@ class TestVLLMClientServerTP(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         prompts = ["Hello, AI!", "Tell me a joke"]
         prompt_token_ids = tokenizer(prompts)["input_ids"]
-        outputs = self.client.generate(prompt_token_ids=prompt_token_ids)
+        outputs = self.client.generate(prompt_token_ids)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 
@@ -744,7 +744,7 @@ class TestVLLMClientServerDP(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         prompts = ["Hello, AI!", "Tell me a joke"]
         prompt_token_ids = tokenizer(prompts)["input_ids"]
-        outputs = self.client.generate(prompt_token_ids=prompt_token_ids)
+        outputs = self.client.generate(prompt_token_ids)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 
