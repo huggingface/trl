@@ -1144,6 +1144,9 @@ class GRPOTrainer(_BaseTrainer):
         # Allow reward functions to log extra columns to the completions table.
         reward_kwargs["log_extra"] = self.log_completion_extra
 
+        # Allow reward functions to log scalar metrics (e.g. accuracy, ECE).
+        reward_kwargs["log_metric"] = self.log_metric
+
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1202,7 +1205,7 @@ class GRPOTrainer(_BaseTrainer):
         if torch.isnan(rewards_per_func).all(dim=1).any():
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
             row_reward_kwargs = {
-                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key not in ("trainer_state", "log_extra")
+                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key not in ("trainer_state", "log_extra", "log_metric")
             }
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]

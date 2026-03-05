@@ -55,6 +55,29 @@ class _BaseTrainer(Trainer):
         """
         self._logs["extra"][column].extend(values)
 
+    def log_metric(self, name: str, value: float):
+        """
+        Log a scalar metric from within a reward function. The metric is averaged over the eval/train loop
+        and reported to logging backends (e.g. Weights & Biases, Trackio) as a plot.
+
+        Example:
+
+        ```python
+        def my_reward_fn(completions, answer, log_metric, **kwargs):
+            rewards = [1.0 if extract(c) == a else 0.0 for c, a in zip(completions, answer)]
+            log_metric("accuracy", sum(rewards) / len(rewards))
+            return rewards
+        ```
+
+        Args:
+            name (`str`):
+                Name of the metric.
+            value (`float`):
+                Scalar value for this batch.
+        """
+        mode = "train" if self.model.training else "eval"
+        self._metrics[mode][name].append(value)
+
     def create_model_card(
         self,
         model_name: str | None = None,
