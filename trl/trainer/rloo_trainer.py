@@ -818,7 +818,7 @@ class RLOOTrainer(_BaseTrainer):
         # Allow reward functions to log extra columns to the completions table.
         reward_kwargs["log_extra"] = self.log_completion_extra
 
-        # Allow reward functions to log scalar metrics (e.g. accuracy, ECE).
+        # Allow reward functions to log additional scalar metrics.
         reward_kwargs["log_metric"] = self.log_metric
 
         async_funcs_info = []  # async custom functions for asyncio.gather

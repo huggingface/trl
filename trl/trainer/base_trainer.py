@@ -31,43 +31,20 @@ class _BaseTrainer(Trainer):
 
     def log_completion_extra(self, column: str, values: list):
         """
-        Log extra columns to the completions table reported to logging backends (e.g. Weights & Biases, Trackio).
-
-        This method can be called from within reward functions via the `log_extra` keyword argument that is passed
-        to reward functions alongside other dataset columns. Extra columns are included in the completions table
-        and saved to the parquet files.
-
-        Example:
-
-        ```python
-        def my_reward_fn(completions, answer, log_extra, **kwargs):
-            extracted = [extract_answer(c) for c in completions]
-            log_extra("golden_answer", answer)
-            log_extra("extracted_answer", extracted)
-            return [1.0 if e == a else 0.0 for e, a in zip(extracted, answer)]
-        ```
+        Log extra columns to the completions table. Called from reward functions via the `log_extra` kwarg.
 
         Args:
             column (`str`):
-                Name of the column to add to the completions table.
+                Name of the column to add.
             values (`list`):
-                List of values for the column, one per sample in the batch.
+                Values for the column, one per sample in the batch.
         """
         self._logs["extra"][column].extend(values)
 
     def log_metric(self, name: str, value: float):
         """
-        Log a scalar metric from within a reward function. The metric is averaged over the eval/train loop
-        and reported to logging backends (e.g. Weights & Biases, Trackio) as a plot.
-
-        Example:
-
-        ```python
-        def my_reward_fn(completions, answer, log_metric, **kwargs):
-            rewards = [1.0 if extract(c) == a else 0.0 for c, a in zip(completions, answer)]
-            log_metric("accuracy", sum(rewards) / len(rewards))
-            return rewards
-        ```
+        Log a scalar metric from a reward function. Called via the `log_metric` kwarg. Values are averaged
+        over each logging step and reported alongside built-in metrics like `kl` and `entropy`.
 
         Args:
             name (`str`):
