@@ -211,7 +211,9 @@ class ScriptArguments:
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
         data_parallel_size (`int`, *optional*, defaults to `1`):
-            Number of data parallel workers to use.
+            Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`,
+            setting this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR
+            #30739).
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
@@ -261,7 +263,11 @@ class ScriptArguments:
     )
     data_parallel_size: int = field(
         default=1,
-        metadata={"help": "Number of data parallel workers to use."},
+        metadata={
+            "help": "Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM "
+            "`0.14.0`, setting this above `1` for dense models is no longer supported/useful and will error out (see "
+            "vLLM PR #30739)."
+        },
     )
     host: str = field(
         default="0.0.0.0",
@@ -667,6 +673,7 @@ def main(script_args: ScriptArguments):
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
+        tools: list | None = None
 
     class ChatResponse(BaseModel):
         prompt_ids: list[list[int]]
@@ -802,6 +809,7 @@ def main(script_args: ScriptArguments):
                 "messages": messages,
                 "sampling_params": sampling_params,
                 "chat_template_kwargs": request.chat_template_kwargs,
+                "tools": request.tools,
             }
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 

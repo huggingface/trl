@@ -109,11 +109,10 @@ def is_uvicorn_available() -> bool:
 def is_vllm_available() -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
-        if not (Version("0.10.2") <= Version(_vllm_version) <= Version("0.12.0")):
+        if not (Version("0.10.2") <= Version(_vllm_version) <= Version("0.14.1")):
             warnings.warn(
-                "TRL currently supports vLLM versions: 0.10.2, 0.11.0, 0.11.1, 0.11.2, 0.12.0. You have version "
-                f"{_vllm_version} installed. We recommend installing a supported version to avoid compatibility "
-                "issues.",
+                f"TRL currently supports vLLM versions from 0.10.2 to 0.14.1. You have version {_vllm_version} "
+                "installed. We recommend installing a supported version to avoid compatibility issues.",
                 stacklevel=2,
             )
     return _vllm_available
