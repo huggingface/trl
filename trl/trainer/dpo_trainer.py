@@ -48,7 +48,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ..data_utils import apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import disable_gradient_checkpointing
-from .base_trainer import BaseTrainer
+from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
@@ -195,7 +195,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     """
     Data collator for vision-preference tasks.
 
-    Unlike text-only datasets—where the collator typically receives pre-tokenized inputs ready for batching,
+    Unlike text-only datasets, where the collator typically receives pre-tokenized inputs ready for batching,
     vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
     making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
     image processing on-the-fly to efficiently prepare batches.
@@ -355,7 +355,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         return output
 
 
-class DPOTrainer(BaseTrainer):
+class DPOTrainer(_BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method. This algorithm was initially proposed in the paper [Direct
     Preference Optimization: Your Language Model is Secretly a Reward Model](https://huggingface.co/papers/2305.18290).
@@ -470,9 +470,11 @@ class DPOTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
-        # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
-        # batches from multiple processes, leading to mismatch errors.
-        if isinstance(train_dataset, IterableDataset):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+        elif isinstance(train_dataset, IterableDataset):
+            # IterableDataset requires dispatch_batches=False because Accelerate's dispatch mode may try to concatenate
+            # batches from multiple processes, leading to mismatch errors.
             if args.accelerator_config.dispatch_batches is True:
                 logger.warning(
                     "You are using an `IterableDataset` for training with `dispatch_batches=True`. `dispatch_batches` "
@@ -1013,9 +1015,9 @@ class DPOTrainer(BaseTrainer):
             comp_lens = shift_completion_mask.sum(dim=1).long()
             chosen_lens, rejected_lens = comp_lens.chunk(2, dim=0)
             shared_lens = torch.minimum(chosen_lens, rejected_lens)
-            shared_lens_2b = torch.cat([shared_lens, shared_lens], dim=0).to(device)
-            shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens_2b.unsqueeze(1))
-            tail_mask = comp_pos > shared_lens_2b.unsqueeze(1)
+            shared_lens = torch.cat([shared_lens, shared_lens], dim=0).to(device)
+            shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens.unsqueeze(1))
+            tail_mask = comp_pos > shared_lens.unsqueeze(1)
             shared_logps = (ref_per_token_logps * shared_mask).sum(dim=1)
             tail_logps = (ref_per_token_logps * tail_mask).sum(dim=1)
             ref_logps = shared_logps + self.ld_alpha * tail_logps
@@ -1128,9 +1130,9 @@ class DPOTrainer(BaseTrainer):
             comp_lens = shift_completion_mask.sum(dim=1).long()
             chosen_lens, rejected_lens = comp_lens.chunk(2, dim=0)
             shared_lens = torch.minimum(chosen_lens, rejected_lens)
-            shared_lens_2b = torch.cat([shared_lens, shared_lens], dim=0).to(device)
-            shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens_2b.unsqueeze(1))  # shared: 1 <= pos <= shared_len
-            tail_mask = comp_pos > shared_lens_2b.unsqueeze(1)  # tail: pos > shared_len
+            shared_lens = torch.cat([shared_lens, shared_lens], dim=0).to(device)
+            shared_mask = (comp_pos > 0) & (comp_pos <= shared_lens.unsqueeze(1))  # shared: 1 <= pos <= shared_len
+            tail_mask = comp_pos > shared_lens.unsqueeze(1)  # tail: pos > shared_len
             shared_logps = (per_token_logps * shared_mask).sum(dim=1)
             tail_logps = (per_token_logps * tail_mask).sum(dim=1)
             logps = shared_logps + self.ld_alpha * tail_logps

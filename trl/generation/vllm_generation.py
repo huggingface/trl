@@ -18,7 +18,6 @@ import json
 import logging
 import math
 import os
-from collections.abc import Callable
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
@@ -28,39 +27,76 @@ from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
+from transformers.utils import is_torch_mlu_available, is_torch_npu_available, is_torch_xpu_available
 
-from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages_vllm
+from ..data_utils import is_conversational, prepare_multimodal_messages_vllm
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
 
 
+if is_vllm_available():
+    from vllm import LLM, RequestOutput, SamplingParams
+
+
 logger = logging.getLogger(__name__)
 
 
-def sanitize_logprob(logprob):
-    value = logprob.logprob
-    if math.isnan(value):
-        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
-        return None
+def empty_cache() -> None:
+    """Empties the cache of the available torch device.
 
-    return value
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
+    the first available device it finds.
+
+    If none of the specific devices are available, it defaults to emptying the CUDA cache.
+    """
+    if is_torch_xpu_available():
+        torch.xpu.empty_cache()
+    elif is_torch_mlu_available():
+        torch.mlu.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
+    else:
+        torch.cuda.empty_cache()
+
+
+def extract_logprobs(all_outputs: list["RequestOutput"]):
+    """
+    Extract logprobs and token IDs from vLLM generation outputs.
+
+    Returns logprobs and token IDs sorted by rank (most probable first). Each returned list has shape (num_sequences,
+    seq_len, num_logprobs), where num_logprobs is determined by the `logprobs` parameter passed to vLLM (1 when
+    `logprobs=0`, up to N+1 when `logprobs=N`). NaN logprob values are replaced with `None`.
+
+    Args:
+        all_outputs (list of `RequestOutput`):
+            List of vLLM `RequestOutput` objects from generation.
+
+    Returns:
+        Tuple of (logprobs, logprob_token_ids), each of shape (num_sequences, seq_len, num_logprobs).
+    """
+    all_logprobs = []
+    all_token_ids = []
+    for outputs in all_outputs:
+        for output in outputs.outputs:
+            if output.logprobs is None:
+                return None, None
+            seq_logprobs = []
+            seq_token_ids = []
+            for lp in output.logprobs:
+                sorted_items = sorted(lp.items(), key=lambda x: x[1].rank)
+                seq_token_ids.append([token_id for token_id, _ in sorted_items])
+                seq_logprobs.append([None if math.isnan(item.logprob) else item.logprob for _, item in sorted_items])
+            all_logprobs.append(seq_logprobs)
+            all_token_ids.append(seq_token_ids)
+    return all_logprobs, all_token_ids
 
 
 if TYPE_CHECKING:
     from accelerate import Accelerator
     from peft import PeftModel
 
-
-if is_vllm_available():
-    import vllm
-    from vllm import LLM, SamplingParams
-
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
@@ -158,6 +194,11 @@ class VLLMGeneration:
             the probability of the most likely token. Default `0.0` means min-p is disabled.
         max_completion_length (`int`, *optional*, defaults to `16`):
             Maximum number of tokens to generate for each prompt.
+        logprobs (`int` or `None`, *optional*, defaults to `0`):
+            Number of top logprobs to return per token. When 0 (default), only the sampled token's logprob is returned
+            (inner dimension = 1). When N>0, returns up to N+1 logprobs sorted by descending probability, because vLLM
+            always includes the sampled token's logprob alongside the top-N (the sampled token may or may not already
+            be in the top-N).
         generation_kwargs (`dict`, *optional*):
             Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
@@ -171,12 +212,6 @@ class VLLMGeneration:
             Additional keyword arguments to customize the chat template used by the model.
         tools (`list`, *optional*):
             Tools available for tool calling during chat generation.
-        rollout_func (`Callable`, *optional*): Optional custom rollout function that accepts prompts and returns
-            a dict with 'prompt_ids', 'completion_ids', 'logprobs', and optional extra fields. Should be a
-            single-argument callable: rollout_func(prompts) -> dict. To pass additional context (e.g., trainer), use a
-            closure or functools.partial:
-                rollout_func = lambda prompts: my_custom_rollout(prompts, trainer)
-            The closure will hold a reference to trainer and see its state updates.
     """
 
     def __init__(
@@ -208,12 +243,12 @@ class VLLMGeneration:
         top_k: int = 0,
         min_p: float = 0.0,
         max_completion_length: int = 16,
+        logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
         # Chat/tool configuration
         chat_template: str | None = None,
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
-        rollout_func: Callable | None = None,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -246,13 +281,13 @@ class VLLMGeneration:
         self.top_k = top_k
         self.min_p = min_p
         self.max_completion_length = max_completion_length
+        self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
 
         # Chat/tool configuration
         self.chat_template = chat_template
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.tools = tools
-        self.rollout_func = rollout_func
 
         self._init_vllm()
 
@@ -409,6 +444,13 @@ class VLLMGeneration:
 
         Handles FSDP, DeepSpeed, PEFT weight synchronization.
         """
+        # Wake up vLLM weights before loading to ensure device memory is mapped. Without this, load_weights() writes to
+        # freed/unmapped memory when sleep mode is active, which crashes on backends with strict physical memory
+        # management (e.g., Ascend NPU). See https://github.com/huggingface/trl/issues/5142
+        if self.mode == "colocate" and self.enable_sleep_mode:
+            empty_cache()  # required to avoid OOM in some cases
+            self.llm.wake_up(tags=["weights"])
+
         model = self.model
         accelerator = self.accelerator
         is_fsdp_enabled = self.is_fsdp_enabled
@@ -495,28 +537,50 @@ class VLLMGeneration:
             profiler: Optional profiler for performance tracking
 
         Returns:
-            Tuple of (prompt_ids, completion_ids, logprobs, extra_fields)
+            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields).
+
+            - `prompt_ids`: `list[list[int]]` of shape `(batch_size, prompt_len)`.
+            - `completion_ids`: `list[list[int]]` of shape `(batch_size, completion_len)`.
+            - `logprobs`: `list[list[list[float | None]]]` of shape `(batch_size, completion_len, num_logprobs)`.
+            - `logprob_token_ids`: `list[list[list[int]]]` of shape `(batch_size, completion_len, num_logprobs)`.
+            - `extra_fields`: `dict` of additional per-completion fields from a custom `rollout_func`.
+
+            `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
+            and may fall outside the top-N).
         """
+        import vllm
+
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+
+            structured_outputs_key = "guided_decoding"
+        else:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            structured_outputs_key = "structured_outputs"
+
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
-        rollout_func = self.rollout_func
         temperature = self.temperature
         top_p = self.top_p
         top_k = self.top_k
         min_p = self.min_p
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
-        processing_class = self.processing_class
         chat_template_kwargs = self.chat_template_kwargs
         tools = self.tools
         chat_template = self.chat_template
 
-        # Wake up colocated vLLM instances if needed
+        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
         if self.mode == "colocate" and self.enable_sleep_mode:
-            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
             # Work around for https://github.com/vllm-project/vllm/issues/29341
-            self.llm.collective_rpc("reload_weights")
+            try:
+                self.llm.collective_rpc("reload_weights")
+            except NotImplementedError:
+                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
+                pass
 
         if is_conversational({"prompt": prompts[0]}):
             prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
@@ -549,48 +613,42 @@ class VLLMGeneration:
                     "top_k": top_k,
                     "min_p": 0.0 if min_p is None else min_p,
                     "max_tokens": max_completion_length,
+                    "logprobs": self.logprobs,
                     "structured_outputs_regex": self.structured_outputs_regex,
                     "generation_kwargs": self.generation_kwargs,
                 }
                 with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
-                    if rollout_func is not None:
-                        # Pass all prompts (with duplicates) to rollout_func for consistency with colocate mode
-                        rollout_prompts = all_prompts
-                        if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
-                            rollout_prompts = [
-                                apply_chat_template({"prompt": p}, processing_class, **chat_template_kwargs)["prompt"]
-                                for p in rollout_prompts
-                            ]
-                        output = rollout_func(rollout_prompts)
+                    if is_conversational({"prompt": ordered_set_of_prompts[0]}):
+                        output = self.vllm_client.chat(
+                            messages=ordered_set_of_prompts,
+                            **sampling_params,
+                            chat_template_kwargs=chat_template_kwargs,
+                            tools=tools,
+                            chat_template=chat_template,
+                        )
                     else:
-                        if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                            output = self.vllm_client.chat(
-                                messages=ordered_set_of_prompts,
-                                **sampling_params,
-                                chat_template_kwargs=chat_template_kwargs,
-                                tools=tools,
-                                chat_template=chat_template,
-                            )
-                        else:
-                            output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
+                        output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
                     # Extract required fields and collect any extra fields for reward functions
-                    required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+                    required_keys = {"prompt_ids", "completion_ids", "logprobs", "logprob_token_ids"}
                     extra_fields = {k: v for k, v in output.items() if k not in required_keys}
-                    payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"], extra_fields)
+                    payload = (
+                        output["prompt_ids"],
+                        output["completion_ids"],
+                        output["logprobs"],
+                        output.get("logprob_token_ids"),
+                        extra_fields,
+                    )
             else:
                 payload = None
 
             # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
             obj_list = [payload]
             broadcast_object_list(obj_list, from_process=0)
-            all_prompt_ids, all_completion_ids, all_logprobs, all_extra_fields = obj_list[0]
+            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids, all_extra_fields = obj_list[0]
 
-            # When using rollout_func, it handles its own generation logic and returns one result per prompt.
-            # When NOT using rollout_func, vllm_client.generate(n=num_generations) returns num_generations
-            # completions per prompt, so we need to duplicate prompt_ids to match.
-            if self.rollout_func is None:
-                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
-                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
+            # vllm_client.generate/chat(n=num_generations) returns num_generations completions per prompt.
+            # Duplicate prompt_ids to align with per-completion entries.
+            all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
             process_slice = slice(
                 accelerator.process_index * len(prompts),
@@ -598,7 +656,8 @@ class VLLMGeneration:
             )
             prompt_ids = all_prompt_ids[process_slice]
             completion_ids = all_completion_ids[process_slice]
-            logprobs = all_logprobs[process_slice]
+            logprobs = all_logprobs[process_slice] if all_logprobs is not None else None
+            logprob_token_ids = all_logprob_token_ids[process_slice] if all_logprob_token_ids is not None else None
 
             # Slice extra fields dict-of-lists per process (extra fields are per-completion, like completion_ids)
             extra_fields = {}
@@ -610,97 +669,79 @@ class VLLMGeneration:
 
         # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
         elif self.mode == "colocate":
-            if rollout_func is not None:
-                rollout_prompts = prompts
-                if rollout_prompts and is_conversational({"prompt": rollout_prompts[0]}):
-                    rollout_prompts = [
-                        apply_chat_template({"prompt": prompt}, processing_class, **chat_template_kwargs)["prompt"]
-                        for prompt in rollout_prompts
-                    ]
-                output = rollout_func(rollout_prompts)
-                required_keys = {"prompt_ids", "completion_ids", "logprobs"}
-                extra_fields = {k: v for k, v in output.items() if k not in required_keys}
-                prompt_ids = output["prompt_ids"]
-                completion_ids = output["completion_ids"]
-                logprobs = output["logprobs"]
+            generation_kwargs = {
+                "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
+                "repetition_penalty": repetition_penalty,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "min_p": 0.0 if min_p is None else min_p,
+                "max_tokens": max_completion_length,
+                "logprobs": self.logprobs,
+            }
+            generation_kwargs.update(self.generation_kwargs)
+
+            if self.structured_outputs_regex is not None:
+                if generation_kwargs.get(structured_outputs_key) is not None:
+                    logger.warning(
+                        f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
+                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(
+                    regex=self.structured_outputs_regex
+                )
+            elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
+                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
+            sampling_params = SamplingParams(**generation_kwargs)
+
+            if self.tensor_parallel_size > 1:
+                # Gather prompts from all ranks in the TP group and flatten.
+                # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                orig_size = len(prompts)
+                gathered_prompts = [None for _ in range(self.tensor_parallel_size)]
+                torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
+                all_prompts = [p for sublist in gathered_prompts for p in sublist]
             else:
-                if Version(vllm.__version__) <= Version("0.10.2"):
-                    structured_outputs_key = "guided_decoding"
-                    if self.structured_outputs_regex:
-                        structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
-                    else:
-                        structured_outputs = None
+                all_prompts = prompts
+
+            if self.enable_sleep_mode:
+                self.llm.wake_up(tags=["kv_cache"])
+
+            with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
+                if is_conversational({"prompt": prompts[0]}):
+                    all_outputs = self.llm.chat(
+                        all_prompts,
+                        sampling_params=sampling_params,
+                        use_tqdm=False,
+                        chat_template_kwargs=chat_template_kwargs,
+                        tools=tools,
+                        chat_template=chat_template,
+                    )
                 else:
-                    structured_outputs_key = "structured_outputs"
-                    if self.structured_outputs_regex:
-                        structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
-                    else:
-                        structured_outputs = None
+                    all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
 
-                generation_kwargs = {
-                    "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
-                    "repetition_penalty": repetition_penalty,
-                    "temperature": temperature,
-                    "top_p": top_p,
-                    "top_k": top_k,
-                    "min_p": 0.0 if min_p is None else min_p,
-                    "max_tokens": max_completion_length,
-                    "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
-                }
-                generation_kwargs[structured_outputs_key] = structured_outputs
-                generation_kwargs.update(self.generation_kwargs)
-                sampling_params = SamplingParams(**generation_kwargs)
+            all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
+            all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+            all_logprobs, all_logprob_token_ids = extract_logprobs(all_outputs)
 
-                if self.tensor_parallel_size > 1:
-                    # Gather prompts from all ranks in the TP group and flatten.
-                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
-                    orig_size = len(prompts)
-                    gathered_prompts = [None for _ in range(self.tensor_parallel_size)]
-                    torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
-                    all_prompts = [p for sublist in gathered_prompts for p in sublist]
-                else:
-                    all_prompts = prompts
+            if self.tensor_parallel_size > 1:
+                # Slice completions for this rank within its TP group.
+                # Each rank generates all outputs — we keep only our share.
+                local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                prompt_ids = all_prompt_ids[tp_slice]
+                completion_ids = all_completion_ids[tp_slice]
+                logprobs = all_logprobs[tp_slice] if all_logprobs is not None else None
+                logprob_token_ids = all_logprob_token_ids[tp_slice] if all_logprob_token_ids is not None else None
+            else:
+                prompt_ids = all_prompt_ids
+                completion_ids = all_completion_ids
+                logprobs = all_logprobs
+                logprob_token_ids = all_logprob_token_ids
 
-                if self.enable_sleep_mode:
-                    self.llm.wake_up(tags=["kv_cache"])
+            extra_fields = {}  # No extra fields for colocate mode
 
-                with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
-                    if is_conversational({"prompt": prompts[0]}):
-                        all_outputs = self.llm.chat(
-                            all_prompts,
-                            sampling_params=sampling_params,
-                            use_tqdm=False,
-                            chat_template_kwargs=chat_template_kwargs,
-                            tools=tools,
-                            chat_template=chat_template,
-                        )
-                    else:
-                        all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+            if self.enable_sleep_mode:
+                self.llm.sleep(level=2)
 
-                all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
-                all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-                all_logprobs = [
-                    [sanitize_logprob(next(iter(lp.values()))) for lp in output.logprobs]
-                    for outputs in all_outputs
-                    for output in outputs.outputs
-                ]
-
-                if self.tensor_parallel_size > 1:
-                    # Slice completions for this rank within its TP group.
-                    # Each rank generates all outputs — we keep only our share.
-                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
-                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
-                    prompt_ids = all_prompt_ids[tp_slice]
-                    completion_ids = all_completion_ids[tp_slice]
-                    logprobs = all_logprobs[tp_slice]
-                else:
-                    prompt_ids = all_prompt_ids
-                    completion_ids = all_completion_ids
-                    logprobs = all_logprobs
-
-                extra_fields = {}  # No extra fields for colocate mode
-
-                if self.enable_sleep_mode:
-                    self.llm.sleep(level=2)
-
-        return prompt_ids, completion_ids, logprobs, extra_fields
+        return prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields

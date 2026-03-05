@@ -49,7 +49,7 @@ from transformers.trainer_callback import CallbackHandler, ExportableState, Prin
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ...models.utils import unwrap_model_for_generation
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     log_table_to_comet_experiment,
@@ -295,7 +295,7 @@ class PolicyAndValueWrapper(nn.Module):
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(BaseTrainer):
+class PPOTrainer(_BaseTrainer):
     """Trainer for Proximal Policy Optimization (PPO).
 
     For details on PPO, see the paper: [Proximal Policy Optimization
@@ -584,20 +584,18 @@ class PPOTrainer(BaseTrainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
-        if not _internal_call:
-            backup_model = self.model
-            if hasattr(self.model, "policy"):
-                self.model = self.model.policy  # save only the policy for inference
-            if self.is_deepspeed_enabled:
-                backup_deepspeed = self.deepspeed
-                self.deepspeed = self.model
+        backup_model = self.model
+        if hasattr(self.model, "policy"):
+            self.model = self.model.policy  # save only the policy for inference
+        if self.is_deepspeed_enabled:
+            backup_deepspeed = self.deepspeed
+            self.deepspeed = self.model
 
         super().save_model(output_dir, _internal_call)
 
-        if not _internal_call:
-            self.model = backup_model
-            if self.is_deepspeed_enabled:
-                self.deepspeed = backup_deepspeed
+        self.model = backup_model
+        if self.is_deepspeed_enabled:
+            self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args

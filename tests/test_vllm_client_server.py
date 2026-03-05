@@ -14,12 +14,15 @@
 
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
-from transformers import AutoModelForCausalLM
+from packaging.version import Version
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient
+from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
 
@@ -33,7 +36,12 @@ from .testing_utils import (
 
 
 if is_vllm_available():
+    import vllm
     from vllm import LLM, SamplingParams
+
+    _is_vllm_ge_014 = Version(vllm.__version__) >= Version("0.14.0")
+else:
+    _is_vllm_ge_014 = False
 
 
 class TestChunkList(TrlTestCase):
@@ -60,6 +68,59 @@ class TestChunkList(TrlTestCase):
             [1, "two", 3.0],
             [{"four": 4}, ["f", "i", "v", "e"]],
         ]
+
+
+class TestExtractLogprobs(TrlTestCase):
+    def test_extract_logprobs_sorts_by_rank_and_replaces_nan(self):
+        all_outputs = [
+            SimpleNamespace(
+                outputs=[
+                    SimpleNamespace(
+                        logprobs=[
+                            {
+                                11: SimpleNamespace(rank=1, logprob=-0.2),
+                                99: SimpleNamespace(rank=0, logprob=-0.1),
+                                42: SimpleNamespace(rank=2, logprob=float("nan")),
+                            },
+                            {
+                                5: SimpleNamespace(rank=0, logprob=-1.1),
+                            },
+                        ]
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                outputs=[
+                    SimpleNamespace(
+                        logprobs=[
+                            {
+                                3: SimpleNamespace(rank=1, logprob=-0.5),
+                                7: SimpleNamespace(rank=0, logprob=-0.4),
+                            }
+                        ]
+                    )
+                ]
+            ),
+        ]
+
+        all_logprobs, all_token_ids = extract_logprobs(all_outputs)
+
+        assert all_token_ids == [
+            [[99, 11, 42], [5]],
+            [[7, 3]],
+        ]
+        assert all_logprobs == [
+            [[-0.1, -0.2, None], [-1.1]],
+            [[-0.4, -0.5]],
+        ]
+
+    def test_extract_logprobs_returns_none_token_ids_when_logprobs_missing(self):
+        all_outputs = [SimpleNamespace(outputs=[SimpleNamespace(logprobs=None)])]
+
+        all_logprobs, all_token_ids = extract_logprobs(all_outputs)
+
+        assert all_logprobs is None
+        assert all_token_ids is None
 
 
 @pytest.mark.slow
@@ -124,6 +185,28 @@ class TestVLLMClientServer(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert "Multiplies two integers." in decoded_prompt
+
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
         completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
@@ -152,65 +235,6 @@ class TestVLLMClientServer(TrlTestCase):
         # Test resetting the prefix cache
         self.client.reset_prefix_cache()
 
-    def test_chat_completions_endpoint(self):
-        data = self.client.chat_completions(
-            messages=[{"role": "user", "content": "Say hello"}],
-            max_tokens=32,
-        )
-
-        assert "id" in data
-        assert "choices" in data
-        assert "usage" in data
-        assert len(data["choices"]) > 0
-        assert data["choices"][0]["message"]["role"] == "assistant"
-        assert data["choices"][0]["finish_reason"] in ["stop", "length", "tool_calls"]
-
-    def test_chat_completions_with_tools(self):
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get weather information for a location",
-                    "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
-                },
-            }
-        ]
-        data = self.client.chat_completions(
-            messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
-            tools=tools,
-            max_tokens=100,
-        )
-
-        assert "choices" in data
-        assert len(data["choices"]) > 0
-        assert "message" in data["choices"][0]
-
-    def test_chat_completions_with_params(self):
-        data = self.client.chat_completions(
-            messages=[{"role": "user", "content": "Tell me a joke"}],
-            n=2,
-            temperature=0.8,
-            top_p=0.9,
-            max_tokens=32,
-        )
-
-        assert len(data["choices"]) == 2
-
-        for i, choice in enumerate(data["choices"]):
-            assert choice["index"] == i, f"Expected choice at position {i} to have index {i}, got {choice['index']}"
-            assert "message" in choice
-            assert choice["message"]["role"] == "assistant"
-
-    def test_tokenize_endpoint(self):
-        data = self.client.tokenize(messages=[{"role": "user", "content": "Hello, how are you?"}])
-
-        assert "tokens" in data
-        assert "model" in data
-        assert isinstance(data["tokens"], list)
-        assert len(data["tokens"]) > 0
-        assert all(isinstance(tok, int) for tok in data["tokens"])
-
     @pytest.mark.xfail(reason="Importing `bitsandbytes` causes issues, see vllm-project/vllm#32793")
     def test_logprobs_match_with_non_default_sampling(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -221,6 +245,7 @@ class TestVLLMClientServer(TrlTestCase):
         top_p = 0.9
         max_tokens = 8
         seed = 1234
+        num_logprobs = 5
 
         server_outputs = self.client.generate(
             prompts,
@@ -228,6 +253,7 @@ class TestVLLMClientServer(TrlTestCase):
             repetition_penalty=repetition_penalty,
             top_p=top_p,
             max_tokens=max_tokens,
+            logprobs=num_logprobs,
             generation_kwargs={"seed": seed},
         )
         os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -244,7 +270,7 @@ class TestVLLMClientServer(TrlTestCase):
             repetition_penalty=repetition_penalty,
             top_p=top_p,
             max_tokens=max_tokens,
-            logprobs=0,  # this is what's used in practice to get the logprobs of generated tokens
+            logprobs=num_logprobs,
             seed=seed,
         )
         colocate_outputs = llm.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
@@ -252,19 +278,43 @@ class TestVLLMClientServer(TrlTestCase):
         colocate_completion_ids = [
             list(output.token_ids) for outputs in colocate_outputs for output in outputs.outputs
         ]
-        colocate_logprobs = [
-            [next(iter(logprob.values())).logprob for logprob in output.logprobs]
-            for outputs in colocate_outputs
-            for output in outputs.outputs
-        ]
+        colocate_logprobs, colocate_logprob_token_ids = extract_logprobs(colocate_outputs)
 
+        # Generation correctness: prompt and completion IDs match between server and colocate
         assert server_outputs["prompt_ids"] == colocate_prompt_ids
         assert server_outputs["completion_ids"] == colocate_completion_ids
+
         server_logprobs = server_outputs["logprobs"]
-        assert len(server_logprobs) == len(colocate_logprobs)
+        server_logprob_token_ids = server_outputs["logprob_token_ids"]
+
+        # Shape: both should be (num_sequences, seq_len, num_logprobs) with multiple logprobs per token
+        assert len(server_logprobs) == len(prompts)
+        assert len(server_logprob_token_ids) == len(prompts)
+        for seq_lps in server_logprobs:
+            for token_lps in seq_lps:
+                assert len(token_lps) > 1, "Expected multiple logprobs per token when logprobs > 0"
+
+        # Value correctness: server extraction matches colocate extraction via extract_logprobs
+        assert server_logprob_token_ids == colocate_logprob_token_ids
         for server_seq, colocate_seq in zip(server_logprobs, colocate_logprobs, strict=True):
             assert len(server_seq) == len(colocate_seq)
-            assert server_seq == pytest.approx(colocate_seq, rel=1e-6, abs=1e-6)
+            for server_token_lps, colocate_token_lps in zip(server_seq, colocate_seq, strict=True):
+                assert server_token_lps == pytest.approx(colocate_token_lps, rel=1e-6, abs=1e-6)
+
+        # Ordering: logprobs at each position should be sorted descending
+        for seq_lps in server_logprobs:
+            for token_lps in seq_lps:
+                assert token_lps == sorted(token_lps, reverse=True), "Logprobs should be sorted descending"
+
+        # Sampled token presence: the actual completion token should appear in the logprob token IDs
+        for seq_idx, (completion_seq, token_ids_seq) in enumerate(
+            zip(server_outputs["completion_ids"], server_logprob_token_ids, strict=True)
+        ):
+            for pos, (sampled_id, lp_ids) in enumerate(zip(completion_seq, token_ids_seq, strict=True)):
+                assert sampled_id in lp_ids, (
+                    f"Sampled token {sampled_id} not found in logprob token IDs {lp_ids} "
+                    f"at sequence {seq_idx}, position {pos}"
+                )
 
     @classmethod
     def teardown_class(cls):
@@ -338,6 +388,28 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert "Multiplies two integers." in decoded_prompt
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -442,6 +514,48 @@ class TestVLLMClientServerTP(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert "Multiplies two integers." in decoded_prompt
+
+    def test_generate_with_params(self):
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
+
+        # Check that the output is a list
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of generated sequences is 2 times the number of prompts
+        assert len(completion_ids) == 2 * len(prompts)
+
+        # Check that the generated sequences are lists of integers
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
+        # Check that the length of the generated sequences is less than or equal to 32
+        for seq in completion_ids:
+            assert len(seq) <= 32
+
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
@@ -461,6 +575,10 @@ class TestVLLMClientServerTP(TrlTestCase):
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    _is_vllm_ge_014,
+    reason="Skipping DP server test for vLLM>=0.14.0 (PR vllm#30739: DP for non-MoE/dense models no longer supported).",
+)
 @require_3_accelerators
 @require_vllm
 class TestVLLMClientServerDP(TrlTestCase):
@@ -524,6 +642,48 @@ class TestVLLMClientServerDP(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_tools(self):
+        def multiply(a: int, b: int) -> int:
+            """
+            Multiplies two integers.
+
+            Args:
+                a: The first integer.
+                b: The second integer.
+
+            Returns:
+                The product of the two integers.
+            """
+            return a * b
+
+        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
+        outputs = self.client.chat(messages, tools=[multiply])
+
+        # Decode prompt and check that "Multiplies two integers." is in the prompt.
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
+        assert "Multiplies two integers." in decoded_prompt
+
+    def test_generate_with_params(self):
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
+
+        # Check that the output is a list
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of generated sequences is 2 times the number of prompts
+        assert len(completion_ids) == 2 * len(prompts)
+
+        # Check that the generated sequences are lists of integers
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
+        # Check that the length of the generated sequences is less than or equal to 32
+        for seq in completion_ids:
+            assert len(seq) <= 32
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)

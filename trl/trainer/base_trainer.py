@@ -23,7 +23,7 @@ if is_wandb_available():
     import wandb
 
 
-class BaseTrainer(Trainer):
+class _BaseTrainer(Trainer):
     _tag_names = []
     _name = "Base"
     _paper = {}
