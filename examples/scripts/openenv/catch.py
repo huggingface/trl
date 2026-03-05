@@ -184,17 +184,16 @@ Each observation is a flattened 10x5 grid (list of 50 floats).
 - 1.0 → occupied (ball or paddle)
 - 0.0 → empty cell
 
-### Actions:
-- `0` → Move left
-- `1` → Stay
-- `2` → Move right
+You have the following tools available:
+- `move(direction)`: Move the paddle left or right. Direction must be "left" or "right".
+- `stay`: Do nothing and let the ball fall one step.
 
-Use the `step` tool to take actions in the game.
+Observe the grid, determine where the ball is relative to the paddle, then move accordingly.
 """
 
 
 def reward_from_env(completions, environments, **kwargs):
-    return [env.get_reward() for env in environments]
+    return [env.reward for env in environments]
 
 
 def main():
@@ -230,50 +229,59 @@ def main():
     class CatchEnv:
         def __init__(self):
             self.client = OpenSpielEnv(base_url=env_url)
-            self._total_reward = 0.0
+            self.reward = 0.0
             self._done = False
 
         def reset(self, **kwargs) -> str:
             env_result = self.client.reset()
-            self._total_reward = 0.0
+            self.reward = 0.0
             self._done = env_result.observation.done
             return str(env_result.observation.info_state)
 
-        def step(self, action_id: int) -> str:
-            """Take an action in the Catch game.
-
-            Args:
-                action_id: The action to take. 0 = move left, 1 = stay, 2 = move right.
-
-            Returns:
-                The observation after taking the action.
-            """
+        def _do_action(self, action_id: int) -> str:
             if self._done:
                 raise ValueError("Episode is done.")
             env_result = self.client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
-            self._total_reward += env_result.reward or 0.0
+            self.reward += env_result.reward or 0.0
             self._done = env_result.observation.done
             return str(env_result.observation.info_state)
 
-        def get_reward(self) -> float:
-            """Get the total reward accumulated during this episode.
+        def move(self, direction: str) -> str:
+            """Move the paddle left or right.
+
+            Args:
+                direction: Direction to move, either "left" or "right".
 
             Returns:
-                The total reward.
+                The observation after moving.
             """
-            return self._total_reward
+            action_id = 0 if direction == "left" else 2
+            return self._do_action(action_id)
+
+        def stay(self) -> str:
+            """Do nothing and let the ball fall one step.
+
+            Returns:
+                The observation after staying.
+            """
+            return self._do_action(1)
 
     training_args = GRPOConfig(
         output_dir=f"{args.model.split('/')[-1]}-GRPO-Catch",
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
+        vllm_gpu_memory_utilization=0.2,
         logging_steps=1,
+        log_completions=True,
         report_to="trackio",
         trackio_space_id=f"{args.model.split('/')[-1]}-GRPO-Catch",
         num_train_epochs=1,
-        max_completion_length=512,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=2,
+        num_generations=8,
+        max_completion_length=4096,
+        gradient_accumulation_steps=16,
+        chat_template_kwargs={"enable_thinking": False},
     )
 
     trainer = GRPOTrainer(

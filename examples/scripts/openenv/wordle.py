@@ -95,7 +95,7 @@ python examples/scripts/openenv/wordle.py --vllm-mode colocate --env-url http://
 import argparse
 
 from datasets import Dataset
-from textarena_env import TextArenaEnv
+from textarena_env import TextArenaAction, TextArenaEnv
 
 from trl import GRPOConfig, GRPOTrainer
 

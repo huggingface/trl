@@ -1423,7 +1423,9 @@ class GRPOTrainer(_BaseTrainer):
                 **self.chat_template_kwargs,
             )
             if self.use_vllm and self.vllm_mode == "colocate":
-                max_model_len = self.llm.llm_engine.model_config.max_model_len
+                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
+            elif self.use_vllm and self.vllm_mode == "server":
+                max_model_len = self.model.config.max_position_embeddings
             elif not self.use_vllm:
                 max_model_len = self.model.config.max_position_embeddings
             else:
@@ -1512,6 +1514,27 @@ class GRPOTrainer(_BaseTrainer):
             idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
             tool_calls = [tool_call for tool_call in tool_calls if tool_call]
             iteration_num += 1
+
+        # Ensure tool_mask, logprobs, and completion_ids have the same length per sequence.
+        # Re-tokenization across tool call iterations can cause length mismatches due to token
+        # boundary merging/splitting, since tool_mask and logprobs are accumulated with += while
+        # completion_ids is replaced with the re-tokenized version.
+        for i in range(len(tool_mask)):
+            comp_len = len(completion_ids[i])
+            mask_len = len(tool_mask[i])
+            if mask_len > comp_len:
+                tool_mask[i] = tool_mask[i][:comp_len]
+            elif mask_len < comp_len:
+                tool_mask[i] = tool_mask[i] + [1] * (comp_len - mask_len)
+        if logprobs is not None:
+            for i in range(len(logprobs)):
+                comp_len = len(completion_ids[i])
+                lp_len = len(logprobs[i])
+                if lp_len > comp_len:
+                    logprobs[i] = logprobs[i][:comp_len]
+                elif lp_len < comp_len:
+                    logprobs[i] = logprobs[i] + [0.0] * (comp_len - lp_len)
+
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
     def _generate(self, prompts: list):

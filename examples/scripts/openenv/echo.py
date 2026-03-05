@@ -88,7 +88,7 @@ dataset = Dataset.from_dict(
 
 
 def reward_func(completions, environments, **kwargs):
-    return [environment.get_reward() for environment in environments]
+    return [environment.reward for environment in environments]
 
 
 class MyEchoEnv:
@@ -96,7 +96,7 @@ class MyEchoEnv:
         self.env = EchoEnv(base_url=args.env_host)
 
     def reset(self, **kwargs) -> None | str:
-        self._reward = None
+        self.reward = None
         return None
 
     def step(self, message: str) -> str:
@@ -110,17 +110,8 @@ class MyEchoEnv:
             The echoed message.
         """
         observation = self.env.step(EchoAction(message=message))
-        self._reward = observation.observation.reward
+        self.reward = observation.observation.reward
         return observation.observation.echoed_message
-
-    def get_reward(self) -> float:
-        """
-        Get the reward from the last step.
-
-        Returns:
-            The reward value.
-        """
-        return self._reward
 
 
 trainer = GRPOTrainer(
