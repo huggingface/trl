@@ -1645,7 +1645,7 @@ class GRPOTrainer(_BaseTrainer):
             self.accelerator.num_processes * local_completion_length_sum / global_completion_length_sum
         )
 
-        valid_mask_global = ~gather(is_std_zero)
+        valid_mask_global = ~is_std_zero
         if valid_mask_global.any():
             valid_completion_length_sum = completion_length_global[valid_mask_global].sum().clamp(min=1e-8)
             zero_mask_ratio = global_completion_length_sum / valid_completion_length_sum
