@@ -518,19 +518,14 @@ def main(script_args: ScriptArguments):
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
         """
-        Generates completions for the provided prompts or token IDs.
-
-        Accepts either `prompts` (text strings, optionally with `images`) or `prompt_token_ids` (pre-tokenized).
-        Exactly one of `prompts` or `prompt_token_ids` must be provided.
+        Generates completions for the provided prompts.
 
         Args:
             request (`GenerateRequest`):
-                - `prompts` (list of `str`, *optional*): A list of prompts (text strings) for the model to generate
-                  completions.
+                - `prompts` (list of `str` or list of list of `int`): A list of prompts. It accepts either text strings
+                  or pre-tokenized token ID lists. When text strings are provided, `images` can optionally be included.
                 - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
                   along with prompts.
-                - `prompt_token_ids` (list of list of `int`, *optional*): A list of tokenized prompts for the model to
-                  generate completions.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
                   generation.
@@ -571,21 +566,31 @@ def main(script_args: ScriptArguments):
 
         Example request (token IDs):
         ```json
-        {"prompt_token_ids": [[101, 102], [201, 202]]}
-        ```
+        {"prompts": [[101, 102], [201, 202]]}
 
         Example response:
         ```json
         {
-          "prompt_ids": [[101, 102], [201, 202]],
-          "completion_ids": [[103, 104, 105], [203, 204, 205]],
-          "logprobs": [[[-0.1], [-0.2], [-0.3]], [[-0.4], [-0.5], [-0.6]]],
-          "logprob_token_ids": [[[103], [104], [105]], [[203], [204], [205]]]
+          "prompt_ids": [[101, 102], [201, 202]], "completion_ids": [[103, 104, 105], [203, 204, 205]], "logprobs":
+          [[[-0.1], [-0.2], [-0.3]], [[-0.4], [-0.5], [-0.6]]], "logprob_token_ids": [[[103], [104], [105]], [[203],
+          [204], [205]]]
         }
         ```
         """
-        # Detect whether prompts are text strings or pre-tokenized token ID lists
-        is_token_ids = request.prompts and isinstance(request.prompts[0], list)
+        # Build vLLM-compatible prompt inputs
+        if request.prompts and isinstance(request.prompts[0], list):
+            # Token IDs path: wrap each list of token IDs as a TokensPrompt dict for vLLM
+            prompts = [{"prompt_token_ids": ids} for ids in request.prompts]
+        else:
+            # Text prompts path: build prompt dicts with optional images
+            request.images = request.images or [None] * len(request.prompts)
+
+            prompts = []
+            for prompt, image in zip(request.prompts, request.images, strict=True):
+                row = {"prompt": prompt}
+                if image is not None:
+                    row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+                prompts.append(row)
 
         generation_kwargs = {
             "n": request.n,
@@ -632,38 +637,24 @@ def main(script_args: ScriptArguments):
         generation_kwargs[structured_outputs_key] = structured_outputs
         sampling_params = SamplingParams(**generation_kwargs)
 
-        if is_token_ids:
-            # Token IDs path: wrap each list of token IDs as a TokensPrompt dict for vLLM
-            prompts = [{"prompt_token_ids": ids} for ids in request.prompts]
-            chunked_inputs = chunk_list(prompts, script_args.data_parallel_size)
-            placeholder = [{"prompt_token_ids": [0]}]
-        else:
-            # Text prompts path: build prompt dicts with optional images
-            request.images = request.images or [None] * len(request.prompts)
-            prompts = []
-            for prompt, image in zip(request.prompts, request.images, strict=True):
-                row = {"prompt": prompt}
-                if image is not None:
-                    row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
-                prompts.append(row)
-            chunked_inputs = chunk_list(prompts, script_args.data_parallel_size)
-            placeholder = ["<placeholder>"]
+        # Evenly distribute prompts across DP ranks
+        chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
 
-        # Send inputs to each worker
-        for connection, chunk in zip(connections, chunked_inputs, strict=True):
+        # Send the prompts to each worker
+        for connection, prompts in zip(connections, chunked_prompts, strict=True):
             # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
             # However, vLLM requires that we always send at least one prompt. So we send a placeholder prompt to comply
             # with vLLM's requirement, and we later ignore the result.
-            if not chunk:
-                chunk = placeholder
-            kwargs = {"prompts": chunk, "sampling_params": sampling_params}
+            if not prompts:
+                prompts = ["<placeholder>"]
+            kwargs = {"prompts": prompts, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results
         all_outputs = [connection.recv() for connection in connections]
 
         # Handle empty prompts (see above)
-        all_outputs = [output for output, chunk in zip(all_outputs, chunked_inputs, strict=True) if chunk]
+        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
