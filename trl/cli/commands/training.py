@@ -18,6 +18,19 @@ from argparse import Namespace
 from .base import Command, CommandContext
 
 
+def _subtract_subsequence(lst: list[str], subseq: list[str]) -> list[str]:
+    """Return lst with the ordered subsequence subseq removed."""
+    sub_iter = iter(subseq)
+    current = next(sub_iter, None)
+    result = []
+    for item in lst:
+        if current is not None and item == current:
+            current = next(sub_iter, None)
+        else:
+            result.append(item)
+    return result
+
+
 class TrainingCommand(Command):
     """
     Generic CLI command that launches a training script with accelerate.
