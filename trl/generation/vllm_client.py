@@ -222,7 +222,7 @@ class VLLMClient:
             prompts (`list[str]` or `list[list[int]]`):
                 List of text prompts or list of token ID lists for which the model will generate completions.
             images (`list[PIL.Image]`, *optional*):
-                List of PIL Images to send along with the prompts. Only valid when `prompts` is a list of strings.
+                List of PIL Images to send along with the prompts.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):

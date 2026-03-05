@@ -579,19 +579,15 @@ def main(script_args: ScriptArguments):
         ```
         """
         # Build vLLM-compatible prompt inputs
-        if request.prompts and isinstance(request.prompts[0], list):
-            # Token IDs path: wrap each list of token IDs as a TokensPrompt dict for vLLM
-            prompts = [{"prompt_token_ids": ids} for ids in request.prompts]
-        else:
-            # Text prompts path: build prompt dicts with optional images
-            request.images = request.images or [None] * len(request.prompts)
+        is_token_ids = request.prompts and isinstance(request.prompts[0], list)
+        request.images = request.images or [None] * len(request.prompts)
 
-            prompts = []
-            for prompt, image in zip(request.prompts, request.images, strict=True):
-                row = {"prompt": prompt}
-                if image is not None:
-                    row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
-                prompts.append(row)
+        prompts = []
+        for prompt, image in zip(request.prompts, request.images, strict=True):
+            row = {"prompt_token_ids": prompt} if is_token_ids else {"prompt": prompt}
+            if image is not None:
+                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+            prompts.append(row)
 
         generation_kwargs = {
             "n": request.n,

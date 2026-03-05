@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.generation.vllm_client import VLLMClient
@@ -31,6 +31,7 @@ from .testing_utils import (
     kill_process,
     require_3_accelerators,
     require_torch_multi_accelerator,
+    require_vision,
     require_vllm,
 )
 
@@ -873,4 +874,44 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
     def teardown_class(cls):
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
+        kill_process(cls.server_process)
+
+
+@pytest.mark.slow
+@require_vllm
+@require_vision
+class TestVLLMClientServerVLM(TrlTestCase):
+    model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
+
+    @classmethod
+    def setup_class(cls):
+        # Start the server process
+        cls.server_process = subprocess.Popen(
+            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+
+        # Initialize the client (no communicator needed for generation-only tests)
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
+
+    def test_generate_with_token_ids_and_image(self):
+        from PIL import Image
+
+        processor = AutoProcessor.from_pretrained(self.model_id)
+        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe this image."}]}]
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image = Image.new("RGB", (64, 64), color="red")
+        inputs = processor(text=[text], images=[image], return_tensors="pt")
+        prompt_token_ids = inputs["input_ids"][0].tolist()
+
+        outputs = self.client.generate([prompt_token_ids], images=[image], max_tokens=64)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        assert len(prompt_ids) == 1
+        assert len(completion_ids) == 1
+        assert all(isinstance(tok, int) for tok in prompt_ids[0])
+        assert all(isinstance(tok, int) for tok in completion_ids[0])
+
+    @classmethod
+    def teardown_class(cls):
         kill_process(cls.server_process)
