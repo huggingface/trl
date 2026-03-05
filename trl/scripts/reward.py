@@ -93,7 +93,7 @@ def make_parser(subparsers: argparse._SubParsersAction | None = None):
             "reward", help="Run the reward training script", dataclass_types=dataclass_types
         )
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(dataclass_types, prog="trl reward")
     return parser
 
 

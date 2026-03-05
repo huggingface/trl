@@ -923,7 +923,7 @@ def make_parser(subparsers: argparse._SubParsersAction | None = None):
     if subparsers is not None:
         parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:
-        parser = TrlParser(ScriptArguments)
+        parser = TrlParser(ScriptArguments, prog="trl vllm-serve")
     return parser
 
 

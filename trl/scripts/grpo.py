@@ -178,7 +178,7 @@ def make_parser(subparsers: argparse._SubParsersAction | None = None):
     if subparsers is not None:
         parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(dataclass_types, prog="trl grpo")
     return parser
 
 

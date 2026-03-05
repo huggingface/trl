@@ -162,7 +162,7 @@ def make_parser(subparsers: argparse._SubParsersAction | None = None):
     if subparsers is not None:
         parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(dataclass_types, prog="trl dpo")
     return parser
 
 
