@@ -201,8 +201,9 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: list[str],
+        prompts: list[str] | None = None,
         images: list | None = None,
+        prompt_token_ids: list[list[int]] | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -216,13 +217,17 @@ class VLLMClient:
         generation_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
         """
-        Generates model completions for the provided prompts.
+        Generates model completions for the provided prompts or token IDs.
+
+        Either `prompts` or `prompt_token_ids` must be provided, but not both.
 
         Args:
-            prompts (`list[str]`):
+            prompts (`list[str]`, *optional*):
                 List of text prompts for which the model will generate completions.
             images (`list[PIL.Image]`, *optional*):
-                List of PIL Images to send along with the prompts.
+                List of PIL Images to send along with the prompts. Only valid when `prompts` is provided.
+            prompt_token_ids (`list[list[int]]` or `None`, *optional*):
+                List of tokenized prompts (list of list of token IDs) for which the model will generate completions.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -263,29 +268,36 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
+        if prompt_token_ids is not None and prompts is not None:
+            raise ValueError("Only one of 'prompts' or 'prompt_token_ids' can be provided, not both.")
+        if prompt_token_ids is None and prompts is None:
+            raise ValueError("Either 'prompts' or 'prompt_token_ids' must be provided.")
+
         url = f"{self.base_url}/generate/"
 
-        # Convert PIL images to base64 strings
-        images = [pil_to_base64(img) for img in images] if images else None
+        # Build the payload with whichever input mode is provided
+        payload = {
+            "n": n,
+            "repetition_penalty": repetition_penalty,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "logprobs": logprobs,
+            "truncate_prompt_tokens": truncate_prompt_tokens,
+            "structured_outputs_regex": structured_outputs_regex,
+            "generation_kwargs": generation_kwargs or {},
+        }
 
-        response = self.session.post(
-            url,
-            json={
-                "prompts": prompts,
-                "images": images,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "logprobs": logprobs,
-                "truncate_prompt_tokens": truncate_prompt_tokens,
-                "structured_outputs_regex": structured_outputs_regex,
-                "generation_kwargs": generation_kwargs or {},
-            },
-        )
+        if prompt_token_ids is not None:
+            payload["prompt_token_ids"] = prompt_token_ids
+        else:
+            payload["prompts"] = prompts
+            if images is not None:
+                payload["images"] = [pil_to_base64(image) if image is not None else None for image in images]
+
+        response = self.session.post(url, json=payload)
         if response.status_code == 200:
             json_response = response.json()
             return {

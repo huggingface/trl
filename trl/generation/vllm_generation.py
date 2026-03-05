@@ -627,7 +627,10 @@ class VLLMGeneration:
                             chat_template=chat_template,
                         )
                     else:
-                        output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
+                        ordered_set_of_prompt_ids = self.processing_class(text=ordered_set_of_prompts)["input_ids"]
+                        output = self.vllm_client.generate(
+                            prompt_token_ids=ordered_set_of_prompt_ids, **sampling_params
+                        )
                     # Extract required fields and collect any extra fields for reward functions
                     required_keys = {"prompt_ids", "completion_ids", "logprobs", "logprob_token_ids"}
                     extra_fields = {k: v for k, v in output.items() if k not in required_keys}

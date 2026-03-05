@@ -495,8 +495,9 @@ def main(script_args: ScriptArguments):
         return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str]
+        prompts: list[str] | None = None
         images: list[str] | None = None
+        prompt_token_ids: list[list[int]] | None = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -518,13 +519,19 @@ def main(script_args: ScriptArguments):
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
         """
-        Generates completions for the provided prompts.
+        Generates completions for the provided prompts or token IDs.
+
+        Accepts either `prompts` (text strings, optionally with `images`) or `prompt_token_ids` (pre-tokenized).
+        Exactly one of `prompts` or `prompt_token_ids` must be provided.
 
         Args:
             request (`GenerateRequest`):
-                - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
+                - `prompts` (list of `str`, *optional*): A list of prompts (text strings) for the model to generate
+                  completions.
                 - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
                   along with prompts.
+                - `prompt_token_ids` (list of list of `int`, *optional*): A list of tokenized prompts for the model to
+                  generate completions.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
                   generation.
@@ -558,9 +565,14 @@ def main(script_args: ScriptArguments):
                 - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
                   shape as `logprobs`.
 
-        Example request:
+        Example request (text prompts):
         ```json
         {"prompts": ["Hello world", "What is AI?"]}
+        ```
+
+        Example request (token IDs):
+        ```json
+        {"prompt_token_ids": [[101, 102], [201, 202]]}
         ```
 
         Example response:
@@ -573,14 +585,10 @@ def main(script_args: ScriptArguments):
         }
         ```
         """
-        request.images = request.images or [None] * len(request.prompts)
-
-        prompts = []
-        for prompt, image in zip(request.prompts, request.images, strict=True):
-            row = {"prompt": prompt}
-            if image is not None:
-                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
-            prompts.append(row)
+        if request.prompt_token_ids is not None and request.prompts is not None:
+            raise ValueError("Only one of 'prompts' or 'prompt_token_ids' can be provided, not both.")
+        if request.prompt_token_ids is None and request.prompts is None:
+            raise ValueError("Either 'prompts' or 'prompt_token_ids' must be provided.")
 
         generation_kwargs = {
             "n": request.n,
@@ -627,24 +635,39 @@ def main(script_args: ScriptArguments):
         generation_kwargs[structured_outputs_key] = structured_outputs
         sampling_params = SamplingParams(**generation_kwargs)
 
-        # Evenly distribute prompts across DP ranks
-        chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
+        if request.prompt_token_ids is not None:
+            # Token IDs path: pass pre-tokenized prompts directly to vLLM workers
+            chunked_inputs = chunk_list(request.prompt_token_ids, script_args.data_parallel_size)
+            input_key = "prompt_token_ids"
+            placeholder = [[0]]
+        else:
+            # Text prompts path: build prompt dicts with optional images
+            request.images = request.images or [None] * len(request.prompts)
+            prompts = []
+            for prompt, image in zip(request.prompts, request.images, strict=True):
+                row = {"prompt": prompt}
+                if image is not None:
+                    row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+                prompts.append(row)
+            chunked_inputs = chunk_list(prompts, script_args.data_parallel_size)
+            input_key = "prompts"
+            placeholder = ["<placeholder>"]
 
-        # Send the prompts to each worker
-        for connection, prompts in zip(connections, chunked_prompts, strict=True):
+        # Send inputs to each worker
+        for connection, chunk in zip(connections, chunked_inputs, strict=True):
             # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
             # However, vLLM requires that we always send at least one prompt. So we send a placeholder prompt to comply
             # with vLLM's requirement, and we later ignore the result.
-            if not prompts:
-                prompts = ["<placeholder>"]
-            kwargs = {"prompts": prompts, "sampling_params": sampling_params}
+            if not chunk:
+                chunk = placeholder
+            kwargs = {input_key: chunk, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Receive results
         all_outputs = [connection.recv() for connection in connections]
 
         # Handle empty prompts (see above)
-        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
+        all_outputs = [output for output, chunk in zip(all_outputs, chunked_inputs, strict=True) if chunk]
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
