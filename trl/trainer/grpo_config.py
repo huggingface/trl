@@ -910,7 +910,7 @@ class GRPOConfig(_BaseConfig):
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
-                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in version 0.29.0. You "
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in version 0.30.0. You "
                 "should instead use `vllm_importance_sampling_max`.",
                 FutureWarning,
                 stacklevel=2,
