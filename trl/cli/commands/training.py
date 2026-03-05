@@ -54,7 +54,7 @@ class TrainingCommand(Command):
 
         module = importlib.import_module(f"...scripts.{self.name}", package=__package__)
         all_args = context.argv_after(self.name)
-        parser = module.make_parser()
+        parser = module.make_parser(prog=f"trl {self.name}")
 
         # Handles -h (exits). Returns config_remaining and cli_remaining separately.
         # cli_remaining is an ordered subsequence of all_args; config_remaining is not.

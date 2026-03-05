@@ -27,34 +27,11 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from accelerate import logging
-from datasets import load_dataset
+from trl import ScriptArguments
 
-from trl import (
-    DatasetMixtureConfig,
-    ModelConfig,
-    RLOOConfig,
-    RLOOTrainer,
-    ScriptArguments,
-    TrlParser,
-    get_dataset,
-    get_peft_config,
-)
-from trl.rewards import accuracy_reward, get_soft_overlong_punishment, reasoning_accuracy_reward, think_format_reward
-
-
-logger = logging.get_logger(__name__)
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
-reward_funcs_registry = {
-    "accuracy_reward": accuracy_reward,
-    "reasoning_accuracy_reward": reasoning_accuracy_reward,
-    "think_format_reward": think_format_reward,
-    "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
-}
 
 
 @dataclass
@@ -93,6 +70,26 @@ class RLOOScriptArguments(ScriptArguments):
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    from accelerate import logging
+    from datasets import load_dataset
+
+    from trl import RLOOTrainer, get_dataset, get_peft_config
+    from trl.rewards import (
+        accuracy_reward,
+        get_soft_overlong_punishment,
+        reasoning_accuracy_reward,
+        think_format_reward,
+    )
+
+    logger = logging.get_logger(__name__)
+
+    reward_funcs_registry = {
+        "accuracy_reward": accuracy_reward,
+        "reasoning_accuracy_reward": reasoning_accuracy_reward,
+        "think_format_reward": think_format_reward,
+        "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
+    }
+
     # Get the reward models and functions
     reward_funcs = []
     if script_args.reward_model_name_or_path:
@@ -155,12 +152,14 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import DatasetMixtureConfig, ModelConfig, RLOOConfig, TrlParser
+
     dataclass_types = (RLOOScriptArguments, RLOOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("rloo", help="Run the RLOO training script", dataclass_types=dataclass_types)
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(dataclass_types, prog=prog)
     return parser
 
 
