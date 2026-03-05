@@ -309,6 +309,12 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
 
 2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
 
+3. **Optional logging callbacks**: Two additional keyword arguments are passed to reward functions for observability:
+   - `log_extra` — a callable `log_extra(column_name: str, values: list)` that adds extra columns to the completions table (saved to parquet and reported to Weights & Biases / Trackio). Useful for logging extracted answers, gold labels, or any per-sample metadata alongside completions.
+   - `log_metric` — a callable `log_metric(name: str, value: float)` that logs a scalar metric through the trainer's built-in metrics system. These metrics are averaged over each logging step and appear as plots in your logging backend, alongside built-in metrics like `kl` and `entropy`.
+
+   Both are backwards compatible — existing reward functions that use `**kwargs` will absorb them without changes.
+
 #### Example 1: Reward longer completions
 
 Below is an example of a reward function for a standard format that rewards longer completions:

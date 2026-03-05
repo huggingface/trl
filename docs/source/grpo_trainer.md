@@ -385,6 +385,12 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
 
 2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
 
+3. **Optional logging callbacks**: Two additional keyword arguments are passed to reward functions for observability:
+   - `log_extra` — a callable `log_extra(column_name: str, values: list)` that adds extra columns to the completions table (saved to parquet and reported to Weights & Biases / Trackio). Useful for logging extracted answers, gold labels, or any per-sample metadata alongside completions.
+   - `log_metric` — a callable `log_metric(name: str, value: float)` that logs a scalar metric through the trainer's built-in metrics system. These metrics are averaged over each logging step and appear as plots in your logging backend, alongside built-in metrics like `kl` and `entropy`.
+
+   Both are backwards compatible — existing reward functions that use `**kwargs` will absorb them without changes.
+
 #### Example 1: Reward longer completions
 
 Below is an example of a reward function for a standard format that rewards longer completions:
@@ -557,6 +563,32 @@ async def async_reward_func(prompts, completions, **kwargs):
     # Simple toy reward: 1.0 if the completion is non-empty, else 0.0
     return [1.0 if completion else 0.0 for completion in completions]
 ```
+
+#### Example 6: Logging extra columns and metrics from reward functions
+
+Reward functions can log additional data for observability without affecting training. Use `log_extra` to add columns to the completions table, and `log_metric` to track scalar metrics as plots.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, log_extra=None, log_metric=None, **kwargs):
+    # Extract answers from completions
+    extracted = [re.search(r"\\boxed\{(.*?)\}", c) for c in completions]
+    extracted = [m.group(1) if m else None for m in extracted]
+    rewards = [1.0 if e == gt else 0.0 for e, gt in zip(extracted, ground_truth)]
+
+    if log_extra:
+        log_extra("golden_answer", list(ground_truth))
+        log_extra("extracted_answer", [e or "[none]" for e in extracted])
+
+    if log_metric:
+        log_metric("accuracy", sum(rewards) / len(rewards))
+        log_metric("format_rate", sum(1 for e in extracted if e is not None) / len(extracted))
+
+    return rewards
+```
+
+The extra columns will appear in the completions table (parquet files and logging backends), while the scalar metrics will appear as plots alongside built-in metrics like `kl` and `entropy`.
 
 #### Passing the reward function to the trainer
 
