@@ -567,6 +567,7 @@ def main(script_args: ScriptArguments):
         Example request (token IDs):
         ```json
         {"prompts": [[101, 102], [201, 202]]}
+        ```
 
         Example response:
         ```json
