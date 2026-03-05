@@ -31,19 +31,6 @@ def _subtract_subsequence(lst: list[str], subseq: list[str]) -> list[str]:
     return result
 
 
-def _strip_config_flag(args: list[str]) -> list[str]:
-    """Return args with --config and its value removed."""
-    result = []
-    i = 0
-    while i < len(args):
-        if args[i] == "--config":
-            i += 2
-        else:
-            result.append(args[i])
-            i += 1
-    return result
-
-
 class TrainingCommand(Command):
     """
     Generic CLI command that launches a training script with accelerate.
@@ -75,15 +62,7 @@ class TrainingCommand(Command):
             all_args, return_remaining_strings=True, separate_remaining_strings=True
         )
         launch_args = resolve_accelerate_config_argument(config_remaining + cli_remaining)
-
-        # Expand recognized YAML keys as CLI args, excluding accelerate-specific keys.
-        accel_keys = {s[2:] for s in config_remaining[::2]}
-        recognized_config_args = [
-            item for key, value in config.items() if key not in accel_keys for item in (f"--{key}", str(value))
-        ]
-        # Strip --config from all_args (expanded above) and remove accelerate CLI args.
-        cli_training_args = _subtract_subsequence(_strip_config_flag(all_args), cli_remaining)
-        training_script_args = recognized_config_args + cli_training_args
+        training_script_args = _subtract_subsequence(all_args, cli_remaining)
 
         launch_training_script(
             script_name=f"{self.name}.py",
