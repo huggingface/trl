@@ -55,11 +55,18 @@ class TrainingCommand(Command):
         module = importlib.import_module(f"...scripts.{self.name}", package=__package__)
         all_args = context.argv_after(self.name)
         parser = module.make_parser()
-        *_, accelerate_args = parser.parse_args_and_config(all_args, return_remaining_strings=True)
-        launch_args = resolve_accelerate_config_argument(accelerate_args)
+
+        # Handles -h (exits). Returns config_remaining and cli_remaining separately.
+        # cli_remaining is an ordered subsequence of all_args; config_remaining is not.
+        *_, config_remaining, cli_remaining = parser.parse_args_and_config(
+            all_args, return_remaining_strings=True, separate_remaining_strings=True
+        )
+        launch_args = resolve_accelerate_config_argument(config_remaining + cli_remaining)
+        training_script_args = _subtract_subsequence(all_args, cli_remaining)
+
         launch_training_script(
             script_name=f"{self.name}.py",
             launch_args=launch_args,
-            training_script_args=all_args,
+            training_script_args=training_script_args,
         )
         return 0
