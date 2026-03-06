@@ -361,7 +361,7 @@ class OnlineDPOConfig(_BaseConfig):
             "is not compatible with vLLM generation."
         },
     )
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
