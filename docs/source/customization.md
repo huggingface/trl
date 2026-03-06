@@ -40,18 +40,6 @@ lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 trainer = DPOTrainer(..., optimizers=(optimizer, lr_scheduler))
 ```
 
-## Memory efficient fine-tuning by sharing layers
-
-Another tool you can use for more memory efficient fine-tuning is to share layers between the reference model and the model you want to train.
-
-```python
-from trl.experimental.utils import create_reference_model
-
-ref_model = create_reference_model(model, num_shared_layers=6)
-
-trainer = DPOTrainer(..., ref_model=ref_model)
-```
-
 ## Pass 8-bit reference models
 
 Since `trl` supports all keyword arguments when loading a model from `transformers` using `from_pretrained`, you can also leverage `load_in_8bit` from `transformers` for more memory efficient fine-tuning.
@@ -122,16 +110,4 @@ training_args = DPOConfig(
     per_device_train_batch_size=4,
     gradient_accumulation_steps=8,
 )
-```
-
-## Use a custom data collator
-
-You can provide a custom data collator to handle special data preprocessing or padding strategies.
-
-```python
-from trl.trainer.dpo_trainer import DataCollatorForPreference
-
-data_collator = DataCollatorForPreference(pad_token_id=tokenizer.pad_token_id)
-
-trainer = DPOTrainer(..., data_collator=data_collator)
 ```

@@ -16,11 +16,12 @@ from dataclasses import dataclass, field
 
 from transformers import TrainingArguments
 
-from .base_config import BaseConfig
+from .base_config import _BaseConfig
 
 
 @dataclass
-class RLOOConfig(BaseConfig):
+class RLOOConfig(_BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`RLOOTrainer`].
 
@@ -62,6 +63,8 @@ class RLOOConfig(BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value.
 
         > Parameters that control generation
 
@@ -203,6 +206,13 @@ class RLOOConfig(BaseConfig):
         log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts. If `True`, only unique prompts are logged. If `False`, all prompts are
             logged.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -269,6 +279,10 @@ class RLOOConfig(BaseConfig):
     shuffle_dataset: bool | None = field(
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
     )
 
     # Parameters that control generation

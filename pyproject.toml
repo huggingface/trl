@@ -83,7 +83,7 @@ test = [
     "pytest"
 ]
 vllm = [
-    "vllm>=0.10.2,<0.13.0",
+    "vllm>=0.10.2,<=0.14.1",
     "fastapi",
     "pydantic",
     "requests",
@@ -109,7 +109,7 @@ dev = [
     # kernels
     "kernels",
     # liger
-    #"liger-kernel>=0.7.0",
+    "liger-kernel>=0.7.0",
     # peft
     "peft>=0.8.0",
     # quality
