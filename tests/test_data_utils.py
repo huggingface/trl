@@ -203,6 +203,48 @@ class TestPrepareMultimodalMessages:
 
         assert messages == expected
 
+    def test_message_with_tool_calling_turns(self):
+        """Test that both the assistant tool call and the tool role turns messages are properly transformed."""
+        messages = [
+            {"role": "user", "content": "What's the weather like in New York?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {"role": "assistant", "content": "The current weather in New York is 22.0 degrees Celsius."},
+        ]
+
+        messages = prepare_multimodal_messages(messages, images=[])
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What's the weather like in New York?"}],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "The current weather in New York is 22.0 degrees Celsius."}],
+            },
+        ]
+
+        assert messages == expected
+
 
 @require_vision
 class TestPrepareMultimodalMessagesVLLM:
