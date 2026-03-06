@@ -173,6 +173,8 @@ class VLLMGeneration:
             - "vllm" will use the vLLM model implementation.
             - "transformers" will use the Transformers model implementation.
             - "terratorch" will use the TerraTorch model implementation.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Trust remote code (e.g., from HuggingFace) when downloading the model and tokenizer.
 
         > Parameters for generation:
 
