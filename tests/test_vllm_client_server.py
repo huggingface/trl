@@ -940,8 +940,18 @@ class TestVLLMClientServerVLM(TrlTestCase):
         processor = AutoProcessor.from_pretrained(self.model_id)
         image = Image.new("RGB", (64, 64), color="red")
         messages = [
-            [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "Describe this image."}]}],
-            [{"role": "user", "content": [{"type": "text", "text": "What is 1+1?"}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": image}, {"type": "text", "text": "Describe this image."}],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "What is 1+1?"}],
+                }
+            ],
         ]
         prompt_token_ids = processor.apply_chat_template(
             conversation=messages, tokenize=True, add_generation_prompt=True
