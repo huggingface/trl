@@ -71,6 +71,7 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 
 > [!TIP]
 > It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
+> Note that turning off std-based scaling also removes variance normalization, so update magnitudes depend directly on the raw reward scale and batch composition.
 
 > [!TIP]
 > As shown in [Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221), calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
@@ -160,7 +161,7 @@ $$
 \end{cases}
 $$
 
-They recommends using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
+They recommend using asymmetric temperatures,  \\( \tau_{\text{neg}} > \tau_{\text{pos}} \\) (defaults are  \\( \tau_{\text{pos}}=1.0, \tau_{\text{neg}}=1.05 \\) ). This ensures that the model is penalized more strictly for "bad" actions to prevent instability, while being more permissive with "good" actions.
 
 To use this formulation, set `loss_type="sapo"` in the [`GRPOConfig`].
 
@@ -592,7 +593,7 @@ RapidFire AI is an open-source experimentation engine that sits on top of TRL an
 ## Agent Training
 
 GRPO supports **agent training** through the `tools` argument in [`GRPOTrainer`].
-This parameter expects a list of Python functions that define the tools available to the agent:
+This parameter expects a list of Python functions (sync or async) that define the tools available to the agent:
 
 ```python
 from trl import GRPOTrainer
@@ -624,17 +625,78 @@ def multiply(a: int, b: int) -> int:
     """
     return a * b
 
+async def async_add(a: int, b: int) -> int:
+    """
+    Asynchronously adds two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The sum of the two integers.
+    """
+    return a + b
+
 trainer = GRPOTrainer(
-    tools=[multiply],
+    tools=[multiply, async_add],
     ...,
 )
 ```
+
+You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
+
+> [!IMPORTANT]
+> `environment_factory` requires `transformers>=5.2.0`.
+
+The following is a minimal example of using `environment_factory` to define a simple environment with an `increment` method, which is exposed as a tool to the agent:
+
+```python
+from datasets import Dataset
+from trl import GRPOConfig, GRPOTrainer
+
+instructions = [f"Increment the counter by {i}." for i in range(1, 7)]
+dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": instruction}] for instruction in instructions]})
+
+def reward_func(environments, **kwargs):  # dummy reward: the reward is the current value of the counter
+    return [environment.counter for environment in environments]
+
+class IncrementEnv:
+    def reset(self, **kwargs) -> str | None:  # required; receives sampled row fields as kwargs (e.g., `prompt`)
+        self.counter = 0
+        return "Counter reset to 0.\n"
+
+    def increment(self, step: int) -> int:  # the other public methods of the environment are exposed as tools
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self.counter += step
+        return self.counter
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
+    train_dataset=dataset,
+    reward_funcs=reward_func,
+    environment_factory=IncrementEnv,
+)
+trainer.train()
+```
+
+`reset` can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message before generation.
 
 ### Supported Models
 
 Tested with:
 
-- **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
+- [**Qwen3**](https://huggingface.co/collections/Qwen/qwen3) — e.g., `Qwen/Qwen3-0.6B`
+- [**Qwen3.5**](https://huggingface.co/collections/Qwen/qwen35) — e.g., `Qwen/Qwen3.5-2B`
 
 > [!TIP]
 > Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
@@ -679,7 +741,6 @@ accelerate launch \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
-  --gradient_checkpointing \
   --dtype bfloat16 \
   --max_completion_length 1024 \
   --use_vllm \

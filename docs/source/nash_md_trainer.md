@@ -124,7 +124,7 @@ python examples/scripts/nash_md.py \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
     --output_dir Qwen2.5-0.5B-NashMD-PairRM \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --push_to_hub
 ```
 

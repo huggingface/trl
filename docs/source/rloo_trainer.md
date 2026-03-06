@@ -277,7 +277,6 @@ def main():
         output_dir="Qwen2.5-72B-RLOO",
         per_device_train_batch_size=4,
         bf16=True,
-        gradient_checkpointing=True,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
@@ -539,9 +538,7 @@ accelerate launch \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir rloo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
-  --gradient_checkpointing \
   --dtype bfloat16 \
-  --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
@@ -551,15 +548,6 @@ accelerate launch \
 ```
 
 ### Configuration Tips
-
-> [!TIP]
-> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_prompt_length=None` in the [`RLOOConfig`]. This allows the model to process the full sequence length without truncating image tokens.
->
-> ```python
-> RLOOConfig(max_prompt_length=None, ...)
-> ```
->
-> Only use `max_prompt_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage

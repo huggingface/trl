@@ -113,18 +113,13 @@ trainer.train()
 
 ```python
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DPOConfig, DPOTrainer
+from trl import DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
+
 trainer = DPOTrainer(
-    model=model,
-    args=training_args,
+    model="Qwen3/Qwen-0.6B",
     train_dataset=dataset,
-    processing_class=tokenizer
 )
 trainer.train()
 ```
@@ -193,13 +188,12 @@ Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimenta
 ## Citation
 
 ```bibtex
-@misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouédec},
-  title = {TRL: Transformer Reinforcement Learning},
-  year = {2020},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {\url{https://github.com/huggingface/trl}}
+@software{vonwerra2020trl,
+  title   = {{TRL: Transformers Reinforcement Learning}},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  license = {Apache-2.0},
+  url     = {https://github.com/huggingface/trl},
+  year    = {2020}
 }
 ```
 

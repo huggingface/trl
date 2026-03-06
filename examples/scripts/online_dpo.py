@@ -32,7 +32,7 @@ python examples/scripts/online_dpo.py \
     --output_dir pythia-1b-tldr-online-dpo \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 16 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0
 
 With LoRA:
@@ -44,7 +44,7 @@ python examples/scripts/online_dpo.py \
     --output_dir pythia-1b-tldr-online-dpo \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 8 \
-    --warmup_ratio 0.1 \
+    --warmup_steps 0.1 \
     --missing_eos_penalty 1.0 \
     --use_peft
 """

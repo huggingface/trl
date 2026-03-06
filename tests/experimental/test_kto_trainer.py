@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import multiprocess
 import pytest
 import torch
 from datasets import load_dataset
@@ -26,7 +27,7 @@ from ..testing_utils import TrlTestCase, require_liger_kernel, require_no_wandb,
 class TestKTOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32")
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -98,6 +99,11 @@ class TestKTOTrainer(TrlTestCase):
             )
 
     def test_tokenize_and_process_tokens(self):
+        # Pytest/CI often starts background threads before tests run. Under Python 3.12+,
+        # using "fork" in a multi-threaded process emits a DeprecationWarning and may deadlock.
+        # Force "spawn" to keep this multiprocessing test safe while still exercising `num_proc=2`.
+        multiprocess.set_start_method("spawn", force=True)
+
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -155,7 +161,6 @@ class TestKTOTrainer(TrlTestCase):
             "prefix": "",
             "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
-            "label_pad_token_id": trainer.label_pad_token_id,
         }
         processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
         assert processed_dataset["prompt"][:] == train_dataset["prompt"][:]
@@ -315,7 +320,7 @@ class TestKTOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token

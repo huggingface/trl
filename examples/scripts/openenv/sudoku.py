@@ -12,16 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+#     "peft",
+#     "trackio",
+#     "kernels",
+#     "openenv-textarena @ git+https://huggingface.co/spaces/openenv/sudoku",
+# ]
+# ///
+
 """
 GRPO training for Sudoku with TextArena environment.
 
-Setup (Option A - Install from HF Space):
+Setup (Option A - Install from HF Space, recommended):
 
 ```sh
 uv pip install git+https://huggingface.co/spaces/openenv/sudoku
 ```
 
-Setup (Option B - Clone OpenEnv repo):
+Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
 git clone https://github.com/meta-pytorch/OpenEnv.git

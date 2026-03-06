@@ -24,55 +24,6 @@ from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 
-import torch
-import torch.distributed.distributed_c10d as c10d
-from packaging.version import Version
-from transformers import is_torch_xpu_available, is_vision_available
-
-from trl import TrlParser
-from trl.import_utils import (
-    is_fastapi_available,
-    is_pydantic_available,
-    is_uvicorn_available,
-    is_vllm_ascend_available,
-    is_vllm_available,
-)
-
-
-if is_fastapi_available():
-    from fastapi import FastAPI
-
-
-if is_pydantic_available():
-    from pydantic import BaseModel
-
-
-if is_uvicorn_available():
-    import uvicorn
-
-
-if is_vision_available():
-    from PIL import Image
-
-
-if is_vllm_available():
-    import vllm
-    from vllm import LLM, SamplingParams
-    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-    from vllm.distributed.parallel_state import get_world_group
-    from vllm.distributed.utils import StatelessProcessGroup
-    from vllm.utils import get_open_port
-
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
-
-    if is_vllm_ascend_available():
-        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
-
-
-logger = logging.getLogger(__name__)
 
 # We use CUDA with multiprocessing, so we must use the 'spawn' start method. Otherwise, we will get the following
 # error: RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use
@@ -112,6 +63,18 @@ class WeightSyncWorkerExtension:
                 UUID of the device of client main process. Used to assert that devices are different from vllm workers
                 devices.
         """
+        import torch
+        import torch.distributed.distributed_c10d as c10d
+        from transformers import is_torch_xpu_available
+        from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+        from vllm.distributed.parallel_state import get_world_group
+        from vllm.distributed.utils import StatelessProcessGroup
+
+        from trl.import_utils import is_vllm_ascend_available
+
+        if is_vllm_ascend_available():
+            from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+
         if self.communicator is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
@@ -161,6 +124,9 @@ class WeightSyncWorkerExtension:
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
+        import torch
+        from transformers import is_torch_xpu_available
+
         if self.communicator is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
@@ -206,7 +172,9 @@ class ScriptArguments:
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
         data_parallel_size (`int`, *optional*, defaults to `1`):
-            Number of data parallel workers to use.
+            Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`,
+            setting this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR
+            #30739).
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
@@ -256,7 +224,11 @@ class ScriptArguments:
     )
     data_parallel_size: int = field(
         default=1,
-        metadata={"help": "Number of data parallel workers to use."},
+        metadata={
+            "help": "Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM "
+            "`0.14.0`, setting this above `1` for dense models is no longer supported/useful and will error out (see "
+            "vLLM PR #30739)."
+        },
     )
     host: str = field(
         default="0.0.0.0",
@@ -338,6 +310,8 @@ class ScriptArguments:
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
+    from vllm import LLM
+
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
@@ -360,6 +334,8 @@ def llm_worker(
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
         model_impl=script_args.vllm_model_impl,
+        # Important so temperature scaling/logit tweaking affects the TIS log probs
+        logprobs_mode="processed_logprobs",
     )
 
     # Send ready signal to parent process
@@ -405,18 +381,18 @@ def chunk_list(lst: list, n: int) -> list[list]:
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
-def sanitize_logprob(logprob):
-    import math
-
-    value = logprob.logprob
-    if math.isnan(value):
-        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
-        return None
-
-    return value
-
-
 def main(script_args: ScriptArguments):
+    from packaging.version import Version
+    from transformers import is_vision_available
+
+    from trl.generation.vllm_generation import extract_logprobs
+    from trl.import_utils import (
+        is_fastapi_available,
+        is_pydantic_available,
+        is_uvicorn_available,
+        is_vllm_available,
+    )
+
     if not is_fastapi_available():
         raise ImportError(
             "FastAPI is required to run the vLLM serve script. Please install it using `pip install fastapi`."
@@ -434,6 +410,27 @@ def main(script_args: ScriptArguments):
 
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
+
+    import uvicorn
+    import vllm
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    from vllm import SamplingParams
+
+    if Version(vllm.__version__) <= Version("0.11.0"):
+        from vllm.utils import get_open_port
+    else:
+        from vllm.utils.network_utils import get_open_port
+
+    if Version(vllm.__version__) <= Version("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
+
+    if is_vision_available():
+        from PIL import Image
+
+    logger = logging.getLogger(__name__)
 
     # Spawn dp workers, and setup pipes for communication
     master_port = get_open_port()
@@ -502,6 +499,7 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        logprobs: int | None = 0
         truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
@@ -509,7 +507,8 @@ def main(script_args: ScriptArguments):
     class GenerateResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[float]]
+        logprobs: list[list[list[float]]]
+        logprob_token_ids: list[list[list[int]]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -533,6 +532,9 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
+                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
+                  descending probability.
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
@@ -546,8 +548,10 @@ def main(script_args: ScriptArguments):
             `GenerateResponse`:
                 - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
-                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
-                  generated completions.
+                - `logprobs` (list of list of list of `float`): Per-token logprobs of shape (num_sequences, seq_len,
+                  num_logprobs), sorted by descending probability.
+                - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
+                  shape as `logprobs`.
 
         Example request:
         ```json
@@ -559,7 +563,8 @@ def main(script_args: ScriptArguments):
         {
           "prompt_ids": [[101, 102], [201, 202]],
           "completion_ids": [[103, 104, 105], [203, 204, 205]],
-          "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]
+          "logprobs": [[[-0.1], [-0.2], [-0.3]], [[-0.4], [-0.5], [-0.6]]],
+          "logprob_token_ids": [[[103], [104], [105]], [[203], [204], [205]]]
         }
         ```
         """
@@ -572,20 +577,6 @@ def main(script_args: ScriptArguments):
                 row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
             prompts.append(row)
 
-        # Structured outputs, if enabled
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            structured_outputs_key = "guided_decoding"
-            if request.structured_outputs_regex is not None:
-                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
-            else:
-                structured_outputs = None
-        else:
-            structured_outputs_key = "structured_outputs"
-            if request.structured_outputs_regex is not None:
-                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
-            else:
-                structured_outputs = None
-
         generation_kwargs = {
             "n": request.n,
             "repetition_penalty": request.repetition_penalty,
@@ -595,10 +586,40 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
+            "logprobs": request.logprobs,
         }
-        generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
+
+        # Structured outputs, if enabled
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            structured_outputs_key = "guided_decoding"
+            if request.structured_outputs_regex is not None:
+                if generation_kwargs.get("guided_decoding") is not None:
+                    logger.warning(
+                        "Both `structured_outputs_regex` and `generation_kwargs['guided_decoding']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
+                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = generation_kwargs.get("guided_decoding")
+        else:
+            structured_outputs_key = "structured_outputs"
+            if request.structured_outputs_regex is not None:
+                if generation_kwargs.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+            elif isinstance(generation_kwargs.get("structured_outputs"), dict):
+                # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
+                # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
+                structured_outputs_dict = generation_kwargs.get("structured_outputs")
+                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
+            else:
+                structured_outputs = generation_kwargs.get("structured_outputs")
+
+        generation_kwargs[structured_outputs_key] = structured_outputs
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
@@ -624,12 +645,14 @@ def main(script_args: ScriptArguments):
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         prompt_ids = [output.prompt_token_ids for output in all_outputs]
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        logprobs: list[list[float]] = [
-            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
-            for outputs in all_outputs
-            for output in outputs.outputs
-        ]
-        return {"prompt_ids": prompt_ids, "completion_ids": completion_ids, "logprobs": logprobs}
+        logprobs, logprob_token_ids = extract_logprobs(all_outputs)
+
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
 
     class ChatRequest(BaseModel):
         messages: list[list[dict]]
@@ -640,15 +663,18 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        logprobs: int | None = 0
         truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
+        tools: list | None = None
 
     class ChatResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[float]]
+        logprobs: list[list[list[float]]]
+        logprob_token_ids: list[list[list[int]]]
 
     @app.post("/chat/", response_model=ChatResponse)
     async def chat(request: ChatRequest):
@@ -671,6 +697,9 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
+                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
+                  descending probability.
                 - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
                   by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
                   truncation). If set to `None`, truncation is disabled.
@@ -686,8 +715,10 @@ def main(script_args: ScriptArguments):
             `ChatResponse`:
                 - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
-                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
-                  generated completions.
+                - `logprobs` (list of list of list of `float`): Per-token logprobs of shape (num_sequences, seq_len,
+                  num_logprobs), sorted by descending probability.
+                - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
+                  shape as `logprobs`.
 
         Example request:
         ```bash
@@ -700,8 +731,9 @@ def main(script_args: ScriptArguments):
         ```json
         {
             "prompt_ids": [[151644, 872, 198, 9707, 0, 151645, 198, 151644, 77091, 198]],
-            "completion_ids":[[151667, 198, 32313, 11, 279, 1196, 1101, 1053, 330, 9707, 8958, 773, 358, 1184, 311, 5889]],
-            "logprobs": [[-0.00029404606902971864, -3.576278118089249e-07, -0.09024181962013245, -6.389413465512916e-05, -0.038671817630529404, -0.00013314791431184858, -0.5868351459503174, -0.09682723134756088, -0.06609706580638885, -0.00023803261865396053, -0.02242819033563137, -0.8185162544250488, -0.04954879730939865, -0.3169460594654083, -4.887569048150908e-06, -0.006023705471307039]]
+            "completion_ids": [[151667, 198, 32313, 11, 279]],
+            "logprobs": [[[-0.0003], [-3.58e-07], [-0.0902], [-6.39e-05], [-0.0387]]],
+            "logprob_token_ids": [[[151667], [198], [32313], [11], [279]]]
         }
         ```
         """
@@ -713,20 +745,6 @@ def main(script_args: ScriptArguments):
                         if part["type"] == "image_pil":
                             part["image_pil"] = Image.open(BytesIO(base64.b64decode(part["image_pil"])))
 
-        # Structured outputs, if enabled
-        if Version(vllm.__version__) <= Version("0.10.2"):
-            structured_outputs_key = "guided_decoding"
-            if request.structured_outputs_regex is not None:
-                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
-            else:
-                structured_outputs = None
-        else:
-            structured_outputs_key = "structured_outputs"
-            if request.structured_outputs_regex is not None:
-                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
-            else:
-                structured_outputs = None
-
         generation_kwargs = {
             "n": request.n,
             "repetition_penalty": request.repetition_penalty,
@@ -736,10 +754,40 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "truncate_prompt_tokens": request.truncate_prompt_tokens,
-            "logprobs": 0,  # enable returning log probabilities; 0 means for the sampled tokens only
+            "logprobs": request.logprobs,
         }
-        generation_kwargs[structured_outputs_key] = structured_outputs
         generation_kwargs.update(request.generation_kwargs)
+
+        # Structured outputs, if enabled
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            structured_outputs_key = "guided_decoding"
+            if request.structured_outputs_regex is not None:
+                if generation_kwargs.get("guided_decoding") is not None:
+                    logger.warning(
+                        "Both `structured_outputs_regex` and `generation_kwargs['guided_decoding']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
+                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+            else:
+                structured_outputs = generation_kwargs.get("guided_decoding")
+        else:
+            structured_outputs_key = "structured_outputs"
+            if request.structured_outputs_regex is not None:
+                if generation_kwargs.get("structured_outputs") is not None:
+                    logger.warning(
+                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
+            elif isinstance(generation_kwargs.get("structured_outputs"), dict):
+                # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
+                # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
+                structured_outputs_dict = generation_kwargs.get("structured_outputs")
+                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
+            else:
+                structured_outputs = generation_kwargs.get("structured_outputs")
+
+        generation_kwargs[structured_outputs_key] = structured_outputs
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
@@ -756,6 +804,7 @@ def main(script_args: ScriptArguments):
                 "messages": messages,
                 "sampling_params": sampling_params,
                 "chat_template_kwargs": request.chat_template_kwargs,
+                "tools": request.tools,
             }
             connection.send({"type": "call", "method": "chat", "kwargs": kwargs})
 
@@ -769,12 +818,14 @@ def main(script_args: ScriptArguments):
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         prompt_ids = [output.prompt_token_ids for output in all_outputs]
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        logprobs: list[list[float]] = [
-            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
-            for outputs in all_outputs
-            for output in outputs.outputs
-        ]
-        return {"prompt_ids": prompt_ids, "completion_ids": completion_ids, "logprobs": logprobs}
+        logprobs, logprob_token_ids = extract_logprobs(all_outputs)
+
+        return {
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": logprobs,
+            "logprob_token_ids": logprob_token_ids,
+        }
 
     class InitCommunicatorRequest(BaseModel):
         host: str
@@ -863,11 +914,13 @@ def main(script_args: ScriptArguments):
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import TrlParser
+
     if subparsers is not None:
         parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:
-        parser = TrlParser(ScriptArguments)
+        parser = TrlParser(ScriptArguments, prog=prog)
     return parser
 
 

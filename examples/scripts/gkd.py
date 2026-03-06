@@ -32,8 +32,7 @@ python examples/scripts/gkd.py \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
     --num_train_epochs 1 \
-    --push_to_hub \
-    --gradient_checkpointing
+    --push_to_hub
 
 # LoRA:
 python examples/scripts/gkd.py \
@@ -46,7 +45,6 @@ python examples/scripts/gkd.py \
     --output_dir gkd-model \
     --num_train_epochs 1 \
     --push_to_hub \
-    --gradient_checkpointing \
     --use_peft \
     --lora_r 64 \
     --lora_alpha 16

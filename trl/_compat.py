@@ -23,7 +23,8 @@ Each patch should be removed when minimum version requirements eliminate the nee
 import warnings
 
 from packaging.version import Version
-from transformers.utils.import_utils import _is_package_available
+
+from .import_utils import _is_package_available
 
 
 def _is_package_version_below(package_name: str, version_threshold: str) -> bool:
@@ -88,7 +89,7 @@ def _patch_vllm_disabled_tqdm() -> None:
 
     - Bug introduced in https://github.com/vllm-project/vllm/pull/52
     - Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-    - Since TRL currently supports vLLM v0.10.2-0.12.0, we patch it here
+    - Since TRL currently supports vLLM v0.10.2-0.14.1, we patch it here
     - This can be removed when TRL requires vLLM>=0.11.1
     """
     if _is_package_version_below("vllm", "0.11.1"):
@@ -111,11 +112,11 @@ def _patch_vllm_cached_tokenizer() -> None:
     Fix get_cached_tokenizer for transformers v5 compatibility.
 
     - Issue: vLLM's get_cached_tokenizer accesses all_special_tokens_extended
-    - Removed in transformers: https://github.com/huggingface/transformers/pull/40936 (transformers>=5.0.0.dev0)
+    - Removed in transformers: https://github.com/huggingface/transformers/pull/40936 (transformers>=5.0.0)
     - Fixed in https://github.com/vllm-project/vllm/pull/29686 (released in v0.12.0)
     - This can be removed when TRL requires vLLM>=0.12.0
     """
-    if _is_package_version_at_least("transformers", "5.0.0.dev0") and _is_package_version_below("vllm", "0.12.0"):
+    if _is_package_version_at_least("transformers", "5.0.0") and _is_package_version_below("vllm", "0.12.0"):
         try:
             import contextlib
             import copy
@@ -170,15 +171,12 @@ def _patch_transformers_hybrid_cache() -> None:
     """
     Fix HybridCache import for transformers v5 compatibility.
 
-    - Issue: liger_kernel and peft import HybridCache from transformers.cache_utils
-    - HybridCache removed in https://github.com/huggingface/transformers/pull/43168 (transformers>=5.0.0.dev0)
-    - Fixed in liger_kernel: https://github.com/linkedin/Liger-Kernel/pull/1002 (released in v0.6.5)
+    - Issue: peft import HybridCache from transformers.cache_utils
+    - HybridCache removed in https://github.com/huggingface/transformers/pull/43168 (transformers>=5.0.0)
     - Fixed in peft: https://github.com/huggingface/peft/pull/2735 (released in v0.18.0)
-    - This can be removed when TRL requires liger_kernel>=0.6.5 and peft>=0.18.0
+    - This can be removed when TRL requires peft>=0.18.0
     """
-    if _is_package_version_at_least("transformers", "5.0.0.dev0") and (
-        _is_package_version_below("liger_kernel", "0.6.5") or _is_package_version_below("peft", "0.18.0")
-    ):
+    if _is_package_version_at_least("transformers", "5.0.0") and _is_package_version_below("peft", "0.18.0"):
         try:
             import transformers.cache_utils
             from transformers.utils.import_utils import _LazyModule
@@ -213,6 +211,35 @@ def _patch_transformers_hybrid_cache() -> None:
             warnings.warn(f"Failed to patch transformers HybridCache compatibility: {e}", stacklevel=2)
 
 
+def _patch_transformers_parallelism_config() -> None:
+    """
+    Fix ParallelismConfig for transformers compatibility.
+
+    Ensure that ``transformers.training_args`` always defines the symbol `ParallelismConfig` so that Python's
+    `typing.get_type_hints` can resolve annotations on `transformers.TrainingArguments` without raising a `NameError`.
+
+    This is needed when running with ``accelerate<1.10.1``, where the module ``accelerate.parallelism_config`` did not
+    exist and therefore the type alias is not imported by Transformers.
+
+    See upstream fix PR in transformers#40818.
+
+    - Issue: transformers imports ParallelismConfig only if accelerate>=1.10.1 and raises NameError if
+      accelerate<1.10.1
+    - Fixed in transformers: https://github.com/huggingface/transformers/pull/40818 (released in v4.57.0)
+    - This can be removed when TRL requires transformers>=4.57.0 or accelerate>=1.10.1
+    """
+    if _is_package_version_below("transformers", "4.57.0") and _is_package_version_below("accelerate", "1.10.1"):
+        try:
+            from typing import Any
+
+            import transformers.training_args
+
+            if not hasattr(transformers.training_args, "ParallelismConfig"):
+                transformers.training_args.ParallelismConfig = Any
+        except Exception as e:
+            warnings.warn(f"Failed to patch transformers ParallelismConfig compatibility: {e}", stacklevel=2)
+
+
 # Apply vLLM patches
 _patch_vllm_logging()
 _patch_vllm_disabled_tqdm()
@@ -220,3 +247,4 @@ _patch_vllm_cached_tokenizer()
 
 # Apply transformers patches
 _patch_transformers_hybrid_cache()
+_patch_transformers_parallelism_config()  # before creating HfArgumentParser
