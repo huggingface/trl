@@ -15,13 +15,14 @@
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient
+from trl.generation.vllm_client import VLLMClient, pil_to_base64
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 from trl.scripts.vllm_serve import chunk_list
@@ -121,6 +122,119 @@ class TestExtractLogprobs(TrlTestCase):
 
         assert all_logprobs is None
         assert all_token_ids is None
+
+
+class TestVLLMClientImageEncoding(TrlTestCase):
+    """CPU-only tests for multi-image encoding in VLLMClient.generate()."""
+
+    def _make_pil_image(self, width=64, height=64):
+        import numpy as np
+        from PIL import Image
+
+        return Image.fromarray(np.random.randint(0, 255, (height, width, 3), dtype=np.uint8))
+
+    def test_single_image_per_prompt(self):
+        """Single PIL Image per prompt encodes to a plain base64 string."""
+        img = self._make_pil_image()
+        client = VLLMClient.__new__(VLLMClient)
+        client.base_url = "http://localhost:8000"
+        client.session = MagicMock()
+        client.session.post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "prompt_ids": [[1]],
+                "completion_ids": [[2]],
+                "logprobs": [[[0.0]]],
+                "logprob_token_ids": [[[2]]],
+            },
+        )
+
+        client.generate(prompts=["Hello"], images=[img])
+
+        payload = client.session.post.call_args[1]["json"]
+        assert payload["images"] is not None
+        assert isinstance(payload["images"][0], str)  # single base64 string
+        assert payload["images"][0] == pil_to_base64(img)
+
+    def test_multi_image_per_prompt(self):
+        """List of PIL Images per prompt encodes to a list of base64 strings."""
+        imgs = [self._make_pil_image() for _ in range(3)]
+        client = VLLMClient.__new__(VLLMClient)
+        client.base_url = "http://localhost:8000"
+        client.session = MagicMock()
+        client.session.post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "prompt_ids": [[1]],
+                "completion_ids": [[2]],
+                "logprobs": [[[0.0]]],
+                "logprob_token_ids": [[[2]]],
+            },
+        )
+
+        client.generate(prompts=["Hello"], images=[imgs])
+
+        payload = client.session.post.call_args[1]["json"]
+        encoded = payload["images"][0]
+        assert isinstance(encoded, list)
+        assert len(encoded) == 3
+        for enc, img in zip(encoded, imgs, strict=True):
+            assert enc == pil_to_base64(img)
+
+    def test_none_image_in_list(self):
+        """None entries in images list are preserved as None."""
+        img = self._make_pil_image()
+        client = VLLMClient.__new__(VLLMClient)
+        client.base_url = "http://localhost:8000"
+        client.session = MagicMock()
+        client.session.post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "prompt_ids": [[1], [2]],
+                "completion_ids": [[3], [4]],
+                "logprobs": [[[0.0]], [[0.0]]],
+                "logprob_token_ids": [[[3]], [[4]]],
+            },
+        )
+
+        client.generate(prompts=["Hello", "World"], images=[img, None])
+
+        payload = client.session.post.call_args[1]["json"]
+        assert payload["images"][0] == pil_to_base64(img)
+        assert payload["images"][1] is None
+
+    def test_prompt_token_ids_forwarded(self):
+        """prompt_token_ids and mm_processor_kwargs are included in the payload."""
+        client = VLLMClient.__new__(VLLMClient)
+        client.base_url = "http://localhost:8000"
+        client.session = MagicMock()
+        client.session.post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "prompt_ids": [[1]],
+                "completion_ids": [[2]],
+                "logprobs": [[[0.0]]],
+                "logprob_token_ids": [[[2]]],
+            },
+        )
+
+        token_ids = [[10, 20, 30]]
+        mm_kwargs = {"min_pixels": 100, "max_pixels": 200}
+        client.generate(prompt_token_ids=token_ids, mm_processor_kwargs=mm_kwargs)
+
+        payload = client.session.post.call_args[1]["json"]
+        assert payload["prompt_token_ids"] == token_ids
+        assert payload["mm_processor_kwargs"] == mm_kwargs
+        assert payload["prompts"] is None
+
+    def test_neither_prompts_nor_token_ids_raises(self):
+        """Omitting both prompts and prompt_token_ids raises ValueError."""
+        client = VLLMClient.__new__(VLLMClient)
+        client.base_url = "http://localhost:8000"
+        client.session = MagicMock()
+
+        with pytest.raises(ValueError, match="Either 'prompts' or 'prompt_token_ids'"):
+            client.generate()
 
 
 @pytest.mark.slow
@@ -230,6 +344,20 @@ class TestVLLMClientServer(TrlTestCase):
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
+
+    def test_generate_with_prompt_token_ids(self):
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        token_ids = tokenizer.encode("Hello, AI!", add_special_tokens=False)
+        outputs = self.client.generate(prompt_token_ids=[token_ids])
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        assert len(prompt_ids) == 1
+        assert len(completion_ids) == 1
+        assert all(isinstance(tok, int) for tok in prompt_ids[0])
+        assert all(isinstance(tok, int) for tok in completion_ids[0])
 
     def test_reset_prefix_cache(self):
         # Test resetting the prefix cache
