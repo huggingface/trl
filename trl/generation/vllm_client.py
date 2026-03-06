@@ -200,7 +200,7 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: list[str],
+        prompts: list[str] | None = None,
         images: list | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
@@ -213,15 +213,24 @@ class VLLMClient:
         truncate_prompt_tokens: int | None = None,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
+        prompt_token_ids: list[list[int]] | None = None,
+        mm_processor_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided prompts.
 
         Args:
-            prompts (`list[str]`):
-                List of text prompts for which the model will generate completions.
-            images (`list[PIL.Image]`, *optional*):
-                List of PIL Images to send along with the prompts.
+            prompts (`list[str]`, *optional*):
+                List of text prompts. Either `prompts` or `prompt_token_ids` must be provided.
+            prompt_token_ids (`list[list[int]]`, *optional*):
+                Pre-tokenized token IDs, passed directly to vLLM without re-tokenization. Either `prompts` or
+                `prompt_token_ids` must be provided.
+            images (`list[PIL.Image]` or `list[list[PIL.Image]]`, *optional*):
+                Per-prompt images. Each element is a single PIL Image or a list of PIL Images for prompts that
+                contain multiple images.
+            mm_processor_kwargs (`dict`, *optional*):
+                Additional keyword arguments forwarded to vLLM's multimodal processor
+                (e.g., ``{"min_pixels": 163840, "max_pixels": 196608}``).
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -262,16 +271,31 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
+        if prompts is None and prompt_token_ids is None:
+            raise ValueError("Either 'prompts' or 'prompt_token_ids' must be provided.")
+
         url = f"{self.base_url}/generate/"
 
-        # Convert PIL images to base64 strings
-        images = [pil_to_base64(img) for img in images] if images else None
+        # Convert PIL images to base64 strings.
+        # Each element may be a single PIL Image or a list of PIL Images (multi-image prompt).
+        encoded_images = None
+        if images is not None:
+            encoded_images = []
+            for img_entry in images:
+                if isinstance(img_entry, list):
+                    encoded_images.append([pil_to_base64(img) for img in img_entry])
+                elif img_entry is not None:
+                    encoded_images.append(pil_to_base64(img_entry))
+                else:
+                    encoded_images.append(None)
 
         response = self.session.post(
             url,
             json={
                 "prompts": prompts,
-                "images": images,
+                "prompt_token_ids": prompt_token_ids,
+                "images": encoded_images,
+                "mm_processor_kwargs": mm_processor_kwargs,
                 "n": n,
                 "repetition_penalty": repetition_penalty,
                 "temperature": temperature,

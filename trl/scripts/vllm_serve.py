@@ -489,8 +489,10 @@ def main(script_args: ScriptArguments):
         return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str]
-        images: list[str] | None = None
+        prompts: list[str] | None = None
+        prompt_token_ids: list[list[int]] | None = None
+        images: list[list[str] | str | None] | None = None
+        mm_processor_kwargs: dict | None = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -516,9 +518,15 @@ def main(script_args: ScriptArguments):
 
         Args:
             request (`GenerateRequest`):
-                - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
-                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
-                  along with prompts.
+                - `prompts` (list of `str`, *optional*): A list of text prompts. Either `prompts` or
+                  `prompt_token_ids` must be provided.
+                - `prompt_token_ids` (list of list of `int`, *optional*): Pre-tokenized prompt token IDs, passed
+                  directly to vLLM without re-tokenization. Either `prompts` or `prompt_token_ids` must be provided.
+                - `images` (list of `str` or list of list of `str`, *optional*, default to `None`): Per-prompt images.
+                  Each element is either a single base64-encoded image string or a list of base64-encoded strings for
+                  prompts that contain multiple images.
+                - `mm_processor_kwargs` (`dict`, *optional*): Additional keyword arguments forwarded to vLLM's
+                  multimodal processor (e.g., ``{"min_pixels": 163840, "max_pixels": 196608}``).
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
                   generation.
@@ -552,9 +560,14 @@ def main(script_args: ScriptArguments):
                 - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
                   shape as `logprobs`.
 
-        Example request:
+        Example request (text prompts):
         ```json
         {"prompts": ["Hello world", "What is AI?"]}
+        ```
+
+        Example request (pre-tokenized, multi-image):
+        ```json
+        {"prompt_token_ids": [[1, 2, 3]], "images": [["<base64_img1>", "<base64_img2>"]]}
         ```
 
         Example response:
@@ -567,13 +580,30 @@ def main(script_args: ScriptArguments):
         }
         ```
         """
-        request.images = request.images or [None] * len(request.prompts)
+        if request.prompts is None and request.prompt_token_ids is None:
+            raise ValueError("Either 'prompts' or 'prompt_token_ids' must be provided.")
+
+        n_prompts = len(request.prompts if request.prompts is not None else request.prompt_token_ids)
+        images_per_prompt = request.images or [None] * n_prompts
 
         prompts = []
-        for prompt, image in zip(request.prompts, request.images, strict=True):
-            row = {"prompt": prompt}
-            if image is not None:
-                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+        for i in range(n_prompts):
+            if request.prompt_token_ids is not None:
+                row = {"prompt_token_ids": request.prompt_token_ids[i]}
+            else:
+                row = {"prompt": request.prompts[i]}
+
+            imgs = images_per_prompt[i]
+            if imgs is not None:
+                # Normalise: a bare str is a single image; a list[str] is multiple images.
+                if isinstance(imgs, str):
+                    imgs = [imgs]
+                pil_imgs = [Image.open(BytesIO(base64.b64decode(b))) for b in imgs]
+                row["multi_modal_data"] = {"image": pil_imgs[0] if len(pil_imgs) == 1 else pil_imgs}
+
+            if request.mm_processor_kwargs:
+                row["mm_processor_kwargs"] = request.mm_processor_kwargs
+
             prompts.append(row)
 
         generation_kwargs = {
