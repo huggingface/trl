@@ -29,6 +29,32 @@ class _BaseTrainer(Trainer):
     _paper = {}
     _template_file = None
 
+    def log_completion_extra(self, column: str, values: list):
+        """
+        Log extra columns to the completions table. Called from reward functions via the `log_extra` kwarg.
+
+        Args:
+            column (`str`):
+                Name of the column to add.
+            values (`list`):
+                Values for the column, one per sample in the batch.
+        """
+        self._logs["extra"][column].extend(values)
+
+    def log_metric(self, name: str, value: float):
+        """
+        Log a scalar metric from a reward function. Called via the `log_metric` kwarg. Values are averaged
+        over each logging step and reported alongside built-in metrics like `kl` and `entropy`.
+
+        Args:
+            name (`str`):
+                Name of the metric.
+            value (`float`):
+                Scalar value for this batch.
+        """
+        mode = "train" if self.model.training else "eval"
+        self._metrics[mode][name].append(value)
+
     def create_model_card(
         self,
         model_name: str | None = None,

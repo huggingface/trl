@@ -698,6 +698,7 @@ class GRPOTrainer(_BaseTrainer):
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
             "advantages": deque(maxlen=args.generation_batch_size),
+            "extra": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
         }
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -1140,6 +1141,12 @@ class GRPOTrainer(_BaseTrainer):
         # This allows for dynamic reward shaping based on training progress.
         reward_kwargs["trainer_state"] = self.state
 
+        # Allow reward functions to log extra columns to the completions table.
+        reward_kwargs["log_extra"] = self.log_completion_extra
+
+        # Allow reward functions to log additional scalar metrics.
+        reward_kwargs["log_metric"] = self.log_metric
+
         async_funcs_info = []  # async custom functions for asyncio.gather
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
@@ -1198,7 +1205,7 @@ class GRPOTrainer(_BaseTrainer):
         if torch.isnan(rewards_per_func).all(dim=1).any():
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
             row_reward_kwargs = {
-                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key != "trainer_state"
+                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key not in ("trainer_state", "log_extra", "log_metric")
             }
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]
@@ -2317,6 +2324,7 @@ class GRPOTrainer(_BaseTrainer):
                 "prompt": self._logs["prompt"],
                 "completion": self._logs["completion"],
                 **self._logs["rewards"],
+                **self._logs["extra"],
                 "advantage": self._logs["advantages"],
             }
 

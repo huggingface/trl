@@ -376,6 +376,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `completions` (contains the generated completions),
      - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
+     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6.
+     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6.
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -556,6 +558,28 @@ async def async_reward_func(prompts, completions, **kwargs):
     await asyncio.sleep(0.01)
     # Simple toy reward: 1.0 if the completion is non-empty, else 0.0
     return [1.0 if completion else 0.0 for completion in completions]
+```
+
+#### Example 6: Logging extra columns and metrics
+
+Below is an example of a reward function that logs extra columns to the completions table and scalar metrics as plots.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, log_extra=None, log_metric=None, **kwargs):
+    extracted = [re.search(r"\\boxed\{(.*?)\}", c) for c in completions]
+    extracted = [m.group(1) if m else None for m in extracted]
+    rewards = [1.0 if e == gt else 0.0 for e, gt in zip(extracted, ground_truth)]
+
+    if log_extra:
+        log_extra("golden_answer", list(ground_truth))
+        log_extra("extracted_answer", [e or "[none]" for e in extracted])
+
+    if log_metric:
+        log_metric("accuracy", sum(rewards) / len(rewards))
+
+    return rewards
 ```
 
 #### Passing the reward function to the trainer
