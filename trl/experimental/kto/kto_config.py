@@ -132,7 +132,7 @@ class KTOConfig(_BaseConfig):
             "This is useful when training without the reference model to reduce the total GPU memory needed."
         },
     )
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "

@@ -138,7 +138,7 @@ class DPOConfig(_BaseConfig):
     )
 
     # Parameters that control the model
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
