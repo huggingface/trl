@@ -257,7 +257,7 @@ class VLLMClient:
                     List of lists of token IDs representing the tokenized input prompts.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each prompt.
-                - `logprobs` (`list[list[list[float]]]`):
+                - `logprobs` (`list[list[list[float]]]` | `list[list[float]]`):
                     Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
                     probability.
                 - `logprob_token_ids` (`list[list[list[int]]]`):
@@ -288,12 +288,15 @@ class VLLMClient:
         )
         if response.status_code == 200:
             json_response = response.json()
-            return {
+            result = {
                 "prompt_ids": json_response["prompt_ids"],
                 "completion_ids": json_response["completion_ids"],
                 "logprobs": json_response["logprobs"],
-                "logprob_token_ids": json_response["logprob_token_ids"],
             }
+            if "logprob_token_ids" in json_response:
+                # `logprob_token_ids` only appears in the response when `logprobs` is greater than 0
+                result["logprob_token_ids"] = json_response["logprob_token_ids"]
+            return result
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -363,7 +366,7 @@ class VLLMClient:
                     List of lists of token IDs representing the tokenized input messages.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each message list.
-                - `logprobs` (`list[list[list[float]]]`):
+                - `logprobs` (`list[list[list[float]]]` | `list[list[float]]`):
                     Per-token logprobs of shape (num_sequences, seq_len, num_logprobs), sorted by descending
                     probability.
                 - `logprob_token_ids` (`list[list[list[int]]]`):
@@ -407,12 +410,15 @@ class VLLMClient:
         )
         if response.status_code == 200:
             json_response = response.json()
-            return {
+            result = {
                 "prompt_ids": json_response["prompt_ids"],
                 "completion_ids": json_response["completion_ids"],
                 "logprobs": json_response["logprobs"],
-                "logprob_token_ids": json_response["logprob_token_ids"],
             }
+            if "logprob_token_ids" in json_response:
+                # `logprob_token_ids` only appears in the response when `logprobs` is greater than 0
+                result["logprob_token_ids"] = json_response["logprob_token_ids"]
+            return result
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
