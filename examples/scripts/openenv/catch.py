@@ -193,7 +193,13 @@ Observe the grid, determine where the ball is relative to the paddle, then move 
 
 
 def reward_from_env(completions, environments, **kwargs):
-    return [env.reward for env in environments]
+    rewards = []
+    for env in environments:
+        if env._done:
+            rewards.append(max(env.reward, 0.0))  # 1.0 if caught, 0.0 if missed
+        else:
+            rewards.append(0.0)  # Incomplete episode
+    return rewards
 
 
 def main():
@@ -227,16 +233,46 @@ def main():
     dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": BASE_PROMPT}]] * args.dataset_size})
 
     class CatchEnv:
+        ROWS = 10
+        COLS = 5
+
         def __init__(self):
             self.client = OpenSpielEnv(base_url=env_url)
             self.reward = 0.0
             self._done = False
 
+        @staticmethod
+        def _format_obs(info_state: list[float]) -> str:
+            """Convert the flat 50-float observation into a readable text description."""
+            rows, cols = CatchEnv.ROWS, CatchEnv.COLS
+            ball_row = ball_col = paddle_col = None
+            for idx, val in enumerate(info_state):
+                if val == 1.0:
+                    r, c = divmod(idx, cols)
+                    if r < rows - 1:
+                        ball_row, ball_col = r + 1, c + 1
+                    else:
+                        paddle_col = c + 1
+            parts = []
+            if ball_row is not None and ball_col is not None:
+                parts.append(f"Ball: row {ball_row}/{rows}, column {ball_col}/{cols}")
+            if paddle_col is not None:
+                parts.append(f"Paddle: column {paddle_col}/{cols}")
+            if ball_col is not None and paddle_col is not None:
+                diff = ball_col - paddle_col
+                if diff < 0:
+                    parts.append(f"The ball is {abs(diff)} column(s) to the LEFT of the paddle.")
+                elif diff > 0:
+                    parts.append(f"The ball is {diff} column(s) to the RIGHT of the paddle.")
+                else:
+                    parts.append("The ball is directly above the paddle.")
+            return "\n".join(parts)
+
         def reset(self, **kwargs) -> str:
             env_result = self.client.reset()
             self.reward = 0.0
             self._done = env_result.observation.done
-            return str(env_result.observation.info_state)
+            return self._format_obs(env_result.observation.info_state)
 
         def _do_action(self, action_id: int) -> str:
             if self._done:
@@ -244,7 +280,7 @@ def main():
             env_result = self.client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
             self.reward += env_result.reward or 0.0
             self._done = env_result.observation.done
-            return str(env_result.observation.info_state)
+            return self._format_obs(env_result.observation.info_state)
 
         def move(self, direction: str) -> str:
             """Move the paddle left or right.

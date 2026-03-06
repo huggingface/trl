@@ -97,7 +97,7 @@ import argparse
 from datasets import Dataset
 from textarena_env import TextArenaAction, TextArenaEnv
 
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
 
 
 def parse_args() -> argparse.Namespace:
@@ -207,7 +207,7 @@ class WordleEnv:
         # The game returns cumulative feedback each turn (new text appended at the end), so
         # we store the previous full response and slice out only the newly appended part.
         self._last_full_feedback = result.observation.messages[0].content
-        self.reward = -1.0
+        self.reward = 0.0
         self.done = False
         return self._last_full_feedback
 
@@ -222,7 +222,7 @@ class WordleEnv:
             The feedback message from the environment.
         """
         if self.done:
-            self.reward = -1.0  # Penalize guesses after game is done
+            self.reward = 0.0  # Penalize guesses after game is done
             raise ValueError("Game over.")
         result = self.client.step(TextArenaAction(message=guess))
         _full_feedback = result.observation.messages[0].content
@@ -232,7 +232,7 @@ class WordleEnv:
         # For some reason, the environment doesn't penalize invalid moves and just returns the last reward.
         # We check the feedback for the invalid move message and penalize it if found.
         if "You attempted an invalid move" in feedback:
-            self.reward = -1.0  # Penalize invalid moves
+            self.reward = 0.0  # Penalize invalid moves
         else:
             self.reward = result.reward
         self.done = result.done
@@ -269,6 +269,7 @@ def main() -> None:
             max_completion_length=1024,
         ),
         environment_factory=WordleEnv,
+        callbacks=[RichProgressCallback()],
     )
     trainer.train()
 

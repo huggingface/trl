@@ -119,4 +119,4 @@ Subgrid 7 | Subgrid 8 | Subgrid 9
 
 ## YOUR GOAL
 
-Use the `place` tool to fill in empty cells one at a time. Solve the puzzle using logical deduction.
+Use ONLY the `place` tool to fill in empty cells one at a time. No explanation, no reasoning, just the `place`.

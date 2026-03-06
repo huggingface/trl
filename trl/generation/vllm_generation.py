@@ -679,6 +679,12 @@ class VLLMGeneration:
             }
             generation_kwargs.update(self.generation_kwargs)
 
+            # When tools are provided, stop generation after the first tool call so the tool-calling
+            # loop can execute the tool and feed the result back before the next generation.
+            if tools and "stop" not in generation_kwargs:
+                generation_kwargs["stop"] = ["</tool_call>"]
+                generation_kwargs["include_stop_str_in_output"] = True
+
             if Version(vllm.__version__) <= Version("0.10.2"):
                 structured_outputs_key = "guided_decoding"
                 if self.structured_outputs_regex is not None:

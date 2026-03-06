@@ -94,7 +94,7 @@ from pathlib import Path
 
 from datasets import Dataset
 
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer, RichProgressCallback
 
 
 # Ensure src/ is on the path
@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B")
 
     # Environment
-    parser.add_argument("--env-host", type=str, default="https://openenv-sudoku.hf.space")
+    parser.add_argument("--env-host", type=str, default="https://sergiopaniego-sudoku.hf.space")
     parser.add_argument("--env-port", type=int, default=8001)
     parser.add_argument("--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space")
     parser.add_argument("--env-image", type=str, default="textarena-env:latest")
@@ -149,9 +149,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=64)
     parser.add_argument("--warmup-steps", type=int, default=20)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
-    parser.add_argument("--num-generations", type=int, default=2)
+    parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--num-epochs", type=int, default=1)
-    parser.add_argument("--max-completion-length", type=int, default=2048)
+    parser.add_argument("--max-completion-length", type=int, default=16384)
 
     # Checkpoints
     parser.add_argument("--save-interval", type=int, default=10)
@@ -170,10 +170,15 @@ def parse_args() -> argparse.Namespace:
         help="Enable gradient checkpointing to save memory",
     )
 
+    # LoRA / PEFT
+    parser.add_argument("--use-lora", action="store_true", default=False, help="Use LoRA for memory-efficient training")
+    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+
     # vLLM
     parser.add_argument("--vllm-mode", choices=("colocate", "server"), default="colocate")
     parser.add_argument("--vllm-server-url", type=str, default="http://localhost:8000")
-    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.2)
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.1)
 
     return parser.parse_args()
 
@@ -331,22 +336,27 @@ def extract_board_only(text: str) -> str:
 
 
 def extract_feedback(observation) -> dict:
-    """Extract feedback from environment observation."""
+    """Extract feedback from the last environment message (messages are cumulative)."""
     feedback = {"valid_move": True, "got_warning": False, "board_state": ""}
 
     if not observation or not observation.messages:
         return feedback
 
-    for message in observation.messages:
-        content = message.content.lower() if message.content else ""
+    # Only check the last message — TextArena accumulates all messages, so checking all
+    # would flag old "invalid" responses as current failures.
+    last_message = observation.messages[-1]
+    content = last_message.content.lower() if last_message.content else ""
 
-        if any(kw in content for kw in ["invalid", "error", "cannot", "already", "violation", "lost"]):
-            feedback["valid_move"] = False
-            if "please resubmit" in content or "avoid penalties" in content:
-                feedback["got_warning"] = True
+    if any(kw in content for kw in ["invalid", "error", "cannot", "already", "violation", "lost"]):
+        feedback["valid_move"] = False
+        if "please resubmit" in content or "avoid penalties" in content:
+            feedback["got_warning"] = True
 
+    # Search all messages for the latest board state
+    for message in reversed(observation.messages):
         if message.content and "|" in message.content and "R1" in message.content:
             feedback["board_state"] = message.content
+            break
 
     return feedback
 
@@ -452,16 +462,17 @@ def main() -> None:
             observation = result.observation
             self._done = result.done
 
-            for message in observation.messages:
-                if message.content and is_valid_board_state(message.content):
-                    self._last_board_state = message.content
-                    self._initial_filled = count_filled_cells(self._last_board_state)
-                    break
+            # Store full message content for diffing (messages are cumulative)
+            self._last_full_content = observation.messages[0].content if observation.messages else ""
+
+            if is_valid_board_state(self._last_full_content):
+                self._last_board_state = self._last_full_content
+                self._initial_filled = count_filled_cells(self._last_board_state)
             self._max_filled = self._initial_filled
 
             board = extract_board_only(self._last_board_state) if self._last_board_state else "No board available."
             hints = self._format_hints()
-            return f"Board:\n{board}{hints}"
+            return f"Step 0. Progress: 0 cells filled.\n\nBoard:\n{board}{hints}"
 
         def place(self, row: int, col: int, number: int) -> str:
             """Place a number on the Sudoku board.
@@ -475,7 +486,7 @@ def main() -> None:
                 The result of the move and updated board state.
             """
             if self._done:
-                raise ValueError("Game is over.")
+                return "Game is over. No more moves allowed."
 
             self._turn += 1
             move = f"[{row} {col} {number}]"
@@ -487,15 +498,29 @@ def main() -> None:
             correct_score = float(result.reward or 0.0)
             self._done = result.done
 
-            feedback = extract_feedback(observation)
+            # Only check the NEW content for feedback (messages are cumulative)
+            full_content = observation.messages[0].content if observation.messages else ""
+            new_content = full_content[len(self._last_full_content):]
+            self._last_full_content = full_content
 
-            # Empty cell score: did the model target an empty cell?
+            new_content_lower = new_content.lower()
+            env_says_invalid = any(
+                kw in new_content_lower for kw in ["invalid", "error", "cannot", "already", "violation", "lost"]
+            )
+            got_warning = "please resubmit" in new_content_lower or "avoid penalties" in new_content_lower
+
+            # Also verify against our own board state: placing on a non-empty cell is always invalid
             if self._last_board_state:
                 empty_cells = extract_empty_cells(self._last_board_state)
                 targets_empty = (row, col) in empty_cells
-                empty_cell_score = 1.0 if targets_empty else -1.0
             else:
-                empty_cell_score = 0.0
+                empty_cells = []
+                targets_empty = True  # Can't verify, assume valid
+
+            is_valid = not env_says_invalid and targets_empty
+
+            # Empty cell score: did the model target an empty cell?
+            empty_cell_score = 1.0 if targets_empty else -1.0
 
             # Repetition tracking
             is_new_move = self._move_counts[move] == 0
@@ -504,18 +529,18 @@ def main() -> None:
             repetition_score = -min(2 ** (repetition_count - 1), 10.0) if repetition_count > 0 else 0.0
 
             # Valid move score
-            if feedback["valid_move"] and is_new_move:
+            if is_valid and is_new_move:
                 valid_move_score = 1.0
                 self._successful_moves.append(move)
-            elif feedback["got_warning"]:
+            elif got_warning:
                 valid_move_score = -0.5
                 self._failed_moves.append(move)
             else:
                 valid_move_score = 0.0
 
-            # Update board state and track progress
-            if feedback["board_state"] and is_valid_board_state(feedback["board_state"]):
-                self._last_board_state = feedback["board_state"]
+            # Update board state from new content
+            if is_valid and is_valid_board_state(new_content):
+                self._last_board_state = new_content
                 current_filled = count_filled_cells(self._last_board_state)
                 if current_filled > self._max_filled:
                     self._max_filled = current_filled
@@ -531,16 +556,25 @@ def main() -> None:
 
             # Build response
             board = extract_board_only(self._last_board_state) if self._last_board_state else "No board available."
-            status = "valid" if feedback["valid_move"] else "invalid"
+            status = "valid" if is_valid else "invalid"
+            cells_filled = len(self._successful_moves)
+            progress = f"Step {self._turn}. Progress: {cells_filled} cells filled."
             hints = self._format_hints()
 
             if self._done:
-                return f"Move {move}: {status}. Game over.\n\nFinal board:\n{board}"
-            return f"Move {move}: {status}\n\nBoard:\n{board}{hints}"
+                return f"Move {move}: {status}. Game over.\n{progress}\n\nFinal board:\n{board}"
+            return f"Move {move}: {status}\n{progress}\n\nBoard:\n{board}{hints}"
 
         def _format_hints(self) -> str:
+            parts = []
+
+            # Already tried moves (avoid repetitions)
+            all_tried = self._successful_moves + self._failed_moves
+            if all_tried:
+                parts.append(f"\nMOVES ALREADY TRIED (do not repeat): {', '.join(all_tried)}")
+
             if not self._last_board_state:
-                return ""
+                return "\n".join(parts)
 
             if self._difficulty == "easy":
                 cells = extract_empty_cells_with_candidates(self._last_board_state, sort_by_difficulty=True)
@@ -553,12 +587,10 @@ def main() -> None:
                         elif len(candidates) <= 3:
                             nums = ",".join(str(n) for n in sorted(candidates))
                             other.append(f"({r},{c})->{nums}")
-                    hints = ""
                     if guaranteed:
-                        hints += f"\nGuaranteed moves: {', '.join(guaranteed[:5])}"
+                        parts.append(f"\nGUARANTEED MOVES: {', '.join(guaranteed[:5])}")
                     if other:
-                        hints += f"\nOther options: {' | '.join(other[:5])}"
-                    return hints
+                        parts.append(f"Other options: {' | '.join(other[:5])}")
 
             elif self._difficulty == "medium":
                 cells = extract_empty_cells_with_candidates(self._last_board_state, sort_by_difficulty=False)
@@ -567,9 +599,9 @@ def main() -> None:
                     for r, c, candidates in cells[:10]:
                         nums = ",".join(str(n) for n in sorted(candidates))
                         cell_hints.append(f"({r},{c})->{nums}")
-                    return f"\nEmpty cells: {' | '.join(cell_hints)}"
+                    parts.append(f"\nEmpty cells: {' | '.join(cell_hints)}")
 
-            return ""
+            return "\n".join(parts)
 
         # Reward properties — properties are not detected by inspect.ismethod,
         # so they won't be exposed as tools.
@@ -615,19 +647,27 @@ def main() -> None:
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         logging_steps=args.logging_steps,
-        save_strategy="steps",
+        save_strategy="no",
         save_steps=args.save_interval,
         save_total_limit=args.save_total_limit,
         temperature=args.temperature,
         top_k=args.top_k,
-        top_p=args.top_p,
         report_to="trackio",
+        log_completions=True,
+        num_completions_to_print=1,
+        chat_template_kwargs={"enable_thinking": False},
     )
 
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
     grpo_config.trackio_space_id = args.trackio_space_id
     grpo_config.gradient_checkpointing = args.gradient_checkpointing
+
+    peft_config = None
+    if args.use_lora:
+        from peft import LoraConfig
+
+        peft_config = LoraConfig(r=args.lora_r, lora_alpha=args.lora_alpha, task_type="CAUSAL_LM")
 
     trainer = GRPOTrainer(
         model=args.model_id,
@@ -638,9 +678,11 @@ def main() -> None:
             reward_progress,  # Reward filling more cells
             reward_correct,  # Solve the puzzle
         ],
+        peft_config=peft_config,
         train_dataset=dataset,
         args=grpo_config,
         environment_factory=SudokuEnv,
+        callbacks=[RichProgressCallback()],
     )
 
     print(f"Starting GRPO training: {args.num_generations} generations, {args.max_turns} max turns")

@@ -72,58 +72,62 @@ def parse_args():
     return parser.parse_args()
 
 
-args = parse_args()
-
-dataset = Dataset.from_dict(
-    {
-        "prompt": [
-            [{"role": "user", "content": "Try to echo 'Hello World!' in the environment."}],
-            [{"role": "user", "content": "Make the environment echo 'Goodbye World!'"}],
-            [{"role": "user", "content": "Can you ask the environment to echo 'TRL is great!'?"}],
-            [{"role": "user", "content": "What happens if you ask the environment to echo 'I love RLHF!'?"}],
-            [{"role": "user", "content": "Try to make the environment echo 'OpenEnv is awesome!'"}],
-        ],
-    }
-)
-
-
 def reward_func(completions, environments, **kwargs):
     return [environment.reward for environment in environments]
 
 
-class MyEchoEnv:
-    def __init__(self):
-        self.env = EchoEnv(base_url=args.env_host)
+def main():
+    args = parse_args()
 
-    def reset(self, **kwargs) -> None | str:
-        self.reward = None
-        return None
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [
+                [{"role": "user", "content": "Try to echo 'Hello World!' in the environment."}],
+                [{"role": "user", "content": "Make the environment echo 'Goodbye World!'"}],
+                [{"role": "user", "content": "Can you ask the environment to echo 'TRL is great!'?"}],
+                [{"role": "user", "content": "What happens if you ask the environment to echo 'I love RLHF!'?"}],
+                [{"role": "user", "content": "Try to make the environment echo 'OpenEnv is awesome!'"}],
+            ],
+        }
+    )
 
-    def step(self, message: str) -> str:
-        """
-        Echo the message back from the environment.
+    class EchoToolEnv:
+        def __init__(self):
+            self.env = EchoEnv(base_url=args.env_host)
+            self.reward = 0.0
 
-        Args:
-            message: The message to echo
+        def reset(self, **kwargs) -> None | str:
+            self.reward = 0.0
+            return None
 
-        Returns:
-            The echoed message.
-        """
-        observation = self.env.step(EchoAction(message=message))
-        self.reward = observation.observation.reward
-        return observation.observation.echoed_message
+        def echo(self, message: str) -> str:
+            """
+            Echo the message back from the environment.
+
+            Args:
+                message: The message to echo
+
+            Returns:
+                The echoed message.
+            """
+            observation = self.env.step(EchoAction(message=message))
+            self.reward = observation.observation.reward
+            return observation.observation.echoed_message
+
+    trainer = GRPOTrainer(
+        model=args.model,
+        train_dataset=dataset,
+        reward_funcs=reward_func,
+        args=GRPOConfig(
+            chat_template_kwargs={"enable_thinking": False},
+            log_completions=True,
+            logging_steps=2,
+            num_completions_to_print=1,
+        ),
+        environment_factory=EchoToolEnv,
+    )
+    trainer.train()
 
 
-trainer = GRPOTrainer(
-    model=args.model,
-    train_dataset=dataset,
-    reward_funcs=reward_func,
-    args=GRPOConfig(
-        chat_template_kwargs={"enable_thinking": False},
-        log_completions=True,
-        logging_steps=2,
-        num_completions_to_print=1,
-    ),
-    environment_factory=MyEchoEnv,
-)
-trainer.train()
+if __name__ == "__main__":
+    main()

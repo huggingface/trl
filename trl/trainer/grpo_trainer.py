@@ -1509,10 +1509,20 @@ class GRPOTrainer(_BaseTrainer):
                 if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
                     completions[idx_with_tool].append(post_tool_completions[idx])
 
-            # Check for further tool calls
+            # Check for further tool calls, but skip environments that are done
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
-            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
-            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+            filtered_idxs = []
+            filtered_tool_calls = []
+            for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True):
+                if not tool_call:
+                    continue
+                # If the environment has a _done attribute and it's True, stop calling tools for it
+                if hasattr(self.environments[idx], "_done") and self.environments[idx]._done:
+                    continue
+                filtered_idxs.append(idx)
+                filtered_tool_calls.append(tool_call)
+            idxs_with_tool = filtered_idxs
+            tool_calls = filtered_tool_calls
             iteration_num += 1
 
         # Ensure tool_mask, logprobs, and completion_ids have the same length per sequence.
