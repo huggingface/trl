@@ -24,60 +24,6 @@ from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 
-import torch
-import torch.distributed.distributed_c10d as c10d
-from packaging.version import Version
-from transformers import is_torch_xpu_available, is_vision_available
-
-from trl import TrlParser
-from trl.generation.vllm_generation import extract_logprobs
-from trl.import_utils import (
-    is_fastapi_available,
-    is_pydantic_available,
-    is_uvicorn_available,
-    is_vllm_ascend_available,
-    is_vllm_available,
-)
-
-
-if is_fastapi_available():
-    from fastapi import FastAPI
-
-
-if is_pydantic_available():
-    from pydantic import BaseModel
-
-
-if is_uvicorn_available():
-    import uvicorn
-
-
-if is_vision_available():
-    from PIL import Image
-
-
-if is_vllm_available():
-    import vllm
-    from vllm import LLM, SamplingParams
-    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-    from vllm.distributed.parallel_state import get_world_group
-    from vllm.distributed.utils import StatelessProcessGroup
-
-    if Version(vllm.__version__) <= Version("0.11.0"):
-        from vllm.utils import get_open_port
-    else:
-        from vllm.utils.network_utils import get_open_port
-
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
-
-    if is_vllm_ascend_available():
-        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
-
-
-logger = logging.getLogger(__name__)
 
 # We use CUDA with multiprocessing, so we must use the 'spawn' start method. Otherwise, we will get the following
 # error: RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use
@@ -117,6 +63,18 @@ class WeightSyncWorkerExtension:
                 UUID of the device of client main process. Used to assert that devices are different from vllm workers
                 devices.
         """
+        import torch
+        import torch.distributed.distributed_c10d as c10d
+        from transformers import is_torch_xpu_available
+        from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+        from vllm.distributed.parallel_state import get_world_group
+        from vllm.distributed.utils import StatelessProcessGroup
+
+        from trl.import_utils import is_vllm_ascend_available
+
+        if is_vllm_ascend_available():
+            from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+
         if self.communicator is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
@@ -166,6 +124,9 @@ class WeightSyncWorkerExtension:
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
+        import torch
+        from transformers import is_torch_xpu_available
+
         if self.communicator is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
@@ -349,6 +310,8 @@ class ScriptArguments:
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
+    from vllm import LLM
+
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
@@ -419,6 +382,17 @@ def chunk_list(lst: list, n: int) -> list[list]:
 
 
 def main(script_args: ScriptArguments):
+    from packaging.version import Version
+    from transformers import is_vision_available
+
+    from trl.generation.vllm_generation import extract_logprobs
+    from trl.import_utils import (
+        is_fastapi_available,
+        is_pydantic_available,
+        is_uvicorn_available,
+        is_vllm_available,
+    )
+
     if not is_fastapi_available():
         raise ImportError(
             "FastAPI is required to run the vLLM serve script. Please install it using `pip install fastapi`."
@@ -436,6 +410,27 @@ def main(script_args: ScriptArguments):
 
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
+
+    import uvicorn
+    import vllm
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    from vllm import SamplingParams
+
+    if Version(vllm.__version__) <= Version("0.11.0"):
+        from vllm.utils import get_open_port
+    else:
+        from vllm.utils.network_utils import get_open_port
+
+    if Version(vllm.__version__) <= Version("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
+
+    if is_vision_available():
+        from PIL import Image
+
+    logger = logging.getLogger(__name__)
 
     # Spawn dp workers, and setup pipes for communication
     master_port = get_open_port()
@@ -496,7 +491,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str] | list[list[int]]
-        images: list[str] | None = None
+        images: list[list[str] | None] | None = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -524,8 +519,8 @@ def main(script_args: ScriptArguments):
             request (`GenerateRequest`):
                 - `prompts` (list of `str` or list of list of `int`): A list of prompts. It accepts either text strings
                   or pre-tokenized token ID lists. When text strings are provided, `images` can optionally be included.
-                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
-                  along with prompts.
+                - `images` (list of list of `str` or `None`, *optional*): A list of image lists. Each element is a list
+                  of base64-encoded images for the corresponding prompt, or `None` if no images for that prompt.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
                   generation.
@@ -583,10 +578,11 @@ def main(script_args: ScriptArguments):
         request.images = request.images or [None] * len(request.prompts)
 
         prompts = []
-        for prompt, image in zip(request.prompts, request.images, strict=True):
+        for prompt, image_list in zip(request.prompts, request.images, strict=True):
             row = {"prompt_token_ids": prompt} if is_token_ids else {"prompt": prompt}
-            if image is not None:
-                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+            if image_list is not None:
+                decoded_images = [Image.open(BytesIO(base64.b64decode(img))) for img in image_list]
+                row["multi_modal_data"] = {"image": decoded_images if len(decoded_images) > 1 else decoded_images[0]}
             prompts.append(row)
 
         generation_kwargs = {
@@ -926,11 +922,13 @@ def main(script_args: ScriptArguments):
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import TrlParser
+
     if subparsers is not None:
         parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:
-        parser = TrlParser(ScriptArguments)
+        parser = TrlParser(ScriptArguments, prog=prog)
     return parser
 
 

@@ -897,20 +897,75 @@ class TestVLLMClientServerVLM(TrlTestCase):
         from PIL import Image
 
         processor = AutoProcessor.from_pretrained(self.model_id)
-        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe this image."}]}]
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image = Image.new("RGB", (64, 64), color="red")
-        inputs = processor(text=[text], images=[image], return_tensors="pt")
-        prompt_token_ids = inputs["input_ids"][0].tolist()
-
-        outputs = self.client.generate([prompt_token_ids], images=[image], max_tokens=64)
+        image1 = Image.new("RGB", (64, 64), color="red")
+        image2 = Image.new("RGB", (64, 64), color="blue")
+        image3 = Image.new("RGB", (64, 64), color="green")
+        messages = [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image1},
+                        {"type": "image", "image": image2},
+                        {"type": "text", "text": "What are the differences between these two images?"},
+                    ],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image3},
+                        {"type": "text", "text": "What is the color of this image?"},
+                    ],
+                }
+            ],
+        ]
+        prompt_token_ids = processor.apply_chat_template(
+            conversation=messages, tokenize=True, add_generation_prompt=True
+        )
+        outputs = self.client.generate(prompt_token_ids, images=[[image1, image2], [image3]], max_tokens=64)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 
-        assert len(prompt_ids) == 1
-        assert len(completion_ids) == 1
+        assert len(prompt_ids) == 2
+        assert len(completion_ids) == 2
         assert all(isinstance(tok, int) for tok in prompt_ids[0])
         assert all(isinstance(tok, int) for tok in completion_ids[0])
+
+    def test_generate_with_token_ids_mixed_images(self):
+        """Test a batch where one prompt has an image and the other does not."""
+        from PIL import Image
+
+        processor = AutoProcessor.from_pretrained(self.model_id)
+        image = Image.new("RGB", (64, 64), color="red")
+        messages = [
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": image}, {"type": "text", "text": "Describe this image."}],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "What is 1+1?"}],
+                }
+            ],
+        ]
+        prompt_token_ids = processor.apply_chat_template(
+            conversation=messages, tokenize=True, add_generation_prompt=True
+        )
+        outputs = self.client.generate(prompt_token_ids, images=[[image], None], max_tokens=64)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        assert len(prompt_ids) == 2
+        assert len(completion_ids) == 2
+        assert all(isinstance(tok, int) for tok in prompt_ids[0])
+        assert all(isinstance(tok, int) for tok in prompt_ids[1])
+        assert all(isinstance(tok, int) for tok in completion_ids[0])
+        assert all(isinstance(tok, int) for tok in completion_ids[1])
 
     @classmethod
     def teardown_class(cls):
