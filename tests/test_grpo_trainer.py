@@ -162,17 +162,32 @@ class TestGetHighEntropyMask(TrlTestCase):
 class TestGRPORolloutDispatch:
     def _make_trainer(self):
         trainer = object.__new__(GRPOTrainer)
-        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+        trainer.accelerator = SimpleNamespace(
+            device=torch.device("cpu"),
+            is_main_process=True,
+            gather=lambda t: t,
+        )
         trainer.args = SimpleNamespace(report_to=[])
         trainer.model = SimpleNamespace(training=True)
-        trainer.state = SimpleNamespace(global_step=2)
+        trainer.state = SimpleNamespace(global_step=2, num_input_tokens_seen=0)
         trainer._last_loaded_step = 1
         trainer.use_vllm = False
         trainer.use_transformers_paged = False
         trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock())
+        trainer.processing_class = SimpleNamespace(
+            batch_decode=MagicMock(return_value=["decoded"]),
+        )
+        trainer.tools = None
+        trainer.eos_token_id = 2
+        trainer.pad_token_id = 0
+        trainer._metrics = {"train": {"num_tokens": [], **{k: [] for k in [
+            "completions/mean_length", "completions/min_length", "completions/max_length",
+            "completions/clipped_ratio", "completions/mean_terminated_length",
+            "completions/min_terminated_length", "completions/max_terminated_length",
+        ]}}}
         return trainer
 
-    def test_generate_single_turn_prefers_rollout_func(self):
+    def test_generate_prefers_rollout_func(self):
         trainer = self._make_trainer()
         trainer.rollout_func = MagicMock(
             return_value={
@@ -183,33 +198,32 @@ class TestGRPORolloutDispatch:
             }
         )
 
-        prompt_ids, completion_ids, logprobs, extra_fields = trainer._generate_single_turn(["prompt"])
+        result = trainer._generate(["prompt"])
 
-        assert prompt_ids == [[1]]
-        assert completion_ids == [[2]]
-        assert logprobs == [[-0.1]]
-        assert extra_fields == {"env_mask": [[1]]}
+        assert result[0] == [[1]]  # prompt_ids
+        assert result[1] == [[2]]  # completion_ids
+        assert result[2] == [[1]]  # tool_mask (from env_mask)
         trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
 
-    def test_generate_single_turn_rollout_func_syncs_vllm_weights_when_needed(self):
+    def test_generate_rollout_func_syncs_vllm_weights_when_needed(self):
         trainer = self._make_trainer()
         trainer.use_vllm = True
         trainer.rollout_func = MagicMock(
             return_value={"prompt_ids": [[1]], "completion_ids": [[2]], "logprobs": [[0.0]]}
         )
 
-        trainer._generate_single_turn(["prompt"])
+        trainer._generate(["prompt"])
 
         trainer.vllm_generation.sync_weights.assert_called_once()
         assert trainer._last_loaded_step == trainer.state.global_step
         trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
 
-    def test_generate_single_turn_rollout_func_raises_when_required_keys_are_missing(self):
+    def test_generate_rollout_func_raises_when_required_keys_are_missing(self):
         trainer = self._make_trainer()
         trainer.rollout_func = MagicMock(return_value={"prompt_ids": [[1]], "completion_ids": [[2]]})
 
         with pytest.raises(ValueError, match="rollout_func must return keys"):
-            trainer._generate_single_turn(["prompt"])
+            trainer._generate(["prompt"])
 
 
 class TestGRPOTrainer(TrlTestCase):
