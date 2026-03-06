@@ -1078,7 +1078,7 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_liger_kernel
     def test_compute_liger_loss_passes_vllm_is_ratio(self):
-        """Test that importance_sampling_ratio from inputs is passed to liger_grpo_loss as vllm_is_ratio."""
+        """Test that importance_sampling_ratio from inputs is passed to triton_grpo_loss as vllm_is_ratio."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -2717,13 +2717,12 @@ class TestGRPOTrainerSlow(TrlTestCase):
             eval_dataset=self.eval_dataset,
             processing_class=tokenizer,
         )
-        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
-
-        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
-        trainer.train()
+        with patch("trl.trainer.grpo_trainer.triton_grpo_loss", wraps=triton_grpo_loss) as mock_forward:
+            trainer.train()
+            assert mock_forward.call_count > 0, "triton_grpo_loss was never called"
 
         for n, param in previous_trainable_params.items():
             new_param = model.get_parameter(n)
