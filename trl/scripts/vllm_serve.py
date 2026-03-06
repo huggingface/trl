@@ -587,25 +587,67 @@ def main(script_args: ScriptArguments):
         n_prompts = len(request.prompts if request.prompts is not None else request.prompt_token_ids)
         images_per_prompt = request.images or [None] * n_prompts
 
+        # When prompt_token_ids are provided alongside images, decode them to
+        # text.  vLLM's multimodal preprocessor hangs when it receives raw
+        # token IDs + images (it goes through a dummy-text code path that is
+        # incompatible with Qwen3-VL).  Sending text lets vLLM use the
+        # text+images path which works correctly.
+        has_any_images = any(img is not None for img in images_per_prompt)
+        if request.prompt_token_ids is not None and has_any_images:
+            if not hasattr(generate, "_tokenizer"):
+                from transformers import AutoTokenizer
+                generate._tokenizer = AutoTokenizer.from_pretrained(
+                    script_args.model, trust_remote_code=script_args.trust_remote_code)
+            _tokenizer = generate._tokenizer
+
         prompts = []
         for i in range(n_prompts):
+            imgs = images_per_prompt[i]
+            has_images = imgs is not None
+
             if request.prompt_token_ids is not None:
-                row = {"prompt_token_ids": request.prompt_token_ids[i]}
+                if has_images:
+                    # Decode to text so vLLM uses the text+images code path.
+                    prompt_text = _tokenizer.decode(
+                        request.prompt_token_ids[i], skip_special_tokens=False)
+                    row = {"prompt": prompt_text}
+                    logger.info(
+                        "Prompt %d: decoded %d token IDs to text (%d chars) for multimodal path",
+                        i, len(request.prompt_token_ids[i]), len(prompt_text),
+                    )
+                else:
+                    row = {"prompt_token_ids": request.prompt_token_ids[i]}
+                    logger.info(
+                        "Prompt %d: %d token IDs (text-only)",
+                        i, len(request.prompt_token_ids[i]),
+                    )
             else:
                 row = {"prompt": request.prompts[i]}
 
-            imgs = images_per_prompt[i]
-            if imgs is not None:
+            if has_images:
                 # Normalise: a bare str is a single image; a list[str] is multiple images.
                 if isinstance(imgs, str):
                     imgs = [imgs]
                 pil_imgs = [Image.open(BytesIO(base64.b64decode(b))) for b in imgs]
                 row["multi_modal_data"] = {"image": pil_imgs[0] if len(pil_imgs) == 1 else pil_imgs}
+                n_imgs = len(pil_imgs)
+                sizes = [img.size for img in pil_imgs[:3]]
+                logger.info(
+                    "Prompt %d: %d image(s), sizes=%s",
+                    i, n_imgs, sizes,
+                )
 
             if request.mm_processor_kwargs:
                 row["mm_processor_kwargs"] = request.mm_processor_kwargs
 
             prompts.append(row)
+
+        logger.info(
+            "Dispatching %d prompt(s) to %d worker(s). "
+            "Sampling: temperature=%.2f, max_tokens=%d",
+            len(prompts), script_args.data_parallel_size,
+            request.temperature, request.max_tokens,
+        )
 
         generation_kwargs = {
             "n": request.n,
@@ -665,8 +707,10 @@ def main(script_args: ScriptArguments):
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
+        logger.info("Waiting for worker response(s)...")
         # Receive results
         all_outputs = [connection.recv() for connection in connections]
+        logger.info("Received %d worker response(s).", len(all_outputs))
 
         # Handle empty prompts (see above)
         all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts, strict=True) if prompts]
