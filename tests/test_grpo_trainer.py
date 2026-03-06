@@ -180,11 +180,23 @@ class TestGRPORolloutDispatch:
         trainer.tools = None
         trainer.eos_token_id = 2
         trainer.pad_token_id = 0
-        trainer._metrics = {"train": {"num_tokens": [], **{k: [] for k in [
-            "completions/mean_length", "completions/min_length", "completions/max_length",
-            "completions/clipped_ratio", "completions/mean_terminated_length",
-            "completions/min_terminated_length", "completions/max_terminated_length",
-        ]}}}
+        trainer._metrics = {
+            "train": {
+                "num_tokens": [],
+                **{
+                    k: []
+                    for k in [
+                        "completions/mean_length",
+                        "completions/min_length",
+                        "completions/max_length",
+                        "completions/clipped_ratio",
+                        "completions/mean_terminated_length",
+                        "completions/min_terminated_length",
+                        "completions/max_terminated_length",
+                    ]
+                },
+            }
+        }
         return trainer
 
     def test_generate_prefers_rollout_func(self):
