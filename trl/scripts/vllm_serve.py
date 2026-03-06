@@ -596,8 +596,10 @@ def main(script_args: ScriptArguments):
         if request.prompt_token_ids is not None and has_any_images:
             if not hasattr(generate, "_tokenizer"):
                 from transformers import AutoTokenizer
+
                 generate._tokenizer = AutoTokenizer.from_pretrained(
-                    script_args.model, trust_remote_code=script_args.trust_remote_code)
+                    script_args.model, trust_remote_code=script_args.trust_remote_code
+                )
             _tokenizer = generate._tokenizer
 
         prompts = []
@@ -608,18 +610,20 @@ def main(script_args: ScriptArguments):
             if request.prompt_token_ids is not None:
                 if has_images:
                     # Decode to text so vLLM uses the text+images code path.
-                    prompt_text = _tokenizer.decode(
-                        request.prompt_token_ids[i], skip_special_tokens=False)
+                    prompt_text = _tokenizer.decode(request.prompt_token_ids[i], skip_special_tokens=False)
                     row = {"prompt": prompt_text}
                     logger.info(
                         "Prompt %d: decoded %d token IDs to text (%d chars) for multimodal path",
-                        i, len(request.prompt_token_ids[i]), len(prompt_text),
+                        i,
+                        len(request.prompt_token_ids[i]),
+                        len(prompt_text),
                     )
                 else:
                     row = {"prompt_token_ids": request.prompt_token_ids[i]}
                     logger.info(
                         "Prompt %d: %d token IDs (text-only)",
-                        i, len(request.prompt_token_ids[i]),
+                        i,
+                        len(request.prompt_token_ids[i]),
                     )
             else:
                 row = {"prompt": request.prompts[i]}
@@ -634,7 +638,9 @@ def main(script_args: ScriptArguments):
                 sizes = [img.size for img in pil_imgs[:3]]
                 logger.info(
                     "Prompt %d: %d image(s), sizes=%s",
-                    i, n_imgs, sizes,
+                    i,
+                    n_imgs,
+                    sizes,
                 )
 
             if request.mm_processor_kwargs:
@@ -643,10 +649,11 @@ def main(script_args: ScriptArguments):
             prompts.append(row)
 
         logger.info(
-            "Dispatching %d prompt(s) to %d worker(s). "
-            "Sampling: temperature=%.2f, max_tokens=%d",
-            len(prompts), script_args.data_parallel_size,
-            request.temperature, request.max_tokens,
+            "Dispatching %d prompt(s) to %d worker(s). Sampling: temperature=%.2f, max_tokens=%d",
+            len(prompts),
+            script_args.data_parallel_size,
+            request.temperature,
+            request.max_tokens,
         )
 
         generation_kwargs = {
