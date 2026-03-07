@@ -349,7 +349,6 @@ class OnlineDPOTrainer(_BaseTrainer):
                     reward_func.eval()
 
         self.max_length = args.max_length
-        self.loss_type = args.loss_type
 
         self.stats = {
             "objective/kl": [],
@@ -1392,12 +1391,12 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         logits = pi_logratios - ref_logratios
 
-        if self.loss_type == "sigmoid":
+        if self.args.loss_type == "sigmoid":
             losses = -F.logsigmoid(self.beta * logits)
-        elif self.loss_type == "ipo":
+        elif self.args.loss_type == "ipo":
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
-            raise NotImplementedError(f"invalid loss type {self.loss_type}")
+            raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
         loss = losses.mean()
 
