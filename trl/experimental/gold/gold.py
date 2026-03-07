@@ -51,6 +51,7 @@ python trl/experimental/gold/gold.py \
 """
 
 import logging
+import os
 
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
@@ -78,6 +79,19 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
+    if training_args.student_model_revision is None:
+        training_args.student_model_revision = model_args.model_revision
+    elif (
+        model_args.model_revision is not None
+        and training_args.student_model_revision != model_args.model_revision
+    ):
+        raise ValueError(
+            "Conflicting revisions for student model: "
+            f"student_model_revision={training_args.student_model_revision!r} and "
+            f"model_revision={model_args.model_revision!r}. "
+            "Set only one revision, or set both to the same value."
+        )
+
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=training_args.student_model_revision,
@@ -93,7 +107,6 @@ if __name__ == "__main__":
     if training_args.teacher_tokenizer_name_or_path is None and training_args.use_uld_loss:
         training_args.teacher_tokenizer_name_or_path = training_args.teacher_model_name_or_path
     teacher_model_kwargs = dict(
-        revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=model_args.dtype,
@@ -101,13 +114,14 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
+    if training_args.teacher_model_init_kwargs is not None:
+        teacher_model_kwargs.update(training_args.teacher_model_init_kwargs)
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
-        padding_side="left",
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -120,7 +134,6 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    # Handle eval dataset - check if test split exists, fallback to validation or None
     eval_dataset = None
     if training_args.eval_strategy != "no":
         if script_args.dataset_test_split in dataset:
