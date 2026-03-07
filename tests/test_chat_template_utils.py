@@ -213,10 +213,44 @@ class TestIsChatTemplatePrefixPreserving:
         {%- endif %}""")
         assert is_chat_template_prefix_preserving(tokenizer) is False
 
+    def test_non_prefix_preserving_tool_call_analysis_dropped_when_future_final_exists(self):
+        # Tokenizers like GPT-OSS would drop the analysis part of an assistant message with tool calls if there is a
+        # future assistant message without tool calls, which makes the template non-prefix-preserving. E.g.,:
+        # '<|user|>What is 2+2?<|end|><|analysis|>Let me think about this...<|end|><|tool_call|><|end|><|tool|>4<|end|><|assistant|>'
+        # '<|user|>What is 2+2?<|end|><|tool_call|><|end|><|tool|>4<|end|><|assistant|>The answer is 4.<|end|>'
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification")
+        # docstyle-ignore
+        tokenizer.chat_template = textwrap.dedent(r"""
+        {%- for message in messages %}
+            {%- if message.role == "user" %}
+                {{- "<|user|>" + message.content + "<|end|>" }}
+            {%- elif message.role == "assistant" and message.tool_calls %}
+                {%- set future_final_message = namespace(found=false) %}
+                {%- for future_message in messages[loop.index:] %}
+                    {%- if future_message.role == "assistant" and not future_message.tool_calls %}
+                        {%- set future_final_message.found = true %}
+                    {%- endif %}
+                {%- endfor %}
+                {%- if message.content and not future_final_message.found %}
+                    {{- "<|analysis|>" + message.content + "<|end|>" }}
+                {%- endif %}
+                {{- "<|tool_call|><|end|>" }}
+            {%- elif message.role == "tool" %}
+                {{- "<|tool|>" + message.content + "<|end|>" }}
+            {%- elif message.role == "assistant" %}
+                {{- "<|final|>" + message.content + "<|end|>" }}
+            {%- endif %}
+        {%- endfor %}
+        {%- if add_generation_prompt %}
+            {{- "<|assistant|>" }}
+        {%- endif %}""")
+        assert is_chat_template_prefix_preserving(tokenizer) is False
+
 
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gpt-oss"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
@@ -229,6 +263,20 @@ class TestIsChatTemplatePrefixPreserving:
     ],
 )
 class TestGetTrainingChatTemplate:
+    @staticmethod
+    def _replace_end(text: str, old: str, new: str) -> str:
+        if text.endswith(old):
+            return text[: -len(old)] + new
+        return text
+
+    def _assert_equal(self, tokenizer_name: str, before: str, after: str) -> None:
+        # Same as `before == after` but with a special case for GPT-OSS.
+        # For GPT-OSS, the training template replaces the final <|return|> with <|end|> to ensure prefix preservation,
+        # so we expect a difference in the output.
+        if tokenizer_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+            before = self._replace_end(before, "<|return|>", "<|end|>")
+        assert before == after
+
     def test_new_chat_template_is_prefix_preserving(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         assert is_chat_template_prefix_preserving(tokenizer) is False
@@ -241,7 +289,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_single_user_with_generation_prompt(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -254,7 +302,7 @@ class TestGetTrainingChatTemplate:
             add_generation_prompt=True,
             chat_template=new_chat_template,
         )
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_single_user_and_final_assistant_plain_content(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -265,7 +313,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -280,7 +328,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_final_assistant_with_existing_think_tags(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -294,7 +342,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_assistant_with_tool_calls(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -309,7 +357,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_with_tools_with_and_without_system_message(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -334,7 +382,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_with_tools_with_system_message(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -359,7 +407,7 @@ class TestGetTrainingChatTemplate:
         before = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools)
         new_chat_template = get_training_chat_template(tokenizer)
         after = tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, chat_template=new_chat_template)
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
     def test_behavior_unchanged_generation_prompt_with_enable_thinking_false(self, tokenizer_name):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -375,7 +423,7 @@ class TestGetTrainingChatTemplate:
             enable_thinking=False,
             chat_template=new_chat_template,
         )
-        assert before == after
+        self._assert_equal(tokenizer_name, before, after)
 
 
 @pytest.mark.parametrize(
