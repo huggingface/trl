@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from transformers import TrainingArguments
 
@@ -190,13 +190,13 @@ class SFTConfig(_BaseConfig):
             "and reduce padding. Uses `max_length` to define sequence length."
         },
     )
-    packing_strategy: str = field(
+    packing_strategy: Literal["bfd", "bfd-split", "wrapped"] = field(
         default="bfd",
         metadata={
             "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
-            "`'bfd-requeue'` (best-fit decreasing, re-queues overflow tokens), or `'wrapped'` (aggressive, cuts "
+            "`'bfd-split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
             "mid-sequence).",
-            "choices": ["bfd", "bfd-requeue", "wrapped"],
+            "choices": ["bfd", "bfd-split", "wrapped"],
         },
     )
     padding_free: bool = field(
