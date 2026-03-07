@@ -1391,6 +1391,7 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         logits = pi_logratios - ref_logratios
 
+        self.loss_type = self.args.loss_type
         if self.args.loss_type == "sigmoid":
             losses = -F.logsigmoid(self.beta * logits)
         elif self.args.loss_type == "ipo":
