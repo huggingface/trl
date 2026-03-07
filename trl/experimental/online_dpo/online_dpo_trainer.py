@@ -349,6 +349,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     reward_func.eval()
 
         self.max_length = args.max_length
+        self.loss_type = self.args.loss_type
 
         self.stats = {
             "objective/kl": [],
@@ -1391,7 +1392,6 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         logits = pi_logratios - ref_logratios
 
-        self.loss_type = self.args.loss_type
         if self.args.loss_type == "sigmoid":
             losses = -F.logsigmoid(self.beta * logits)
         elif self.args.loss_type == "ipo":
