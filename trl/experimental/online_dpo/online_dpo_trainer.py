@@ -349,7 +349,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     reward_func.eval()
 
         self.max_length = args.max_length
-        self.loss_type = self.args.loss_type
+        self.loss_type = args.loss_type
 
         self.stats = {
             "objective/kl": [],
