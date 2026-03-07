@@ -1473,6 +1473,15 @@ class GRPOTrainer(_BaseTrainer):
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
+            images = [img for img, o in zip(images, overlong, strict=True)] if images is not None else None
+            multimodal_fields = (
+                {
+                    k: [v[idx] for idx, o in zip(range(len(overlong)), overlong, strict=True) if not o]
+                    for k, v in multimodal_fields.items()
+                }
+                if multimodal_fields
+                else None
+            )
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
