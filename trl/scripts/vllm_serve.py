@@ -590,6 +590,9 @@ def main(script_args: ScriptArguments):
         }
         generation_kwargs.update(request.generation_kwargs)
 
+        if Version(vllm.__version__) > Version("0.14.1"):
+            generation_kwargs.pop("truncate_prompt_tokens", None)
+
         # Structured outputs, if enabled
         if Version(vllm.__version__) <= Version("0.10.2"):
             structured_outputs_key = "guided_decoding"
@@ -757,6 +760,9 @@ def main(script_args: ScriptArguments):
             "logprobs": request.logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
+
+        if Version(vllm.__version__) > Version("0.14.1"):
+            generation_kwargs.pop("truncate_prompt_tokens", None)
 
         # Structured outputs, if enabled
         if Version(vllm.__version__) <= Version("0.10.2"):
