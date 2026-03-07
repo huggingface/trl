@@ -207,6 +207,31 @@ class TestVLLMClientServer(TrlTestCase):
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
         assert "Multiplies two integers." in decoded_prompt
 
+    def test_generate_with_token_ids(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        prompt_token_ids = tokenizer(prompts)["input_ids"]
+        outputs = self.client.generate(prompt_token_ids)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of prompts
+        assert len(prompt_ids) == len(prompts)
+        assert len(completion_ids) == len(prompts)
+
+        # Check that prompt_ids match the input token IDs
+        assert prompt_ids == prompt_token_ids
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
         completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
@@ -411,6 +436,31 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
         assert "Multiplies two integers." in decoded_prompt
 
+    def test_generate_with_token_ids(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        prompt_token_ids = tokenizer(prompts)["input_ids"]
+        outputs = self.client.generate(prompt_token_ids)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of prompts
+        assert len(prompt_ids) == len(prompts)
+        assert len(completion_ids) == len(prompts)
+
+        # Check that prompt_ids match the input token IDs
+        assert prompt_ids == prompt_token_ids
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
         completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
@@ -535,6 +585,31 @@ class TestVLLMClientServerTP(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
         assert "Multiplies two integers." in decoded_prompt
+
+    def test_generate_with_token_ids(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        prompt_token_ids = tokenizer(prompts)["input_ids"]
+        outputs = self.client.generate(prompt_token_ids)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of prompts
+        assert len(prompt_ids) == len(prompts)
+        assert len(completion_ids) == len(prompts)
+
+        # Check that prompt_ids match the input token IDs
+        assert prompt_ids == prompt_token_ids
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -664,6 +739,31 @@ class TestVLLMClientServerDP(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
         assert "Multiplies two integers." in decoded_prompt
+
+    def test_generate_with_token_ids(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        prompt_token_ids = tokenizer(prompts)["input_ids"]
+        outputs = self.client.generate(prompt_token_ids)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+
+        # Check that the outputs are lists
+        assert isinstance(prompt_ids, list)
+        assert isinstance(completion_ids, list)
+
+        # Check that the number of sequences are equal to the number of prompts
+        assert len(prompt_ids) == len(prompts)
+        assert len(completion_ids) == len(prompts)
+
+        # Check that prompt_ids match the input token IDs
+        assert prompt_ids == prompt_token_ids
+
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            assert all(isinstance(tok, int) for tok in seq)
+        for seq in completion_ids:
+            assert all(isinstance(tok, int) for tok in seq)
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
