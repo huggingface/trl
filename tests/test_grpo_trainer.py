@@ -167,8 +167,13 @@ class TestGRPORolloutDispatch:
         trainer.model = SimpleNamespace(training=True)
         trainer.state = SimpleNamespace(global_step=2)
         trainer._last_loaded_step = 1
+        trainer.num_generations = 4
+        trainer.num_generations_eval = 2
         trainer.use_vllm = False
         trainer.use_transformers_paged = False
+        trainer.processing_class = object()
+        trainer.generation_config = object()
+        trainer.generation_backend = SimpleNamespace(sync_weights=MagicMock(), generate=MagicMock())
         trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock())
         return trainer
 
@@ -200,7 +205,7 @@ class TestGRPORolloutDispatch:
 
         trainer._generate_single_turn(["prompt"])
 
-        trainer.vllm_generation.sync_weights.assert_called_once()
+        trainer.generation_backend.sync_weights.assert_called_once()
         assert trainer._last_loaded_step == trainer.state.global_step
         trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
 
@@ -210,6 +215,29 @@ class TestGRPORolloutDispatch:
 
         with pytest.raises(ValueError, match="rollout_func must return keys"):
             trainer._generate_single_turn(["prompt"])
+
+    def test_generate_single_turn_non_rollout_uses_generation_backend(self):
+        trainer = self._make_trainer()
+        trainer.rollout_func = None
+        trainer.generation_backend.generate.return_value = SimpleNamespace(
+            prompt_ids=[[1]],
+            completion_ids=[[2]],
+            logprobs=None,
+            extra_fields={},
+        )
+
+        prompt_ids, completion_ids, logprobs, extra_fields = trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.generate.assert_called_once_with(
+            prompts=["prompt"],
+            num_generations=trainer.num_generations,
+            processing_class=trainer.processing_class,
+            generation_config=trainer.generation_config,
+        )
+        assert prompt_ids == [[1]]
+        assert completion_ids == [[2]]
+        assert logprobs is None
+        assert extra_fields == {}
 
 
 class TestGRPOTrainer(TrlTestCase):
