@@ -20,7 +20,6 @@ import textwrap
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -35,7 +34,6 @@ from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -54,8 +52,9 @@ from transformers.utils import is_datasets_available, is_peft_available, is_rich
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
+from ..generation.backend import create_generation_backend
 from ..generation.vllm_generation import VLLMGeneration
-from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp
 from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
@@ -547,6 +546,8 @@ class RLOOTrainer(_BaseTrainer):
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
+        self.generation_backend = create_generation_backend(self)
+
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
@@ -885,103 +886,23 @@ class RLOOTrainer(_BaseTrainer):
         return rewards_per_func
 
     def _generate_single_turn(self, prompts: list):
-        device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
+        num_generations = self.num_generations if mode == "train" else self.num_generations_eval
 
-        # Generate completions using either vLLM or regular generation
-        if self.use_vllm:
-            # Sync weights if training step changed
-            if self.state.global_step != self._last_loaded_step:
-                with profiling_context(self, "sync_weights"):
-                    self.vllm_generation.sync_weights()
-                self._last_loaded_step = self.state.global_step
+        if self.use_vllm and self.state.global_step != self._last_loaded_step:
+            with profiling_context(self, "sync_weights"):
+                self.generation_backend.sync_weights()
+            self._last_loaded_step = self.state.global_step
 
-            # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
-            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, _, _, _ = self.vllm_generation.generate(
-                prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
-            )
+        generation_result = self.generation_backend.generate(
+            prompts=prompts,
+            num_generations=num_generations,
+            processing_class=self.processing_class,
+            generation_config=getattr(self, "generation_config", None),
+        )
 
-        elif self.use_transformers_paged:
-            if is_conversational({"prompt": prompts[0]}):
-                processor_outputs = self.processing_class.apply_chat_template(
-                    conversation=prompts,
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    return_dict=True,
-                    **self.chat_template_kwargs,
-                )
-            else:
-                processor_outputs = self.processing_class(text=prompts)
-
-            with (
-                profiling_context(self, "transformers.generate_batch"),
-                unwrap_model_for_generation(
-                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-                ) as unwrapped_model,
-                torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
-            ):
-                # Cast to the appropriate dtype based on training configuration
-                if self.args.bf16:
-                    unwrapped_model.to(torch.bfloat16)
-                elif self.args.fp16:
-                    unwrapped_model.to(torch.float16)
-                with torch.inference_mode():
-                    # Continuous batching API expects 'inputs' arg only
-                    all_outputs = unwrapped_model.generate_batch(
-                        processor_outputs["input_ids"], generation_config=self.generation_config, progress_bar=False
-                    )
-                    unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
-            completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = processor_outputs["input_ids"]
-
-        else:
-            # Regular generation path
-            if is_conversational({"prompt": prompts[0]}):
-                generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts,
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    padding=True,
-                    padding_side="left",
-                    return_tensors="pt",
-                    return_dict=True,
-                    **self.chat_template_kwargs,
-                )
-            else:
-                generate_inputs = self.processing_class(
-                    text=prompts, padding=True, padding_side="left", return_tensors="pt"
-                )
-            generate_inputs = super()._prepare_inputs(generate_inputs)
-
-            with (
-                profiling_context(self, "transformers.generate"),
-                unwrap_model_for_generation(
-                    self.model_wrapped,
-                    self.accelerator,
-                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-                    generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
-                ) as unwrapped_model,
-                torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
-            ):
-                prompt_completion_ids = unwrapped_model.generate(
-                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
-                )
-            # Compute prompt length and extract completion ids
-            prompt_ids, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
-            prompt_length = prompt_ids.size(1)
-            completion_ids = prompt_completion_ids[:, prompt_length:]
-
-            # Mask everything after the first EOS token
-            is_eos = completion_ids == self.eos_token_id
-            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
+        prompt_ids = generation_result.prompt_ids
+        completion_ids = generation_result.completion_ids
 
         return prompt_ids, completion_ids
 

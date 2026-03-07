@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -34,6 +35,72 @@ from .testing_utils import TrlTestCase, require_peft, require_vision, require_vl
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+
+class TestRLOOGenerationDispatch:
+    def _make_trainer(self):
+        trainer = object.__new__(RLOOTrainer)
+        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
+        trainer.args = SimpleNamespace(report_to=[])
+        trainer.model = SimpleNamespace(training=True)
+        trainer.state = SimpleNamespace(global_step=2)
+        trainer._last_loaded_step = 1
+        trainer.num_generations = 4
+        trainer.num_generations_eval = 2
+        trainer.use_vllm = False
+        trainer.processing_class = object()
+        trainer.generation_config = object()
+        trainer.generation_backend = SimpleNamespace(sync_weights=MagicMock(), generate=MagicMock())
+        return trainer
+
+    def test_generate_single_turn_uses_generation_backend(self):
+        trainer = self._make_trainer()
+        trainer.generation_backend.generate.return_value = SimpleNamespace(prompt_ids=[[1]], completion_ids=[[2]])
+
+        prompt_ids, completion_ids = trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.generate.assert_called_once_with(
+            prompts=["prompt"],
+            num_generations=trainer.num_generations,
+            processing_class=trainer.processing_class,
+            generation_config=trainer.generation_config,
+        )
+        assert prompt_ids == [[1]]
+        assert completion_ids == [[2]]
+
+    def test_generate_single_turn_uses_eval_num_generations(self):
+        trainer = self._make_trainer()
+        trainer.model.training = False
+        trainer.generation_backend.generate.return_value = SimpleNamespace(prompt_ids=[[1]], completion_ids=[[2]])
+
+        trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.generate.assert_called_once_with(
+            prompts=["prompt"],
+            num_generations=trainer.num_generations_eval,
+            processing_class=trainer.processing_class,
+            generation_config=trainer.generation_config,
+        )
+
+    def test_generate_single_turn_syncs_vllm_weights_on_step_change(self):
+        trainer = self._make_trainer()
+        trainer.use_vllm = True
+        trainer.generation_backend.generate.return_value = SimpleNamespace(prompt_ids=[[1]], completion_ids=[[2]])
+
+        trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.sync_weights.assert_called_once()
+        assert trainer._last_loaded_step == trainer.state.global_step
+
+    def test_generate_single_turn_skips_vllm_sync_when_step_unchanged(self):
+        trainer = self._make_trainer()
+        trainer.use_vllm = True
+        trainer._last_loaded_step = trainer.state.global_step
+        trainer.generation_backend.generate.return_value = SimpleNamespace(prompt_ids=[[1]], completion_ids=[[2]])
+
+        trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.sync_weights.assert_not_called()
 
 
 class TestRLOOTrainer(TrlTestCase):
