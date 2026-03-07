@@ -1396,7 +1396,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         elif self.args.loss_type == "ipo":
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
-            raise NotImplementedError(f"invalid loss type {self.loss_type}")
+            raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
         loss = losses.mean()
 
