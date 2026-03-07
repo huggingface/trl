@@ -1392,9 +1392,9 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         logits = pi_logratios - ref_logratios
 
-        if self.args.loss_type == "sigmoid":
+        if self.loss_type == "sigmoid":
             losses = -F.logsigmoid(self.beta * logits)
-        elif self.args.loss_type == "ipo":
+        elif self.loss_type == "ipo":
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise NotImplementedError(f"invalid loss type {self.loss_type}")
