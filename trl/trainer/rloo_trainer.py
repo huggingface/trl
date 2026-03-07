@@ -885,11 +885,8 @@ class RLOOTrainer(_BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _generate_single_turn(self, prompts: list):
-        device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
-
-        # Tokenize prompts once, shared across all generation backends
+    def _tokenize_prompts(self, prompts: list):
+        """Tokenize prompts and extract images/multimodal fields for generation."""
         if is_conversational({"prompt": prompts[0]}):
             # Extract images from messages for VLM support
             images = []
@@ -918,6 +915,13 @@ class RLOOTrainer(_BaseTrainer):
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None
+            multimodal_fields = {}
+        return prompt_ids, images, multimodal_fields
+
+    def _generate_single_turn(self, prompt_ids, images=None, multimodal_fields=None):
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+        if multimodal_fields is None:
             multimodal_fields = {}
 
         # Generate completions using either vLLM or regular generation
@@ -1007,7 +1011,8 @@ class RLOOTrainer(_BaseTrainer):
         # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        prompt_ids, completion_ids = self._generate_single_turn(prompts)
+        prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
+        prompt_ids, completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
