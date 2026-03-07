@@ -1360,12 +1360,14 @@ class GRPOTrainer(_BaseTrainer):
             dummy_messages,
             add_generation_prompt=False,
             chat_template=self.chat_template,
+            return_dict=False,
             **self.chat_template_kwargs,
         )
         full_ids = self.processing_class.apply_chat_template(
             dummy_messages + tool_messages,
             add_generation_prompt=True,
             chat_template=self.chat_template,
+            return_dict=False,
             **self.chat_template_kwargs,
         )
         if not full_ids[: len(prefix_ids)] == prefix_ids:
