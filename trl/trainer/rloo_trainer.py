@@ -918,8 +918,8 @@ class RLOOTrainer(_BaseTrainer):
             )
             # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
             prompt_ids = [
-                [tok for tok, m in zip(ids, mask) if m]
-                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"])
+                [tok for tok, m in zip(ids, mask, strict=True) if m]
+                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=False)
             ]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
