@@ -588,7 +588,11 @@ class VLLMGeneration:
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
             all_prompts = gather_object(prompts)
-            all_images = gather_object(images) if images is not None else None
+            # Always gather images (even when None) to avoid deadlock: images may be None on some ranks
+            # and non-None on others in mixed datasets, and gather_object is a collective operation.
+            all_images = gather_object(images if images is not None else [None] * len(prompts))
+            if all(img is None for img in all_images):
+                all_images = None
 
             if accelerator.is_main_process:
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and
@@ -688,11 +692,13 @@ class VLLMGeneration:
                 gathered_prompts = [None for _ in range(self.tensor_parallel_size)]
                 torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
                 all_prompts = [p for sublist in gathered_prompts for p in sublist]
-                if images is not None:
-                    gathered_images = [None for _ in range(self.tensor_parallel_size)]
-                    torch.distributed.all_gather_object(gathered_images, images, group=self.tp_group)
-                    all_images = [img for sublist in gathered_images for img in sublist]
-                else:
+                # Always gather images (even when None) to avoid deadlock: images may be None on some
+                # ranks and non-None on others in mixed datasets, and all_gather_object is collective.
+                local_images = images if images is not None else [None] * len(prompts)
+                gathered_images = [None for _ in range(self.tensor_parallel_size)]
+                torch.distributed.all_gather_object(gathered_images, local_images, group=self.tp_group)
+                all_images = [img for sublist in gathered_images for img in sublist]
+                if all(img is None for img in all_images):
                     all_images = None
             else:
                 all_prompts = prompts
