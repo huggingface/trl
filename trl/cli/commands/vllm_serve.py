@@ -30,7 +30,7 @@ class VllmServeCommand(Command):
         from ...scripts.vllm_serve import main as vllm_serve_main
         from ...scripts.vllm_serve import make_parser as make_vllm_serve_parser
 
-        parser = make_vllm_serve_parser()
+        parser = make_vllm_serve_parser(prog="trl vllm-serve")
         (script_args,) = parser.parse_args_and_config(args=context.argv_after(self.name))
         vllm_serve_main(script_args)
         return 0
