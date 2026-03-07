@@ -1473,21 +1473,20 @@ class GRPOTrainer(_BaseTrainer):
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
-            images = [img for img, o in zip(images, overlong, strict=True)] if images is not None else None
-            multimodal_fields = (
-                {
-                    k: [v[idx] for idx, o in zip(range(len(overlong)), overlong, strict=True) if not o]
-                    for k, v in multimodal_fields.items()
-                }
-                if multimodal_fields
-                else None
-            )
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
+            # Filter images and multimodal fields to match the current subset (index into full batch)
+            loop_images = [images[i] for i in idxs_with_tool] if images else None
+            loop_multimodal_fields = (
+                {k: [v[i] for i in idxs_with_tool] for k, v in multimodal_fields.items()}
+                if multimodal_fields
+                else None
+            )
+
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
-                prompt_completion_tool_ids, images, multimodal_fields
+                prompt_completion_tool_ids, loop_images, loop_multimodal_fields
             )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
