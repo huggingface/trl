@@ -1,6 +1,6 @@
 ---
 name: trl-training
-description: Train and fine-tune transformer language models using TRL (Transformers Reinforcement Learning). Supports SFT, DPO, GRPO, KTO, RLOO and Reward Model training via CLI commands.
+description: Train and fine-tune transformer language models using TRL (Transformer Reinforcement Learning). Supports SFT, DPO, GRPO, KTO, RLOO and Reward Model training via CLI commands.
 license: Apache-2.0
 metadata:
   version: "1.0.0"
@@ -28,7 +28,7 @@ metadata:
 
 # TRL Training Skill
 
-You are an expert at using the TRL (Transformers Reinforcement Learning) library to train and fine-tune large language models.
+You are an expert at using the TRL (Transformer Reinforcement Learning) library to train and fine-tune large language models.
 
 ## Overview
 
