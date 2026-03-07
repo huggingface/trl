@@ -1871,8 +1871,9 @@ class GRPOTrainer(_BaseTrainer):
             rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             mean_grouped_rewards = rewards.view(-1, num_generations).mean(dim=1)
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
-            if self.scale_rewards in ["group", "none"]:
-                # If self.scale_rewards = "none", we'll only use std_rewards to check for zero std for logging
+            if self.scale_rewards in ["group", "none", "mean"]:
+                # For "none" and "mean", std_rewards is not used for advantage scaling but is computed
+                # for observability (is_std_zero logging).
                 if num_generations > 1:
                     std_rewards = rewards.view(-1, num_generations).std(dim=1)
                     std_rewards = std_rewards.repeat_interleave(num_generations, dim=0)
@@ -1886,11 +1887,13 @@ class GRPOTrainer(_BaseTrainer):
                     std_rewards = torch.zeros_like(rewards)
             else:
                 raise ValueError(
-                    f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+                    f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', 'mean', or 'none'."
                 )
 
             advantages = rewards - mean_grouped_rewards
-            if self.scale_rewards != "none":
+            if self.scale_rewards == "mean":
+                advantages = advantages / (mean_grouped_rewards + 1e-4)
+            elif self.scale_rewards != "none":
                 advantages = advantages / (std_rewards + 1e-4)
             is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
