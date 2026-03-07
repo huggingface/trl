@@ -1303,7 +1303,15 @@ class GRPOTrainer(_BaseTrainer):
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
             for k, v in multimodal_fields.items():
-                generate_inputs[k] = torch.tensor(np.array(v)) if not isinstance(v, torch.Tensor) else v
+                if isinstance(v, torch.Tensor):
+                    generate_inputs[k] = v
+                elif isinstance(v, list) and v and isinstance(v[0], list):
+                    # Per-token field (e.g., token_type_ids): left-pad like input_ids
+                    generate_inputs[k] = pad(
+                        [torch.tensor(x) for x in v], padding_value=0, padding_side="left"
+                    )
+                else:
+                    generate_inputs[k] = torch.tensor(np.array(v))
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
