@@ -90,3 +90,7 @@ def method(self, param1: str, param2: int = 1, param3: float | None = None):
     ```
     """
 ````
+
+### Links to papers
+
+When linking to papers, use `https://huggingface.co/papers/<id>` instead of `https://arxiv.org/abs/<id>` (same ID suffix system).
