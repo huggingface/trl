@@ -1348,6 +1348,26 @@ class GRPOTrainer(_BaseTrainer):
 
         return prompt_ids, completion_ids, logprobs, extra_fields
 
+    def _get_tool_suffix_ids(self, tool_messages):
+        """
+        Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
+        prefix_ids = self.processing_class.apply_chat_template(
+            dummy_messages,
+            add_generation_prompt=False,
+            chat_template=self.chat_template,
+            **self.chat_template_kwargs,
+        )
+        full_ids = self.processing_class.apply_chat_template(
+            dummy_messages + tool_messages,
+            add_generation_prompt=True,
+            chat_template=self.chat_template,
+            **self.chat_template_kwargs,
+        )
+        if not full_ids[: len(prefix_ids)] == prefix_ids:
+            raise ValueError("Unexpected tokenization: the prefix IDs are not a prefix of the full IDs.")
+        return full_ids[len(prefix_ids) :]
+
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
@@ -1415,17 +1435,22 @@ class GRPOTrainer(_BaseTrainer):
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
 
-            # Tokenize and filter samples whose length exceeds max allowed length. This is important, because both
+            # Build token IDs by concatenation: prompt + completion + tool_suffix.
+            pct_ids = []
+            for idx in range(len(idxs_with_tool)):
+                idx_with_tool = idxs_with_tool[idx]
+                # Extract trailing tool messages from completions
+                tool_messages = []
+                for message in reversed(completions[idx_with_tool]):
+                    if message["role"] == "tool":
+                        tool_messages.insert(0, message)
+                    else:
+                        break
+                suffix_ids = self._get_tool_suffix_ids(tool_messages)
+                pct_ids.append(prompt_ids[idx_with_tool] + completion_ids[idx_with_tool] + suffix_ids)
+
+            # Filter samples whose length exceeds max allowed length. This is important, because both
             # vLLM and transformers will error out if the input is longer than the model's max length.
-            pct_ids = self.processing_class.apply_chat_template(
-                prompt_completion_tools,
-                tools=self.tools,
-                chat_template=self.chat_template,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=False,
-                **self.chat_template_kwargs,
-            )
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
@@ -1447,24 +1472,12 @@ class GRPOTrainer(_BaseTrainer):
             # Keep only non-overlong items for further processing
             idxs_with_tool = [idx for idx, o in zip(idxs_with_tool, overlong, strict=True) if not o]
             prompt_completion_tools = [pct for pct, o in zip(prompt_completion_tools, overlong, strict=True) if not o]
+            pct_ids = [pct for pct, o in zip(pct_ids, overlong, strict=True) if not o]
             if not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
             # Generate new completions after tool execution
-            pct_prompt_ids, pct_images, pct_multimodal_fields = self._tokenize_prompts(prompt_completion_tools)
-            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _ = self._generate_single_turn(
-                pct_prompt_ids, pct_images, pct_multimodal_fields
-            )
-
-            # Sanity check: from experience, this is useful to catch bugs in the chat template
-            for idx in range(len(idxs_with_tool)):
-                idx_with_tool = idxs_with_tool[idx]
-                pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
-                if prompt_ids[idx_with_tool] != pct[: len(prompt_ids[idx_with_tool])]:
-                    raise ValueError(
-                        "The chat template is not prefix-preserving. Please update it to use a prefix-preserving "
-                        "format."
-                    )
+            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _ = self._generate_single_turn(pct_ids)
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for idx in range(len(idxs_with_tool)):
