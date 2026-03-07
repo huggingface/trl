@@ -1233,6 +1233,9 @@ class GRPOTrainer(_BaseTrainer):
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
 
+            # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
+            # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
+            # See: https://github.com/huggingface/transformers/issues/44514
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 tools=self.tools,
@@ -1240,9 +1243,14 @@ class GRPOTrainer(_BaseTrainer):
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
+                padding=True,
                 **self.chat_template_kwargs,
             )
-            prompt_ids = tokenized["input_ids"]
+            # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+            prompt_ids = [
+                [tok for tok, m in zip(ids, mask) if m]
+                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"])
+            ]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
