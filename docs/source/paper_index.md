@@ -1566,12 +1566,16 @@ Self-Distillation Policy Optimization (SDPO) enhances reinforcement learning wit
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
 training_args = SDPOConfig(
-    distillation_alpha=0.5,          # Jensen-Shannon divergence (recommended)
-    distillation_topk=100,           # Top-K distillation
-    distillation_is_clip=2.0,        # Importance sampling clipping
-    distillation_weight=1.0,         # Weight for self-distillation loss
-    use_successful_as_teacher=True,  # Use successful rollouts as teacher
-    ema_update_rate=0.05,            # Teacher EMA update rate
+    distillation_alpha=0.5,                # Jensen-Shannon divergence (recommended)
+    distillation_topk=100,                 # Top-K logit distillation approximation
+    full_logit_distillation=True,          # Required for top-K logit-level SDPO
+    distillation_is_clip=2.0,              # Importance sampling clipping
+    distillation_weight=1.0,               # Weight for self-distillation loss
+    sdpo_policy_loss_mode="distillation_only",
+    use_successful_as_teacher=True,        # Use successful rollouts as teacher
+    teacher_regularization="ema",          # Supported: "ema", "none"
+    teacher_update_rate=0.05,              # EMA update rate
+    include_environment_feedback=False,    # Use dataset privileged_context when available
 )
 
 trainer = SDPOTrainer(
@@ -1583,7 +1587,54 @@ trainer = SDPOTrainer(
 trainer.train()
 ```
 
+Expected dataset columns:
+
+- `prompt`
+- `privileged_context` for optional environment feedback
+
 For more details, see the [SDPO Trainer documentation](sdpo_trainer).
+
+### Self-Training with On-Policy Self-Distillation for Language Model Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2601.19897
+
+Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. In TRL, SDFT uses a shared self-distillation core with SDPO while keeping its own explicit `ref_model` teacher and dataset-provided privileged context.
+
+```python
+from datasets import Dataset
+
+from trl.experimental.sdft import SDFTConfig, SDFTTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": ["Solve 2+2."],
+        "privileged_context": ["Solve 2+2. Example answer: 4."],
+    }
+)
+
+training_args = SDFTConfig(
+    distillation_alpha=0.5,
+    distillation_topk=5,
+    generate_from_teacher=False,
+    num_loss_tokens_to_skip=0,
+    max_completion_length=64,
+)
+
+trainer = SDFTTrainer(
+    model="Qwen/Qwen2.5-1.5B-Instruct",
+    ref_model="Qwen/Qwen2.5-1.5B-Instruct",
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+Expected dataset columns:
+
+- `prompt`
+- `privileged_context`
+
+For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
 ## Distributed Training
 
