@@ -1798,7 +1798,7 @@ class GRPOTrainer(_BaseTrainer):
                 else:
                     logps_diff = per_token_logps_diff
 
-                vllm_importance_sampling_ratio = torch.exp(logps_diff)
+                raw_vllm_importance_sampling_ratio = torch.exp(logps_diff)
 
                 # vllm_importance_sampling_ratio.shape:
                 #   token_* modes:     (B, T)  (per-token ratio)
@@ -1806,11 +1806,11 @@ class GRPOTrainer(_BaseTrainer):
 
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                        raw_vllm_importance_sampling_ratio, max=self.vllm_importance_sampling_cap
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
-                    vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
-                        vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
+                    vllm_importance_sampling_ratio = raw_vllm_importance_sampling_ratio.masked_fill(
+                        raw_vllm_importance_sampling_ratio > self.vllm_importance_sampling_cap, value=0.0
                     )
                 else:
                     raise ValueError(
@@ -1954,9 +1954,12 @@ class GRPOTrainer(_BaseTrainer):
             )
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
+                raw_flat_is_ratio = raw_vllm_importance_sampling_ratio.flatten()
             else:
                 flat_is_ratio = vllm_importance_sampling_ratio[mask]
+                raw_flat_is_ratio = raw_vllm_importance_sampling_ratio[mask]
 
+            # Stats related to importance sampling ratio after masking/truncation
             min_importance_sampling_ratio = (
                 torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
             )
@@ -1974,6 +1977,29 @@ class GRPOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
                 nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
+            )
+
+            # Stats related to importance sampling ratio before masking/truncation
+            min_raw_importance_sampling_ratio = (
+                torch.min(raw_flat_is_ratio) if raw_flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            mean_raw_importance_sampling_ratio = (
+                torch.mean(raw_flat_is_ratio) if raw_flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            max_raw_importance_sampling_ratio = (
+                torch.max(raw_flat_is_ratio) if raw_flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            self._metrics[mode]["sampling/raw_importance_sampling_ratio/min"].append(
+                nanmin(self.accelerator.gather(min_raw_importance_sampling_ratio)).item()
+            )
+            self._metrics[mode]["sampling/raw_importance_sampling_ratio/mean"].append(
+                self.accelerator.gather(mean_raw_importance_sampling_ratio).nanmean().item()
+            )
+            self._metrics[mode]["sampling/raw_importance_sampling_ratio/max"].append(
+                nanmax(self.accelerator.gather(max_raw_importance_sampling_ratio)).item()
+            )
+            self._metrics[mode]["sampling/frac_modified_importance_sampling_ratio"].append(
+                self.accelerator.gather(torch.ne(flat_is_ratio, raw_flat_is_ratio).float().mean()).item()
             )
 
         output = {
