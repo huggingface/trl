@@ -1,0 +1,226 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from transformers import TrainingArguments
+
+from ...trainer.base_config import _BaseConfig
+
+
+@dataclass
+class SelfDistillationConfig(_BaseConfig):
+    r"""Shared configuration for experimental self-distillation trainers."""
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    model_init_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
+    )
+    disable_dropout: bool = field(
+        default=False,
+        metadata={"help": "Whether to disable dropout in the student model."},
+    )
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={"help": "Whether to drop dataset columns unused by the trainer."},
+    )
+    max_prompt_length: int | None = field(
+        default=512,
+        metadata={"help": "Maximum prompt length. Longer prompts are truncated from the left."},
+    )
+    num_generations: int = field(
+        default=8,
+        metadata={"help": "Number of sampled generations per prompt."},
+    )
+    num_generations_eval: int | None = field(
+        default=None,
+        metadata={"help": "Number of sampled generations per prompt during evaluation."},
+    )
+    max_completion_length: int | None = field(
+        default=256,
+        metadata={"help": "Maximum generated completion length."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={"help": "Whether to gather ZeRO-3 weights for generation."},
+    )
+    shuffle_dataset: bool = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    generation_batch_size: int | None = field(
+        default=None,
+        metadata={"help": "Global batch size used for generation. Mutually exclusive with `steps_per_generation`."},
+    )
+    steps_per_generation: int | None = field(
+        default=None,
+        metadata={"help": "Number of optimizer steps that reuse one generated batch."},
+    )
+    temperature: float = field(
+        default=1.0,
+        metadata={"help": "Sampling temperature."},
+    )
+    top_p: float = field(
+        default=1.0,
+        metadata={"help": "Top-p sampling parameter."},
+    )
+    top_k: int = field(
+        default=0,
+        metadata={"help": "Top-k sampling parameter. `0` disables top-k filtering."},
+    )
+    min_p: float | None = field(
+        default=None,
+        metadata={"help": "Minimum token probability for sampling."},
+    )
+    generation_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Extra generation kwargs passed to `GenerationConfig`."},
+    )
+    chat_template_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={"help": "Extra kwargs forwarded to chat template application."},
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={"help": "Repetition penalty used during generation."},
+    )
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={"help": "Reserved for paged generation support."},
+    )
+    cache_implementation: str | None = field(
+        default=None,
+        metadata={"help": "Cache implementation used by transformers generation."},
+    )
+    use_vllm: bool = field(
+        default=False,
+        metadata={"help": "Whether to use vLLM for generation."},
+    )
+    beta: float = field(
+        default=0.0,
+        metadata={"help": "Reference-model KL coefficient for online policy optimization."},
+    )
+    num_iterations: int = field(
+        default=1,
+        metadata={"help": "Number of optimization iterations per generated batch."},
+    )
+    epsilon: float = field(
+        default=0.2,
+        metadata={"help": "Lower clipping coefficient for GRPO-style policy loss."},
+    )
+    epsilon_high: float | None = field(
+        default=None,
+        metadata={"help": "Upper clipping coefficient. Defaults to `epsilon` when unset."},
+    )
+    importance_sampling_level: str = field(
+        default="token",
+        metadata={"help": "Importance-sampling granularity. Supported: `token`, `sequence`."},
+    )
+    reward_weights: list[float] | None = field(
+        default=None,
+        metadata={"help": "Optional weights for multiple reward functions."},
+    )
+    scale_rewards: str | bool = field(
+        default="group",
+        metadata={"help": "Reward normalization mode. Supported: `group`, `batch`, `none`."},
+    )
+    loss_type: str = field(
+        default="dapo",
+        metadata={"help": "Policy loss aggregation. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`."},
+    )
+    mask_truncated_completions: bool = field(
+        default=False,
+        metadata={"help": "Whether to exclude truncated completions from the loss."},
+    )
+    sync_ref_model: bool = field(
+        default=False,
+        metadata={"help": "Whether to synchronize the reference model with the student model."},
+    )
+    ref_model_mixup_alpha: float = field(
+        default=0.6,
+        metadata={"help": "EMA mix coefficient used when syncing the reference model."},
+    )
+    ref_model_sync_steps: int = field(
+        default=512,
+        metadata={"help": "How often to synchronize the reference model."},
+    )
+    top_entropy_quantile: float = field(
+        default=1.0,
+        metadata={"help": "Reserved for entropy-based token filtering."},
+    )
+    distillation_alpha: float = field(
+        default=0.5,
+        metadata={"help": "KL divergence direction: 0.0=forward KL, 0.5=JSD, 1.0=reverse KL."},
+    )
+    distillation_topk: int | None = field(
+        default=100,
+        metadata={"help": "Number of top tokens for top-k distillation. If None, uses all tokens."},
+    )
+    full_logit_distillation: bool = field(
+        default=False,
+        metadata={"help": "Whether to use full-logit distillation instead of token-level distillation."},
+    )
+    distillation_is_clip: float | None = field(
+        default=2.0,
+        metadata={"help": "Clipping coefficient for importance sampling in self-distillation."},
+    )
+    distillation_add_tail: bool = field(
+        default=False,
+        metadata={"help": "Whether to add a tail bucket for non-top-k probability mass."},
+    )
+    distillation_weight: float = field(
+        default=1.0,
+        metadata={"help": "Weight applied to the self-distillation loss term."},
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+        if self.scale_rewards not in ["group", "batch", "none"]:
+            raise ValueError("scale_rewards must be one of: 'group', 'batch', 'none'")
+
+        if self.importance_sampling_level not in ["token", "sequence"]:
+            raise ValueError("importance_sampling_level must be either 'token' or 'sequence'")
+        if self.loss_type not in ["grpo", "bnpo", "dr_grpo", "dapo"]:
+            raise ValueError("loss_type must be one of: 'grpo', 'bnpo', 'dr_grpo', 'dapo'")
+        if self.num_generations < 1:
+            raise ValueError("num_generations must be at least 1")
+
+        num_processes = self.world_size
+        if self.generation_batch_size is None and self.steps_per_generation is None:
+            self.steps_per_generation = self.gradient_accumulation_steps
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+        elif self.generation_batch_size is not None and self.steps_per_generation is None:
+            global_batch_size = self.per_device_train_batch_size * num_processes
+            if self.generation_batch_size % global_batch_size != 0:
+                raise ValueError(
+                    f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size ({global_batch_size})."
+                )
+            self.steps_per_generation = self.generation_batch_size // global_batch_size
+        elif self.generation_batch_size is None and self.steps_per_generation is not None:
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+        else:
+            raise ValueError("'generation_batch_size' and 'steps_per_generation' can not both be configured")
+
+        if self.generation_batch_size % self.num_generations != 0:
+            raise ValueError(
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations ({self.num_generations})."
+            )
+
+        if self.epsilon_high is None:
+            self.epsilon_high = self.epsilon
