@@ -175,7 +175,6 @@ class SuccessfulRolloutTeacherContextBuilder:
         feedback_only_without_solution = self.trainer.args.environment_feedback_only_without_solution
         teacher_messages_list = []
         self_distillation_mask = torch.zeros(total_samples, device=device)
-        feedback_used = []
         num_with_solution = 0
         num_with_feedback_available = 0
         num_with_feedback_used = 0
@@ -208,7 +207,6 @@ class SuccessfulRolloutTeacherContextBuilder:
                 and has_feedback
                 and (not feedback_only_without_solution or not has_solution)
             )
-            feedback_used.append(use_feedback)
             if use_feedback:
                 num_with_feedback_used += 1
 

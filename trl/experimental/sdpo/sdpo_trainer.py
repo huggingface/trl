@@ -106,13 +106,18 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         model,
         inputs,
     ) -> torch.Tensor:
-        base_policy_loss = super()._compute_loss(model, inputs)
         accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
 
+        if self.args.sdpo_policy_loss_mode == "hybrid":
+            base_policy_loss = super()._compute_loss(model, inputs)
+            if self.args.distillation_weight <= 0.0:
+                return base_policy_loss
+
+            sdpo_loss = self._compute_self_distillation_loss(model, inputs) / accumulation_scale
+            return base_policy_loss + self.args.distillation_weight * sdpo_loss
+
         if self.args.distillation_weight <= 0.0:
-            return base_policy_loss
+            return super()._compute_loss(model, inputs)
 
         sdpo_loss = self._compute_self_distillation_loss(model, inputs) / accumulation_scale
-        if self.args.sdpo_policy_loss_mode == "hybrid":
-            return base_policy_loss + self.args.distillation_weight * sdpo_loss
         return self.args.distillation_weight * sdpo_loss

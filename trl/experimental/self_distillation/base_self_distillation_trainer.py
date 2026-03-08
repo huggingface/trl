@@ -486,6 +486,14 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
             raise ValueError(f"The {self.__class__.__name__} does not support returning outputs")
         return self._compute_loss(model, inputs)
 
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if not isinstance(inputs, dict):
+            inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+        return loss.detach(), None, None
+
     def _compute_loss(self, model, inputs):
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
