@@ -1,0 +1,45 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from dataclasses import dataclass, field
+
+from ..self_distillation.self_distillation_config import SelfDistillationConfig
+
+
+@dataclass
+class SDFTConfig(SelfDistillationConfig):
+    """
+    Configuration class for [`SDFTTrainer`].
+
+    This adapts the official SDFT implementation to the TRL trainer API while reusing the common self-distillation
+    configuration shared with SDPO.
+    """
+
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the student and teacher models."},
+    )
+    generate_from_teacher: bool = field(
+        default=False,
+        metadata={"help": "Whether on-policy generation should use the teacher-conditioned prompt."},
+    )
+    num_loss_tokens_to_skip: int = field(
+        default=0,
+        metadata={"help": "Number of initial completion tokens to exclude from the distillation loss."},
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.num_loss_tokens_to_skip < 0:
+            raise ValueError("num_loss_tokens_to_skip must be non-negative")

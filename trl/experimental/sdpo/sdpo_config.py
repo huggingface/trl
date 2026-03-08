@@ -14,94 +14,41 @@
 
 from dataclasses import dataclass, field
 
-from trl.trainer.grpo_config import GRPOConfig
+from ..self_distillation import SelfDistillationConfig
 
 
 @dataclass
-class SDPOConfig(GRPOConfig):
+class SDPOConfig(SelfDistillationConfig):
     r"""
     Configuration class for the [`SDPOTrainer`].
 
-    This class extends [`GRPOConfig`] with additional parameters specific to Self-Distillation Policy Optimization
-    (SDPO). SDPO augments on-policy optimization with self-distillation from the model's own high-reward trajectories.
-
-    SDPO converts tokenized feedback into a dense learning signal without any external teacher or explicit reward
-    model. SDPO treats the current model conditioned on feedback as a self-teacher and distills its feedback-informed
-    next-token predictions back into the policy.
-
-    Parameters:
-        distillation_alpha (`float`, *optional*, defaults to `0.5`):
-            Controls the KL divergence direction in self-distillation loss.
-            - 0.0: Forward KL (teacher -> student)
-            - 0.5: Jensen-Shannon divergence (recommended by SDPO paper)
-            - 1.0: Reverse KL (student -> teacher)
-        distillation_topk (`int` or `None`, *optional*, defaults to `100`):
-            Number of top tokens to consider for top-k distillation. If `None`, all tokens are considered. When
-            `full_logit_distillation` is False, this parameter is used to compute top-k log probabilities.
-        full_logit_distillation (`bool`, *optional*, defaults to `False`):
-            Whether to use full logit distillation instead of token-level distillation. When True, distills from the
-            full logit distribution. When False, distills only from top-k tokens.
-        distillation_is_clip (`float`, *optional*, defaults to `2.0`):
-            Clipping coefficient for importance sampling in self-distillation loss. Values > 0 apply clipping to
-            stabilize training. Recommended value is 2.0.
-        distillation_add_tail (`bool`, *optional*, defaults to `False`):
-            Whether to add tail log-probability to top-k distillation. When True, includes the probability mass of
-            non-top-k tokens as a separate "tail" token.
-        dont_reprompt_on_self_success (`bool`, *optional*, defaults to `True`):
-            Whether to skip reprompting when the model generates a correct response on its own. When True, the model
-            uses its own successful response as a demonstration without additional prompting. When False, the model is
-            always reprompted even on successful attempts.
-        ema_update_rate (`float`, *optional*, defaults to `0.05`):
-            EMA update rate for the teacher model. The teacher model is updated as: teacher = ema_update_rate * student
-            + (1 - ema_update_rate) * teacher. A higher value makes the teacher follow the student more closely.
-        max_reprompt_len (`int`, *optional*, defaults to `10240`):
-            Maximum length for reprompting when using self-distillation. This limits the length of the feedback +
-            reprompt sequence to prevent excessive memory usage.
-        distillation_weight (`float`, *optional*, defaults to `1.0`):
-            Weight for the self-distillation loss term. The total loss is: total_loss = grpo_loss + distillation_weight
-            * distillation_loss.
-        use_successful_as_teacher (`bool`, *optional*, defaults to `True`):
-            Whether to use successful rollouts as implicit feedback for self-distillation. When True, high-reward
-            rollouts are used as teacher demonstrations. When False, only explicit feedback is used for
-            self-distillation.
+    This class extends [`experimental.self_distillation.SelfDistillationConfig`] with the online teacher-construction
+    parameters used by Self-Distillation Policy Optimization (SDPO).
     """
 
-    # Self-distillation specific parameters
-    distillation_alpha: float = field(
-        default=0.5,
-        metadata={"help": "KL divergence direction: 0.0=forward KL, 0.5=JSD, 1.0=reverse KL."},
-    )
-    distillation_topk: int | None = field(
-        default=100,
-        metadata={"help": "Number of top tokens for top-k distillation. If None, uses all tokens."},
-    )
-    full_logit_distillation: bool = field(
-        default=False,
-        metadata={"help": "Whether to use full logit distillation instead of token-level."},
-    )
-    distillation_is_clip: float = field(
-        default=2.0,
-        metadata={"help": "Clipping coefficient for importance sampling in self-distillation."},
-    )
-    distillation_add_tail: bool = field(
-        default=False,
-        metadata={"help": "Whether to add tail log-prob to top-k distillation."},
-    )
     dont_reprompt_on_self_success: bool = field(
         default=True,
         metadata={"help": "Skip reprompting when model generates correct response."},
     )
+    sdpo_policy_loss_mode: str = field(
+        default="distillation_only",
+        metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `hybrid`."},
+    )
+    teacher_regularization: str = field(
+        default="ema",
+        metadata={"help": "Teacher regularization mode. Supported: `ema`, `none`."},
+    )
+    teacher_update_rate: float | None = field(
+        default=None,
+        metadata={"help": "Teacher update rate used for EMA teacher synchronization."},
+    )
     ema_update_rate: float = field(
         default=0.05,
-        metadata={"help": "EMA update rate for teacher model."},
+        metadata={"help": "Deprecated alias for `teacher_update_rate`."},
     )
     max_reprompt_len: int = field(
         default=10240,
         metadata={"help": "Maximum length for reprompting in self-distillation."},
-    )
-    distillation_weight: float = field(
-        default=1.0,
-        metadata={"help": "Weight for self-distillation loss term."},
     )
     use_successful_as_teacher: bool = field(
         default=True,
@@ -112,14 +59,39 @@ class SDPOConfig(GRPOConfig):
         metadata={"help": "Minimum reward for a rollout to be considered a successful demonstration."},
     )
     reprompt_template: str = field(
-        default="{prompt}{solution}\n\nCorrectly solve the original question.\n",
+        default="{prompt}{solution}{feedback}\n\nCorrectly solve the original question.\n",
         metadata={"help": "Template for reprompting the teacher with a successful demonstration."},
     )
     solution_template: str = field(
         default="\nCorrect solution:\n\n{successful_previous_attempt}\n\n",
         metadata={"help": "Template for formatting the successful demonstration text."},
     )
+    feedback_template: str = field(
+        default="\nThe following is feedback from your unsuccessful earlier attempt:\n\n{feedback_raw}\n\n",
+        metadata={"help": "Template for formatting environment feedback for reprompting."},
+    )
+    include_environment_feedback: bool = field(
+        default=False,
+        metadata={"help": "Whether to include environment feedback in teacher reprompts when available."},
+    )
+    environment_feedback_only_without_solution: bool = field(
+        default=False,
+        metadata={"help": "Whether to use feedback only when no successful solution is available."},
+    )
     remove_thinking_from_demonstration: bool = field(
         default=False,
         metadata={"help": "Whether to remove <think>...</think> blocks from the demonstration text."},
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.teacher_update_rate is None:
+            self.teacher_update_rate = self.ema_update_rate
+
+        if self.teacher_regularization not in {"ema", "none"}:
+            raise ValueError("teacher_regularization must be one of: 'ema', 'none'")
+        if not 0.0 <= self.teacher_update_rate <= 1.0:
+            raise ValueError("teacher_update_rate must be in [0, 1]")
+        if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
+            raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
