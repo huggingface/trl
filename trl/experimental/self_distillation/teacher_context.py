@@ -60,7 +60,10 @@ class PromptTokenizer:
             add_special_tokens=False,
         )
         prompt_inputs = super(_BaseTrainer, self.trainer)._prepare_inputs(prompt_inputs)
-        prompt_ids = [p[m].tolist() for p, m in zip(prompt_inputs["input_ids"], prompt_inputs["attention_mask"].bool())]
+        prompt_ids = [
+            p[m].tolist()
+            for p, m in zip(prompt_inputs["input_ids"], prompt_inputs["attention_mask"].bool(), strict=False)
+        ]
         prompt_ids = [torch.tensor(ids, device=self.trainer.accelerator.device) for ids in prompt_ids]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
         return TokenizedPromptBatch(
@@ -119,7 +122,9 @@ class SuccessfulRolloutTeacherContextBuilder:
             feedback=feedback_text,
         )
 
-    def _tokenize_teacher_messages(self, teacher_messages_list: list[str | list[dict[str, Any]]]) -> TokenizedPromptBatch:
+    def _tokenize_teacher_messages(
+        self, teacher_messages_list: list[str | list[dict[str, Any]]]
+    ) -> TokenizedPromptBatch:
         teacher_prompt_ids_list = []
         device = self.trainer.accelerator.device
         for msg in teacher_messages_list:
@@ -198,8 +203,10 @@ class SuccessfulRolloutTeacherContextBuilder:
                 num_with_feedback_available += 1
 
             has_solution = len(successful) > 0
-            use_feedback = self.trainer.args.include_environment_feedback and has_feedback and (
-                not feedback_only_without_solution or not has_solution
+            use_feedback = (
+                self.trainer.args.include_environment_feedback
+                and has_feedback
+                and (not feedback_only_without_solution or not has_solution)
             )
             feedback_used.append(use_feedback)
             if use_feedback:

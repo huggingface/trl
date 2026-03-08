@@ -16,14 +16,11 @@ from __future__ import annotations
 
 import inspect
 from collections import defaultdict
-from collections.abc import Callable
 from functools import partial
 from typing import Any
 
 import datasets
 import torch
-import torch.nn.functional as F
-from accelerate.utils import gather_object, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.utils.data import DataLoader, Sampler
@@ -81,7 +78,7 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: "PeftConfig | None" = None,
+        peft_config: PeftConfig | None = None,
     ):
         args = self._coerce_self_distillation_args(args)
         if train_dataset is None:
@@ -295,7 +292,9 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
         )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        return RepeatSampler(data_source=eval_dataset, mini_repeat_count=self.num_generations_eval, seed=self.args.seed)
+        return RepeatSampler(
+            data_source=eval_dataset, mini_repeat_count=self.num_generations_eval, seed=self.args.seed
+        )
 
     def training_step(self, model, inputs, num_items_in_batch):
         output = super().training_step(model, inputs, num_items_in_batch)
@@ -350,11 +349,14 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
             add_special_tokens=False,
         )
         generate_inputs = super()._prepare_inputs(generate_inputs)
-        with unwrap_model_for_generation(
-            self.model_wrapped,
-            self.accelerator,
-            gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-        ) as unwrapped_model, torch.no_grad():
+        with (
+            unwrap_model_for_generation(
+                self.model_wrapped,
+                self.accelerator,
+                gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+            ) as unwrapped_model,
+            torch.no_grad(),
+        ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs,
                 generation_config=self.generation_config,
@@ -369,8 +371,8 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         seq_idx = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
         completion_mask = (seq_idx <= eos_idx.unsqueeze(1)).int()
-        prompt_ids_list = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
-        completion_ids_list = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
+        prompt_ids_list = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=False)]
+        completion_ids_list = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=False)]
         return prompt_ids_list, completion_ids_list
 
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
@@ -389,7 +391,10 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
             if isinstance(reward_func, nn.Module):
                 if is_conversational(inputs[0]):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
-                    texts = [apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"] for x in messages]
+                    texts = [
+                        apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
+                        for x in messages
+                    ]
                 else:
                     texts = [p + c for p, c in zip(prompts, completions, strict=True)]
                 reward_inputs = reward_processing_class(
@@ -414,7 +419,9 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
 
         return self.accelerator.gather(rewards_per_func)
 
-    def _generate_and_score_completions(self, inputs: list[dict[str, torch.Tensor | Any]]) -> dict[str, torch.Tensor | Any]:
+    def _generate_and_score_completions(
+        self, inputs: list[dict[str, torch.Tensor | Any]]
+    ) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
         prompts = [x["prompt"] for x in inputs]
@@ -460,7 +467,9 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
         process_slice = slice(process_start, process_start + local_batch_size)
         advantages = advantages[process_slice]
 
-        agg_completion_lengths = self.accelerator.gather(torch.tensor([len(ids) for ids in completion_ids_list], device=device))
+        agg_completion_lengths = self.accelerator.gather(
+            torch.tensor([len(ids) for ids in completion_ids_list], device=device)
+        )
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
 
         return {
@@ -497,7 +506,9 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
             advantages = advantages.unsqueeze(1)
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "sequence":
-            log_ratio = (log_ratio * completion_mask).sum(-1, keepdim=True) / completion_mask.sum(-1, keepdim=True).clamp(min=1.0)
+            log_ratio = (log_ratio * completion_mask).sum(-1, keepdim=True) / completion_mask.sum(
+                -1, keepdim=True
+            ).clamp(min=1.0)
         coef_1 = torch.exp(log_ratio)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
         per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
@@ -514,6 +525,9 @@ class BaseSelfDistillationTrainer(SelfDistillationMixin, _BaseTrainer):
             loss = loss / (self.current_gradient_accumulation_steps if mode == "train" else 1.0)
         else:
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = loss / (self.current_gradient_accumulation_steps if mode == "train" else 1.0)
 
-        self._metrics[mode]["self_distillation/policy_loss"].append(self.accelerator.gather(loss.detach()).mean().item())
+        self._metrics[mode]["self_distillation/policy_loss"].append(
+            self.accelerator.gather(loss.detach()).mean().item()
+        )
         return loss

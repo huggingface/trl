@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import inspect
 from collections import defaultdict
-from collections.abc import Callable
 from functools import partial
 from typing import Any
 
 import datasets
 import torch
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.utils.data import DataLoader, Sampler
@@ -47,15 +47,17 @@ from ...trainer.utils import (
     identity,
     pad,
     split_tensor_dict,
+    use_adapter,
 )
-from ..utils import prepare_peft_model
 from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
 from ..self_distillation.teacher_context import DemonstrationTeacherContextBuilder, PromptTokenizer
+from ..utils import prepare_peft_model
 from .sdft_config import SDFTConfig
 
 
 if is_peft_available():
     from peft import PeftConfig
+    from peft.peft_model import PeftModel
 
 
 class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
@@ -68,14 +70,14 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
     def __init__(
         self,
         model: str | PreTrainedModel | nn.Module,
-        ref_model: str | PreTrainedModel | nn.Module,
+        ref_model: str | PreTrainedModel | nn.Module | None,
         args: SDFTConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: "PeftConfig | None" = None,
+        peft_config: PeftConfig | None = None,
     ):
         args = self._coerce_sdft_args(args)
 
@@ -89,9 +91,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             raise NotImplementedError("Iterable eval datasets are not yet supported in SDFTTrainer.")
         if args.use_vllm:
             raise NotImplementedError("SDFTTrainer does not support `use_vllm=True` yet.")
-        if ref_model is None:
-            raise ValueError("`ref_model` is required for SDFTTrainer.")
-
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
@@ -106,8 +105,15 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
+        if is_peft_available() and is_peft_model(model) and peft_config is not None:
+            raise ValueError(
+                "You passed a `PeftModel` instance together with a `peft_config` to SDFTTrainer. Pass either a base "
+                "model with `peft_config`, or a pre-wrapped PEFT model."
+            )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+        if ref_model is None and not (is_peft_available() and is_peft_model(model)):
+            raise ValueError("`ref_model` is required for SDFTTrainer unless `model` is a PEFT model.")
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -184,7 +190,8 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
-            disable_dropout_in_model(self.ref_model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
@@ -197,8 +204,16 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
             self.teacher_model = self.ref_model
+        elif is_peft_available() and is_peft_model(self.model):
+            self.teacher_model = None
 
         if args.sync_ref_model:
+            if self.ref_model is None:
+                raise NotImplementedError(
+                    "You passed `sync_ref_model=True` while using PEFT without an explicit `ref_model`. In this "
+                    "setup, SDFT recovers teacher behavior by temporarily disabling the adapter, so there is no "
+                    "standalone reference model to synchronize."
+                )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         self.model_accepts_loss_kwargs = False
@@ -289,11 +304,14 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         )
         generate_inputs = super()._prepare_inputs(generate_inputs)
 
-        with unwrap_model_for_generation(
-            self.model_wrapped,
-            self.accelerator,
-            gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-        ) as unwrapped_model, torch.no_grad():
+        with (
+            unwrap_model_for_generation(
+                self.model_wrapped,
+                self.accelerator,
+                gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+            ) as unwrapped_model,
+            torch.no_grad(),
+        ):
             prompt_completion_ids = unwrapped_model.generate(
                 **generate_inputs,
                 generation_config=self.generation_config,
@@ -308,7 +326,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         seq_idx = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
         completion_mask = (seq_idx <= eos_idx.unsqueeze(1)).long()
 
-        completion_ids_list = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
+        completion_ids_list = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
         completion_ids = [torch.tensor(ids, device=self.accelerator.device) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
         return (
@@ -327,7 +345,9 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         )
         completion_ids, completion_mask = self._generate_completion_ids(generation_prompts)
 
-        teacher_batch = self.teacher_context_builder.build(prompts, privileged_contexts, completion_ids, completion_mask)
+        teacher_batch = self.teacher_context_builder.build(
+            prompts, privileged_contexts, completion_ids, completion_mask
+        )
 
         return {
             "prompt_ids": teacher_batch["prompt_ids"],
@@ -342,7 +362,9 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         self._metrics[mode][f"self_distillation/{metric_name}"].append(value)
         self._metrics[mode][f"sdft/{metric_name}"].append(value)
 
-    def training_step(self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None):
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
+    ):
         loss = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         return loss
@@ -360,3 +382,9 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
 
         loss = self._compute_self_distillation_loss(model, inputs)
         return loss / self.current_gradient_accumulation_steps
+
+    def _get_teacher_context_for_self_distillation(self, model):
+        if is_peft_available() and isinstance(self.model, PeftModel) and self.ref_model is None:
+            model = self.accelerator.unwrap_model(self.model)
+            return use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None)
+        return super()._get_teacher_context_for_self_distillation(model)

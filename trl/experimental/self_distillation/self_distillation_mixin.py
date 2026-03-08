@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -103,7 +104,7 @@ class SelfDistillationMixin:
             teacher_model_inputs["logits_to_keep"] = logits_to_keep + 1
 
         teacher_model = self._get_teacher_model_for_self_distillation(model)
-        with torch.no_grad():
+        with torch.no_grad(), self._get_teacher_context_for_self_distillation(model):
             teacher_logits = teacher_model(**teacher_model_inputs).logits
             teacher_logits = teacher_logits[:, :-1, :]
             teacher_logits = teacher_logits[:, -logits_to_keep:, :]
@@ -202,9 +203,13 @@ class SelfDistillationMixin:
             return model
         return teacher_model
 
+    def _get_teacher_context_for_self_distillation(self, model):
+        return nullcontext()
+
     def _log_self_distillation_metric(self, mode: str, metric_name: str, value: float) -> None:
+        metric_prefix = getattr(self, "_name", "self_distillation").lower().replace(" ", "_")
         self._metrics[mode][f"self_distillation/{metric_name}"].append(value)
-        self._metrics[mode][f"sdpo/{metric_name}"].append(value)
+        self._metrics[mode][f"{metric_prefix}/{metric_name}"].append(value)
 
     @staticmethod
     def _compute_divergence(
