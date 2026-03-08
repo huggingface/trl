@@ -239,6 +239,49 @@ class TestGRPORolloutDispatch:
         assert logprobs is None
         assert extra_fields == {}
 
+    def test_generate_single_turn_non_rollout_syncs_vllm_weights_on_step_change(self):
+        trainer = self._make_trainer()
+        trainer.rollout_func = None
+        trainer.use_vllm = True
+        trainer.generation_backend.generate.return_value = SimpleNamespace(
+            prompt_ids=[[1]], completion_ids=[[2]], logprobs=None, extra_fields={}
+        )
+
+        trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.sync_weights.assert_called_once()
+        assert trainer._last_loaded_step == trainer.state.global_step
+
+    def test_generate_single_turn_non_rollout_skips_sync_when_step_unchanged(self):
+        trainer = self._make_trainer()
+        trainer.rollout_func = None
+        trainer.use_vllm = True
+        trainer._last_loaded_step = trainer.state.global_step  # already in sync
+        trainer.generation_backend.generate.return_value = SimpleNamespace(
+            prompt_ids=[[1]], completion_ids=[[2]], logprobs=None, extra_fields={}
+        )
+
+        trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.sync_weights.assert_not_called()
+
+    def test_generate_single_turn_uses_eval_num_generations(self):
+        trainer = self._make_trainer()
+        trainer.rollout_func = None
+        trainer.model.training = False
+        trainer.generation_backend.generate.return_value = SimpleNamespace(
+            prompt_ids=[[1]], completion_ids=[[2]], logprobs=None, extra_fields={}
+        )
+
+        trainer._generate_single_turn(["prompt"])
+
+        trainer.generation_backend.generate.assert_called_once_with(
+            prompts=["prompt"],
+            num_generations=trainer.num_generations_eval,
+            processing_class=trainer.processing_class,
+            generation_config=trainer.generation_config,
+        )
+
 
 class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
