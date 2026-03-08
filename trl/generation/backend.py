@@ -284,6 +284,10 @@ def create_generation_backend(trainer: Any) -> GenerationBackend:
             profiler_factory=profiler_factory,
         )
 
+    # Use the base Trainer input preparation path, not trainer-specific overrides
+    # like GRPO/RLOO _prepare_inputs, to avoid recursive generation.
+    base_prepare_inputs = super(type(trainer), trainer)._prepare_inputs
+
     return TransformersBackendAdapter(
         model_wrapped=trainer.model_wrapped,
         accelerator=trainer.accelerator,
@@ -295,6 +299,6 @@ def create_generation_backend(trainer: Any) -> GenerationBackend:
         tools=getattr(trainer, "tools", None),
         chat_template=getattr(trainer, "chat_template", None),
         include_tools_in_chat_template=include_tools_in_chat_template,
-        prepare_inputs=trainer._prepare_inputs,
+        prepare_inputs=base_prepare_inputs,
         profiler_factory=profiler_factory,
     )
