@@ -21,6 +21,7 @@ from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
 from ..testing_utils import TrlTestCase
 
+
 if is_peft_available():
     from peft import LoraConfig
 
@@ -72,7 +73,9 @@ class TestSDFTTrainer(TrlTestCase):
         for name, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(name)
             if param.sum() != 0:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Parameter {name} has not changed."
+                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), (
+                    f"Parameter {name} has not changed."
+                )
 
     def test_training_with_generate_from_teacher(self):
         dataset = Dataset.from_dict(

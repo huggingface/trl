@@ -11,8 +11,8 @@ In the current TRL implementation:
 - the default SDPO policy loss mode is `distillation_only`
 - `hybrid` mode is also available to combine the base policy loss with the self-distillation loss
 - supported teacher regularization modes are `ema` and `none`
-- `distillation_topk` is used as the approximation for logit-level distillation
-- when `full_logit_distillation=False`, SDPO falls back to token-level reverse KL and requires `distillation_alpha=1.0`
+- `distillation_topk` is only valid when `full_logit_distillation=True`
+- when `full_logit_distillation=False`, SDPO uses token-level reverse KL and requires `distillation_alpha=1.0`
 - environment feedback can be injected into teacher reprompts when the dataset exposes a `privileged_context` column
 
 ## Expected dataset columns

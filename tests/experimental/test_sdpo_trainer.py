@@ -187,42 +187,21 @@ class TestSDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_training_rejects_non_reverse_token_level_distillation(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": [
-                    [
-                        {"role": "system", "content": "You are a careful assistant."},
-                        {"role": "user", "content": "Try the puzzle again."},
-                    ]
-                ],
-                "privileged_context": ["Your earlier answer violated the format requirements."],
-            }
-        )
-
-        training_args = SDPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=1,
-            generation_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
-            report_to="none",
-            distillation_alpha=0.5,
-            distillation_topk=5,
-            distillation_is_clip=None,
-            include_environment_feedback=True,
-            max_steps=1,
-        )
-
-        trainer = SDPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        with pytest.raises(ValueError, match="Only reverse KL"):
-            trainer.train()
+        with pytest.raises(ValueError, match="requires `full_logit_distillation=True`"):
+            SDPOConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=1,
+                generation_batch_size=2,
+                num_generations=2,
+                max_completion_length=8,
+                report_to="none",
+                distillation_alpha=0.5,
+                distillation_topk=5,
+                distillation_is_clip=None,
+                include_environment_feedback=True,
+                max_steps=1,
+            )
 
     def test_training_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(

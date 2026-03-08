@@ -36,7 +36,7 @@ Expected dataset formats:
 
 Example:
 
-python examples/scripts/sdft.py \
+python trl/experimental/sdft/sdft.py \
     --model_name_or_path Qwen/Qwen3.5-0.8B \
     --dataset_name your-org/your-dataset \
     --output_dir outputs/sdft-qwen3.5-0.8b \
@@ -121,7 +121,9 @@ class SDFTScriptArguments(ScriptArguments):
     )
     tool_eval_num_examples: int | None = field(
         default=None,
-        metadata={"help": "Optional number of eval examples to score for tool-use metrics. Defaults to the full eval split."},
+        metadata={
+            "help": "Optional number of eval examples to score for tool-use metrics. Defaults to the full eval split."
+        },
     )
     tool_eval_max_new_tokens: int = field(
         default=256,
@@ -158,7 +160,9 @@ def _stringify_golden_response(response: Any) -> str:
     return str(response)
 
 
-def _build_privileged_context(example: dict[str, Any], privileged_context_column: str, golden_response_column: str, template: Template):
+def _build_privileged_context(
+    example: dict[str, Any], privileged_context_column: str, golden_response_column: str, template: Template
+):
     if privileged_context_column in example and example[privileged_context_column] is not None:
         privileged_context = example[privileged_context_column]
     elif golden_response_column in example:
@@ -259,11 +263,14 @@ def _run_tooluse_eval(
     )
     tokenized = {key: value.to(trainer.accelerator.device) for key, value in tokenized.items()}
 
-    with unwrap_model_for_generation(
-        trainer.model_wrapped,
-        trainer.accelerator,
-        gather_deepspeed3_params=trainer.args.ds3_gather_for_generation,
-    ) as unwrapped_model, torch.no_grad():
+    with (
+        unwrap_model_for_generation(
+            trainer.model_wrapped,
+            trainer.accelerator,
+            gather_deepspeed3_params=trainer.args.ds3_gather_for_generation,
+        ) as unwrapped_model,
+        torch.no_grad(),
+    ):
         generated = unwrapped_model.generate(
             **tokenized,
             max_new_tokens=max_new_tokens,
@@ -382,7 +389,11 @@ if __name__ == "__main__":
     train_dataset = _prepare_split(dataset[script_args.dataset_train_split], script_args)
     raw_eval_dataset = dataset[script_args.dataset_test_split] if script_args.dataset_test_split in dataset else None
     eval_dataset = None
-    if training_args.eval_strategy != "no" and raw_eval_dataset is not None and _can_prepare_privileged_context(raw_eval_dataset):
+    if (
+        training_args.eval_strategy != "no"
+        and raw_eval_dataset is not None
+        and _can_prepare_privileged_context(raw_eval_dataset)
+    ):
         eval_dataset = _prepare_split(raw_eval_dataset, script_args)
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
@@ -409,7 +420,9 @@ if __name__ == "__main__":
             do_sample=True,
             temperature=training_args.temperature,
         )
-        trainer.add_callback(LogCompletionsCallback(trainer, generation_config, num_prompts=script_args.eval_num_prompts))
+        trainer.add_callback(
+            LogCompletionsCallback(trainer, generation_config, num_prompts=script_args.eval_num_prompts)
+        )
 
     pretrain_metrics = None
     if raw_eval_dataset is not None and "golden_answer" in raw_eval_dataset.column_names:

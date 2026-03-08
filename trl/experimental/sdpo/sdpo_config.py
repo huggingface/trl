@@ -30,6 +30,10 @@ class SDPOConfig(SelfDistillationConfig):
         default=True,
         metadata={"help": "Skip reprompting when model generates correct response."},
     )
+    distillation_topk: int | None = field(
+        default=None,
+        metadata={"help": "Top-K approximation for logit-level SDPO. Requires `full_logit_distillation=True`."},
+    )
     sdpo_policy_loss_mode: str = field(
         default="distillation_only",
         metadata={"help": "SDPO policy loss mode. Supported: `distillation_only`, `hybrid`."},
@@ -95,3 +99,5 @@ class SDPOConfig(SelfDistillationConfig):
             raise ValueError("teacher_update_rate must be in [0, 1]")
         if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
             raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
+        if self.distillation_topk is not None and not self.full_logit_distillation:
+            raise ValueError("SDPO `distillation_topk` requires `full_logit_distillation=True`.")
