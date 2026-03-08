@@ -15,6 +15,13 @@ In the current TRL implementation:
 - when `full_logit_distillation=False`, SDPO falls back to token-level reverse KL and requires `distillation_alpha=1.0`
 - environment feedback can be injected into teacher reprompts when the dataset exposes a `privileged_context` column
 
+## Expected dataset columns
+
+Each example must provide:
+
+- `prompt`: the student-facing prompt
+- `privileged_context`: optional privileged text, such as environment feedback, used when `include_environment_feedback=True`
+
 ## Usage
 
 ```python
@@ -43,7 +50,7 @@ trainer = SDPOTrainer(
 trainer.train()
 ```
 
-To use environment feedback, include a `privileged_context` column in the dataset. SDPO will use successful rollouts and, when enabled, that text to build teacher reprompts for self-distillation.
+SDPO always requires a `prompt` column. To use environment feedback, also include a `privileged_context` column. SDPO will use successful rollouts and, when enabled, that text to build teacher reprompts for self-distillation.
 
 ## SDPOConfig
 
