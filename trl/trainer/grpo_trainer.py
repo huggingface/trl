@@ -1999,7 +1999,8 @@ class GRPOTrainer(_BaseTrainer):
                 nanmax(self.accelerator.gather(max_raw_importance_sampling_ratio)).item()
             )
             self._metrics[mode]["sampling/frac_modified_importance_sampling_ratio"].append(
-                self.accelerator.gather(torch.ne(flat_is_ratio, raw_flat_is_ratio).float().mean()).item()
+                self.accelerator.gather(torch.ne(flat_is_ratio, raw_flat_is_ratio).float().sum()).sum().item()
+                / self.accelerator.gather(torch.tensor(flat_is_ratio.numel(), device=device)).sum().item()
             )
 
         output = {
