@@ -53,14 +53,11 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=2,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
             distillation_alpha=1.0,
             distillation_topk=None,
             distillation_is_clip=None,
             include_environment_feedback=True,
-            success_reward_threshold=1.0,
             max_steps=1,
-            num_train_epochs=1,
         )
 
         trainer = SDPOTrainer(
@@ -84,8 +81,6 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=3,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
-            distillation_alpha=0.5,
             distillation_topk=5,
             full_logit_distillation=True,
             distillation_is_clip=None,
@@ -118,11 +113,9 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=3,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
             distillation_alpha=1.0,
             distillation_topk=None,
             distillation_is_clip=None,
-            success_reward_threshold=1.0,
         )
 
         def zero_reward(**kwargs):
@@ -150,8 +143,6 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=3,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
-            distillation_alpha=0.5,
             distillation_topk=5,
             full_logit_distillation=True,
             distillation_is_clip=None,
@@ -178,8 +169,6 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=3,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
-            distillation_alpha=0.5,
             distillation_topk=5,
             full_logit_distillation=True,
             distillation_is_clip=None,
@@ -218,15 +207,11 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=2,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
             distillation_alpha=0.5,
             distillation_topk=5,
-            full_logit_distillation=False,
             distillation_is_clip=None,
-            success_reward_threshold=1.0,
             include_environment_feedback=True,
             max_steps=1,
-            num_train_epochs=1,
         )
 
         trainer = SDPOTrainer(
@@ -259,13 +244,11 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=2,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
             distillation_alpha=1.0,
             distillation_topk=None,
             distillation_is_clip=None,
             success_reward_threshold=0.5,
             dont_reprompt_on_self_success=False,
-            num_train_epochs=1,
             max_steps=1,
         )
 
@@ -311,13 +294,10 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=2,
             max_completion_length=8,
             report_to="none",
-            distillation_weight=1.0,
             distillation_alpha=1.0,
             distillation_topk=None,
             distillation_is_clip=None,
-            success_reward_threshold=1.0,
             include_environment_feedback=True,
-            num_train_epochs=1,
             max_steps=1,
         )
 
