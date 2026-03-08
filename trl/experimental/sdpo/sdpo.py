@@ -27,17 +27,19 @@
 Usage:
 
 python trl/experimental/sdpo/sdpo.py \
-    --model_name_or_path Qwen/Qwen3-0.6B \
-    --output_dir sdpo-Qwen3-0.6B \
+    --model_name_or_path Qwen/Qwen3.5-2B \
+    --dataset_name openai/gsm8k \
+    --dataset_config main \
+    --output_dir outputs/sdpo-qwen35-2b-gsm8k \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
-    --max_completion_length 1024 \
+    --max_completion_length 128 \
     --use_peft \
     --lora_target_modules q_proj v_proj \
-    --per_device_train_batch_size 8 \
-    --gradient_accumulation_steps 2 \
-    --num_generations 8 \
-    --steps_per_generation 8 \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 4 \
+    --num_generations 4 \
+    --generation_batch_size 4 \
     --distillation_alpha 1.0 \
     --full_logit_distillation false \
     --sdpo_policy_loss_mode distillation_only
@@ -48,6 +50,7 @@ already contains textual environment feedback, pass the column name via `--feedb
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -66,7 +69,6 @@ from trl import (
 )
 from trl.data_utils import maybe_apply_chat_template
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
-from trl.rewards import accuracy_reward, think_format_reward
 
 
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
@@ -121,16 +123,21 @@ def _make_conversation(example: dict[str, Any], feedback_column: str | None) -> 
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": example["problem"]},
         ]
+    if prompt is None and "question" in example:
+        prompt = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": example["question"]},
+        ]
 
     if prompt is None:
-        raise ValueError("Each example must provide either `prompt` or `problem`.")
+        raise ValueError("Each example must provide one of: `prompt`, `problem`, or `question`.")
 
     output = {"prompt": prompt}
 
     if "solution" in example:
         output["solution"] = example["solution"]
     elif "answer" in example:
-        output["solution"] = example["answer"]
+        output["solution"] = _normalize_gsm8k_answer(example["answer"])
 
     if feedback_column is not None and feedback_column in example:
         output["privileged_context"] = example[feedback_column]
@@ -142,6 +149,41 @@ def _make_conversation(example: dict[str, Any], feedback_column: str | None) -> 
 
 def _apply_prompt_template(tokenizer, prompt: Any) -> str:
     return maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"]
+
+
+def _normalize_gsm8k_answer(answer_text: str) -> str:
+    if "####" not in answer_text:
+        return answer_text.strip()
+    return answer_text.split("####", 1)[1].strip().replace(",", "")
+
+
+def _extract_predicted_answer(completion_text: str) -> str | None:
+    match = re.search(r"####\s*([^\n]+)", completion_text)
+    if match:
+        return match.group(1).strip().replace(",", "")
+
+    matches = re.findall(r"(-?\$?[0-9][0-9,]*(?:\.[0-9]+)?)", completion_text)
+    if not matches:
+        return None
+    return matches[-1].replace("$", "").replace(",", "").strip()
+
+
+def _gsm8k_accuracy_reward(completions, solution, **kwargs) -> list[float]:
+    rewards = []
+    for completion, gold in zip(completions, solution, strict=True):
+        content = completion[0]["content"] if isinstance(completion, list) else completion
+        pred = _extract_predicted_answer(content)
+        rewards.append(1.0 if pred is not None and pred == gold else 0.0)
+    return rewards
+
+
+def _gsm8k_soft_format_reward(completions, **kwargs) -> list[float]:
+    pattern = r"<think>.*?</think>\s*.*"
+    rewards = []
+    for completion in completions:
+        content = completion[0]["content"] if isinstance(completion, list) else completion
+        rewards.append(0.25 if re.match(pattern, content, flags=re.DOTALL) else 0.0)
+    return rewards
 
 
 def _run_accuracy_eval(
@@ -175,12 +217,11 @@ def _run_accuracy_eval(
     prompt_length = tokenized["input_ids"].shape[1]
     completions = trainer.processing_class.batch_decode(generated[:, prompt_length:], skip_special_tokens=True)
     completion_messages = [[{"role": "assistant", "content": completion}] for completion in completions]
-    rewards = accuracy_reward(completion_messages, solution=eval_dataset["solution"])
-    scored_rewards = [reward for reward in rewards if reward is not None]
-    total = max(len(scored_rewards), 1)
+    rewards = _gsm8k_accuracy_reward(completion_messages, solution=eval_dataset["solution"])
+    total = max(len(rewards), 1)
     return {
-        f"{metric_prefix}/accuracy": sum(scored_rewards) / total,
-        f"{metric_prefix}/num_scored": float(len(scored_rewards)),
+        f"{metric_prefix}/accuracy": sum(rewards) / total,
+        f"{metric_prefix}/num_scored": float(len(rewards)),
     }
 
 
@@ -218,7 +259,7 @@ if __name__ == "__main__":
             remove_columns=dataset[script_args.dataset_test_split].column_names,
         )
 
-    reward_funcs = [think_format_reward, accuracy_reward]
+    reward_funcs = [_gsm8k_soft_format_reward, _gsm8k_accuracy_reward]
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     if tokenizer.pad_token is None:
