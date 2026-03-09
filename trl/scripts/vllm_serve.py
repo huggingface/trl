@@ -491,7 +491,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str] | list[list[int]]
-        images: list[str] | None = None
+        images: list[list[str] | None] | None = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -518,8 +518,8 @@ def main(script_args: ScriptArguments):
             request (`GenerateRequest`):
                 - `prompts` (list of `str` or list of list of `int`): A list of prompts. It accepts either text strings
                   or pre-tokenized token ID lists. When text strings are provided, `images` can optionally be included.
-                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
-                  along with prompts.
+                - `images` (list of list of `str` or `None`, *optional*): A list of image lists. Each element is a list
+                  of base64-encoded images for the corresponding prompt, or `None` if no images for that prompt.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
                   generation.
@@ -571,19 +571,15 @@ def main(script_args: ScriptArguments):
         ```
         """
         # Build vLLM-compatible prompt inputs
-        if request.prompts and isinstance(request.prompts[0], list):
-            # Token IDs path: wrap each list of token IDs as a TokensPrompt dict for vLLM
-            prompts = [{"prompt_token_ids": ids} for ids in request.prompts]
-        else:
-            # Text prompts path: build prompt dicts with optional images
-            request.images = request.images or [None] * len(request.prompts)
+        is_token_ids = request.prompts and isinstance(request.prompts[0], list)
+        request.images = request.images or [None] * len(request.prompts)
 
-            prompts = []
-            for prompt, image in zip(request.prompts, request.images, strict=True):
-                row = {"prompt": prompt}
-                if image is not None:
-                    row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
-                prompts.append(row)
+        prompts = []
+        for prompt, image_list in zip(request.prompts, request.images, strict=True):
+            row = {"prompt_token_ids": prompt} if is_token_ids else {"prompt": prompt}
+            if image_list is not None:
+                row["multi_modal_data"] = {"image": [Image.open(BytesIO(base64.b64decode(img))) for img in image_list]}
+            prompts.append(row)
 
         generation_kwargs = {
             "n": request.n,
