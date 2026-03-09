@@ -582,8 +582,7 @@ def main(script_args: ScriptArguments):
         for prompt, image_list in zip(request.prompts, request.images, strict=True):
             row = {"prompt_token_ids": prompt} if is_token_ids else {"prompt": prompt}
             if image_list is not None:
-                decoded_images = [Image.open(BytesIO(base64.b64decode(img))) for img in image_list]
-                row["multi_modal_data"] = {"image": decoded_images if len(decoded_images) > 1 else decoded_images[0]}
+                row["multi_modal_data"] = {"image": [Image.open(BytesIO(base64.b64decode(img))) for img in image_list]}
             prompts.append(row)
 
         generation_kwargs = {
