@@ -590,7 +590,7 @@ def main(script_args: ScriptArguments):
         }
         generation_kwargs.update(request.generation_kwargs)
 
-        if Version(vllm.__version__) > Version("0.14.1"):
+        if Version(vllm.__version__) >= Version("0.17.0"):
             generation_kwargs.pop("truncate_prompt_tokens", None)
 
         # Structured outputs, if enabled
@@ -761,7 +761,7 @@ def main(script_args: ScriptArguments):
         }
         generation_kwargs.update(request.generation_kwargs)
 
-        if Version(vllm.__version__) > Version("0.14.1"):
+        if Version(vllm.__version__) >= Version("0.17.0"):
             generation_kwargs.pop("truncate_prompt_tokens", None)
 
         # Structured outputs, if enabled
