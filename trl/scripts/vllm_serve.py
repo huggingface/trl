@@ -500,7 +500,6 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         logprobs: int | None = 0
-        truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
 
@@ -536,9 +535,6 @@ def main(script_args: ScriptArguments):
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
                   only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
                   descending probability.
-                - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
-                  by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
-                  truncation). If set to `None`, truncation is disabled.
                 - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
                   the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -597,7 +593,6 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
-            "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": request.logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
@@ -676,7 +671,6 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         logprobs: int | None = 0
-        truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
@@ -712,9 +706,6 @@ def main(script_args: ScriptArguments):
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
                   only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
                   descending probability.
-                - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
-                  by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
-                  truncation). If set to `None`, truncation is disabled.
                 - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
                   the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -765,7 +756,6 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
-            "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": request.logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
