@@ -144,7 +144,13 @@ class _StreamingDataLoader:
         self._min_groups = max(1, min_groups)
         n_samples = len(dataset)
         self._n_groups = n_samples // num_generations
-        self._n_micro_batches = n_samples // batch_size
+        # Compute exact micro-batch count: each chunk of min_groups yields ceil(chunk_size / batch_size) micro-batches
+        n_micro = 0
+        for chunk_start_g in range(0, self._n_groups, self._min_groups):
+            chunk_end_g = min(chunk_start_g + self._min_groups, self._n_groups)
+            chunk_size = (chunk_end_g - chunk_start_g) * num_generations
+            n_micro += -(-chunk_size // batch_size)  # ceil div
+        self._n_micro_batches = n_micro
 
     def __len__(self):
         return self._n_micro_batches
@@ -1348,7 +1354,14 @@ class GRPOTrainer(_BaseTrainer):
         for key in ("pixel_values", "image_grid_thw", "pixel_attention_mask",
                     "image_sizes", "token_type_ids", "mm_token_type_ids"):
             if key in data:
-                forward_kwargs[key] = data[key]
+                val = data[key]
+                if isinstance(val, torch.Tensor) and val.dim() > 0 and val.size(0) == len(data["prompt_ids"]):
+                    forward_kwargs[key] = val[s_start:s_end]
+                else:
+                    forward_kwargs[key] = val
+        num_images = data.get("num_images")
+        if num_images is not None and hasattr(num_images, '__getitem__') and len(num_images) == len(data["prompt_ids"]):
+            num_images = num_images[s_start:s_end]
 
         logprob_batch_size = min(batch_size * 4, chunk_size)
         with disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
@@ -1358,7 +1371,7 @@ class GRPOTrainer(_BaseTrainer):
             ):
                 old_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model, prompt_completion_ids, attention_mask,
-                    logits_to_keep, logprob_batch_size, **forward_kwargs,
+                    logits_to_keep, logprob_batch_size, num_images=num_images, **forward_kwargs,
                 )
                 if "old_per_token_logps" not in data:
                     # Initialize the full-batch tensor on first chunk
@@ -1368,11 +1381,36 @@ class GRPOTrainer(_BaseTrainer):
                     )
                 data["old_per_token_logps"][s_start:s_end] = old_logps
 
+                # Compute importance sampling ratio for this chunk and store it
+                if "sampling_per_token_logps" in data:
+                    sampling_logps_chunk = data["sampling_per_token_logps"][s_start:s_end]
+                    is_mask = chunk_completion_mask if "tool_mask" not in data else (
+                            chunk_completion_mask * data["tool_mask"][s_start:s_end]
+                    )
+                    per_token_logps_diff = (old_logps - sampling_logps_chunk) * is_mask
+                    sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
+                    if sequence_level_is:
+                        logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                    else:
+                        logps_diff = per_token_logps_diff
+                    is_ratio = torch.exp(logps_diff)
+                    if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
+                        is_ratio = torch.clamp(is_ratio, max=self.vllm_importance_sampling_cap)
+                    elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
+                        is_ratio = is_ratio.masked_fill(is_ratio > self.vllm_importance_sampling_cap, value=0.0)
+                    if "importance_sampling_ratio" not in data:
+                        total_samples = len(data["prompt_ids"])
+                        is_shape = (total_samples, 1) if sequence_level_is else (total_samples, is_ratio.size(1))
+                        data["importance_sampling_ratio"] = torch.ones(
+                            *is_shape, device=device, dtype=is_ratio.dtype
+                        )
+                    data["importance_sampling_ratio"][s_start:s_end] = is_ratio
+
             if self.beta != 0.0:
                 if self.ref_model is not None:
                     ref_logps, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model, prompt_completion_ids, attention_mask,
-                        logits_to_keep, batch_size, **forward_kwargs,
+                        logits_to_keep, batch_size, num_images=num_images, **forward_kwargs,
                     )
                 else:
                     unwrapped = self.accelerator.unwrap_model(self.model)
@@ -1380,7 +1418,7 @@ class GRPOTrainer(_BaseTrainer):
                     with use_adapter(unwrapped, adapter_name=adapter_name):
                         ref_logps, _ = self._get_per_token_logps_and_entropies(
                             self.model, prompt_completion_ids, attention_mask,
-                            logits_to_keep, batch_size, **forward_kwargs,
+                            logits_to_keep, batch_size, num_images=num_images, **forward_kwargs,
                         )
                 if "ref_per_token_logps" not in data:
                     total_samples = len(data["prompt_ids"])
@@ -2241,7 +2279,10 @@ class GRPOTrainer(_BaseTrainer):
 
         # When skip_policy_logps=True, then we're being called by the data producer on a
         # background thread. avoid reading self.model.training due to race conditions
-        mode = "train" if self.model.training else "eval"
+        if skip_policy_logps:
+            mode = "train"
+        else:
+            mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
 
