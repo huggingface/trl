@@ -490,8 +490,7 @@ def main(script_args: ScriptArguments):
         return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str] | None = None
-        prompt_token_ids: list[list[int]] | None = None
+        prompts: list[str] | list[list[int]]
         images: list[list[str] | str | None] | None = None
         mm_processor_kwargs: dict | None = None
         n: int = 1
@@ -519,10 +518,9 @@ def main(script_args: ScriptArguments):
 
         Args:
             request (`GenerateRequest`):
-                - `prompts` (list of `str`, *optional*): A list of text prompts. Either `prompts` or
-                  `prompt_token_ids` must be provided.
-                - `prompt_token_ids` (list of list of `int`, *optional*): Pre-tokenized prompt token IDs, passed
-                  directly to vLLM without re-tokenization. Either `prompts` or `prompt_token_ids` must be provided.
+                - `prompts` (list of `str` or list of list of `int`): A list of text prompts or pre-tokenized token
+                  ID sequences. When token IDs are provided, they are passed directly to vLLM without
+                  re-tokenization.
                 - `images` (list of `str` or list of list of `str`, *optional*, default to `None`): Per-prompt images.
                   Each element is either a single base64-encoded image string or a list of base64-encoded strings for
                   prompts that contain multiple images.
@@ -568,7 +566,7 @@ def main(script_args: ScriptArguments):
 
         Example request (pre-tokenized, multi-image):
         ```json
-        {"prompt_token_ids": [[1, 2, 3]], "images": [["<base64_img1>", "<base64_img2>"]]}
+        {"prompts": [[1, 2, 3]], "images": [["<base64_img1>", "<base64_img2>"]]}
         ```
 
         Example response:
@@ -581,19 +579,19 @@ def main(script_args: ScriptArguments):
         }
         ```
         """
-        if request.prompts is None and request.prompt_token_ids is None:
-            raise ValueError("Either 'prompts' or 'prompt_token_ids' must be provided.")
-
-        n_prompts = len(request.prompts if request.prompts is not None else request.prompt_token_ids)
+        n_prompts = len(request.prompts)
         images_per_prompt = request.images or [None] * n_prompts
 
-        # When prompt_token_ids are provided alongside images, decode them to
-        # text.  vLLM's multimodal preprocessor hangs when it receives raw
-        # token IDs + images (it goes through a dummy-text code path that is
-        # incompatible with Qwen3-VL).  Sending text lets vLLM use the
-        # text+images path which works correctly.
+        # Detect whether prompts are token IDs (list[list[int]]) or text (list[str]).
+        is_token_ids = len(request.prompts) > 0 and isinstance(request.prompts[0], list)
+
+        # When token IDs are provided alongside images, decode them to text.
+        # vLLM's multimodal preprocessor hangs when it receives raw token IDs +
+        # images (it goes through a dummy-text code path that is incompatible
+        # with Qwen3-VL).  Sending text lets vLLM use the text+images path
+        # which works correctly.
         has_any_images = any(img is not None for img in images_per_prompt)
-        if request.prompt_token_ids is not None and has_any_images:
+        if is_token_ids and has_any_images:
             if not hasattr(generate, "_tokenizer"):
                 from transformers import AutoTokenizer
 
@@ -607,23 +605,23 @@ def main(script_args: ScriptArguments):
             imgs = images_per_prompt[i]
             has_images = imgs is not None
 
-            if request.prompt_token_ids is not None:
+            if is_token_ids:
                 if has_images:
                     # Decode to text so vLLM uses the text+images code path.
-                    prompt_text = _tokenizer.decode(request.prompt_token_ids[i], skip_special_tokens=False)
+                    prompt_text = _tokenizer.decode(request.prompts[i], skip_special_tokens=False)
                     row = {"prompt": prompt_text}
                     logger.info(
                         "Prompt %d: decoded %d token IDs to text (%d chars) for multimodal path",
                         i,
-                        len(request.prompt_token_ids[i]),
+                        len(request.prompts[i]),
                         len(prompt_text),
                     )
                 else:
-                    row = {"prompt_token_ids": request.prompt_token_ids[i]}
+                    row = {"prompt_token_ids": request.prompts[i]}
                     logger.info(
                         "Prompt %d: %d token IDs (text-only)",
                         i,
-                        len(request.prompt_token_ids[i]),
+                        len(request.prompts[i]),
                     )
             else:
                 row = {"prompt": request.prompts[i]}

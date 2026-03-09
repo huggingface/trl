@@ -204,7 +204,7 @@ class TestVLLMClientImageEncoding(TrlTestCase):
         assert payload["images"][1] is None
 
     def test_prompt_token_ids_forwarded(self):
-        """prompt_token_ids and mm_processor_kwargs are included in the payload."""
+        """Token ID prompts and mm_processor_kwargs are included in the payload."""
         client = VLLMClient.__new__(VLLMClient)
         client.base_url = "http://localhost:8000"
         client.session = MagicMock()
@@ -220,21 +220,11 @@ class TestVLLMClientImageEncoding(TrlTestCase):
 
         token_ids = [[10, 20, 30]]
         mm_kwargs = {"min_pixels": 100, "max_pixels": 200}
-        client.generate(prompt_token_ids=token_ids, mm_processor_kwargs=mm_kwargs)
+        client.generate(prompts=token_ids, mm_processor_kwargs=mm_kwargs)
 
         payload = client.session.post.call_args[1]["json"]
-        assert payload["prompt_token_ids"] == token_ids
+        assert payload["prompts"] == token_ids
         assert payload["mm_processor_kwargs"] == mm_kwargs
-        assert payload["prompts"] is None
-
-    def test_neither_prompts_nor_token_ids_raises(self):
-        """Omitting both prompts and prompt_token_ids raises ValueError."""
-        client = VLLMClient.__new__(VLLMClient)
-        client.base_url = "http://localhost:8000"
-        client.session = MagicMock()
-
-        with pytest.raises(ValueError, match="Either 'prompts' or 'prompt_token_ids'"):
-            client.generate()
 
 
 @pytest.mark.slow
@@ -350,7 +340,7 @@ class TestVLLMClientServer(TrlTestCase):
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         token_ids = tokenizer.encode("Hello, AI!", add_special_tokens=False)
-        outputs = self.client.generate(prompt_token_ids=[token_ids])
+        outputs = self.client.generate(prompts=[token_ids])
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 

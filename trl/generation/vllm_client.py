@@ -201,7 +201,7 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: list[str] | None = None,
+        prompts: list[str] | list[list[int]],
         images: list | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
@@ -214,18 +214,15 @@ class VLLMClient:
         truncate_prompt_tokens: int | None = None,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
-        prompt_token_ids: list[list[int]] | None = None,
         mm_processor_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided prompts.
 
         Args:
-            prompts (`list[str]`, *optional*):
-                List of text prompts. Either `prompts` or `prompt_token_ids` must be provided.
-            prompt_token_ids (`list[list[int]]`, *optional*):
-                Pre-tokenized token IDs, passed directly to vLLM without re-tokenization. Either `prompts` or
-                `prompt_token_ids` must be provided.
+            prompts (`list[str]` or `list[list[int]]`):
+                List of text prompts or pre-tokenized token ID sequences. When token IDs are provided, they are
+                passed directly to vLLM without re-tokenization.
             images (`list[PIL.Image]` or `list[list[PIL.Image]]`, *optional*):
                 Per-prompt images. Each element is a single PIL Image or a list of PIL Images for prompts that
                 contain multiple images.
@@ -272,9 +269,6 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        if prompts is None and prompt_token_ids is None:
-            raise ValueError("Either 'prompts' or 'prompt_token_ids' must be provided.")
-
         url = f"{self.base_url}/generate/"
 
         # Convert PIL images to base64 strings.
@@ -294,7 +288,6 @@ class VLLMClient:
             url,
             json={
                 "prompts": prompts,
-                "prompt_token_ids": prompt_token_ids,
                 "images": encoded_images,
                 "mm_processor_kwargs": mm_processor_kwargs,
                 "n": n,
