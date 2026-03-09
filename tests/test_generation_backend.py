@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from trl.generation.backend import (
+    RolloutCompletion,
     TransformersBackendAdapter,
     TransformersPagedBackendAdapter,
     VLLMBackendAdapter,
@@ -43,7 +46,24 @@ class TestGenerationBackendAdapters:
         )
         profiler_factory = MagicMock(return_value=SimpleNamespace())
 
-        adapter = VLLMBackendAdapter(vllm_generation=vllm_generation, profiler_factory=profiler_factory)
+        adapter = VLLMBackendAdapter(
+            vllm_generation=vllm_generation,
+            profiler_factory=profiler_factory,
+            vllm_mode="server",
+            processing_class=MagicMock(),
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={},
+            tools=None,
+            chat_template=None,
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=False,
+        )
         result = adapter.generate(
             prompts=["hello"],
             num_generations=1,
@@ -137,7 +157,23 @@ class TestGenerationBackendAdapters:
 
     def test_sync_behavior(self):
         vllm_generation = MagicMock()
-        vllm_adapter = VLLMBackendAdapter(vllm_generation=vllm_generation)
+        vllm_adapter = VLLMBackendAdapter(
+            vllm_generation=vllm_generation,
+            vllm_mode="server",
+            processing_class=MagicMock(),
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={},
+            tools=None,
+            chat_template=None,
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=False,
+        )
         vllm_adapter.sync_weights()
         vllm_generation.sync_weights.assert_called_once()
 
@@ -159,26 +195,187 @@ class TestGenerationBackendAdapters:
         transformers_adapter.sync_weights()
         transformers_paged_adapter.sync_weights()
 
+    def test_vllm_rollout_completions_server_chat(self):
+        vllm_generation = MagicMock()
+        vllm_generation.vllm_client.chat.return_value = {
+            "prompt_ids": [[1, 2]],
+            "completion_ids": [[10, 11]],
+            "logprobs": [[-0.1, -0.2]],
+        }
+        processing_class = MagicMock()
+        processing_class.decode.return_value = "hello"
 
-class TestGenerationBackendFactory:
-    def _base_trainer(self):
-        return SimpleNamespace(
-            use_vllm=False,
-            use_transformers_paged=False,
+        adapter = VLLMBackendAdapter(
+            vllm_generation=vllm_generation,
+            vllm_mode="server",
+            processing_class=processing_class,
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={"foo": "bar"},
+            tools=[{"name": "tool"}],
+            chat_template="template",
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=False,
+        )
+
+        prompts = [[{"role": "user", "content": "hi"}]]
+        results = adapter.generate_rollout_completions(prompts=prompts, processing_class=MagicMock(), as_chat=True)
+
+        assert results == [
+            RolloutCompletion(prompt_ids=[1, 2], completion_ids=[10, 11], logprobs=[-0.1, -0.2], text="hello")
+        ]
+        vllm_generation.vllm_client.chat.assert_called_once()
+
+    def test_vllm_rollout_completions_server_text(self):
+        vllm_generation = MagicMock()
+        vllm_generation.vllm_client.generate.return_value = {
+            "prompt_ids": [[3, 4]],
+            "completion_ids": [[20]],
+            "logprobs": [[-0.9]],
+        }
+        processing_class = MagicMock()
+        processing_class.decode.return_value = "ok"
+
+        adapter = VLLMBackendAdapter(
+            vllm_generation=vllm_generation,
+            vllm_mode="server",
+            processing_class=processing_class,
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={},
+            tools=None,
+            chat_template=None,
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=False,
+        )
+
+        results = adapter.generate_rollout_completions(prompts=["hello"], processing_class=MagicMock(), as_chat=False)
+
+        assert results == [RolloutCompletion(prompt_ids=[3, 4], completion_ids=[20], logprobs=[-0.9], text="ok")]
+        vllm_generation.vllm_client.generate.assert_called_once()
+
+    def test_vllm_rollout_completions_colocate_mapping_and_empty_outputs(self):
+        fake_sampling_params_module = SimpleNamespace(StructuredOutputsParams=MagicMock())
+        fake_vllm_module = SimpleNamespace(SamplingParams=MagicMock())
+
+        def _token_logprob(value):
+            return {0: SimpleNamespace(logprob=value)}
+
+        seq = SimpleNamespace(
+            token_ids=[7, 8],
+            logprobs=[_token_logprob(-0.4), _token_logprob(-0.5)],
+            text="done",
+        )
+        request_with_output = SimpleNamespace(prompt_token_ids=[1, 2], outputs=[seq])
+        request_empty = SimpleNamespace(prompt_token_ids=[3], outputs=[])
+
+        vllm_generation = MagicMock()
+        vllm_generation.structured_outputs_regex = None
+        vllm_generation.llm.generate.return_value = [request_with_output, request_empty]
+
+        adapter = VLLMBackendAdapter(
+            vllm_generation=vllm_generation,
+            vllm_mode="colocate",
+            processing_class=MagicMock(),
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={},
+            tools=None,
+            chat_template=None,
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=False,
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "vllm": fake_vllm_module,
+                "vllm.sampling_params": fake_sampling_params_module,
+            },
+        ):
+            results = adapter.generate_rollout_completions(
+                prompts=["a", "b"], processing_class=MagicMock(), as_chat=False
+            )
+
+        assert results == [
+            RolloutCompletion(prompt_ids=[1, 2], completion_ids=[7, 8], logprobs=[-0.4, -0.5], text="done"),
+            RolloutCompletion(prompt_ids=[3], completion_ids=[], logprobs=[], text=""),
+        ]
+        vllm_generation.llm.generate.assert_called_once()
+
+    def test_rollout_capability_unsupported_for_non_vllm_backends(self):
+        transformers_adapter = TransformersBackendAdapter(
             model_wrapped=MagicMock(),
             accelerator=SimpleNamespace(device=torch.device("cpu")),
             is_fsdp_enabled=False,
-            args=SimpleNamespace(
-                ds3_gather_for_generation=False,
-                bf16=False,
-                fp16=False,
-                cast_lm_head_to_fp32=False,
-            ),
-            generation_kwargs={"foo": "bar"},
+            ds3_gather_for_generation=False,
+            generation_kwargs=None,
             eos_token_id=0,
-            chat_template_kwargs={},
-            _prepare_inputs=lambda x: x,
         )
+        transformers_paged_adapter = TransformersPagedBackendAdapter(
+            model_wrapped=MagicMock(),
+            accelerator=SimpleNamespace(device=torch.device("cpu")),
+            is_fsdp_enabled=False,
+            ds3_gather_for_generation=False,
+        )
+
+        with pytest.raises(RuntimeError, match="does not support rollout completions"):
+            transformers_adapter.generate_rollout_completions(prompts=["x"], processing_class=MagicMock())
+        with pytest.raises(RuntimeError, match="does not support rollout completions"):
+            transformers_paged_adapter.generate_rollout_completions(prompts=["x"], processing_class=MagicMock())
+
+
+class TestGenerationBackendFactory:
+    def _base_trainer(self):
+        class _BaseTrainer:
+            def _prepare_inputs(self, inputs):
+                return inputs
+
+        class _Trainer(_BaseTrainer):
+            pass
+
+        trainer = _Trainer()
+        trainer.use_vllm = False
+        trainer.use_transformers_paged = False
+        trainer.model_wrapped = MagicMock()
+        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+        trainer.is_fsdp_enabled = False
+        trainer.args = SimpleNamespace(
+            ds3_gather_for_generation=False,
+            bf16=False,
+            fp16=False,
+            cast_lm_head_to_fp32=False,
+            generation_kwargs={},
+            vllm_enable_sleep_mode=False,
+        )
+        trainer.generation_kwargs = {"foo": "bar"}
+        trainer.eos_token_id = 0
+        trainer.chat_template_kwargs = {}
+        trainer.processing_class = MagicMock()
+        trainer.temperature = 1.0
+        trainer.top_k = 50
+        trainer.min_p = None
+        trainer.max_completion_length = 32
+        trainer.repetition_penalty = None
+        trainer.top_p = None
+        trainer.vllm_tensor_parallel_size = 1
+        trainer.vllm_mode = "server"
+        return trainer
 
     def test_factory_selects_vllm_backend(self):
         trainer = self._base_trainer()

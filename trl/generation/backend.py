@@ -34,6 +34,14 @@ class GenerationResult:
     extra_fields: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class RolloutCompletion:
+    prompt_ids: list[int]
+    completion_ids: list[int]
+    logprobs: list[float]
+    text: str
+
+
 class GenerationBackend(Protocol):
     def generate(
         self,
@@ -48,10 +56,61 @@ class GenerationBackend(Protocol):
         ...
 
 
+class RolloutCompletionsBackend(Protocol):
+    def generate_rollout_completions(
+        self,
+        prompts: list,
+        processing_class: Any,
+        generation_overrides: dict[str, Any] | None = None,
+        as_chat: bool | None = None,
+    ) -> list[RolloutCompletion]:
+        ...
+
+
+def _raise_rollout_capability_error(backend_name: str) -> None:
+    raise RuntimeError(
+        f"Backend '{backend_name}' does not support rollout completions. "
+        "This capability is currently available only for vLLM backends."
+    )
+
+
 class VLLMBackendAdapter:
-    def __init__(self, vllm_generation: VLLMGeneration, profiler_factory: Any | None = None):
+    def __init__(
+        self,
+        vllm_generation: VLLMGeneration,
+        profiler_factory: Any | None = None,
+        *,
+        vllm_mode: str,
+        processing_class: Any,
+        temperature: float,
+        top_k: int,
+        min_p: float | None,
+        max_completion_length: int,
+        repetition_penalty: float | None,
+        top_p: float | None,
+        generation_kwargs: dict[str, Any] | None = None,
+        chat_template_kwargs: dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
+        chat_template: str | None = None,
+        vllm_tensor_parallel_size: int = 1,
+        vllm_enable_sleep_mode: bool = False,
+    ):
         self.vllm_generation = vllm_generation
         self.profiler_factory = profiler_factory or (lambda _label: nullcontext())
+        self.vllm_mode = vllm_mode
+        self.processing_class = processing_class
+        self.temperature = temperature
+        self.top_k = top_k
+        self.min_p = min_p
+        self.max_completion_length = max_completion_length
+        self.repetition_penalty = repetition_penalty
+        self.top_p = top_p
+        self.generation_kwargs = generation_kwargs
+        self.chat_template_kwargs = chat_template_kwargs or {}
+        self.tools = tools
+        self.chat_template = chat_template
+        self.vllm_tensor_parallel_size = vllm_tensor_parallel_size
+        self.vllm_enable_sleep_mode = vllm_enable_sleep_mode
 
     def generate(
         self,
@@ -79,6 +138,148 @@ class VLLMBackendAdapter:
 
     def sync_weights(self) -> None:
         self.vllm_generation.sync_weights()
+
+    def _build_base_generation_kwargs(self, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        generation_kwargs: dict[str, Any] = {
+            "n": 1,
+            "temperature": self.temperature,
+            "top_k": self.top_k,
+            "min_p": 0.0 if self.min_p is None else self.min_p,
+            "max_tokens": self.max_completion_length,
+        }
+        if self.repetition_penalty is not None:
+            generation_kwargs["repetition_penalty"] = self.repetition_penalty
+        if self.top_p is not None:
+            generation_kwargs["top_p"] = self.top_p
+
+        if self.generation_kwargs is not None:
+            generation_kwargs.update(self.generation_kwargs)
+
+        if overrides is not None:
+            generation_kwargs.update(overrides)
+
+        generation_kwargs = {key: value for key, value in generation_kwargs.items() if value is not None}
+
+        if generation_kwargs.get("n", 1) != 1:
+            raise ValueError("generate_rollout_completions expects n=1.")
+
+        return generation_kwargs
+
+    def generate_rollout_completions(
+        self,
+        prompts: list,
+        processing_class: Any,
+        generation_overrides: dict[str, Any] | None = None,
+        as_chat: bool | None = None,
+    ) -> list[RolloutCompletion]:
+        del processing_class
+
+        if not prompts:
+            return []
+
+        if self.vllm_mode == "server":
+            generation_kwargs = self._build_base_generation_kwargs(generation_overrides)
+
+            if as_chat is None:
+                as_chat = prompts and is_conversational({"prompt": prompts[0]})
+
+            with self.profiler_factory("vLLM.generate_rollout_server"):
+                if as_chat:
+                    output = self.vllm_generation.vllm_client.chat(
+                        messages=prompts,
+                        **generation_kwargs,
+                        chat_template_kwargs=self.chat_template_kwargs,
+                        tools=self.tools or None,
+                        chat_template=self.chat_template,
+                    )
+                else:
+                    output = self.vllm_generation.vllm_client.generate(prompts=prompts, **generation_kwargs)
+
+            return [
+                RolloutCompletion(
+                    prompt_ids=output["prompt_ids"][i],
+                    completion_ids=list(output["completion_ids"][i]),
+                    logprobs=list(output["logprobs"][i]),
+                    text=self.processing_class.decode(output["completion_ids"][i], skip_special_tokens=True),
+                )
+                for i in range(len(prompts))
+            ]
+
+        if self.vllm_mode == "colocate":
+            from vllm import SamplingParams
+            from vllm.sampling_params import StructuredOutputsParams
+
+            generation_kwargs = self._build_base_generation_kwargs(generation_overrides)
+            if self.vllm_generation.structured_outputs_regex:
+                generation_kwargs["structured_outputs"] = StructuredOutputsParams(
+                    regex=self.vllm_generation.structured_outputs_regex
+                )
+            generation_kwargs["logprobs"] = 0
+            sampling_params = SamplingParams(**generation_kwargs)
+
+            prompts_for_generation = prompts
+            original_size = len(prompts)
+
+            if self.vllm_tensor_parallel_size > 1:
+                gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.vllm_generation.tp_group)
+                prompts_for_generation = [prompt for group_prompts in gathered_prompts for prompt in group_prompts]
+
+            if as_chat is None:
+                as_chat = prompts_for_generation and is_conversational({"prompt": prompts_for_generation[0]})
+
+            if self.vllm_enable_sleep_mode:
+                self.vllm_generation.llm.wake_up(tags=["kv_cache"])
+                self.vllm_generation.llm.collective_rpc("reload_weights")
+
+            with self.profiler_factory("vLLM.generate_rollout"):
+                if as_chat:
+                    vllm_outputs = self.vllm_generation.llm.chat(
+                        prompts_for_generation,
+                        sampling_params=sampling_params,
+                        use_tqdm=False,
+                    )
+                else:
+                    vllm_outputs = self.vllm_generation.llm.generate(
+                        prompts_for_generation,
+                        sampling_params=sampling_params,
+                        use_tqdm=False,
+                    )
+
+            results: list[RolloutCompletion] = []
+            for request in vllm_outputs:
+                if not request.outputs:
+                    results.append(
+                        RolloutCompletion(
+                            prompt_ids=request.prompt_token_ids,
+                            completion_ids=[],
+                            logprobs=[],
+                            text="",
+                        )
+                    )
+                    continue
+                sequence = request.outputs[0]
+                logprobs = [next(iter(token_logprob.values())).logprob for token_logprob in sequence.logprobs]
+                results.append(
+                    RolloutCompletion(
+                        prompt_ids=request.prompt_token_ids,
+                        completion_ids=sequence.token_ids,
+                        logprobs=logprobs,
+                        text=sequence.text,
+                    )
+                )
+
+            if self.vllm_tensor_parallel_size > 1:
+                local_rank_in_group = torch.distributed.get_rank(group=self.vllm_generation.tp_group)
+                tp_slice = slice(local_rank_in_group * original_size, (local_rank_in_group + 1) * original_size)
+                results = results[tp_slice]
+
+            if self.vllm_enable_sleep_mode:
+                self.vllm_generation.llm.sleep(level=2)
+
+            return results
+
+        raise ValueError(f"vllm_mode must be 'server' or 'colocate', got '{self.vllm_mode}'")
 
 
 class TransformersPagedBackendAdapter:
@@ -162,6 +363,16 @@ class TransformersPagedBackendAdapter:
 
     def sync_weights(self) -> None:
         pass
+
+    def generate_rollout_completions(
+        self,
+        prompts: list,
+        processing_class: Any,
+        generation_overrides: dict[str, Any] | None = None,
+        as_chat: bool | None = None,
+    ) -> list[RolloutCompletion]:
+        del prompts, processing_class, generation_overrides, as_chat
+        _raise_rollout_capability_error("transformers_paged")
 
 
 class TransformersBackendAdapter:
@@ -258,13 +469,40 @@ class TransformersBackendAdapter:
     def sync_weights(self) -> None:
         pass
 
+    def generate_rollout_completions(
+        self,
+        prompts: list,
+        processing_class: Any,
+        generation_overrides: dict[str, Any] | None = None,
+        as_chat: bool | None = None,
+    ) -> list[RolloutCompletion]:
+        del prompts, processing_class, generation_overrides, as_chat
+        _raise_rollout_capability_error("transformers")
+
 
 def create_generation_backend(trainer: Any) -> GenerationBackend:
     def profiler_factory(label: str):
         return profiling_context(trainer, label)
 
     if trainer.use_vllm:
-        return VLLMBackendAdapter(vllm_generation=trainer.vllm_generation, profiler_factory=profiler_factory)
+        return VLLMBackendAdapter(
+            vllm_generation=trainer.vllm_generation,
+            profiler_factory=profiler_factory,
+            vllm_mode=trainer.vllm_mode,
+            processing_class=trainer.processing_class,
+            temperature=trainer.temperature,
+            top_k=trainer.top_k,
+            min_p=trainer.min_p,
+            max_completion_length=trainer.max_completion_length,
+            repetition_penalty=trainer.repetition_penalty,
+            top_p=trainer.top_p,
+            generation_kwargs=trainer.args.generation_kwargs,
+            chat_template_kwargs=trainer.chat_template_kwargs,
+            tools=getattr(trainer, "tools", None),
+            chat_template=getattr(trainer, "chat_template", None),
+            vllm_tensor_parallel_size=trainer.vllm_tensor_parallel_size,
+            vllm_enable_sleep_mode=trainer.args.vllm_enable_sleep_mode,
+        )
 
     include_tools_in_chat_template = hasattr(trainer, "tools") and hasattr(trainer, "chat_template")
 
