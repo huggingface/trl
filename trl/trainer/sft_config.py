@@ -195,9 +195,9 @@ class SFTConfig(_BaseConfig):
         default="bfd",
         metadata={
             "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
-            "`'bfd-split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
+            "`'bfd_split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
             "mid-sequence).",
-            "choices": ["bfd", "bfd-split", "wrapped"],
+            "choices": ["bfd", "bfd_split", "wrapped"],
         },
     )
     padding_free: bool = field(

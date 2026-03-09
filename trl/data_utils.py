@@ -857,8 +857,8 @@ def pack_dataset(
      'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 1], [1, 0]],
      'seq_lengths': [[4], [3, 1], [2]]}
 
-    >>> # "bfd-split" strategy: preserves all tokens
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd-split")
+    >>> # "bfd_split" strategy: preserves all tokens
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd_split")
     >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 5], [6, 7, 11]],
      'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 0], [1, 0, 1]],
