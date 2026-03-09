@@ -15,6 +15,7 @@
 import copy
 from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
+from enum import Enum
 from itertools import takewhile
 from typing import Any, Literal, TypeVar
 
@@ -27,6 +28,33 @@ from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
+
+
+class PackingStrategy(str, Enum):
+    """Possible values for the packing strategy."""
+
+    BFD = "bfd"
+    BFD_SPLIT = "bfd_split"
+    WRAPPED = "wrapped"
+
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            normalized = value.lower().replace("-", "_")
+            if normalized in {member.value for member in cls}:
+                return cls(normalized)
+
+            aliases = {
+                "bfd_truncate": "bfd",
+                "bfd_requeue": "bfd_split",
+            }
+            if normalized in aliases:
+                return cls(aliases[normalized])
+
+        # Copied from https://github.com/huggingface/transformers/blob/1a50a3b13b6d17c2637fe19e94a8c459bd4208a5/src/transformers/utils/generic.py#L485-L487
+        raise ValueError(
+            f"{value} is not a valid {cls.__name__}, please select one of {list(cls._value2member_map_.keys())}"
+        )
 
 
 def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) -> list[dict[str, Any]]:
@@ -620,6 +648,7 @@ def _get_dataset_format(dataset: DatasetType) -> dict[str, Any]:
     else:
         format_type = dataset.formatting.format_type if dataset._formatting is not None else None
         format = {"type": format_type}
+    format.update(format.pop("format_kwargs", {}))
     return format
 
 
@@ -631,7 +660,7 @@ def _check_if_columns_can_be_packed(columns: list[pa.Array]):
 
         if idx == 0:
             first_column_offsets = column.offsets
-        elif first_column_offsets != column.offsets:
+        elif not first_column_offsets.equals(column.offsets):
             raise ValueError("All columns must have values of the same length.")
 
 
@@ -688,11 +717,10 @@ def _pack_bfd(
     _check_if_columns_can_be_packed(columns)
     assert len(columns) > 0
 
-    lengths = pc.list_value_length(columns[0]).to_numpy()
-
     if on_seq_length_overflow == "truncate":
         columns = [pc.list_slice(column, 0, seq_length) for column in columns]
     elif on_seq_length_overflow == "split":
+        lengths = pc.list_value_length(columns[0]).to_numpy()
         # Split the sequences longer than `seq_length` into chunks (of length `seq_length` or less) while respecting sequence boundaries
         num_fragments = np.ceil(lengths / seq_length).astype(int)
         offsets = np.arange(np.sum(num_fragments) + 1, dtype=columns[0].offsets.type.to_pandas_dtype()) * seq_length
@@ -783,7 +811,7 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 def pack_dataset(
     dataset: DatasetType,
     seq_length: int,
-    strategy: Literal["bfd", "bfd-split", "wrapped"] = "bfd",
+    strategy: PackingStrategy | str = PackingStrategy.BFD,
     map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
@@ -794,13 +822,13 @@ def pack_dataset(
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
-        strategy (`str`, *optional*, defaults to `"bfd"`):
+        strategy (`str` or [`PackingStrategy`], *optional*, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
             - `"bfd"` (Best Fit Decreasing): Preserves sequence boundaries and truncates sequences that exceed
                 `seq_length`, discarding overflow tokens. Ideal for SFT and conversational datasets where maintaining
                 conversation structure is important.
-            - `"bfd-split"`: Similar to `"bfd"` but splits overflow sequences for packing into other
+            - `"bfd_split"`: Similar to `"bfd"` but splits overflow sequences for packing into other
                 examples. Prevents token loss for pre-training or long documents, but may break conversation structure
                 in SFT datasets.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
@@ -839,26 +867,26 @@ def pack_dataset(
     """
     if map_kwargs is None:
         map_kwargs = {}
+
+    strategy = PackingStrategy(strategy)
     format = _get_dataset_format(dataset)
     dataset = dataset.with_format("arrow")
-    if strategy in {"bfd", "bfd-truncate"}:
+    if strategy is PackingStrategy.BFD:
         dataset = dataset.map(
             _pack_bfd,
             batched=True,
             fn_kwargs={"seq_length": seq_length, "on_seq_length_overflow": "truncate"},
             **map_kwargs,
         )
-    elif strategy in {"bfd-split", "bfd-requeue"}:
+    elif strategy is PackingStrategy.BFD_SPLIT:
         dataset = dataset.map(
             _pack_bfd,
             batched=True,
             fn_kwargs={"seq_length": seq_length, "on_seq_length_overflow": "split"},
             **map_kwargs,
         )
-    elif strategy == "wrapped":
+    else:  # PackingStrategy.WRAPPED
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
-    else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd', 'bfd-split', or 'wrapped'.")
     dataset = dataset.with_format(**format)
     return dataset
 

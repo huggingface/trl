@@ -13,10 +13,11 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from transformers import TrainingArguments
 
+from ..data_utils import PackingStrategy
 from .base_config import _BaseConfig
 
 
@@ -72,7 +73,7 @@ class SFTConfig(_BaseConfig):
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
-        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
+        packing_strategy (`str` or [`PackingStrategy`], *optional*, defaults to `"bfd"`):
             Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd-requeue"`
             (best-fit decreasing, re-queues overflow tokens), or `"wrapped"` (aggressive, cuts mid-sequence).
         padding_free (`bool`, *optional*, defaults to `False`):
@@ -190,7 +191,7 @@ class SFTConfig(_BaseConfig):
             "and reduce padding. Uses `max_length` to define sequence length."
         },
     )
-    packing_strategy: Literal["bfd", "bfd-split", "wrapped"] = field(
+    packing_strategy: str | PackingStrategy = field(
         default="bfd",
         metadata={
             "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
@@ -254,3 +255,8 @@ class SFTConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
+
+    def __post_init__(self):
+        self.packing_strategy = PackingStrategy(self.packing_strategy)
+
+        return super().__post_init__()
