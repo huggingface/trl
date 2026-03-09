@@ -16,6 +16,9 @@ import copy
 from typing import Any
 
 import torch
+from datasets import Dataset, IterableDataset
+from torch import nn
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, TrainerCallback
 
 from ...trainer.callbacks import SyncRefModelCallback
 from ..self_distillation.base_self_distillation_trainer import BaseSelfDistillationTrainer
@@ -49,9 +52,32 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
 
     config_cls = SDPOConfig
 
-    def __init__(self, *args, **kwargs):
-        kwargs["args"] = self._coerce_self_distillation_args(kwargs.get("args"))
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        model: str | PreTrainedModel | nn.Module,
+        reward_funcs: Any | list[Any] | None = None,
+        args: SDPOConfig | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        peft_config=None,
+    ):
+        args = self._coerce_self_distillation_args(args)
+        super().__init__(
+            model=model,
+            reward_funcs=reward_funcs,
+            args=args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=processing_class,
+            reward_processing_classes=reward_processing_classes,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            peft_config=peft_config,
+        )
         self._last_rewards_per_func = None
         self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
         if self.args.teacher_regularization == "ema":
