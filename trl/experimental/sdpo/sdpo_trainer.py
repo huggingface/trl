@@ -97,6 +97,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
             "on_teacher_context_built",
             teacher_input_ids=output["teacher_input_ids"],
             teacher_attention_mask=output["teacher_attention_mask"],
+            completion_mask=output["completion_mask"],
             self_distillation_mask=output["self_distillation_mask"],
         )
 

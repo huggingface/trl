@@ -161,12 +161,14 @@ class SuccessfulRolloutTeacherContextBuilder:
         num_generations = self.trainer.num_generations
         total_samples = rewards.shape[0]
         completion_ids = output["completion_ids"]
+        completion_mask = output["completion_mask"]
 
         num_local = len(prompts)
         process_start = self.trainer.accelerator.process_index * num_local
         process_slice = slice(process_start, process_start + num_local)
 
         all_completion_ids = self.trainer.accelerator.gather(completion_ids)
+        all_completion_mask = self.trainer.accelerator.gather(completion_mask)
         all_prompts = gather_object(prompts)
         all_feedbacks = gather_object(feedbacks) if feedbacks is not None else [None] * total_samples
 
@@ -242,10 +244,7 @@ class SuccessfulRolloutTeacherContextBuilder:
 
         teacher_batch = self._tokenize_teacher_messages(teacher_messages_list)
         teacher_input_ids = torch.cat([teacher_batch.prompt_ids, all_completion_ids], dim=1)
-        teacher_attention_mask = torch.cat(
-            [teacher_batch.prompt_mask, (all_completion_ids != self.trainer.pad_token_id).long()],
-            dim=1,
-        )
+        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, all_completion_mask], dim=1)
 
         batch_size = total_samples if total_samples > 0 else 1
         num_groups = max(1, total_samples // max(1, num_generations))

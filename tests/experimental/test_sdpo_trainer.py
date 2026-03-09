@@ -28,12 +28,24 @@ class TeacherContextCaptureCallback(TrainerCallback):
     def __init__(self):
         self.captured_teacher_input_text = None
         self.captured_self_distillation_mask = None
+        self.captured_teacher_attention_mask = None
+        self.captured_completion_mask = None
 
     def on_teacher_context_built(
-        self, processing_class=None, teacher_input_ids=None, self_distillation_mask=None, **kwargs
+        self,
+        processing_class=None,
+        teacher_input_ids=None,
+        teacher_attention_mask=None,
+        completion_mask=None,
+        self_distillation_mask=None,
+        **kwargs,
     ):
         if self.captured_teacher_input_text is None and teacher_input_ids is not None:
             self.captured_teacher_input_text = processing_class.decode(teacher_input_ids[0], skip_special_tokens=True)
+        if self.captured_teacher_attention_mask is None and teacher_attention_mask is not None:
+            self.captured_teacher_attention_mask = teacher_attention_mask.detach().cpu()
+        if self.captured_completion_mask is None and completion_mask is not None:
+            self.captured_completion_mask = completion_mask.detach().cpu()
         if self.captured_self_distillation_mask is None and self_distillation_mask is not None:
             self.captured_self_distillation_mask = self_distillation_mask.detach().cpu()
 
@@ -188,7 +200,7 @@ class TestSDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_training_rejects_non_reverse_token_level_distillation(self):
-        with pytest.raises(ValueError, match="requires `full_logit_distillation=True`"):
+        with pytest.raises(ValueError, match="requires `distillation_alpha=1.0`"):
             SDPOConfig(
                 output_dir=self.tmp_dir,
                 learning_rate=0.1,
@@ -330,3 +342,40 @@ class TestSDPOTrainer(TrlTestCase):
 
         assert "Observed flat SDPO rewards across all sampled generations" in caplog.text
         assert "SDPO self-distillation is inactive because no reprompted samples were constructed" in caplog.text
+
+    def test_training_preserves_teacher_completion_attention_mask(self):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+            success_reward_threshold=0.5,
+            dont_reprompt_on_self_success=False,
+            max_steps=1,
+        )
+
+        def alternating_reward(**kwargs):
+            return [1.0 if i % 2 == 0 else 0.0 for i in range(len(kwargs["prompts"]))]
+
+        capture_callback = TeacherContextCaptureCallback()
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=alternating_reward,
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.captured_teacher_attention_mask is not None
+        assert capture_callback.captured_completion_mask is not None
+
+        completion_length = capture_callback.captured_completion_mask.shape[1]
+        teacher_completion_attention = capture_callback.captured_teacher_attention_mask[0, -completion_length:]
+        assert torch.equal(teacher_completion_attention, capture_callback.captured_completion_mask[0])

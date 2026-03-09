@@ -188,11 +188,15 @@ class SelfDistillationConfig(_BaseConfig):
     )
     diagnostics_warning_interval: int = field(
         default=10,
-        metadata={"help": "Emit repeated trainer diagnostics every N consecutive degenerate steps. Set to 0 to disable."},
+        metadata={
+            "help": "Emit repeated trainer diagnostics every N consecutive degenerate steps. Set to 0 to disable."
+        },
     )
     diagnostics_flat_tolerance: float = field(
         default=1e-8,
-        metadata={"help": "Tolerance used to decide whether reward variance or reprompt activity is effectively zero."},
+        metadata={
+            "help": "Tolerance used to decide whether reward variance or reprompt activity is effectively zero."
+        },
     )
 
     def __post_init__(self):

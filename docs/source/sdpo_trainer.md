@@ -29,9 +29,9 @@ from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
 training_args = SDPOConfig(
     output_dir="sdpo-model",
-    distillation_alpha=0.5,                # Jensen-Shannon divergence (recommended)
+    distillation_alpha=1.0,                # Default token-level reverse KL
     distillation_topk=100,                 # Top-K logit distillation approximation
-    full_logit_distillation=True,          # Required for top-K logit-level SDPO
+    full_logit_distillation=True,          # Required for top-K logit-level SDPO; enables non-reverse divergences
     distillation_is_clip=2.0,              # Importance sampling clipping
     distillation_weight=1.0,               # Weight for self-distillation loss
     sdpo_policy_loss_mode="distillation_only",

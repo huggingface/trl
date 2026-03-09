@@ -30,6 +30,12 @@ class SDPOConfig(SelfDistillationConfig):
         default=True,
         metadata={"help": "Skip reprompting when model generates correct response."},
     )
+    distillation_alpha: float = field(
+        default=1.0,
+        metadata={
+            "help": "KL divergence direction for SDPO. Token-level SDPO requires reverse KL (`distillation_alpha=1.0`)."
+        },
+    )
     distillation_topk: int | None = field(
         default=None,
         metadata={"help": "Top-K approximation for logit-level SDPO. Requires `full_logit_distillation=True`."},
@@ -99,5 +105,10 @@ class SDPOConfig(SelfDistillationConfig):
             raise ValueError("teacher_update_rate must be in [0, 1]")
         if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
             raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
+        if not self.full_logit_distillation and self.distillation_alpha != 1.0:
+            raise ValueError(
+                "SDPO token-level distillation requires `distillation_alpha=1.0`. "
+                "Set `full_logit_distillation=True` to use other divergence settings."
+            )
         if self.distillation_topk is not None and not self.full_logit_distillation:
             raise ValueError("SDPO `distillation_topk` requires `full_logit_distillation=True`.")
