@@ -145,12 +145,11 @@ class _StreamingDataLoader:
         n_samples = len(dataset)
         self._n_groups = n_samples // num_generations
         # Compute exact micro-batch count: each chunk of min_groups yields ceil(chunk_size / batch_size) micro-batches
-        n_micro = 0
-        for chunk_start_g in range(0, self._n_groups, self._min_groups):
-            chunk_end_g = min(chunk_start_g + self._min_groups, self._n_groups)
-            chunk_size = (chunk_end_g - chunk_start_g) * num_generations
-            n_micro += -(-chunk_size // batch_size)  # ceil div
-        self._n_micro_batches = n_micro
+        n_full_chunks, remainder_groups = divmod(self._n_groups, self._min_groups)
+        full_chunk_size = self._min_groups * num_generations
+        self._n_micro_batches = n_full_chunks * -(-full_chunk_size // batch_size)
+        if remainder_groups:
+            self._n_micro_batches += -(-(remainder_groups * num_generations) // batch_size)
 
     def __len__(self):
         return self._n_micro_batches
