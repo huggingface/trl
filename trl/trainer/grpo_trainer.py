@@ -109,9 +109,12 @@ if is_trackio_available():
 
 logger = get_logger(__name__)
 
-# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
-# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
+# What we call a reward function is a callable that takes a list of prompts and completions (plus optional
+# keyword arguments such as completion_ids and per-sample dataset metadata forwarded by the trainer) and
+# returns a list of rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
+# NOTE: the trainer always calls reward functions with keyword arguments, so plain callables must accept
+# **kwargs (e.g. ``def my_reward(prompts, completions, **kwargs) -> list[float]``).
+RewardFunc = str | PreTrainedModel | Callable[..., list[float]]
 
 # What we call a rollout function is a callable that takes prompts (list) and the trainer instance as parameters and
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
