@@ -722,8 +722,9 @@ class GRPOTrainer(_BaseTrainer):
                 server_base_url=args.vllm_server_base_url,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
-                group_port=args.vllm_group_port,
                 server_timeout=args.vllm_server_timeout,
+                group_port=args.vllm_group_port,
+                weight_sync_chunk_size=args.vllm_weight_sync_chunk_size,
                 # Colocate mode configuration
                 tensor_parallel_size=args.vllm_tensor_parallel_size,
                 gpu_memory_utilization=args.vllm_gpu_memory_utilization,
