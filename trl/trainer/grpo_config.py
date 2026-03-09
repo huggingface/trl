@@ -163,6 +163,31 @@ class GRPOConfig(_BaseConfig):
             Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
             waking the engine adds host–device transfer latency.
 
+
+        > Parameters that control the data producer (online rollout generation)
+
+        use_data_producer (`bool`, *optional*, defaults to `False`):
+            Use the `DataProducer` protocol for rollout generation instead of the legacy `_prepare_inputs`
+            buffering path. When enabled, the trainer creates a `GRPODataProducer` that integrates with the
+            transformers `_OnlineEpochSource` for the training loop.
+        async_prefetch (`bool`, *optional*, defaults to `False`):
+            Enable asynchronous rollout prefetching. When `True`, the next rollout is produced in a background
+            thread while the current one is being trained on. Requires `use_data_producer=True`. Currently only
+            supported with a single process (`num_processes=1`).
+        prefetch_depth (`int`, *optional*, defaults to `1`):
+            Number of rollouts to produce ahead of training when `async_prefetch` is enabled. Higher values
+            keep the GPU more saturated but increase off-policy staleness.
+        streaming_partial_batch (`bool`, *optional*, defaults to `False`):
+            Enable verl-style streaming partial batch training. When `True`, training begins on prompt
+            groups as they are scored, rather than waiting for the full batch to be scored. This reduces
+            peak GPU memory (only one group's logits in memory at a time) and allows reward subprocess
+            computation to overlap with subsequent groups' scoring. Requires `use_data_producer=True`,
+            `async_prefetch=True`, and `scale_rewards="group"` or `"none"`.
+        streaming_min_groups (`int`, *optional*, defaults to `1`):
+            Minimum number of prompt groups to accumulate and score before yielding micro-batches for
+            training. Higher values give better inter-group shuffling at the cost of more latency.
+            Only relevant when `streaming_partial_batch=True`.
+
         > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.0`):
@@ -568,6 +593,54 @@ class GRPOConfig(_BaseConfig):
             "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set "
             "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
             "launching the vLLM server via the `--vllm_tensor_parallel_size` flag."
+        },
+    )
+
+    # Parameters that control the data producer (online rollout generation)
+    vllm_sync_interval: int = field(
+        default=1,
+        metadata={
+            "help": "Sync model weights to the vLLM server every N training steps when async_prefetch is enabled. "
+                    "Higher values reduce sync overhead but increase off-policy staleness of generated data. "
+                    "Set to 1 to sync every step (default)."
+        },
+    )
+    use_data_producer: bool = field(
+        default=False,
+        metadata={
+            "help": "Use the DataProducer protocol for rollout generation instead of the legacy _prepare_inputs "
+                    "buffering path. When enabled, the trainer creates a GRPODataProducer for the training loop."
+        },
+    )
+    async_prefetch: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable asynchronous rollout prefetching. When True, the next rollout is produced in a "
+                    "background thread while the current one is being trained on. Requires use_data_producer=True. "
+                    "Currently only supported with a single process."
+        },
+    )
+    prefetch_depth: int = field(
+        default=1,
+        metadata={
+            "help": "Number of rollouts to produce ahead of training when async_prefetch is enabled. Higher values "
+                    "keep the GPU more saturated but increase off-policy staleness."
+        },
+    )
+    streaming_partial_batch: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable verl-style streaming partial batch training. Scores and trains on prompt groups "
+                    "incrementally instead of waiting for the full batch. Reduces peak GPU memory and enables "
+                    "reward/scoring overlap. Requires use_data_producer=True, async_prefetch=True, and "
+                    "scale_rewards='group' or 'none'."
+        },
+    )
+    streaming_min_groups: int = field(
+        default=1,
+        metadata={
+            "help": "Minimum number of prompt groups to accumulate before yielding micro-batches. "
+                    "Higher values give better inter-group shuffling. Only used when streaming_partial_batch=True."
         },
     )
 
