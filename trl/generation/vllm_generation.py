@@ -692,6 +692,10 @@ class VLLMGeneration:
                 )
             elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
                 generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
+
+            if Version(vllm.__version__) >= Version("0.17.0"):
+                generation_kwargs.pop("truncate_prompt_tokens", None)
+
             sampling_params = SamplingParams(**generation_kwargs)
 
             if self.tensor_parallel_size > 1:
