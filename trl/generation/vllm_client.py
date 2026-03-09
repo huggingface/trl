@@ -26,6 +26,7 @@ import torch.distributed.distributed_c10d as c10d
 from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers import is_torch_xpu_available
+from transformers.utils import get_json_schema
 from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
@@ -339,7 +340,7 @@ class VLLMClient:
                 will override them.
             chat_template_kwargs (`dict`, *optional*):
                 Additional keyword arguments to customize the chat template used by the model.
-            tools (`list`, *optional*):
+            tools (`list[dict | Callable]`, *optional*):
                 List of tool functions available for tool calling during chat generation.
             chat_template (`str`, *optional*):
                 Template to use for structuring the chat. If not provided, the model's default chat template will be
@@ -357,8 +358,6 @@ class VLLMClient:
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
         """
-        if tools:
-            raise NotImplementedError("Tool calling is not yet implemented in VLLMClient.chat().")
         if chat_template is not None:
             raise NotImplementedError("Custom chat templates are not yet implemented in VLLMClient.chat().")
 
@@ -372,6 +371,9 @@ class VLLMClient:
                     for part in message["content"]:
                         if part["type"] == "image_pil":
                             part["image_pil"] = pil_to_base64(part["image_pil"])
+
+        if isinstance(tools, list) and len(tools) > 0:
+            tools = [get_json_schema(tool) if callable(tool) else tool for tool in tools]
 
         response = self.session.post(
             url,
@@ -388,6 +390,7 @@ class VLLMClient:
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
                 "chat_template_kwargs": chat_template_kwargs or {},
+                "tools": tools,
             },
         )
         if response.status_code == 200:

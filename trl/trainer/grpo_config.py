@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -68,6 +69,8 @@ class GRPOConfig(_BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
+        pad_to_multiple_of (`int`, *optional*):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value.
 
         > Parameters that control generation
 
@@ -330,7 +333,7 @@ class GRPOConfig(_BaseConfig):
     )
 
     # Parameters that control the model and reference model
-    model_init_kwargs: dict | str | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
@@ -394,6 +397,10 @@ class GRPOConfig(_BaseConfig):
     shuffle_dataset: bool | None = field(
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
+    )
+    pad_to_multiple_of: int | None = field(
+        default=None,
+        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
     )
 
     # Parameters that control generation
@@ -744,7 +751,6 @@ class GRPOConfig(_BaseConfig):
             "IS ratios are computed and constrained."
         },
     )
-
     vllm_importance_sampling_mode: str = field(
         default="sequence_mask",
         metadata={
@@ -758,7 +764,6 @@ class GRPOConfig(_BaseConfig):
             "'sequence_mask'."
         },
     )
-
     vllm_importance_sampling_cap: float = field(
         default=3.0,
         metadata={
