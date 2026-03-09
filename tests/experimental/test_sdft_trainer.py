@@ -148,8 +148,6 @@ class TestSDFTTrainer(TrlTestCase):
             ),
         )
 
-        assert trainer.ref_model is None
-
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None

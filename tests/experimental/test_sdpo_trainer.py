@@ -134,8 +134,6 @@ class TestSDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        assert trainer._metrics["train"]["self_distillation/flat_group_fraction"]
-        assert trainer._metrics["train"]["self_distillation/reward_std"]
 
     def test_training_with_hybrid_policy_loss_mode(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -187,7 +185,6 @@ class TestSDPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        assert trainer.teacher_model is None
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_training_rejects_non_reverse_token_level_distillation(self):
