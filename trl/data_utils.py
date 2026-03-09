@@ -646,7 +646,7 @@ def _get_dataset_format(dataset: DatasetType) -> dict[str, Any]:
     if isinstance(dataset, Dataset):
         format = dataset.format
     else:
-        format_type = dataset.formatting.format_type if dataset._formatting is not None else None
+        format_type = dataset._formatting.format_type if dataset._formatting is not None else None
         format = {"type": format_type}
     format.update(format.pop("format_kwargs", {}))
     return format
