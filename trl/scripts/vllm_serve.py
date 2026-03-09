@@ -490,7 +490,7 @@ def main(script_args: ScriptArguments):
         return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str]
+        prompts: list[str] | list[list[int]]
         images: list[str] | None = None
         n: int = 1
         repetition_penalty: float = 1.0
@@ -517,7 +517,8 @@ def main(script_args: ScriptArguments):
 
         Args:
             request (`GenerateRequest`):
-                - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
+                - `prompts` (list of `str` or list of list of `int`): A list of prompts. It accepts either text strings
+                  or pre-tokenized token ID lists. When text strings are provided, `images` can optionally be included.
                 - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
                   along with prompts.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
@@ -553,9 +554,14 @@ def main(script_args: ScriptArguments):
                 - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
                   shape as `logprobs`.
 
-        Example request:
+        Example request (text prompts):
         ```json
         {"prompts": ["Hello world", "What is AI?"]}
+        ```
+
+        Example request (token IDs):
+        ```json
+        {"prompts": [[101, 102], [201, 202]]}
         ```
 
         Example response:
@@ -568,14 +574,20 @@ def main(script_args: ScriptArguments):
         }
         ```
         """
-        request.images = request.images or [None] * len(request.prompts)
+        # Build vLLM-compatible prompt inputs
+        if request.prompts and isinstance(request.prompts[0], list):
+            # Token IDs path: wrap each list of token IDs as a TokensPrompt dict for vLLM
+            prompts = [{"prompt_token_ids": ids} for ids in request.prompts]
+        else:
+            # Text prompts path: build prompt dicts with optional images
+            request.images = request.images or [None] * len(request.prompts)
 
-        prompts = []
-        for prompt, image in zip(request.prompts, request.images, strict=True):
-            row = {"prompt": prompt}
-            if image is not None:
-                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
-            prompts.append(row)
+            prompts = []
+            for prompt, image in zip(request.prompts, request.images, strict=True):
+                row = {"prompt": prompt}
+                if image is not None:
+                    row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+                prompts.append(row)
 
         generation_kwargs = {
             "n": request.n,
