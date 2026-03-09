@@ -1485,9 +1485,17 @@ class GRPOTrainer(_BaseTrainer):
                 completion_length = len(completion_ids[idx_with_tool])
                 post_tool_length = len(post_tool_ids[idx])
                 tool_length = prompt_completion_tool_length - prompt_length - completion_length
-                tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
-                if logprobs is not None:
-                    logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
+                if tool_length >= 0:
+                    # Normal case: tool tokens (mask=0) follow the completion, then post-tool (mask=1)
+                    tool_mask[idx_with_tool] += [0] * tool_length + [1] * post_tool_length
+                    if logprobs is not None:
+                        logprobs[idx_with_tool] += [0.0] * tool_length + post_tool_logprobs[idx]
+                else:
+                    # Retokenisation produced a shorter sequence: trim the tail of tool_mask/logprobs
+                    # (tool_length is negative, so list[:tool_length] drops |tool_length| items from the end)
+                    tool_mask[idx_with_tool] = tool_mask[idx_with_tool][:tool_length] + [1] * post_tool_length
+                    if logprobs is not None:
+                        logprobs[idx_with_tool] = logprobs[idx_with_tool][:tool_length] + post_tool_logprobs[idx]
 
             # Update completion_ids with the new completions (after tool execution)
             for idx in range(len(idxs_with_tool)):
