@@ -91,6 +91,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         mode = "train" if self.model.training else "eval"
         for key, value in self.teacher_context_builder.last_metrics.items():
             self._metrics[mode][key].append(value)
+        self._warn_on_inactive_self_distillation(mode)
 
         self._dispatch_self_distillation_callback(
             "on_teacher_context_built",
@@ -100,6 +101,39 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         )
 
         return output
+
+    def _warn_on_inactive_self_distillation(self, mode: str) -> None:
+        metrics = self.teacher_context_builder.last_metrics
+        tolerance = self.args.diagnostics_flat_tolerance
+
+        reprompt_fraction = metrics.get("self_distillation/reprompt_sample_fraction", 0.0)
+        success_fraction = metrics.get("self_distillation/success_group_fraction", 0.0)
+
+        if reprompt_fraction <= tolerance:
+            self._warn_on_degenerate_diagnostics(
+                mode=mode,
+                counter_key="inactive_self_distillation",
+                message=(
+                    "SDPO self-distillation is inactive because no reprompted samples were constructed. "
+                    "This usually means no rollout exceeded `success_reward_threshold` and no usable privileged "
+                    "feedback was available."
+                ),
+            )
+        else:
+            self._diagnostic_counters[mode]["inactive_self_distillation"] = 0
+
+        if success_fraction <= tolerance:
+            self._warn_on_degenerate_diagnostics(
+                mode=mode,
+                counter_key="no_successful_rollouts",
+                message=(
+                    "SDPO did not find any successful rollouts in the current generation groups. "
+                    "If this persists, reduce task difficulty, adjust reward shaping, or lower "
+                    "`success_reward_threshold`."
+                ),
+            )
+        else:
+            self._diagnostic_counters[mode]["no_successful_rollouts"] = 0
 
     def _compute_loss(
         self,

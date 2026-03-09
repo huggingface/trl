@@ -186,6 +186,14 @@ class SelfDistillationConfig(_BaseConfig):
         default=1.0,
         metadata={"help": "Weight applied to the self-distillation loss term."},
     )
+    diagnostics_warning_interval: int = field(
+        default=10,
+        metadata={"help": "Emit repeated trainer diagnostics every N consecutive degenerate steps. Set to 0 to disable."},
+    )
+    diagnostics_flat_tolerance: float = field(
+        default=1e-8,
+        metadata={"help": "Tolerance used to decide whether reward variance or reprompt activity is effectively zero."},
+    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -200,6 +208,10 @@ class SelfDistillationConfig(_BaseConfig):
             raise ValueError("loss_type must be one of: 'grpo', 'bnpo', 'dr_grpo', 'dapo'")
         if self.num_generations < 1:
             raise ValueError("num_generations must be at least 1")
+        if self.diagnostics_warning_interval < 0:
+            raise ValueError("diagnostics_warning_interval must be non-negative")
+        if self.diagnostics_flat_tolerance < 0:
+            raise ValueError("diagnostics_flat_tolerance must be non-negative")
 
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:

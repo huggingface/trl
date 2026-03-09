@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 import pytest
 import torch
 from datasets import Dataset, load_dataset
@@ -132,6 +134,8 @@ class TestSDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer._metrics["train"]["self_distillation/flat_group_fraction"]
+        assert trainer._metrics["train"]["self_distillation/reward_std"]
 
     def test_training_with_hybrid_policy_loss_mode(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -299,3 +303,33 @@ class TestSDPOTrainer(TrlTestCase):
         assert "format requirements" in capture_callback.captured_teacher_input_text
         assert capture_callback.captured_self_distillation_mask is not None
         assert capture_callback.captured_self_distillation_mask[0].item() == 1.0
+
+    def test_training_warns_when_sdpo_rewards_are_flat(self, caplog):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+            diagnostics_warning_interval=2,
+            max_steps=2,
+        )
+
+        def zero_reward(**kwargs):
+            return [0.0] * len(kwargs["prompts"])
+
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=zero_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            trainer.train()
+
+        assert "Observed flat SDPO rewards across all sampled generations" in caplog.text
+        assert "SDPO self-distillation is inactive because no reprompted samples were constructed" in caplog.text
