@@ -1243,14 +1243,20 @@ class RLOOTrainer(_BaseTrainer):
             else:  # this case doesn't occur during training, but could in eval when num_generations_eval=1
                 advantages = torch.zeros_like(rewards)
         elif self.args.advantage_estimator == "reinforce":
-            # REINFORCE++: global z-score normalization over the flat batch
-            advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+                # REINFORCE++: global z-score normalization over the flat batch
+                all_rewards = self.accelerator.gather(rewards)
+                global_mean = all_rewards.mean()
+                global_std = all_rewards.std()
+                advantages = (rewards - global_mean) / (global_std + 1e-8)
+
         elif self.args.advantage_estimator == "reinforce_baseline":
             # REINFORCE++ with baseline: group mean subtraction then global z-score normalization
-            # No /std at the group step — global whitening handles scale
             group_mean = grouped_rewards.mean(dim=1, keepdim=True)
             advantages = (grouped_rewards - group_mean).flatten()
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            all_advantages = self.accelerator.gather(advantages)
+            global_mean = all_advantages.mean()
+            global_std = all_advantages.std()
+            advantages = (advantages - global_mean) / (global_std + 1e-8)
         else:
             raise ValueError(f"Unknown advantage_estimator: {self.args.advantage_estimator}")
 

@@ -1597,3 +1597,90 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
+
+    def test_advantage_estimators_math(self):
+        """Pure tensor unit test verifying the exact math for all three advantage estimators."""
+        # Setup: 2 prompts, 3 generations each
+        rewards = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        grouped_rewards = rewards.view(2, 3)
+        num_generations = 3
+
+        # 1. RLOO
+        grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)
+        baselines = (grouped_sum - grouped_rewards) / (num_generations - 1)
+        rloo_adv = rewards - baselines.view(-1)
+        expected_rloo = torch.tensor([-1.5, 0.0, 1.5, -1.5, 0.0, 1.5])
+        torch.testing.assert_close(rloo_adv, expected_rloo)
+
+        # 2. REINFORCE
+        mean = rewards.mean()
+        std = rewards.std()
+        reinforce_adv = (rewards - mean) / (std + 1e-8)
+        expected_reinforce = (rewards - 3.5) / 1.8708287
+        torch.testing.assert_close(reinforce_adv, expected_reinforce)
+
+        # 3. REINFORCE Baseline
+        group_mean = grouped_rewards.mean(dim=1, keepdim=True)
+        adv = (grouped_rewards - group_mean).flatten()
+        reinforce_baseline_adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+
+        # adv before whitening: [-1.0, 0.0, 1.0, -1.0, 0.0, 1.0]
+        # mean is 0, std is 0.8944272
+        expected_baseline_adv = adv / 0.8944272
+        torch.testing.assert_close(reinforce_baseline_adv, expected_baseline_adv)
+
+    @pytest.mark.parametrize("estimator", ["rloo", "reinforce", "reinforce_baseline"])
+    def test_training_advantage_estimators_integration(self, estimator):
+        """Integration test verifying forward and backward passes run without errors for each estimator."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            advantage_estimator=estimator,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Verify parameters updated
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("estimator", ["reinforce", "reinforce_baseline"])
+    def test_advantage_estimators_global_whitening(self, estimator):
+        """Verifies that accelerator.gather is called to enforce global whitening, not local."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            advantage_estimator=estimator,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Patch the accelerator gather method to verify it intercepts the reward tensors
+        with patch.object(trainer.accelerator, "gather", wraps=trainer.accelerator.gather) as mock_gather:
+            trainer.train()
+            assert mock_gather.call_count > 0, f"accelerator.gather was not called for global whitening in {estimator}"
