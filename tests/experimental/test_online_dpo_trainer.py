@@ -241,7 +241,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @require_torch_accelerator
     @require_vllm
     @pytest.mark.slow
-    def test_training_with_vllm(self, config_name):
+    def test_training_with_vllm_server(self, config_name):
         def cleanup_vllm_communicator(trainer):
             """Clean up vLLM communicator to avoid conflicts between test runs"""
             try:

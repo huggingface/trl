@@ -161,7 +161,7 @@ pip install trl[vllm]
 
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
-#### 🧩 Option 1: Colocate mode
+#### Option 1: Colocate mode
 
 In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs. This is the default mode.
 
@@ -174,7 +174,7 @@ training_args = RLOOConfig(
 )
 ```
 
-#### 🔌 Option 2: Server mode
+#### Option 2: Server mode
 
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
