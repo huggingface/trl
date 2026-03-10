@@ -161,7 +161,20 @@ pip install trl[vllm]
 
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
-#### 🔌 Option 1: Server mode
+#### 🧩 Option 1: Colocate mode
+
+In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs. This is the default mode.
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+#### 🔌 Option 2: Server mode
 
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
@@ -185,20 +198,6 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 
 > [!WARNING]
 > Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
-
-#### 🧩 Option 2: Colocate mode
-
-In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
-
-```python
-from trl import RLOOConfig
-
-training_args = RLOOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
 
 > [!TIP]
 > Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`RLOOConfig`] to avoid underutilization or out-of-memory errors.
