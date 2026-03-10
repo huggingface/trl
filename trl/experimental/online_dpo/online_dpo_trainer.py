@@ -752,7 +752,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             # prompt individually.
             ordered_set_of_prompts = all_prompts[:: self.num_generations]
             if has_images:
-                ordered_set_of_images = all_images[:: self.num_generations]
+                ordered_set_of_images = [
+                    [img] if img is not None else None for img in all_images[:: self.num_generations]
+                ]
             else:
                 ordered_set_of_images = None
             completion_ids = self.vllm_client.generate(
