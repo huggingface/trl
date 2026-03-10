@@ -109,9 +109,11 @@ if is_trackio_available():
 
 logger = get_logger(__name__)
 
-# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
-# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
+# A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
+# a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
+# arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
+# accept **kwargs.
+RewardFunc = str | PreTrainedModel | Callable[..., list[float]]
 
 # What we call a rollout function is a callable that takes prompts (list) and the trainer instance as parameters and
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
@@ -1071,7 +1073,7 @@ class GRPOTrainer(_BaseTrainer):
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
+            logits.div_(self.temperature)
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1216,25 +1218,6 @@ class GRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        if self.rollout_func is not None:
-            # Keep vLLM weights in sync for custom rollouts that rely on vLLM utilities.
-            if self.use_vllm and self.state.global_step != self._last_loaded_step:
-                with profiling_context(self, "sync_weights"):
-                    self.vllm_generation.sync_weights()
-                self._last_loaded_step = self.state.global_step
-
-            # Pass prompts to rollout_func preserving structured messages.
-            # Chat templating must happen inside rollout_func, at the backend boundary, so that
-            # multimodal content (images, typed content blocks) is not lost before rollout logic runs.
-            output = self.rollout_func(prompts, self)
-            required_keys = {"prompt_ids", "completion_ids", "logprobs"}
-            missing_keys = required_keys - output.keys()
-            if missing_keys:
-                missing_keys_list = sorted(missing_keys)
-                raise ValueError(f"rollout_func must return keys {missing_keys_list} in its output dict.")
-            extra_fields = {k: v for k, v in output.items() if k not in required_keys}
-            return output["prompt_ids"], output["completion_ids"], output["logprobs"], extra_fields
-
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # Sync weights if training step changed
@@ -1337,8 +1320,11 @@ class GRPOTrainer(_BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
+            # Move tensors to CPU before per-sample to avoid many CUDA syncs/copies (costly at scale/contention).
+            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids.cpu(), prompt_mask.bool().cpu(), strict=True)]
+            completion_ids = [
+                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+            ]
             logprobs = None  # not used in this case
             extra_fields = {}  # No extra fields for non-rollout_func paths
 
@@ -1521,7 +1507,26 @@ class GRPOTrainer(_BaseTrainer):
         # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+        if self.rollout_func is not None:
+            # Keep vLLM weights in sync for custom rollouts that rely on vLLM utilities.
+            if self.use_vllm and self.state.global_step != self._last_loaded_step:
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
+                self._last_loaded_step = self.state.global_step
+
+            # Pass prompts to rollout_func preserving structured messages.
+            # Chat templating must happen inside rollout_func, at the backend boundary, so that
+            # multimodal content (images, typed content blocks) is not lost before rollout logic runs.
+            output = self.rollout_func(prompts, self)
+            required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+            missing_keys = required_keys - output.keys()
+            if missing_keys:
+                missing_keys_list = sorted(missing_keys)
+                raise ValueError(f"rollout_func must return keys {missing_keys_list} in its output dict.")
+            extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+            prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
+        else:
+            prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
