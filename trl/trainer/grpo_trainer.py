@@ -1325,7 +1325,7 @@ class GRPOTrainer(_BaseTrainer):
             logprobs = None  # not used in this case
             extra_fields = {}  # No extra fields for non-rollout_func paths
 
-        return prompt_ids, completion_ids, logprobs, extra_fields
+        return prompt_ids, completion_ids, logprobs
 
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
