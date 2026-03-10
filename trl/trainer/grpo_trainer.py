@@ -1430,7 +1430,7 @@ class GRPOTrainer(_BaseTrainer):
                 break  # all overlong, exit tool loop
 
             # Generate new completions after tool execution
-            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _ = self._generate_single_turn(
+            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs = self._generate_single_turn(
                 prompt_completion_tools
             )
 
