@@ -47,6 +47,8 @@ class MiniLLMConfig(GRPOConfig):
             Whether to apply length normalization to the rewards.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+
     teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={

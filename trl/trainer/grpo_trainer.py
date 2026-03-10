@@ -741,10 +741,6 @@ class GRPOTrainer(_BaseTrainer):
                 max_completion_length=self.max_completion_length,
                 logprobs=0,  # we only need the generated token logprobs for the importance sampling correction
                 generation_kwargs=args.generation_kwargs,
-                # Chat/tool configuration
-                chat_template=self.chat_template,
-                chat_template_kwargs=self.chat_template_kwargs,
-                tools=self.tools,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
@@ -1226,10 +1222,43 @@ class GRPOTrainer(_BaseTrainer):
                     self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
-            # Generate using vLLM
+            # Tokenize prompts and extract images (for VLM) before calling vLLM
+            if is_conversational({"prompt": prompts[0]}):
+                # Extract images from messages for VLM support
+                images = []
+                has_images = False
+                for prompt in prompts:
+                    prompt_images = []
+                    for message in prompt:
+                        if isinstance(message["content"], list):
+                            for part in message["content"]:
+                                if part["type"] == "image":
+                                    prompt_images.append(part["image"])
+                                    has_images = True
+                    images.append(prompt_images if prompt_images else None)
+                images = images if has_images else None
+
+                tokenized = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    tools=self.tools,
+                    chat_template=self.chat_template,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
+                )
+                prompt_token_ids = tokenized["input_ids"]
+            else:
+                prompt_token_ids = self.processing_class(text=prompts)["input_ids"]
+                images = None
+
+            # Generate using vLLM with raw token IDs
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             prompt_ids, completion_ids, logprobs, _, extra_fields = self.vllm_generation.generate(
-                prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
+                prompts=prompt_token_ids,
+                images=images,
+                num_generations=num_generations,
+                profiler=profiling_context(self, "vLLM.generate"),
             )
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
             logprobs = [[lp[0] for lp in seq] for seq in logprobs]
@@ -1320,8 +1349,11 @@ class GRPOTrainer(_BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
+            # Move tensors to CPU before per-sample to avoid many CUDA syncs/copies (costly at scale/contention).
+            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids.cpu(), prompt_mask.bool().cpu(), strict=True)]
+            completion_ids = [
+                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+            ]
             logprobs = None  # not used in this case
             extra_fields = {}  # No extra fields for non-rollout_func paths
 
