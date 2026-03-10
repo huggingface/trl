@@ -1459,7 +1459,7 @@ class GRPOTrainer(_BaseTrainer):
 
             # Generate new completions after tool execution
             pct_prompt_ids, pct_images, pct_multimodal_fields = self._tokenize_prompts(prompt_completion_tools)
-            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _ = self._generate_single_turn(
+            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs = self._generate_single_turn(
                 pct_prompt_ids, pct_images, pct_multimodal_fields
             )
 
@@ -1553,9 +1553,10 @@ class GRPOTrainer(_BaseTrainer):
             prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
         else:
             prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-            prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(
+            prompt_ids, completion_ids, logprobs = self._generate_single_turn(
                 prompt_ids, images, multimodal_fields
             )
+            extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
