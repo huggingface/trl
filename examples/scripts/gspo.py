@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@ accelerate launch \
     --output_dir gspo-Qwen3-0.6B \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
-    --max_prompt_length 2048 \
     --max_completion_length 1024 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \

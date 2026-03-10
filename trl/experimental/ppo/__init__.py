@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,8 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .modeling_value_head import (
+    AutoModelForCausalLMWithValueHead,
+    AutoModelForSeq2SeqLMWithValueHead,
+    PreTrainedModelWrapper,
+)
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
 
 
-__all__ = ["PPOConfig", "PPOTrainer"]
+__all__ = [
+    "AutoModelForCausalLMWithValueHead",
+    "AutoModelForSeq2SeqLMWithValueHead",
+    "PreTrainedModelWrapper",
+    "PPOConfig",
+    "PPOTrainer",
+]

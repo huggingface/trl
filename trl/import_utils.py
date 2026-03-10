@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,96 +13,117 @@
 # limitations under the License.
 
 import importlib
-import os
+import importlib.metadata
+import importlib.util
 import warnings
 from contextlib import contextmanager
-from itertools import chain
-from types import ModuleType
-from typing import Any
 
-from packaging import version
-from transformers.utils.import_utils import _is_package_available
+from packaging.version import Version
 
 
-LIGER_KERNEL_MIN_VERSION = "0.6.4"
+LIGER_KERNEL_MIN_VERSION = "0.7.0"
+PACKAGE_DISTRIBUTION_MAPPING = importlib.metadata.packages_distributions()
 
-# Use same as transformers.utils.import_utils
-_deepspeed_available = _is_package_available("deepspeed")
-_fastapi_available = _is_package_available("fastapi")
-_joblib_available = _is_package_available("joblib")
-_liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
-_llm_blender_available = _is_package_available("llm_blender")
-_math_verify_available = _is_package_available("math_verify")
-_mergekit_available = _is_package_available("mergekit")
-_pydantic_available = _is_package_available("pydantic")
-_requests_available = _is_package_available("requests")
-_unsloth_available = _is_package_available("unsloth")
-_uvicorn_available = _is_package_available("uvicorn")
-_vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
-_vllm_ascend_available = _is_package_available("vllm_ascend")
-_weave_available = _is_package_available("weave")
+
+# From transformers: https://github.com/huggingface/transformers/blob/556312cd45a5e619c41b0f8adf680eab0d334324/src/transformers/utils/import_utils.py#L48-L77
+def _is_package_available(pkg_name: str, return_version: bool = False) -> tuple[bool, str] | bool:
+    """Check if `pkg_name` exist, and optionally try to get its version"""
+    spec = importlib.util.find_spec(pkg_name)
+    package_exists = spec is not None
+    package_version = "N/A"
+    if package_exists and return_version:
+        try:
+            # importlib.metadata works with the distribution package, which may be different from the import
+            # name (e.g. `PIL` is the import name, but `pillow` is the distribution name)
+            distributions = PACKAGE_DISTRIBUTION_MAPPING[pkg_name]
+            # Per PEP 503, underscores and hyphens are equivalent in package names.
+            # Prefer the distribution that matches the (normalized) package name.
+            normalized_pkg_name = pkg_name.replace("_", "-")
+            if normalized_pkg_name in distributions:
+                distribution_name = normalized_pkg_name
+            elif pkg_name in distributions:
+                distribution_name = pkg_name
+            else:
+                distribution_name = distributions[0]
+            package_version = importlib.metadata.version(distribution_name)
+        except (importlib.metadata.PackageNotFoundError, KeyError):
+            # If we cannot find the metadata (because of editable install for example), try to import directly.
+            # Note that this branch will almost never be run, so we do not import packages for nothing here
+            package = importlib.import_module(pkg_name)
+            package_version = getattr(package, "__version__", "N/A")
+    if return_version:
+        return package_exists, package_version
+    else:
+        return package_exists
 
 
 def is_deepspeed_available() -> bool:
-    return _deepspeed_available
+    return _is_package_available("deepspeed")
 
 
 def is_fastapi_available() -> bool:
-    return _fastapi_available
+    return _is_package_available("fastapi")
+
+
+def is_jmespath_available() -> bool:
+    return _is_package_available("jmespath")
 
 
 def is_joblib_available() -> bool:
-    return _joblib_available
+    return _is_package_available("joblib")
 
 
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
-    return _liger_kernel_available and version.parse(_liger_kernel_version) >= version.parse(min_version)
+    _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
+    return _liger_kernel_available and Version(_liger_kernel_version) >= Version(min_version)
 
 
 def is_llm_blender_available() -> bool:
-    return _llm_blender_available
+    return _is_package_available("llm_blender")
 
 
 def is_math_verify_available() -> bool:
-    return _math_verify_available
+    return _is_package_available("math_verify")
 
 
 def is_mergekit_available() -> bool:
-    return _mergekit_available
+    return _is_package_available("mergekit")
 
 
 def is_pydantic_available() -> bool:
-    return _pydantic_available
+    return _is_package_available("pydantic")
 
 
 def is_requests_available() -> bool:
-    return _requests_available
+    return _is_package_available("requests")
 
 
 def is_unsloth_available() -> bool:
-    return _unsloth_available
+    return _is_package_available("unsloth")
 
 
 def is_uvicorn_available() -> bool:
-    return _uvicorn_available
+    return _is_package_available("uvicorn")
 
 
 def is_vllm_available() -> bool:
-    if _vllm_available and version.parse(_vllm_version) != version.parse("0.10.2"):
-        warnings.warn(
-            f"TRL currently only supports vLLM version `0.10.2`. You have version {_vllm_version} installed. We "
-            "recommend to install this version to avoid compatibility issues.",
-            stacklevel=2,
-        )
+    _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
+    if _vllm_available:
+        if not (Version("0.10.2") <= Version(_vllm_version) <= Version("0.17.0")):
+            warnings.warn(
+                f"TRL currently supports vLLM versions from 0.10.2 to 0.17.0. You have version {_vllm_version} "
+                "installed. We recommend installing a supported version to avoid compatibility issues.",
+                stacklevel=2,
+            )
     return _vllm_available
 
 
 def is_vllm_ascend_available() -> bool:
-    return _vllm_ascend_available
+    return _is_package_available("vllm_ascend")
 
 
 def is_weave_available() -> bool:
-    return _weave_available
+    return _is_package_available("weave")
 
 
 class TRLExperimentalWarning(UserWarning):
@@ -120,63 +141,3 @@ def suppress_warning(category):
 
 def suppress_experimental_warning():
     return suppress_warning(TRLExperimentalWarning)
-
-
-class _LazyModule(ModuleType):
-    """
-    Module class that surfaces all objects but only performs associated imports when the objects are requested.
-    """
-
-    # Very heavily inspired by optuna.integration._IntegrationModule
-    # https://github.com/optuna/optuna/blob/master/optuna/integration/__init__.py
-    def __init__(self, name, module_file, import_structure, module_spec=None, extra_objects=None):
-        super().__init__(name)
-        self._modules = set(import_structure.keys())
-        self._class_to_module = {}
-        for key, values in import_structure.items():
-            for value in values:
-                self._class_to_module[value] = key
-        # Needed for autocompletion in an IDE
-        self.__all__ = list(import_structure.keys()) + list(chain(*import_structure.values()))
-        self.__file__ = module_file
-        self.__spec__ = module_spec
-        self.__path__ = [os.path.dirname(module_file)]
-        self._objects = {} if extra_objects is None else extra_objects
-        self._name = name
-        self._import_structure = import_structure
-
-    # Needed for autocompletion in an IDE
-    def __dir__(self):
-        result = super().__dir__()
-        # The elements of self.__all__ that are submodules may or may not be in the dir already, depending on whether
-        # they have been accessed or not. So we only add the elements of self.__all__ that are not already in the dir.
-        for attr in self.__all__:
-            if attr not in result:
-                result.append(attr)
-        return result
-
-    def __getattr__(self, name: str) -> Any:
-        if name in self._objects:
-            return self._objects[name]
-        if name in self._modules:
-            value = self._get_module(name)
-        elif name in self._class_to_module.keys():
-            module = self._get_module(self._class_to_module[name])
-            value = getattr(module, name)
-        else:
-            raise AttributeError(f"module {self.__name__} has no attribute {name}")
-
-        setattr(self, name, value)
-        return value
-
-    def _get_module(self, module_name: str):
-        try:
-            return importlib.import_module("." + module_name, self.__name__)
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to import {self.__name__}.{module_name} because of the following error (look up to see its"
-                f" traceback):\n{e}"
-            ) from e
-
-    def __reduce__(self):
-        return (self.__class__, (self._name, self.__file__, self._import_structure))

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,29 +12,74 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ...trainer.utils import OnPolicyConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class PPOConfig(OnPolicyConfig):
+class PPOConfig(_BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.ppo.PPOTrainer`].
 
     This class includes only the parameters that are specific to PPO training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] and [`OnPolicyConfig`] documentation. Note that default
-    values in this class may differ from those in [`~transformers.TrainingArguments`].
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[:-3]`):
-            Name of this experiment.
+        dataset_num_proc (`int`, *optional*):
+            Number of processes to use for processing the dataset.
+        num_mini_batches (`int`, *optional*, defaults to `1`):
+            Number of minibatches to split a batch into.
+        total_episodes (`int`, *optional*):
+            Total number of episodes in the dataset.
+        local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
+            Per rank no grad forward pass in the rollout phase.
+        num_sample_generations (`int`, *optional*, defaults to `10`):
+            Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
+        response_length (`int`, *optional*, defaults to `53`):
+            Length of the response.
+        stop_token (`str`, *optional*):
+            Specifies the stop token to use for text generation. This parameter is mutually exclusive with
+            `stop_token_id`.
+
+            - `None`: No stop token is applied, unless `stop_token_id` is specified.
+            - `'eos'`: Uses the tokenizer's `eos_token`.
+
+        stop_token_id (`int`, *optional*):
+            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
+            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
+        temperature (`float`, *optional*, defaults to `0.7`):
+            Sampling temperature.
+        missing_eos_penalty (`float`, *optional*):
+            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
+            generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
+            value.
+        sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
+            Path to the SFT model.
+        world_size (`int`, *optional*):
+            Number of processes (GPUs) to use for the training.
+        num_total_batches (`int`, *optional*):
+            Number of total batches to train.
+        micro_batch_size (`int`, *optional*):
+            Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
+        local_batch_size (`int`, *optional*):
+            Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
+        batch_size (`int`, *optional*):
+            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` *
+            `gradient_accumulation_steps`).
+        local_mini_batch_size (`int`, *optional*):
+            Mini batch size per GPU.
+        mini_batch_size (`int`, *optional*):
+            Mini batch size across GPUs.
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the model to the Hub after training.
         reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the reward model.
         model_adapter_name (`str`, *optional*):
@@ -66,11 +111,111 @@ class PPOConfig(OnPolicyConfig):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `3e-6` instead of `5e-5`.
     """
 
-    exp_name: str = field(
-        default=os.path.basename(__file__)[:-3],
-        metadata={"help": "Name of this experiment."},
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=3e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+
+    dataset_num_proc: int | None = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    num_mini_batches: int = field(
+        default=1,
+        metadata={"help": "Number of minibatches to split a batch into."},
+    )
+    total_episodes: int | None = field(
+        default=None,
+        metadata={"help": "Total number of episodes in the dataset."},
+    )
+    local_rollout_forward_batch_size: int = field(
+        default=64,
+        metadata={"help": "Per rank no grad forward pass in the rollout phase."},
+    )
+    num_sample_generations: int = field(
+        default=10,
+        metadata={
+            "help": "Number of debugging samples generations (i.e., `generate_completions` calls) throughout training."
+        },
+    )
+    response_length: int = field(
+        default=53,
+        metadata={"help": "Length of the response."},
+    )
+    stop_token: Literal["eos"] | None = field(
+        default=None,
+        metadata={
+            "help": "Specifies the stop token to use for text generation. This parameter is mutually exclusive with "
+            "`stop_token_id`."
+        },
+    )
+    stop_token_id: int | None = field(
+        default=None,
+        metadata={
+            "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
+            "applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`."
+        },
+    )
+    temperature: float = field(
+        default=0.7,
+        metadata={"help": "Sampling temperature."},
+    )
+    missing_eos_penalty: float | None = field(
+        default=None,
+        metadata={
+            "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
+            "encourage to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be "
+            "a positive value."
+        },
+    )
+    sft_model_path: str = field(
+        default="EleutherAI/pythia-160m",
+        metadata={"help": "Path to the SFT model."},
+    )
+    world_size: int | None = field(
+        default=None,
+        metadata={"help": "Number of processes (GPUs) to use for the training."},
+    )
+    num_total_batches: int | None = field(
+        default=None,
+        metadata={"help": "Number of total batches to train."},
+    )
+    micro_batch_size: int | None = field(
+        default=None,
+        metadata={"help": "Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)."},
+    )
+    local_batch_size: int | None = field(
+        default=None,
+        metadata={"help": "Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)."},
+    )
+    batch_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * "
+            "`gradient_accumulation_steps`)."
+        },
+    )
+    local_mini_batch_size: int | None = field(
+        default=None,
+        metadata={"help": "Mini batch size per GPU."},
+    )
+    mini_batch_size: int | None = field(
+        default=None,
+        metadata={"help": "Mini batch size across GPUs."},
+    )
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the model to the Hub after training."},
     )
     reward_model_path: str = field(
         default="EleutherAI/pythia-160m",

@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,22 +22,22 @@ import os
 import platform
 from importlib.metadata import version
 
-import torch
-from accelerate.commands.config import default_config_file, load_config_from_file
-from transformers import is_bitsandbytes_available
-from transformers.utils import is_openai_available, is_peft_available
-
-from trl import __version__
-from trl.import_utils import (
-    is_deepspeed_available,
-    is_liger_kernel_available,
-    is_llm_blender_available,
-    is_vllm_available,
-)
-from trl.scripts.utils import get_git_commit_hash
-
 
 def print_env():
+    import torch
+    from accelerate.commands.config import default_config_file, load_config_from_file
+    from transformers import is_bitsandbytes_available
+    from transformers.utils import is_openai_available, is_peft_available
+
+    from trl import __version__
+    from trl.import_utils import (
+        is_deepspeed_available,
+        is_liger_kernel_available,
+        is_llm_blender_available,
+        is_vllm_available,
+    )
+    from trl.scripts.utils import get_git_commit_hash
+
     devices = None
     if torch.cuda.is_available():
         devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]

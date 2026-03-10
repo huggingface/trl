@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_train(self, config_name):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -56,7 +56,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -83,7 +83,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_train_with_precompute(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -92,7 +92,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             precompute_ref_log_probs=True,
             report_to="none",
         )
@@ -120,7 +120,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_train_eval(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -148,7 +148,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_init_with_ref_model_is_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
@@ -171,7 +171,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_tokenize_and_process_tokens(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -211,8 +211,6 @@ class TestBCOTrainer(TrlTestCase):
             "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
             "truncation_mode": trainer.truncation_mode,
-            "label_pad_token_id": trainer.label_pad_token_id,
-            "max_prompt_length": trainer.max_prompt_length,
         }
         processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs)
         assert processed_dataset["prompt"][:] == dataset["prompt"][:]
@@ -227,7 +225,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_train_without_providing_ref_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
@@ -235,7 +233,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -261,7 +259,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_train_udm(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # Get embedding model
@@ -282,7 +280,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -311,7 +309,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_peft
     def test_train_without_providing_ref_model_with_lora(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -320,7 +318,7 @@ class TestBCOTrainer(TrlTestCase):
         training_args = BCOConfig(
             output_dir=self.tmp_dir,
             remove_unused_columns=False,  # warning raised if not set to False
-            learning_rate=0.1,  # increase the learning rate to speed up the test
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
 
@@ -349,7 +347,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_no_wandb
     def test_generate_during_eval_no_wandb(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
@@ -380,7 +378,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_peft
     def test_lora_train_and_save(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -412,7 +410,7 @@ class TestBCOTrainer(TrlTestCase):
     @require_sklearn
     def test_compute_metrics(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 

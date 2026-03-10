@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,23 +36,25 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
 
     Args:
         messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content may be a raw string before transformation. List of messages
-            a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing either a string or
-            a list of structured blocks if already prepared.
+            Messages with `"role"`, `"content"` (or `"tool_calls"`). Content may be a raw string before transformation.
+            List of messages with a `"role"` key (`"system"`, `"user"`, `"assistant"`, or `"tool"`) and a `"content"` key containing
+            either a string or a list of structured blocks if already prepared. Optionally, the `"content"` might
+            be `None` or not provided in favour of `"tool_calls"` in the `"assistant"` turns if applicable.
         images (`list`):
-            List of image objects to insert.
+            List of image objects to insert. Can be empty if no images are included in the messages.
 
     Returns:
         `list[dict[str, Any]]`: A deep-copied list of messages where every `"content"` value is a list of structured
-        content blocks, and all `"image"` placeholders are populated with the corresponding image objects.
+        content blocks, and all `"image"` placeholders are populated with the corresponding image objects. If the
+        assistant turns contains `"tool_calls"`, then the `"content"` might be empty.
 
     Notes:
         - When the input `messages` isn't already in the structured format, (i.e., all `"content"` values are strings),
           the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
           and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
-        - When the input `messages` is already in the structured format (i.e., all `"content"` values are lists of
-          structured blocks), the function only fills in the actual images in the existing `{"type": "image"}`
-          placeholders. If the number of placeholders does not match the number of provided images, an error is raised.
+          If the number of placeholders does not match the number of provided images, an error is raised.
+        - When the input `messages` contains either `"tool_calls"` in the `"assistant"` turns, or `"tool"` roles with
+          `"content"` and `"name"` those are left as-is, since those don't require any specific handling for multimodal data.
 
     Example:
     ```python
@@ -86,13 +88,23 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
             elif isinstance(message["content"], str) and images_included:
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "assistant":
-            if isinstance(message["content"], str):
+            if message.get("content") and isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
+        elif message["role"] == "tool":
+            # NOTE: `tool` contains `name` (name of the tool used) and `content` (output of the tool call as a string)
+            # but there's no need to prepare it for multimodal specifically but rather leave it as-is
+            continue
         else:
-            raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
+            raise ValueError(
+                f"Invalid role in message: {message['role']}. Expected 'system', 'user', 'assistant', or 'tool'."
+            )
 
     # Then, check that the number of image placeholders matches the number of images provided
-    num_placeholders = sum(sum(1 for part in message["content"] if part["type"] == "image") for message in messages)
+    num_placeholders = sum(
+        sum(1 for part in message["content"] if part["type"] == "image")
+        for message in messages
+        if message.get("content") and message["role"] != "tool"
+    )
     if num_placeholders != len(images):
         raise ValueError(
             f"Number of images provided ({len(images)}) does not match number of image placeholders ({num_placeholders})."
@@ -101,6 +113,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
     # Then, fill in the actual images in the placeholders
     img_idx = 0
     for message in messages:
+        if not message.get("content") or message["role"] == "tool":
+            continue
         for part in message["content"]:
             if part["type"] == "image":
                 part["image"] = images[img_idx]
@@ -177,7 +191,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
             # Each message must a list of dictionaries with keys "role" and "content"
-            if isinstance(maybe_message, dict) and "role" in maybe_message and "content" in maybe_message:
+            if isinstance(maybe_message, dict) and "role" in maybe_message:
                 return True
 
     return False
@@ -220,7 +234,7 @@ def apply_chat_template(
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
         last_role = example["prompt"][-1]["role"]
-        if last_role == "user":
+        if last_role in ["user", "tool"]:
             add_generation_prompt = True
             continue_final_message = False
         elif last_role == "assistant":
@@ -490,29 +504,9 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
     Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
     rejected completions.
 
-    For more details, see [`maybe_extract_prompt`].
-    """
-    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
-        if example["chosen"][idx] != example["rejected"][idx]:
-            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
-                idx -= 1
-            break
-    return {
-        "prompt": example["chosen"][:idx],
-        "chosen": example["chosen"][idx:],
-        "rejected": example["rejected"][idx:],
-    }
-
-
-def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
-    r"""
-    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
-    rejected completions.
-
-    If the example already contains a `"prompt"` key, the function returns the example as is. Else, the function
-    identifies the longest common sequence (prefix) of conversation turns between the "chosen" and "rejected"
-    completions and extracts this as the prompt. It then removes this prompt from the respective "chosen" and
-    "rejected" completions.
+    The function identifies the longest common sequence (prefix) of conversation turns between the "chosen" and
+    "rejected" completions and extracts this as the prompt. It then removes this prompt from the respective "chosen"
+    and "rejected" completions.
 
     Args:
         example (`dict[str, list]`):
@@ -580,6 +574,27 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
     """
+    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
+        if example["chosen"][idx] != example["rejected"][idx]:
+            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
+                idx -= 1
+            break
+    return {
+        "prompt": example["chosen"][:idx],
+        "chosen": example["chosen"][idx:],
+        "rejected": example["rejected"][idx:],
+    }
+
+
+def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
+    r"""
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
+    rejected completions.
+
+    If the example already contains a `"prompt"` key, the function returns the example as is. For more details, see
+    [`extract_prompt`].
+    ```
+    """
     # Some dataset add a `"prompt"` column, even though the prompt is implicit and included in the "chosen" and
     # "rejected" completions. E.g.:
     # {"prompt": "What color is the sky?",
@@ -642,25 +657,79 @@ class _SegmentTree:
         return self.tree[i]
 
 
-def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
+def _pack_bfd(examples: pa.Table, seq_length: int, requeue_truncated_sequences: bool = False) -> pa.Table:
     """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
+    # Identify the list column and prepare all columns
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
-        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-            column = pc.list_slice(column, 0, seq_length)
-            if list_column_idx is None:
-                list_column_idx = idx
+        if isinstance(column, pa.ChunkedArray):
+            column = column.combine_chunks()
+        if not (pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type)):
+            raise TypeError("pack_dataset(bfd) requires all columns to be list-like.")
+        if list_column_idx is None:
+            list_column_idx = idx
         columns.append(column)
-    examples = pa.Table.from_arrays(columns, names=examples.column_names)
 
-    ids = np.arange(len(examples))
     assert list_column_idx is not None
+    list_column = columns[list_column_idx]
+    offsets = np.asarray(list_column.offsets)
+    values = list_column.values
+
+    # Split every list row into fragments of length <= seq_length (so long rows become multiple samples).
+    frag_lengths: list[int] = []
+    frag_info: list[tuple[int, int, int]] = []  # (row_idx, split_start, frag_len)
+    expanded_indices: list[int] = []
+    for row_idx, (row_start, row_end) in enumerate(zip(offsets[:-1], offsets[1:], strict=False)):
+        length = row_end - row_start
+        for split_start in range(0, length, seq_length):
+            frag_len = min(seq_length, length - split_start)
+            # When requeue_truncated_sequences is False, only keep the first fragment (truncate overflow)
+            if not requeue_truncated_sequences and split_start > 0:
+                continue
+            # Clamp the first fragment to seq_length when not re-queuing
+            if not requeue_truncated_sequences and frag_len > seq_length:
+                frag_len = seq_length
+            frag_lengths.append(frag_len)
+            frag_info.append((row_idx, split_start, frag_len))
+            expanded_indices.append(row_idx)
+
+    # Rebuild list columns with fragments
+    offsets_type = list_column.offsets.type
+    new_offsets = np.empty(len(frag_lengths) + 1, dtype=offsets_type.to_pandas_dtype())
+    new_offsets[0] = 0
+    new_offsets[1:] = np.cumsum(frag_lengths, dtype=offsets_type.to_pandas_dtype())
+    new_offsets_array = pa.array(new_offsets, type=offsets_type)
+
+    for idx, column in enumerate(columns):
+        if idx == list_column_idx:
+            slices = [
+                values.slice(offsets[row_idx] + split_start, frag_len) for row_idx, split_start, frag_len in frag_info
+            ]
+            new_values = pa.concat_arrays(slices)
+            columns[idx] = type(column).from_arrays(new_offsets_array, new_values)
+            continue
+
+        column_offsets = np.asarray(column.offsets)
+        column_values = column.values
+        slices = []
+        for row_idx, split_start, frag_len in frag_info:
+            row_len = column_offsets[row_idx + 1] - column_offsets[row_idx]
+            if row_len < split_start + frag_len:
+                raise ValueError("List columns must have matching lengths when packing datasets.")
+            start = column_offsets[row_idx] + split_start
+            slices.append(column_values.slice(start, frag_len))
+        column_offsets_array = pa.array(new_offsets, type=column.offsets.type)
+        columns[idx] = type(column).from_arrays(column_offsets_array, pa.concat_arrays(slices))
+
+    examples = pa.Table.from_arrays(columns, names=examples.column_names)
+    ids = np.arange(len(examples))
     lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
     examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
     lengths = pc.make_struct(lengths, ids)
     lengths = lengths.sort("descending", by=0)
 
+    # Greedy BFD binning using a segment tree to quickly find best-fit remaining space.
     segment_tree = _SegmentTree(seq_length)
     segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
     space_to_bin = defaultdict(deque)
@@ -689,8 +758,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
             segment_tree.add(space)
 
     examples = pc.take(examples, [id_ for bin in bins for id_ in bin["ids"]])
-    offsets = np.array([0] + [bin["length"] for bin in bins])
-    offsets = np.cumsum(offsets)
+    offsets = np.cumsum([0] + [bin["length"] for bin in bins])
 
     assert all(
         column.num_chunks == 1 for column in examples.columns
@@ -729,7 +797,10 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 
 
 def pack_dataset(
-    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: dict[str, Any] | None = None
+    dataset: DatasetType,
+    seq_length: int,
+    strategy: str = "bfd",
+    map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
@@ -740,10 +811,14 @@ def pack_dataset(
         seq_length (`int`):
             Target sequence length to pack to.
         strategy (`str`, *optional*, defaults to `"bfd"`):
-            Packing strategy to use. Can be either:
+            Packing strategy to use. Can be one of:
 
-            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
-                middle.
+            - `"bfd"` (Best Fit Decreasing): Preserves sequence boundaries and truncates sequences that exceed
+                `seq_length`, discarding overflow tokens. Ideal for SFT and conversational datasets where maintaining
+                conversation structure is important.
+            - `"bfd-requeue"`: Similar to `"bfd"` but re-queues truncated overflow tokens for packing into other
+                sequences. Prevents token loss for pre-training or long documents, but may break conversation structure
+                in SFT datasets.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
         map_kwargs (`dict`, *optional*):
@@ -759,15 +834,23 @@ def pack_dataset(
     >>> from trl import pack_dataset
 
     >>> examples = {
-    ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
-    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]],
+    ...     "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10], [11]],
+    ...     "attention_mask": [[1, 1, 1, 0, 0], [1, 0], [1, 1, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
+    >>> # Default "bfd" strategy (SFT-friendly): truncates long sequences
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 9], [6, 7, 8], [4, 5]],
-    'attention_mask': [[1, 1, 0, 1], [1, 0, 0], [1, 0]],
-    'seq_lengths': [[3, 1], [3], [2]]}
+    {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7]],
+     'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 1], [1, 0]],
+     'seq_lengths': [[4], [3, 1], [2]]}
+
+    >>> # "bfd-requeue" strategy: preserves all tokens
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd-requeue")
+    >>> packed_dataset[:]
+    {'input_ids': [[1, 2, 3, 4], [8, 9, 10, 5], [6, 7, 11]],
+     'attention_mask': [[1, 1, 1, 0], [1, 1, 0, 0], [1, 0, 1]],
+     'seq_lengths': [[4], [3, 1], [2, 1]]}
     ```
     """
     if map_kwargs is None:
@@ -775,11 +858,23 @@ def pack_dataset(
     # Fast packing with pyarrow
     dataset = dataset.with_format("arrow")
     if strategy == "bfd":
-        dataset = dataset.map(_pack_bfd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+        dataset = dataset.map(
+            _pack_bfd,
+            batched=True,
+            fn_kwargs={"seq_length": seq_length, "requeue_truncated_sequences": False},
+            **map_kwargs,
+        )
+    elif strategy == "bfd-requeue":
+        dataset = dataset.map(
+            _pack_bfd,
+            batched=True,
+            fn_kwargs={"seq_length": seq_length, "requeue_truncated_sequences": True},
+            **map_kwargs,
+        )
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd', 'bfd-requeue', or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 

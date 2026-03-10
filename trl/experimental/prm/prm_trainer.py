@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,10 +17,13 @@ from collections.abc import Callable
 from itertools import chain
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
-from accelerate import PartialState
+import transformers
+from accelerate import PartialState, logging
 from datasets import Dataset, features
+from packaging.version import Version
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -29,22 +32,69 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
 )
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ...models import prepare_peft_model
-from ...trainer.base_trainer import BaseTrainer
-from ...trainer.utils import compute_accuracy, disable_dropout_in_model
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import disable_dropout_in_model
+from ..utils import prepare_peft_model
 from .prm_config import PRMConfig
 
 
 if is_peft_available():
     from peft import PeftModel
 
+logger = logging.get_logger(__name__)
 
-class PRMTrainer(BaseTrainer):
+
+def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
+    predictions, labels = eval_pred
+    if predictions.ndim == 3:
+        # Token classification task. Shapes are (batch_size, seq_len, num_labels) and (batch_size, seq_len)
+        # Used to compute the accuracy in the prm_trainer.
+        predictions = np.argmax(predictions, axis=2)
+
+        # Flatten the predictions and labels to remove the ignored tokens.
+        predictions = np.array(
+            [
+                p
+                for prediction, label in zip(predictions, labels, strict=True)
+                for (p, lbl) in zip(prediction, label, strict=True)
+                if lbl != -100
+            ]
+        )
+        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
+
+    else:
+        # Here, predictions is rewards_chosen and rewards_rejected. Shapes are (batch_size, 2) and (batch_size,)
+        # We want to see how much of the time rewards_chosen > rewards_rejected.
+        equal_mask = predictions[:, 0] == predictions[:, 1]
+        equal_predictions_count = int(equal_mask.sum())
+
+        if equal_predictions_count > 0:
+            # Before using the logger, the accelerate state must be initialized. It'susually the case when using this
+            # function inside a Trainer, but it may not be the case otherwise, in particular when unit testing.
+            PartialState()
+
+            logger.warning(
+                f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
+                "for both options are equal. These instances are ignored in the accuracy computation.",
+            )
+
+        # Filter out equal predictions
+        predictions = predictions[~equal_mask]
+        labels = labels[~equal_mask]
+
+        # Use the remaining predictions for accuracy calculation
+        predictions = np.argmax(predictions, axis=1)
+
+    accuracy = np.array(predictions == labels, dtype=float).mean().item()
+    return {"accuracy": accuracy}
+
+
+class PRMTrainer(_BaseTrainer):
     """
     Initialize PRMTrainer.
 
@@ -142,7 +192,6 @@ class PRMTrainer(BaseTrainer):
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,
                     "max_length": args.max_length,
-                    "max_prompt_length": args.max_prompt_length,
                     "max_completion_length": args.max_completion_length,
                     "train_on_last_step_only": args.train_on_last_step_only,
                 }
@@ -177,6 +226,14 @@ class PRMTrainer(BaseTrainer):
                         ),
                     )
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -201,7 +258,6 @@ class PRMTrainer(BaseTrainer):
         tokenizer,
         step_separator,
         max_length,
-        max_prompt_length,
         max_completion_length,
         train_on_last_step_only,
         is_eval,
@@ -218,8 +274,6 @@ class PRMTrainer(BaseTrainer):
                 Separator between steps in the completion.
             max_length (`int` or `None`):
                Maximum length of the sequences (prompt + completion). If `None`, the sequences are not truncated.
-            max_prompt_length (`int` or `None`):
-                Maximum length of the prompt. If `None`, the prompt is not truncated.
             max_completion_length (`int` or `None`):
                 Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
             train_on_last_step_only (`bool`):
@@ -276,9 +330,7 @@ class PRMTrainer(BaseTrainer):
         if tokenizer.bos_token_id is not None:
             prompt_ids = [tokenizer.bos_token_id] + prompt_ids
 
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_ids = prompt_ids[-max_prompt_length:]
+        # Truncate completion sequences
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
             labels = labels[:max_completion_length]

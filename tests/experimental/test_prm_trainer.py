@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 import torch
 from datasets import Dataset, load_dataset
@@ -21,12 +22,80 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrai
 from transformers.utils import is_peft_available
 
 from trl.experimental.prm import PRMConfig, PRMTrainer
+from trl.experimental.prm.prm_trainer import compute_accuracy
 
 from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig, TaskType
+
+
+class TestComputeAccuracy(TrlTestCase):
+    def test_token_classification_task(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[0, 1], [1, 0]]),
+        )
+        expected_accuracy = 0.5  # 2 matches, 2 mismatches
+        result = compute_accuracy(eval_pred)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+
+    def test_token_classification_task_with_ignored_tokens_0(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 0], [1, -100]]),
+        )
+        expected_accuracy = 1.0  # All non-ignored tokens match
+        result = compute_accuracy(eval_pred)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+
+    def test_token_classification_task_with_ignored_tokens_1(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 1], [0, -100]]),
+        )
+        expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
+        result = compute_accuracy(eval_pred)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+
+    def test_rewards_comparison_task(self, caplog):
+        eval_pred = (
+            np.array(
+                [
+                    [0.9, 0.1],  # Batch 1
+                    [0.6, 0.4],  # Batch 2
+                    [0.5, 0.5],  # Batch 3 (equal)
+                ]
+            ),
+            np.array([0, 1, 1]),
+        )
+        expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
+
+        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
+            result = compute_accuracy(eval_pred)
+
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
+        expected_warning = (
+            "There are 1 out of 3 instances where the predictions for both options are equal. "
+            "These instances are ignored in the accuracy computation."
+        )
+        assert expected_warning in caplog.text
 
 
 class TestTokenizeRow(TrlTestCase):
@@ -67,7 +136,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -91,7 +159,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=True,
             is_eval=False,
@@ -100,31 +167,6 @@ class TestTokenizeRow(TrlTestCase):
         assert result == {
             "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
             "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
-        }
-
-    def test_tokenize_row_prompt_truncation(self):
-        # Define the input features
-        features = {
-            "prompt": "Which number is larger, 9.8 or 9.11?",
-            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
-            "labels": [True, False],
-        }
-
-        # Call the method with truncation on the completion
-        result = PRMTrainer.tokenize_row(
-            features=features,
-            tokenizer=self.tokenizer,
-            step_separator="\n",
-            max_length=None,
-            max_prompt_length=3,
-            max_completion_length=None,
-            train_on_last_step_only=False,
-            is_eval=False,
-        )
-
-        assert result == {
-            "input_ids": [6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
-            "labels": [-100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
         }
 
     def test_tokenize_row_completion_truncation(self):
@@ -141,7 +183,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=6,
             train_on_last_step_only=False,
             is_eval=False,
@@ -166,7 +207,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=9,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -191,7 +231,6 @@ class TestTokenizeRow(TrlTestCase):
             tokenizer=self.tokenizer,
             step_separator="\n\n",
             max_length=None,
-            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -206,7 +245,7 @@ class TestTokenizeRow(TrlTestCase):
 class TestPRMTrainer(TrlTestCase):
     def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForTokenClassification.from_pretrained(model_id)
+        self.model = AutoModelForTokenClassification.from_pretrained(model_id, dtype="float32")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @pytest.mark.parametrize("train_on_last_step_only", [True, False])
@@ -326,7 +365,7 @@ class TestPRMTrainer(TrlTestCase):
         # Check that the non trainable parameters have not changed
         for n, param in previous_non_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+            torch.testing.assert_close(param, new_param, atol=1e-12, rtol=1e-12)
 
     def test_tags(self):
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")

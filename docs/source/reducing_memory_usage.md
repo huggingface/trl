@@ -19,25 +19,20 @@ To reduce memory usage, it's important to truncate sequences to a reasonable len
 <hfoptions id="truncation">
 <hfoption id="DPO">
 
-DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
+DPO truncation is controlled via `max_length`, which truncates the combined prompt+completion sequence.
 
 ![DPO truncation](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png)
 
-To set the truncation parameters, use the following code snippet:
+To set the truncation parameter, use the following code snippet:
 
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., max_prompt_length=..., max_length=...)
+training_args = DPOConfig(..., max_length=...)
 ```
 
-You can also use the `max_completion_length` parameter to truncate the completion, though this is less common since the goal is typically to preserve the completion's full length whenever possible.
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., max_completion_length=...)
-```
+> [!WARNING]
+> The legacy `max_prompt_length` and `max_completion_length` parameters are now removed; instead, filter or pre-truncate overlong prompts/completions in your dataset before training.
 
 </hfoption>
 <hfoption id="SFT">
@@ -77,7 +72,7 @@ To help you choose an appropriate value, we provide a utility to visualize the s
 
 Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
 
-![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png)
+![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_3.png)
 
 Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
 
@@ -155,7 +150,7 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 <hfoption id="KTO">
 
 ```python
-from trl import KTOConfig
+from trl.experimental.kto import KTOConfig
 
 training_args = KTOConfig(..., use_liger_kernel=True)
 ```
@@ -329,4 +324,7 @@ from trl import SFTConfig
 training_args = SFTConfig(..., gradient_checkpointing=True)
 ```
 
-Gradient checkpointing is available and activated by default across all TRL trainers. For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
+> [!NOTE]
+> Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+
+For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).

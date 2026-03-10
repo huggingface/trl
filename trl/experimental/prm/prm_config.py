@@ -1,4 +1,4 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,11 +14,12 @@
 
 from dataclasses import dataclass, field
 
-from transformers import TrainingArguments
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class PRMConfig(TrainingArguments):
+class PRMConfig(_BaseConfig):
+    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.prm.PRMTrainer`].
 
@@ -33,8 +34,6 @@ class PRMConfig(TrainingArguments):
     Parameters:
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) used for truncation.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt used for truncation.
         max_completion_length (`int`, *optional*):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -45,6 +44,13 @@ class PRMConfig(TrainingArguments):
             Whether to train only on the last step.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-5` instead of `5e-5`.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -52,35 +58,10 @@ class PRMConfig(TrainingArguments):
         default=1e-5,
         metadata={"help": "The initial learning rate for AdamW."},
     )
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
 
     max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) used for truncation."},
-    )
-    max_prompt_length: int | None = field(
-        default=512,
-        metadata={"help": "Maximum length of the prompt used for truncation."},
     )
     max_completion_length: int | None = field(
         default=None,
@@ -105,8 +86,3 @@ class PRMConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
-        super().__post_init__()

@@ -19,7 +19,7 @@ There are several ways you can contribute to TRL:
 
 If you don't know where to start, there is a special [Good First Issue](https://github.com/huggingface/trl/labels/%F0%9F%91%B6%20good%20first%20issue) listing. It will give you a list of open issues that are beginner-friendly and help you start contributing to open-source. The best way to do that is to open a Pull Request and link it to the issue that you'd like to work on. We try to give priority to opened PRs as we can easily track the progress of the fix, and if the contributor does not have time anymore, someone else can take the PR over.
 
-For something slightly more challenging, you can also take a look at the [Good Second Issue](https://github.com/huggingface/trl/labels/Good%20Second%20Issue) list. In general though, if you feel like you know what you're doing, go for it and we'll help you get there! 🚀
+For something slightly more challenging, you can also take a look at the [Good Second Issue](https://github.com/huggingface/trl/labels/%F0%9F%A7%92%20good%20second%20issue) list. In general though, if you feel like you know what you're doing, go for it and we'll help you get there! 🚀
 
 > All contributions are equally valuable to the community. 🥰
 
@@ -88,7 +88,7 @@ If you want to implement a trainer for a new post-training method, first open an
 Based on the community and maintainer feedback, the next step will be to implement the trainer and config classes. See the following examples for inspiration:
 
 * Paired preference optimisation: [`dpo_trainer.py`](./trl/trainer/dpo_trainer.py) and [`dpo_config.py`](./trl/trainer/dpo_config.py)
-* RL-based optimisation: [`rloo_trainer.py](./trl/trainer/rloo_trainer.py) and [`rloo_config.py](./trl/trainer/rloo_config.py)
+* RL-based optimisation: [`rloo_trainer.py`](./trl/trainer/rloo_trainer.py) and [`rloo_config.py`](./trl/trainer/rloo_config.py)
 * Online optimisation: [`online_dpo_trainer.py`](./trl/trainer/online_dpo_trainer.py) and [`online_dpo_config.py`](./trl/trainer/online_dpo_config.py)
 
 ## Do you want to add documentation?
