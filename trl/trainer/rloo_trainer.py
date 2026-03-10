@@ -97,9 +97,11 @@ if is_trackio_available():
 
 logger = get_logger(__name__)
 
-# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
-# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
+# A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
+# a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
+# arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
+# accept **kwargs.
+RewardFunc = str | PreTrainedModel | Callable[..., list[float]]
 
 
 class RLOOTrainer(_BaseTrainer):
@@ -916,7 +918,7 @@ class RLOOTrainer(_BaseTrainer):
             # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
             prompt_ids = [
                 [tok for tok, m in zip(ids, mask, strict=True) if m]
-                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=False)
+                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
             ]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
@@ -926,11 +928,9 @@ class RLOOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images=None, multimodal_fields=None):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
-        if multimodal_fields is None:
-            multimodal_fields = {}
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1012,7 +1012,10 @@ class RLOOTrainer(_BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
+            # Move tensors to CPU before per-sample to avoid many CUDA syncs/copies (costly at scale/contention).
+            completion_ids = [
+                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+            ]
 
         return completion_ids
 
