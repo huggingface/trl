@@ -37,7 +37,7 @@ from .vllm_client import VLLMClient
 
 
 if is_vllm_available():
-    from vllm import RequestOutput
+    from vllm import LLM, RequestOutput, SamplingParams
 
 
 logger = logging.getLogger(__name__)
@@ -97,15 +97,6 @@ if TYPE_CHECKING:
     from accelerate import Accelerator
     from peft import PeftModel
 
-
-if is_vllm_available():
-    import vllm
-    from vllm import LLM, SamplingParams
-
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
@@ -557,6 +548,17 @@ class VLLMGeneration:
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
         """
+        import vllm
+
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+
+            structured_outputs_key = "guided_decoding"
+        else:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            structured_outputs_key = "structured_outputs"
+
         profiler = profiler or nullcontext()
         accelerator = self.accelerator
         temperature = self.temperature
@@ -625,7 +627,8 @@ class VLLMGeneration:
                             chat_template=chat_template,
                         )
                     else:
-                        output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
+                        ordered_set_of_prompt_ids = self.processing_class(text=ordered_set_of_prompts)["input_ids"]
+                        output = self.vllm_client.generate(prompts=ordered_set_of_prompt_ids, **sampling_params)
                     # Extract required fields and collect any extra fields for reward functions
                     required_keys = {"prompt_ids", "completion_ids", "logprobs", "logprob_token_ids"}
                     extra_fields = {k: v for k, v in output.items() if k not in required_keys}
@@ -679,33 +682,17 @@ class VLLMGeneration:
             }
             generation_kwargs.update(self.generation_kwargs)
 
-            if Version(vllm.__version__) <= Version("0.10.2"):
-                structured_outputs_key = "guided_decoding"
-                if self.structured_outputs_regex is not None:
-                    if generation_kwargs.get("guided_decoding") is not None:
-                        logger.warning(
-                            "Both `structured_outputs_regex` and `generation_kwargs['guided_decoding']` are set; "
-                            "`structured_outputs_regex` takes precedence."
-                        )
-                    structured_outputs = GuidedDecodingParams(regex=self.structured_outputs_regex)
-                else:
-                    structured_outputs = generation_kwargs.get("guided_decoding")
-            else:
-                structured_outputs_key = "structured_outputs"
-                if self.structured_outputs_regex is not None:
-                    if generation_kwargs.get("structured_outputs") is not None:
-                        logger.warning(
-                            "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are "
-                            "set; `structured_outputs_regex` takes precedence."
-                        )
-                    structured_outputs = StructuredOutputsParams(regex=self.structured_outputs_regex)
-                elif isinstance(generation_kwargs.get("structured_outputs"), dict):
-                    structured_outputs_dict = generation_kwargs.get("structured_outputs")
-                    structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
-                else:
-                    structured_outputs = generation_kwargs.get("structured_outputs")
-
-            generation_kwargs[structured_outputs_key] = structured_outputs
+            if self.structured_outputs_regex is not None:
+                if generation_kwargs.get(structured_outputs_key) is not None:
+                    logger.warning(
+                        f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                        "`structured_outputs_regex` takes precedence."
+                    )
+                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(
+                    regex=self.structured_outputs_regex
+                )
+            elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
+                generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
             sampling_params = SamplingParams(**generation_kwargs)
 
             if self.tensor_parallel_size > 1:
