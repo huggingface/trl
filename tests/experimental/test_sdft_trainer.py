@@ -35,6 +35,15 @@ class GenerationPromptCaptureCallback(TrainerCallback):
             self.captured_generation_prompt_text = generation_prompt_text[0]
 
 
+class OldLogProbsCaptureCallback(TrainerCallback):
+    def __init__(self):
+        self.captured_old_per_token_logps = None
+
+    def on_self_distillation_batch_prepared(self, old_per_token_logps=None, **kwargs):
+        if self.captured_old_per_token_logps is None and old_per_token_logps is not None:
+            self.captured_old_per_token_logps = old_per_token_logps.detach().cpu()
+
+
 class TestSDFTTrainer(TrlTestCase):
     def test_training_with_required_dataset_columns(self):
         dataset = Dataset.from_dict(
@@ -151,3 +160,39 @@ class TestSDFTTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Solve 3+3."],
+                "privileged_context": [
+                    "Solve 2+2. Example answer: 4.",
+                    "Solve 3+3. Example answer: 6.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=3,
+            steps_per_generation=2,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+        )
+
+        capture_callback = OldLogProbsCaptureCallback()
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.captured_old_per_token_logps is not None

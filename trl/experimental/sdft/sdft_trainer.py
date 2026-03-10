@@ -349,7 +349,30 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             prompts, privileged_contexts, completion_ids, completion_mask
         )
 
-        return {
+        prompt_completion_ids = torch.cat([teacher_batch["prompt_ids"], completion_ids], dim=1)
+        attention_mask = torch.cat([teacher_batch["prompt_mask"], completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
+
+        with torch.no_grad():
+            generate_every = self.args.steps_per_generation * self.num_iterations
+            if not self.generate_from_teacher and self.args.gradient_accumulation_steps % generate_every != 0:
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    compute_entropy=False,
+                )
+            else:
+                old_per_token_logps = None
+
+        self._dispatch_self_distillation_callback(
+            "on_self_distillation_batch_prepared",
+            old_per_token_logps=old_per_token_logps,
+            prompt_ids=teacher_batch["prompt_ids"],
+            completion_ids=completion_ids,
+        )
+        output = {
             "prompt_ids": teacher_batch["prompt_ids"],
             "prompt_mask": teacher_batch["prompt_mask"],
             "completion_ids": completion_ids,
@@ -357,6 +380,9 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             "teacher_input_ids": teacher_batch["teacher_input_ids"],
             "teacher_attention_mask": teacher_batch["teacher_attention_mask"],
         }
+        if old_per_token_logps is not None:
+            output["old_per_token_logps"] = old_per_token_logps
+        return output
 
     def _log_self_distillation_metric(self, mode: str, metric_name: str, value: float) -> None:
         self._metrics[mode][f"self_distillation/{metric_name}"].append(value)

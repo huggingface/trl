@@ -25,13 +25,7 @@ from transformers.utils import is_datasets_available, logging
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...models import unwrap_model_for_generation
-from ...trainer.utils import (
-    RepeatSampler,
-    entropy_from_logits,
-    pad,
-    selective_log_softmax,
-    split_tensor_dict,
-)
+from ...trainer.utils import RepeatSampler, pad, split_tensor_dict
 
 
 logger = logging.get_logger(__name__)
@@ -104,26 +98,6 @@ class OnlineRolloutMixin:
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
             for prompt in prompts
         ]
-
-    def _get_per_token_logps_and_entropies(
-        self,
-        model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        compute_entropy=False,
-    ):
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        if "logits_to_keep" in self.model_kwarg_keys:
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-        logits = model(**model_inputs).logits
-        logits = logits[:, :-1, :]
-        logits = logits[:, -logits_to_keep:, :]
-        logits = logits / self.temperature
-        completion_ids = input_ids[:, -logits_to_keep:]
-        selected_logps = selective_log_softmax(logits, completion_ids)
-        entropies = entropy_from_logits(logits) if compute_entropy else None
-        return selected_logps, entropies
 
     def _generate(self, prompts):
         prompts_text = self._apply_prompt_template(prompts)
@@ -227,6 +201,23 @@ class OnlineRolloutMixin:
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
+        prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
+
+        with torch.no_grad():
+            generate_every = self.args.steps_per_generation * self.num_iterations
+            if self.args.gradient_accumulation_steps % generate_every != 0:
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    compute_entropy=False,
+                )
+            else:
+                old_per_token_logps = None
+
         if is_conversational({"prompt": prompts[0]}):
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
             completions = [[{"role": "assistant", "content": content}] for content in completions_text]
@@ -262,7 +253,7 @@ class OnlineRolloutMixin:
         )
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
 
-        return {
+        output = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -270,6 +261,16 @@ class OnlineRolloutMixin:
             "advantages": advantages,
             "num_items_in_batch": completion_mask.sum().detach(),
         }
+        if old_per_token_logps is not None:
+            output["old_per_token_logps"] = old_per_token_logps
+
+        self._dispatch_self_distillation_callback(
+            "on_self_distillation_batch_prepared",
+            old_per_token_logps=old_per_token_logps,
+            prompt_ids=prompt_ids,
+            completion_ids=completion_ids,
+        )
+        return output
 
     def _record_reward_diagnostics(
         self,

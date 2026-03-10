@@ -50,6 +50,15 @@ class TeacherContextCaptureCallback(TrainerCallback):
             self.captured_self_distillation_mask = self_distillation_mask.detach().cpu()
 
 
+class OldLogProbsCaptureCallback(TrainerCallback):
+    def __init__(self):
+        self.captured_old_per_token_logps = None
+
+    def on_self_distillation_batch_prepared(self, old_per_token_logps=None, **kwargs):
+        if self.captured_old_per_token_logps is None and old_per_token_logps is not None:
+            self.captured_old_per_token_logps = old_per_token_logps.detach().cpu()
+
+
 class TestSDPOTrainer(TrlTestCase):
     def test_training_with_required_dataset_columns(self):
         dataset = Dataset.from_dict(
@@ -205,6 +214,34 @@ class TestSDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2.", "Solve 3+3."]})
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=3,
+            steps_per_generation=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+            max_steps=1,
+        )
+
+        capture_callback = OldLogProbsCaptureCallback()
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.captured_old_per_token_logps is not None
 
     def test_training_with_teacher_regularization_none(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

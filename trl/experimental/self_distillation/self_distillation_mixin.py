@@ -20,6 +20,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from ...trainer.utils import entropy_from_logits, selective_log_softmax
 from .self_distillation_config import SelfDistillationConfig
 
 
@@ -57,6 +58,26 @@ class SelfDistillationMixin:
 
     def _allow_topk_without_full_logit_distillation(self) -> bool:
         return True
+
+    def _get_per_token_logps_and_entropies(
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        compute_entropy=False,
+    ):
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        if "logits_to_keep" in self.model_kwarg_keys:
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+        logits = model(**model_inputs).logits
+        logits = logits[:, :-1, :]
+        logits = logits[:, -logits_to_keep:, :]
+        logits = logits / self.temperature
+        completion_ids = input_ids[:, -logits_to_keep:]
+        selected_logps = selective_log_softmax(logits, completion_ids)
+        entropies = entropy_from_logits(logits) if compute_entropy else None
+        return selected_logps, entropies
 
     def _compute_self_distillation_loss(
         self,
@@ -248,6 +269,9 @@ class SelfDistillationMixin:
         student_log_probs: torch.Tensor,
         teacher_log_probs: torch.Tensor,
     ) -> torch.Tensor:
+        # This is the token-level reverse-KL surrogate used by the official SDPO implementation for
+        # `full_logit_distillation=False`. It intentionally treats the teacher log-probs as fixed targets
+        # and keeps only the score-function term for the sampled student tokens.
         log_ratio = student_log_probs - teacher_log_probs
         return log_ratio.detach() * student_log_probs
 
