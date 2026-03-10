@@ -289,6 +289,14 @@ class PolicyAndValueWrapper(nn.Module):
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
         self.is_gradient_checkpointing = policy.is_gradient_checkpointing
 
+    def gradient_checkpointing_enable(self, **kwargs):
+        self.policy.gradient_checkpointing_enable(**kwargs)
+        self.is_gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self):
+        self.policy.gradient_checkpointing_disable()
+        self.is_gradient_checkpointing = False
+
     def forward(self, **kwargs):
         output = self.critic_backbone(**kwargs)
         logits = self.value_model.score(output.hidden_states[-1])

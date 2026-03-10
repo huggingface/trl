@@ -24,60 +24,6 @@ from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 
-import torch
-import torch.distributed.distributed_c10d as c10d
-from packaging.version import Version
-from transformers import is_torch_xpu_available, is_vision_available
-
-from trl import TrlParser
-from trl.generation.vllm_generation import extract_logprobs
-from trl.import_utils import (
-    is_fastapi_available,
-    is_pydantic_available,
-    is_uvicorn_available,
-    is_vllm_ascend_available,
-    is_vllm_available,
-)
-
-
-if is_fastapi_available():
-    from fastapi import FastAPI
-
-
-if is_pydantic_available():
-    from pydantic import BaseModel
-
-
-if is_uvicorn_available():
-    import uvicorn
-
-
-if is_vision_available():
-    from PIL import Image
-
-
-if is_vllm_available():
-    import vllm
-    from vllm import LLM, SamplingParams
-    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-    from vllm.distributed.parallel_state import get_world_group
-    from vllm.distributed.utils import StatelessProcessGroup
-
-    if Version(vllm.__version__) <= Version("0.11.0"):
-        from vllm.utils import get_open_port
-    else:
-        from vllm.utils.network_utils import get_open_port
-
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
-
-    if is_vllm_ascend_available():
-        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
-
-
-logger = logging.getLogger(__name__)
 
 # We use CUDA with multiprocessing, so we must use the 'spawn' start method. Otherwise, we will get the following
 # error: RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use
@@ -117,6 +63,18 @@ class WeightSyncWorkerExtension:
                 UUID of the device of client main process. Used to assert that devices are different from vllm workers
                 devices.
         """
+        import torch
+        import torch.distributed.distributed_c10d as c10d
+        from transformers import is_torch_xpu_available
+        from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+        from vllm.distributed.parallel_state import get_world_group
+        from vllm.distributed.utils import StatelessProcessGroup
+
+        from trl.import_utils import is_vllm_ascend_available
+
+        if is_vllm_ascend_available():
+            from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+
         if self.communicator is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
@@ -166,6 +124,9 @@ class WeightSyncWorkerExtension:
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
+        import torch
+        from transformers import is_torch_xpu_available
+
         if self.communicator is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
@@ -211,7 +172,9 @@ class ScriptArguments:
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
         data_parallel_size (`int`, *optional*, defaults to `1`):
-            Number of data parallel workers to use.
+            Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`,
+            setting this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR
+            #30739).
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
@@ -261,7 +224,11 @@ class ScriptArguments:
     )
     data_parallel_size: int = field(
         default=1,
-        metadata={"help": "Number of data parallel workers to use."},
+        metadata={
+            "help": "Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM "
+            "`0.14.0`, setting this above `1` for dense models is no longer supported/useful and will error out (see "
+            "vLLM PR #30739)."
+        },
     )
     host: str = field(
         default="0.0.0.0",
@@ -343,6 +310,8 @@ class ScriptArguments:
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
+    from vllm import LLM
+
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
@@ -413,6 +382,17 @@ def chunk_list(lst: list, n: int) -> list[list]:
 
 
 def main(script_args: ScriptArguments):
+    from packaging.version import Version
+    from transformers import is_vision_available
+
+    from trl.generation.vllm_generation import extract_logprobs
+    from trl.import_utils import (
+        is_fastapi_available,
+        is_pydantic_available,
+        is_uvicorn_available,
+        is_vllm_available,
+    )
+
     if not is_fastapi_available():
         raise ImportError(
             "FastAPI is required to run the vLLM serve script. Please install it using `pip install fastapi`."
@@ -430,6 +410,27 @@ def main(script_args: ScriptArguments):
 
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
+
+    import uvicorn
+    import vllm
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    from vllm import SamplingParams
+
+    if Version(vllm.__version__) <= Version("0.11.0"):
+        from vllm.utils import get_open_port
+    else:
+        from vllm.utils.network_utils import get_open_port
+
+    if Version(vllm.__version__) <= Version("0.10.2"):
+        from vllm.sampling_params import GuidedDecodingParams
+    else:
+        from vllm.sampling_params import StructuredOutputsParams
+
+    if is_vision_available():
+        from PIL import Image
+
+    logger = logging.getLogger(__name__)
 
     # Spawn dp workers, and setup pipes for communication
     master_port = get_open_port()
@@ -489,8 +490,8 @@ def main(script_args: ScriptArguments):
         return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str]
-        images: list[str] | None = None
+        prompts: list[str] | list[list[int]]
+        images: list[list[str] | None] | None = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -499,7 +500,6 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         logprobs: int | None = 0
-        truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
 
@@ -516,9 +516,10 @@ def main(script_args: ScriptArguments):
 
         Args:
             request (`GenerateRequest`):
-                - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
-                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
-                  along with prompts.
+                - `prompts` (list of `str` or list of list of `int`): A list of prompts. It accepts either text strings
+                  or pre-tokenized token ID lists. When text strings are provided, `images` can optionally be included.
+                - `images` (list of list of `str` or `None`, *optional*): A list of image lists. Each element is a list
+                  of base64-encoded images for the corresponding prompt, or `None` if no images for that prompt.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
                   generation.
@@ -534,9 +535,6 @@ def main(script_args: ScriptArguments):
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
                   only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
                   descending probability.
-                - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
-                  by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
-                  truncation). If set to `None`, truncation is disabled.
                 - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
                   the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -552,9 +550,14 @@ def main(script_args: ScriptArguments):
                 - `logprob_token_ids` (list of list of list of `int`): Token IDs corresponding to each logprob, same
                   shape as `logprobs`.
 
-        Example request:
+        Example request (text prompts):
         ```json
         {"prompts": ["Hello world", "What is AI?"]}
+        ```
+
+        Example request (token IDs):
+        ```json
+        {"prompts": [[101, 102], [201, 202]]}
         ```
 
         Example response:
@@ -567,13 +570,15 @@ def main(script_args: ScriptArguments):
         }
         ```
         """
+        # Build vLLM-compatible prompt inputs
+        is_token_ids = request.prompts and isinstance(request.prompts[0], list)
         request.images = request.images or [None] * len(request.prompts)
 
         prompts = []
-        for prompt, image in zip(request.prompts, request.images, strict=True):
-            row = {"prompt": prompt}
-            if image is not None:
-                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+        for prompt, image_list in zip(request.prompts, request.images, strict=True):
+            row = {"prompt_token_ids": prompt} if is_token_ids else {"prompt": prompt}
+            if image_list is not None:
+                row["multi_modal_data"] = {"image": [Image.open(BytesIO(base64.b64decode(img))) for img in image_list]}
             prompts.append(row)
 
         generation_kwargs = {
@@ -584,7 +589,6 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
-            "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": request.logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
@@ -663,7 +667,6 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         logprobs: int | None = 0
-        truncate_prompt_tokens: int | None = None
         structured_outputs_regex: str | None = None
         generation_kwargs: dict = field(default_factory=dict)
         chat_template_kwargs: dict = field(default_factory=dict)
@@ -699,9 +702,6 @@ def main(script_args: ScriptArguments):
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
                   only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
                   descending probability.
-                - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
-                  by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
-                  truncation). If set to `None`, truncation is disabled.
                 - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
                   the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -752,7 +752,6 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
-            "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "logprobs": request.logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
@@ -913,11 +912,13 @@ def main(script_args: ScriptArguments):
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
+    from trl import TrlParser
+
     if subparsers is not None:
         parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:
-        parser = TrlParser(ScriptArguments)
+        parser = TrlParser(ScriptArguments, prog=prog)
     return parser
 
 
