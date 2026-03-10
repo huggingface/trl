@@ -912,6 +912,7 @@ class RLOOTrainer(_BaseTrainer):
                     images.append(prompt_images if prompt_images else None)
                 images = images if has_images else None
 
+                # RLOO does not support tools; omit tools/chat_template args
                 tokenized = self.processing_class.apply_chat_template(
                     conversation=prompts,
                     add_generation_prompt=True,
