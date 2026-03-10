@@ -47,7 +47,7 @@ class MiniLLMConfig(GRPOConfig):
             Whether to apply length normalization to the rewards.
     """
 
-    teacher_model_init_kwargs: dict[str, Any] | None = field(
+    teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
