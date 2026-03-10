@@ -926,11 +926,9 @@ class RLOOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images=None, multimodal_fields=None):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
-        if multimodal_fields is None:
-            multimodal_fields = {}
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
