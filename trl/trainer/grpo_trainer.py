@@ -1553,9 +1553,7 @@ class GRPOTrainer(_BaseTrainer):
             prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
         else:
             prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-            prompt_ids, completion_ids, logprobs = self._generate_single_turn(
-                prompt_ids, images, multimodal_fields
-            )
+            prompt_ids, completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields)
             extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
