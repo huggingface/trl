@@ -1272,7 +1272,7 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             prompt_ids = processor_outputs["input_ids"]
             logprobs = None  # not used in this case
-            extra_fields = {}  # No extra fields for paged mode
+            extra_fields = {}  # noqa: F841
 
         else:
             # Regular generation path
@@ -1323,7 +1323,7 @@ class GRPOTrainer(_BaseTrainer):
             prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
             logprobs = None  # not used in this case
-            extra_fields = {}  # No extra fields for non-rollout_func paths
+            extra_fields = {}  # noqa: F841
 
         return prompt_ids, completion_ids, logprobs
 
