@@ -264,6 +264,67 @@ class TestGenerationBackendAdapters:
         assert results == [RolloutCompletion(prompt_ids=[3, 4], completion_ids=[20], logprobs=[-0.9], text="ok")]
         vllm_generation.vllm_client.generate.assert_called_once()
 
+    def test_vllm_rollout_completions_server_auto_chat_inference(self):
+        vllm_generation = MagicMock()
+        vllm_generation.vllm_client.chat.return_value = {
+            "prompt_ids": [[1]],
+            "completion_ids": [[2]],
+            "logprobs": [[-0.3]],
+        }
+        processing_class = MagicMock()
+        processing_class.decode.return_value = "x"
+
+        adapter = VLLMBackendAdapter(
+            vllm_generation=vllm_generation,
+            vllm_mode="server",
+            processing_class=processing_class,
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={},
+            tools=None,
+            chat_template=None,
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=False,
+        )
+
+        prompts = [[{"role": "user", "content": "hi"}]]
+        results = adapter.generate_rollout_completions(prompts=prompts, processing_class=MagicMock(), as_chat=None)
+
+        assert results == [RolloutCompletion(prompt_ids=[1], completion_ids=[2], logprobs=[-0.3], text="x")]
+        vllm_generation.vllm_client.chat.assert_called_once()
+        vllm_generation.vllm_client.generate.assert_not_called()
+
+    def test_vllm_rollout_completions_rejects_n_not_equal_to_one(self):
+        adapter = VLLMBackendAdapter(
+            vllm_generation=MagicMock(),
+            vllm_mode="server",
+            processing_class=MagicMock(),
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={},
+            tools=None,
+            chat_template=None,
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=False,
+        )
+
+        with pytest.raises(ValueError, match="expects n=1"):
+            adapter.generate_rollout_completions(
+                prompts=["hello"],
+                processing_class=MagicMock(),
+                generation_overrides={"n": 2},
+            )
+
     def test_vllm_rollout_completions_colocate_mapping_and_empty_outputs(self):
         fake_sampling_params_module = SimpleNamespace(StructuredOutputsParams=MagicMock())
         fake_vllm_module = SimpleNamespace(SamplingParams=MagicMock())
@@ -317,6 +378,57 @@ class TestGenerationBackendAdapters:
             RolloutCompletion(prompt_ids=[3], completion_ids=[], logprobs=[], text=""),
         ]
         vllm_generation.llm.generate.assert_called_once()
+
+    def test_vllm_rollout_completions_colocate_sleep_mode_hooks(self):
+        fake_sampling_params_module = SimpleNamespace(StructuredOutputsParams=MagicMock())
+        fake_vllm_module = SimpleNamespace(SamplingParams=MagicMock())
+
+        request = SimpleNamespace(
+            prompt_token_ids=[1],
+            outputs=[
+                SimpleNamespace(
+                    token_ids=[9],
+                    logprobs=[{0: SimpleNamespace(logprob=-0.2)}],
+                    text="z",
+                )
+            ],
+        )
+
+        vllm_generation = MagicMock()
+        vllm_generation.structured_outputs_regex = None
+        vllm_generation.llm.generate.return_value = [request]
+
+        adapter = VLLMBackendAdapter(
+            vllm_generation=vllm_generation,
+            vllm_mode="colocate",
+            processing_class=MagicMock(),
+            temperature=1.0,
+            top_k=50,
+            min_p=None,
+            max_completion_length=32,
+            repetition_penalty=None,
+            top_p=None,
+            generation_kwargs=None,
+            chat_template_kwargs={},
+            tools=None,
+            chat_template=None,
+            vllm_tensor_parallel_size=1,
+            vllm_enable_sleep_mode=True,
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "vllm": fake_vllm_module,
+                "vllm.sampling_params": fake_sampling_params_module,
+            },
+        ):
+            results = adapter.generate_rollout_completions(prompts=["a"], processing_class=MagicMock(), as_chat=False)
+
+        assert results == [RolloutCompletion(prompt_ids=[1], completion_ids=[9], logprobs=[-0.2], text="z")]
+        vllm_generation.llm.wake_up.assert_called_once_with(tags=["kv_cache"])
+        vllm_generation.llm.collective_rpc.assert_called_once_with("reload_weights")
+        vllm_generation.llm.sleep.assert_called_once_with(level=2)
 
     def test_rollout_capability_unsupported_for_non_vllm_backends(self):
         transformers_adapter = TransformersBackendAdapter(
