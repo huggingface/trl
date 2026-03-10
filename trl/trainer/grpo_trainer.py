@@ -1351,7 +1351,7 @@ class GRPOTrainer(_BaseTrainer):
             ]
             logprobs = None  # not used in this case
 
-        return prompt_ids, completion_ids, logprobs, {}
+        return prompt_ids, completion_ids, logprobs
 
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
@@ -1456,7 +1456,7 @@ class GRPOTrainer(_BaseTrainer):
                 break  # all overlong, exit tool loop
 
             # Generate new completions after tool execution
-            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _ = self._generate_single_turn(
+            prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs = self._generate_single_turn(
                 prompt_completion_tools
             )
 
@@ -1549,7 +1549,8 @@ class GRPOTrainer(_BaseTrainer):
             extra_fields = {k: v for k, v in output.items() if k not in required_keys}
             prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
         else:
-            prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+            prompt_ids, completion_ids, logprobs = self._generate_single_turn(prompts)
+            extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
