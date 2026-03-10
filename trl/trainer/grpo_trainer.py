@@ -1228,7 +1228,7 @@ class GRPOTrainer(_BaseTrainer):
 
             # Generate using vLLM
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, logprobs, _, extra_fields = self.vllm_generation.generate(
+            prompt_ids, completion_ids, logprobs, _ = self.vllm_generation.generate(
                 prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
             )
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
@@ -1272,7 +1272,6 @@ class GRPOTrainer(_BaseTrainer):
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             prompt_ids = processor_outputs["input_ids"]
             logprobs = None  # not used in this case
-            extra_fields = {}  # No extra fields for paged mode
 
         else:
             # Regular generation path
@@ -1323,9 +1322,8 @@ class GRPOTrainer(_BaseTrainer):
             prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool(), strict=True)]
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
             logprobs = None  # not used in this case
-            extra_fields = {}  # No extra fields for non-rollout_func paths
 
-        return prompt_ids, completion_ids, logprobs, extra_fields
+        return prompt_ids, completion_ids, logprobs, {}
 
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
