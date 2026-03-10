@@ -258,6 +258,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             use_vllm=True,
+            vllm_mode="server",
             vllm_gpu_memory_utilization=0.2,
             report_to="none",
         )

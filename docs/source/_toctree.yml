@@ -5,8 +5,6 @@
     title: Installation
   - local: quickstart
     title: Quickstart
-  - local: migration_v0_to_v1
-    title: Migrating from v0 to v1
   title: Getting started
 - sections:
   - local: dataset_formats

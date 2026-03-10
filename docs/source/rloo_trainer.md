@@ -179,7 +179,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
    training_args = RLOOConfig(
        ...,
        use_vllm=True,
-       vllm_mode="server",  # default value, can be omitted
+       vllm_mode="server",
    )
    ```
 
@@ -278,6 +278,7 @@ def main():
         per_device_train_batch_size=4,
         bf16=True,
         use_vllm=True,
+        vllm_mode="server",
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 

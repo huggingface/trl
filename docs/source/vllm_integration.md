@@ -52,7 +52,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=GRPOConfig(use_vllm=True),
+    args=GRPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -72,7 +72,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = OnlineDPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=OnlineDPOConfig(use_vllm=True),
+    args=OnlineDPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -92,7 +92,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = NashMDTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=NashMDConfig(use_vllm=True),
+    args=NashMDConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -112,7 +112,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = XPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=XPOConfig(use_vllm=True),
+    args=XPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -132,7 +132,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = RLOOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=RLOOConfig(use_vllm=True),
+    args=RLOOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
