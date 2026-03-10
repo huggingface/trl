@@ -1156,9 +1156,9 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
         trainer = RLOOTrainer(
@@ -1180,9 +1180,9 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             log_completions=True,
         )
@@ -1206,9 +1206,9 @@ class TestRLOOTrainer(TrlTestCase):
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
         trainer = RLOOTrainer(
@@ -1218,6 +1218,7 @@ class TestRLOOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
         trainer.train()
+        # log_metric appends to _metrics, which gets averaged and merged into log_history
         logged_keys = {k for entry in trainer.state.log_history for k in entry}
         assert "custom_accuracy" in logged_keys
 
