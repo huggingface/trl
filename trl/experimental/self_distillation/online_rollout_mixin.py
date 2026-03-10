@@ -100,6 +100,8 @@ class OnlineRolloutMixin:
         ]
 
     def _generate(self, prompts):
+        # Keep the generation path aligned with the reference trainers: generate from left-padded prompts,
+        # then recover completion token spans by trimming prompt tokens and stopping at the first EOS.
         prompts_text = self._apply_prompt_template(prompts)
         generate_inputs = self.processing_class(
             text=prompts_text,
@@ -252,6 +254,19 @@ class OnlineRolloutMixin:
             torch.tensor([len(ids) for ids in completion_ids_list], device=device)
         )
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
+
+        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
         output = {
             "prompt_ids": prompt_ids,
