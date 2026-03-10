@@ -97,11 +97,9 @@ if is_trackio_available():
 
 logger = get_logger(__name__)
 
-# A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
-# a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
-# arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
-# accept **kwargs.
-RewardFunc = str | PreTrainedModel | Callable[..., list[float]]
+# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
+# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
+RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
 
 
 class RLOOTrainer(_BaseTrainer):
@@ -526,6 +524,8 @@ class RLOOTrainer(_BaseTrainer):
                 max_completion_length=self.max_completion_length,
                 logprobs=None,  # we don't need logprobs from vLLM in RLOO
                 generation_kwargs=args.generation_kwargs,
+                # Chat/tool configuration
+                chat_template_kwargs=self.chat_template_kwargs,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
@@ -916,7 +916,7 @@ class RLOOTrainer(_BaseTrainer):
             # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
             prompt_ids = [
                 [tok for tok, m in zip(ids, mask, strict=True) if m]
-                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=False)
             ]
             # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
             multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
@@ -926,47 +926,10 @@ class RLOOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images=None, multimodal_fields=None):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
-
-        # Tokenize prompts once, shared across all generation backends
-        if is_conversational({"prompt": prompts[0]}):
-            # Extract images from messages for VLM support
-            images = []
-            has_images = False
-            for prompt in prompts:
-                prompt_images = []
-                for message in prompt:
-                    if isinstance(message["content"], list):
-                        for part in message["content"]:
-                            if part["type"] == "image":
-                                prompt_images.append(part["image"])
-                                has_images = True
-                images.append(prompt_images if prompt_images else None)
-            images = images if has_images else None
-
-            # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
-            # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
-            # See: https://github.com/huggingface/transformers/issues/44514
-            tokenized = self.processing_class.apply_chat_template(
-                conversation=prompts,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                padding=True,
-                **self.chat_template_kwargs,
-            )
-            # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
-            prompt_ids = [
-                [tok for tok, m in zip(ids, mask, strict=True) if m]
-                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
-            ]
-            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
-            multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
-        else:
-            prompt_ids = self.processing_class(text=prompts)["input_ids"]
-            images = None
+        if multimodal_fields is None:
             multimodal_fields = {}
 
         # Generate completions using either vLLM or regular generation
@@ -1049,10 +1012,7 @@ class RLOOTrainer(_BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            # Move tensors to CPU before per-sample to avoid many CUDA syncs/copies (costly at scale/contention).
-            completion_ids = [
-                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
-            ]
+            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
 
         return completion_ids
 
