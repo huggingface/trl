@@ -960,9 +960,7 @@ class RLOOTrainer(_BaseTrainer):
                     return_dict=True,
                     **self.chat_template_kwargs,
                 )
-                prompt_token_ids = tokenized["input_ids"]
             else:
-                prompt_token_ids = self.processing_class(text=prompts)["input_ids"]
                 images = None
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
