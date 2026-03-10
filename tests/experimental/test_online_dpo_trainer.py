@@ -351,7 +351,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         # Test default values
         config = OnlineDPOConfig()
-        assert config.vllm_mode == "server"
+        assert config.vllm_mode == "colocate"
         assert config.vllm_server_base_url is None
         assert config.vllm_server_host == "0.0.0.0"
         assert config.vllm_server_port == 8000
