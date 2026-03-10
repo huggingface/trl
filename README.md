@@ -1,4 +1,4 @@
-# TRL - Transformer Reinforcement Learning
+# TRL - Transformers Reinforcement Learning
 
 <div style="text-align: center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
@@ -189,7 +189,7 @@ Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimenta
 
 ```bibtex
 @software{vonwerra2020trl,
-  title   = {{TRL: Transformer Reinforcement Learning}},
+  title   = {{TRL: Transformers Reinforcement Learning}},
   author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
   license = {Apache-2.0},
   url     = {https://github.com/huggingface/trl},

@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: 'TRL: Transformer Reinforcement Learning'
+title: 'TRL: Transformers Reinforcement Learning'
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -25,7 +25,7 @@ authors:
     family-names: Gallouédec
 repository-code: 'https://github.com/huggingface/trl'
 abstract: >-
-  TRL (Transformer Reinforcement Learning) is an
+  TRL (Transformers Reinforcement Learning) is an
   open-source toolkit for aligning transformer models via
   post-training. It provides practical, scalable
   implementations of SFT, reward modeling, DPO, and GRPO
