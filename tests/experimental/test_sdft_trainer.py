@@ -26,18 +26,14 @@ if is_peft_available():
     from peft import LoraConfig
 
 
-class GenerationPromptCaptureCallback(TrainerCallback):
+class SelfDistillationCaptureCallback(TrainerCallback):
     def __init__(self):
         self.captured_generation_prompt_text = None
+        self.captured_old_per_token_logps = None
 
     def on_generation_prompts_selected(self, generation_prompt_text=None, **kwargs):
         if self.captured_generation_prompt_text is None and generation_prompt_text is not None:
             self.captured_generation_prompt_text = generation_prompt_text[0]
-
-
-class OldLogProbsCaptureCallback(TrainerCallback):
-    def __init__(self):
-        self.captured_old_per_token_logps = None
 
     def on_self_distillation_batch_prepared(self, old_per_token_logps=None, **kwargs):
         if self.captured_old_per_token_logps is None and old_per_token_logps is not None:
@@ -108,7 +104,7 @@ class TestSDFTTrainer(TrlTestCase):
             generate_from_teacher=True,
         )
 
-        capture_callback = GenerationPromptCaptureCallback()
+        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -184,7 +180,7 @@ class TestSDFTTrainer(TrlTestCase):
             report_to="none",
         )
 
-        capture_callback = OldLogProbsCaptureCallback()
+        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",

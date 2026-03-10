@@ -24,12 +24,13 @@ from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 from ..testing_utils import TrlTestCase
 
 
-class TeacherContextCaptureCallback(TrainerCallback):
+class SelfDistillationCaptureCallback(TrainerCallback):
     def __init__(self):
         self.captured_teacher_input_text = None
         self.captured_self_distillation_mask = None
         self.captured_teacher_attention_mask = None
         self.captured_completion_mask = None
+        self.captured_old_per_token_logps = None
 
     def on_teacher_context_built(
         self,
@@ -48,11 +49,6 @@ class TeacherContextCaptureCallback(TrainerCallback):
             self.captured_completion_mask = completion_mask.detach().cpu()
         if self.captured_self_distillation_mask is None and self_distillation_mask is not None:
             self.captured_self_distillation_mask = self_distillation_mask.detach().cpu()
-
-
-class OldLogProbsCaptureCallback(TrainerCallback):
-    def __init__(self):
-        self.captured_old_per_token_logps = None
 
     def on_self_distillation_batch_prepared(self, old_per_token_logps=None, **kwargs):
         if self.captured_old_per_token_logps is None and old_per_token_logps is not None:
@@ -230,7 +226,7 @@ class TestSDPOTrainer(TrlTestCase):
             max_steps=1,
         )
 
-        capture_callback = OldLogProbsCaptureCallback()
+        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
@@ -318,7 +314,7 @@ class TestSDPOTrainer(TrlTestCase):
             prompts = kwargs["prompts"]
             return [1.0 if i % 2 == 0 else 0.0 for i in range(len(prompts))]
 
-        capture_callback = TeacherContextCaptureCallback()
+        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=alternating_reward,
@@ -367,7 +363,7 @@ class TestSDPOTrainer(TrlTestCase):
             prompts = kwargs["prompts"]
             return [0.0] * len(prompts)
 
-        capture_callback = TeacherContextCaptureCallback()
+        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=zero_reward,
@@ -432,7 +428,7 @@ class TestSDPOTrainer(TrlTestCase):
         def alternating_reward(**kwargs):
             return [1.0 if i % 2 == 0 else 0.0 for i in range(len(kwargs["prompts"]))]
 
-        capture_callback = TeacherContextCaptureCallback()
+        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=alternating_reward,
