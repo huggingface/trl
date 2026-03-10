@@ -143,3 +143,9 @@ checklink/cookies.txt
 nbs/wandb/
 examples/notebooks/wandb/
 wandb/
+
+# AI agent generated artifacts
+/AGENTS.md
+/CLAUDE.md
+/.agents/skills
+/.claude/skills
