@@ -97,9 +97,11 @@ if is_trackio_available():
 
 logger = get_logger(__name__)
 
-# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
-# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
+# A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
+# a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
+# arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
+# accept **kwargs.
+RewardFunc = str | PreTrainedModel | Callable[..., list[float]]
 
 
 class RLOOTrainer(_BaseTrainer):
@@ -524,8 +526,6 @@ class RLOOTrainer(_BaseTrainer):
                 max_completion_length=self.max_completion_length,
                 logprobs=None,  # we don't need logprobs from vLLM in RLOO
                 generation_kwargs=args.generation_kwargs,
-                # Chat/tool configuration
-                chat_template_kwargs=self.chat_template_kwargs,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
@@ -926,11 +926,9 @@ class RLOOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images=None, multimodal_fields=None):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
-        if multimodal_fields is None:
-            multimodal_fields = {}
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
