@@ -1258,47 +1258,6 @@ class GRPOTrainer(_BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        # Tokenize prompts once, shared across all generation backends
-        if is_conversational({"prompt": prompts[0]}):
-            # Extract images from messages for VLM support
-            images = []
-            has_images = False
-            for prompt in prompts:
-                prompt_images = []
-                for message in prompt:
-                    if isinstance(message["content"], list):
-                        for part in message["content"]:
-                            if part["type"] == "image":
-                                prompt_images.append(part["image"])
-                                has_images = True
-                images.append(prompt_images if prompt_images else None)
-            images = images if has_images else None
-
-            # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
-            # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
-            # See: https://github.com/huggingface/transformers/issues/44514
-            tokenized = self.processing_class.apply_chat_template(
-                conversation=prompts,
-                tools=self.tools,
-                chat_template=self.chat_template,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                padding=True,
-                **self.chat_template_kwargs,
-            )
-            # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
-            prompt_ids = [
-                [tok for tok, m in zip(ids, mask, strict=True) if m]
-                for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
-            ]
-            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
-            multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
-        else:
-            prompt_ids = self.processing_class(text=prompts)["input_ids"]
-            images = None
-            multimodal_fields = {}
-
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # Sync weights if training step changed
