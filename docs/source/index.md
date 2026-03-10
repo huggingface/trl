@@ -1,5 +1,5 @@
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/TRL%20banner%20dark.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png">
 </div>
 
 # TRL - Transformers Reinforcement Learning
