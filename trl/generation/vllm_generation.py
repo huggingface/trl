@@ -520,7 +520,7 @@ class VLLMGeneration:
     def generate(
         self,
         prompts: list[list[int]],
-        images: list[list] | None,
+        images: list[list | None] | None,
         num_generations: int,
         profiler: ProfilingContext | None = None,
     ) -> tuple:
