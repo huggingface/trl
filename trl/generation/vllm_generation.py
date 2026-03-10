@@ -243,10 +243,6 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
-        # Chat/tool configuration
-        chat_template: str | None = None,
-        chat_template_kwargs: dict | None = None,
-        tools: list | None = None,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -281,11 +277,6 @@ class VLLMGeneration:
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
-
-        # Chat/tool configuration
-        self.chat_template = chat_template
-        self.chat_template_kwargs = chat_template_kwargs or {}
-        self.tools = tools
 
         self._init_vllm()
 
@@ -529,7 +520,7 @@ class VLLMGeneration:
     def generate(
         self,
         prompts: list[list[int]],
-        images: list[list] | None,
+        images: list[list | None] | None,
         num_generations: int,
         profiler: ProfilingContext | None = None,
     ) -> tuple:
