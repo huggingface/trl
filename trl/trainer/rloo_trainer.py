@@ -936,6 +936,35 @@ class RLOOTrainer(_BaseTrainer):
                     self.vllm_generation.sync_weights()
                 self._last_loaded_step = self.state.global_step
 
+            # Tokenize prompts and extract images (for VLM) before calling vLLM
+            if is_conversational({"prompt": prompts[0]}):
+                # Extract images from messages for VLM support
+                images = []
+                has_images = False
+                for prompt in prompts:
+                    prompt_images = []
+                    for message in prompt:
+                        if isinstance(message["content"], list):
+                            for part in message["content"]:
+                                if part["type"] == "image":
+                                    prompt_images.append(part["image"])
+                                    has_images = True
+                    images.append(prompt_images if prompt_images else None)
+                images = images if has_images else None
+
+                # RLOO does not support tools; omit tools/chat_template args
+                tokenized = self.processing_class.apply_chat_template(
+                    conversation=prompts,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
+                )
+                prompt_token_ids = tokenized["input_ids"]
+            else:
+                prompt_token_ids = self.processing_class(text=prompts)["input_ids"]
+                images = None
+
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             prompt_ids, completion_ids, _, _, _ = self.vllm_generation.generate(
