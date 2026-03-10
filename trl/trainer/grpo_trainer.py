@@ -1268,7 +1268,7 @@ class GRPOTrainer(_BaseTrainer):
 
             # Generate using vLLM with raw token IDs
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            _, completion_ids, logprobs, _, _ = self.vllm_generation.generate(
+            _, completion_ids, logprobs, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
                 num_generations=num_generations,
