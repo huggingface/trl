@@ -537,13 +537,12 @@ class VLLMGeneration:
             profiler: Optional profiler for performance tracking
 
         Returns:
-            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields).
+            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids).
 
             - `prompt_ids`: `list[list[int]]` of shape `(batch_size, prompt_len)`.
             - `completion_ids`: `list[list[int]]` of shape `(batch_size, completion_len)`.
             - `logprobs`: `list[list[list[float | None]]]` of shape `(batch_size, completion_len, num_logprobs)`.
             - `logprob_token_ids`: `list[list[list[int]]]` of shape `(batch_size, completion_len, num_logprobs)`.
-            - `extra_fields`: `dict` of additional per-completion fields from a custom `rollout_func`.
 
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
@@ -745,4 +744,4 @@ class VLLMGeneration:
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
 
-        return prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields
+        return prompt_ids, completion_ids, logprobs, logprob_token_ids
