@@ -3,7 +3,7 @@
 <div style="text-align: center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/TRL%20banner%20light.png">
-        <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/TRL%20banner%20dark.png" alt="TRL Banner">
+        <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
     </picture>
 </div>
 
