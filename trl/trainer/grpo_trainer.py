@@ -1523,7 +1523,8 @@ class GRPOTrainer(_BaseTrainer):
             extra_fields = {k: v for k, v in output.items() if k not in required_keys}
             prompt_ids, completion_ids, logprobs = output["prompt_ids"], output["completion_ids"], output["logprobs"]
         else:
-            prompt_ids, completion_ids, logprobs, extra_fields = self._generate_single_turn(prompts)
+            prompt_ids, completion_ids, logprobs = self._generate_single_turn(prompts)
+            extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
