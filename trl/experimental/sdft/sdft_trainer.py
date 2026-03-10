@@ -16,15 +16,12 @@ from __future__ import annotations
 
 import inspect
 from collections import defaultdict
-from functools import partial
 from typing import Any
 
-import datasets
 import torch
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
-from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
     GenerationConfig,
@@ -33,20 +30,17 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
 )
-from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import (
-    RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
     identity,
     pad,
-    split_tensor_dict,
     use_adapter,
 )
 from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
@@ -232,66 +226,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             dict_args = args.__dict__.copy()
         return cls.config_cls(**dict_args)
 
-    def get_train_dataloader(self):
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
-
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
-        else:
-            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
-
-        dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.steps_per_generation,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
-
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = partial(
-                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-            )
-            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-
-    def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
-        if dataset is None:
-            dataset = self.train_dataset
-        return RepeatSampler(
-            data_source=dataset,
-            mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args.steps_per_generation,
-            shuffle=self.shuffle_dataset,
-            seed=self.args.seed,
-        )
-
-    def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        return RepeatSampler(
-            data_source=eval_dataset,
-            mini_repeat_count=self.num_generations,
-            seed=self.args.seed,
-        )
-
-    def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
-        mode = "train" if self.model.training else "eval"
-        if mode == "train":
-            generate_every = self.args.steps_per_generation * self.num_iterations
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
-                generation_batch = self._generate_and_prepare_batch(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
-            inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
-        else:
-            inputs = self._generate_and_prepare_batch(generation_batch)
-        return inputs
-
     def _generate_completion_ids(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
         generate_inputs = self.processing_class(
             text=self.prompt_tokenizer.apply_prompt_template(prompts),
@@ -302,7 +236,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             truncation=True,
             add_special_tokens=False,
         )
-        generate_inputs = super()._prepare_inputs(generate_inputs)
+        generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
 
         with (
             unwrap_model_for_generation(
@@ -384,16 +318,12 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             output["old_per_token_logps"] = old_per_token_logps
         return output
 
+    def _build_buffered_batch(self, generation_batch):
+        return self._generate_and_prepare_batch(generation_batch)
+
     def _log_self_distillation_metric(self, mode: str, metric_name: str, value: float) -> None:
         self._metrics[mode][f"self_distillation/{metric_name}"].append(value)
         self._metrics[mode][f"sdft/{metric_name}"].append(value)
-
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
-    ):
-        loss = super().training_step(model, inputs, num_items_in_batch)
-        self._step += 1
-        return loss
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:

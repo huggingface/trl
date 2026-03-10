@@ -14,18 +14,14 @@
 
 from __future__ import annotations
 
-from functools import partial
-
-import datasets
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Sampler
-from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, logging
+from transformers.utils import logging
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...models import unwrap_model_for_generation
-from ...trainer.utils import RepeatSampler, pad, split_tensor_dict
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import pad
 
 
 logger = logging.get_logger(__name__)
@@ -34,70 +30,14 @@ logger = logging.get_logger(__name__)
 class OnlineRolloutMixin:
     """Online rollout, reward, and policy-loss utilities shared by SDPO-like trainers."""
 
-    def get_train_dataloader(self):
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
-
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
-        else:
-            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
-
-        dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.steps_per_generation,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = partial(
-                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-            )
-            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-
-    def _get_train_sampler(self, dataset=None) -> Sampler:
-        if dataset is None:
-            dataset = self.train_dataset
-        return RepeatSampler(
-            data_source=dataset,
-            mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args.steps_per_generation,
-            shuffle=self.shuffle_dataset,
-            seed=self.args.seed,
-        )
-
-    def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        return RepeatSampler(
-            data_source=eval_dataset, mini_repeat_count=self.num_generations_eval, seed=self.args.seed
-        )
-
-    def training_step(self, model, inputs, num_items_in_batch):
-        output = super().training_step(model, inputs, num_items_in_batch)
-        self._step += 1
-        return output
-
-    def _prepare_inputs(self, generation_batch):
-        mode = "train" if self.model.training else "eval"
-        if mode == "train":
-            generate_every = self.args.steps_per_generation * self.num_iterations
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
-                generation_batch = self._generate_and_score_completions(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
-            return self._buffered_inputs[self._step % self.args.steps_per_generation]
-        return self._generate_and_score_completions(generation_batch)
-
     def _apply_prompt_template(self, prompts):
         return [
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
             for prompt in prompts
         ]
+
+    def _build_buffered_batch(self, generation_batch):
+        return self._generate_and_score_completions(generation_batch)
 
     def _generate(self, prompts):
         # Keep the generation path aligned with the reference trainers: generate from left-padded prompts,
@@ -112,7 +52,7 @@ class OnlineRolloutMixin:
             truncation=True,
             add_special_tokens=False,
         )
-        generate_inputs = super()._prepare_inputs(generate_inputs)
+        generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
         with (
             unwrap_model_for_generation(
                 self.model_wrapped,
@@ -168,7 +108,7 @@ class OnlineRolloutMixin:
                     padding_side="right",
                     add_special_tokens=False,
                 )
-                reward_inputs = super()._prepare_inputs(reward_inputs)
+                reward_inputs = _BaseTrainer._prepare_inputs(self, reward_inputs)
                 with torch.inference_mode():
                     rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]
             else:
