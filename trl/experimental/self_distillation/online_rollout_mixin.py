@@ -217,6 +217,7 @@ class OnlineRolloutMixin:
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "rewards": rewards,
             "advantages": advantages,
             "num_items_in_batch": completion_mask.sum().detach(),
         }

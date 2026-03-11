@@ -135,7 +135,10 @@ class SuccessfulRolloutTeacherContextBuilder:
                     add_generation_prompt=True,
                     return_tensors="pt",
                 )
-                ids = tokenized["input_ids"].squeeze(0) if hasattr(tokenized, "__getitem__") else tokenized.squeeze(0)
+                if isinstance(tokenized, torch.Tensor):
+                    ids = tokenized.squeeze(0)
+                else:
+                    ids = tokenized["input_ids"].squeeze(0)
             else:
                 ids = self.trainer.processing_class.encode(msg, return_tensors="pt").squeeze(0)
 
@@ -167,6 +170,9 @@ class SuccessfulRolloutTeacherContextBuilder:
         process_start = self.trainer.accelerator.process_index * num_local
         process_slice = slice(process_start, process_start + num_local)
 
+        # Rewards are already globally gathered before this builder runs, but prompts and completions are still local.
+        # Gather only the pieces needed to mine successful rollouts across generation groups; the returned teacher
+        # tensors remain local to the current process.
         all_completion_ids = self.trainer.accelerator.gather(completion_ids)
         all_prompts = gather_object(prompts)
         all_feedbacks = gather_object(feedbacks) if feedbacks is not None else [None] * total_samples

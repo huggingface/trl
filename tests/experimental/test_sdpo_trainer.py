@@ -56,6 +56,27 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDPOTrainer(TrlTestCase):
+    def test_sdpo_requires_reward_functions(self):
+        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            report_to="none",
+            max_steps=1,
+        )
+
+        with pytest.raises(ValueError, match="`reward_funcs` is required for SDPOTrainer"):
+            SDPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=None,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     def test_training_with_required_dataset_columns(self):
         dataset = Dataset.from_dict(
             {

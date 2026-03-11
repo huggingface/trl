@@ -66,6 +66,8 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         peft_config=None,
     ):
         args = self._coerce_self_distillation_args(args)
+        if reward_funcs is None or (isinstance(reward_funcs, list) and len(reward_funcs) == 0):
+            raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
         super().__init__(
             model=model,
             reward_funcs=reward_funcs,
@@ -78,7 +80,6 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
             optimizers=optimizers,
             peft_config=peft_config,
         )
-        self._last_rewards_per_func = None
         self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
         if self.args.teacher_regularization == "ema":
             # `self.model` may already be accelerator-wrapped after the shared base constructor. Build the EMA
@@ -99,23 +100,13 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
     def _allow_topk_without_full_logit_distillation(self) -> bool:
         return False
 
-    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
-        rewards_per_func = super()._calculate_rewards(inputs, prompts, completions, completion_ids_list)
-        self._last_rewards_per_func = rewards_per_func
-        return rewards_per_func
-
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
     ) -> dict[str, torch.Tensor | Any]:
         prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
 
         output = super()._generate_and_score_completions(inputs)
-
-        device = self.accelerator.device
-        rewards_per_func = self._last_rewards_per_func
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-
-        output.update(self.teacher_context_builder.build(output, prompts, rewards, feedbacks=privileged_contexts))
+        output.update(self.teacher_context_builder.build(output, prompts, output["rewards"], feedbacks=privileged_contexts))
 
         mode = "train" if self.model.training else "eval"
         for key, value in self.teacher_context_builder.last_metrics.items():

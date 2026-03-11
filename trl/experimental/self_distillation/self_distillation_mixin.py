@@ -110,6 +110,9 @@ class SelfDistillationMixin:
         mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
+            # The outer Trainer loop calls `_prepare_inputs` once per optimizer step. In self-distillation trainers
+            # that hook is repurposed to build one larger generation batch, then reuse its slices for the next
+            # `steps_per_generation` optimization steps.
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 generation_batch = self._build_buffered_batch(generation_batch)
                 self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
