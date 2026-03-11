@@ -87,6 +87,8 @@ class DemonstrationTeacherContextBuilder:
         return content
 
     def _stringify_privileged_context(self, privileged_context: Any) -> str:
+        if privileged_context is None:
+            raise ValueError("`privileged_context` must not be None for self-distillation teacher prompt construction.")
         if isinstance(privileged_context, str):
             return privileged_context
         if isinstance(privileged_context, list) and privileged_context and isinstance(privileged_context[0], dict):
