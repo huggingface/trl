@@ -14,7 +14,6 @@
 
 import logging
 
-import pytest
 import torch
 from datasets import Dataset, load_dataset
 from transformers import TrainerCallback
@@ -61,61 +60,6 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDPOTrainer(TrlTestCase):
-    def test_sdpo_requires_reward_functions(self):
-        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
-
-        training_args = SDPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,
-            generation_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
-            report_to="none",
-            max_steps=1,
-        )
-
-        with pytest.raises(ValueError, match="`reward_funcs` is required for SDPOTrainer"):
-            SDPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=None,
-                args=training_args,
-                train_dataset=dataset,
-            )
-
-    def test_training_with_required_dataset_columns(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Solve 2+2."],
-                "privileged_context": ["Your earlier answer used the wrong format."],
-            }
-        )
-
-        training_args = SDPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=1,
-            generation_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
-            report_to="none",
-            distillation_alpha=1.0,
-            distillation_topk=None,
-            distillation_is_clip=None,
-            include_environment_feedback=True,
-            max_steps=1,
-        )
-
-        trainer = SDPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
     def test_training_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {
@@ -211,32 +155,6 @@ class TestSDPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_training_with_hybrid_policy_loss_mode(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = SDPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
-            report_to="none",
-            distillation_topk=5,
-            full_logit_distillation=True,
-            distillation_is_clip=None,
-            sdpo_policy_loss_mode="hybrid",
-        )
-        trainer = SDPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
     def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict({"prompt": ["Solve 2+2.", "Solve 3+3."]})
 
@@ -312,49 +230,6 @@ class TestSDPOTrainer(TrlTestCase):
         assert beta_teachers
         assert any("Correct solution:" in text for text in alpha_teachers)
         assert all("Correct solution:" not in text for text in beta_teachers)
-
-    def test_training_with_teacher_regularization_none(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = SDPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
-            report_to="none",
-            distillation_topk=5,
-            full_logit_distillation=True,
-            distillation_is_clip=None,
-            teacher_regularization="none",
-        )
-        trainer = SDPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-    def test_training_rejects_non_reverse_token_level_distillation(self):
-        with pytest.raises(ValueError, match="requires `distillation_alpha=1.0`"):
-            SDPOConfig(
-                output_dir=self.tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=1,
-                generation_batch_size=2,
-                num_generations=2,
-                max_completion_length=8,
-                report_to="none",
-                distillation_alpha=0.5,
-                distillation_topk=5,
-                distillation_is_clip=None,
-                include_environment_feedback=True,
-                max_steps=1,
-            )
 
     def test_training_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(

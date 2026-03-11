@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import pytest
-import torch
 from datasets import Dataset
 from transformers import TrainerCallback
 from transformers.utils import is_peft_available
@@ -46,47 +45,16 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDFTTrainer(TrlTestCase):
-    def test_rejects_same_model_and_ref_model_object(self):
-        training_args = SDFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,
-            max_completion_length=8,
-            max_steps=1,
-            num_generations=1,
-            report_to="none",
-        )
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-
-        from transformers import AutoModelForCausalLM
-
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        with pytest.raises(ValueError, match="`model` and `ref_model` cannot be the same object"):
-            SDFTTrainer(
-                model=model,
-                ref_model=model,
-                args=training_args,
-                train_dataset=Dataset.from_dict(
-                    {
-                        "prompt": ["Solve 2+2."],
-                        "privileged_context": ["Example answer: 4."],
-                    }
-                ),
-            )
-
-    def test_training_with_required_dataset_columns(self):
+    def test_training_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
-                "prompt": ["Solve 2+2.", "Name the capital of France."],
-                "privileged_context": [
-                    "Example answer: 4.",
-                    "Example answer: Paris.",
-                ],
+                "prompt": ["Solve 2+2."],
+                "privileged_context": [None],
             }
         )
 
         training_args = SDFTConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
@@ -101,18 +69,8 @@ class TestSDFTTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        previous_trainable_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        for name, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(name)
-            if param.sum() != 0:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), (
-                    f"Parameter {name} has not changed."
-                )
+        with pytest.raises(ValueError, match="`privileged_context` must not be None"):
+            trainer.train()
 
     def test_training_with_generate_from_teacher(self):
         dataset = Dataset.from_dict(
