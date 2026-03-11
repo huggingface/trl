@@ -84,9 +84,7 @@ from trl.models import unwrap_model_for_generation
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
-DEFAULT_DEMONSTRATION_TEMPLATE = Template(
-    """Example response: $output_text"""
-)
+DEFAULT_DEMONSTRATION_TEMPLATE = Template("""Example response: $output_text""")
 
 
 @dataclass
