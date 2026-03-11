@@ -22,7 +22,57 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class SelfDistillationConfig(_BaseConfig):
-    r"""Shared configuration for experimental self-distillation trainers."""
+    r"""
+    Shared configuration for experimental self-distillation trainers.
+
+    This class contains only the arguments that are specific to the shared self-distillation stack. For the full set
+    of generic training arguments, refer to [`~transformers.TrainingArguments`] via [`trl.trainer.base_config._BaseConfig`].
+
+    Parameters:
+        > Parameters that control generation and rollout reuse
+
+        model_init_kwargs (`dict[str, Any]`, *optional*):
+            Keyword arguments used when the `model` argument is passed as a string.
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
+            Maximum prompt length. Longer prompts are truncated from the left.
+        num_generations (`int`, *optional*, defaults to `8`):
+            Number of sampled generations per prompt.
+        generation_batch_size (`int` or `None`, *optional*):
+            Global batch size used for generation. Mutually exclusive with `steps_per_generation`.
+        steps_per_generation (`int` or `None`, *optional*):
+            Number of optimizer steps that reuse one generated batch. Mutually exclusive with
+            `generation_batch_size`.
+
+        > Parameters that control the online policy objective
+
+        beta (`float`, *optional*, defaults to `0.0`):
+            Reference-model KL coefficient for online policy optimization.
+        loss_type (`str`, *optional*, defaults to `"dapo"`):
+            Policy-loss aggregation mode. Supported: `grpo`, `bnpo`, `dr_grpo`, `dapo`.
+        scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
+            Reward normalization mode. Supported: `group`, `batch`, `none`.
+
+        > Parameters that control self-distillation
+
+        distillation_alpha (`float`, *optional*, defaults to `0.5`):
+            Divergence interpolation coefficient using the official SDPO/SDFT convention:
+            `0.0=forward KL`, `0.5=JSD`, `1.0=reverse KL`.
+        distillation_topk (`int` or `None`, *optional*, defaults to `100`):
+            Number of top tokens to keep for top-k distillation. If `None`, all logits are used.
+        full_logit_distillation (`bool`, *optional*, defaults to `False`):
+            Whether to use full-logit distillation instead of token-level distillation.
+        distillation_is_clip (`float` or `None`, *optional*, defaults to `2.0`):
+            Importance-sampling clip used by the official SDPO-style correction. `None` disables clipping.
+        distillation_weight (`float`, *optional*, defaults to `1.0`):
+            Weight applied to the self-distillation loss term.
+
+        > Parameters that control diagnostics
+
+        diagnostics_warning_interval (`int`, *optional*, defaults to `10`):
+            Emit repeated trainer diagnostics every N consecutive degenerate steps. Set to `0` to disable.
+        diagnostics_flat_tolerance (`float`, *optional*, defaults to `1e-8`):
+            Tolerance used to decide whether reward variance or reprompt activity is effectively zero.
+    """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
@@ -212,6 +262,14 @@ class SelfDistillationConfig(_BaseConfig):
             raise ValueError("loss_type must be one of: 'grpo', 'bnpo', 'dr_grpo', 'dapo'")
         if self.num_generations < 1:
             raise ValueError("num_generations must be at least 1")
+        if not 0.0 <= self.distillation_alpha <= 1.0:
+            raise ValueError("distillation_alpha must be in [0, 1]")
+        if self.distillation_topk is not None and self.distillation_topk <= 0:
+            raise ValueError("distillation_topk must be positive when provided")
+        if self.distillation_is_clip is not None and self.distillation_is_clip <= 0:
+            raise ValueError("distillation_is_clip must be positive when provided")
+        if self.distillation_weight < 0:
+            raise ValueError("distillation_weight must be non-negative")
         if self.diagnostics_warning_interval < 0:
             raise ValueError("diagnostics_warning_interval must be non-negative")
         if self.diagnostics_flat_tolerance < 0:

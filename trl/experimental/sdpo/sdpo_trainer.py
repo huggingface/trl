@@ -81,6 +81,8 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         self._last_rewards_per_func = None
         self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
         if self.args.teacher_regularization == "ema":
+            # `self.model` may already be accelerator-wrapped after the shared base constructor. Build the EMA
+            # teacher from the unwrapped student model first, then prepare it as an auxiliary eval-only module.
             student_model = self.accelerator.unwrap_model(self.model)
             self.teacher_model = copy.deepcopy(student_model)
             self.teacher_model.requires_grad_(False)

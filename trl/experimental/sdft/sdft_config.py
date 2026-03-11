@@ -19,11 +19,19 @@ from ..self_distillation.self_distillation_config import SelfDistillationConfig
 
 @dataclass
 class SDFTConfig(SelfDistillationConfig):
-    """
+    r"""
     Configuration class for [`SDFTTrainer`].
 
     This adapts the official SDFT implementation to the TRL trainer API while reusing the common self-distillation
     configuration shared with SDPO.
+
+    Parameters:
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the student and teacher models.
+        generate_from_teacher (`bool`, *optional*, defaults to `False`):
+            Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
+        num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
+            Number of initial completion tokens to exclude from the distillation loss.
     """
 
     disable_dropout: bool = field(

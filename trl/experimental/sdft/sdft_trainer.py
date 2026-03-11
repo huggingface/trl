@@ -236,6 +236,8 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             truncation=True,
             add_special_tokens=False,
         )
+        # This generation helper builds tokenized model inputs directly, so use the base Trainer tensor preparation
+        # instead of re-entering the buffered outer training hook.
         generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
 
         with (
