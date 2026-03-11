@@ -168,14 +168,12 @@ class SuccessfulRolloutTeacherContextBuilder:
         process_slice = slice(process_start, process_start + num_local)
 
         all_completion_ids = self.trainer.accelerator.gather(completion_ids)
-        all_completion_mask = self.trainer.accelerator.gather(completion_mask)
         all_prompts = gather_object(prompts)
         all_feedbacks = gather_object(feedbacks) if feedbacks is not None else [None] * total_samples
 
         threshold = self.trainer.args.success_reward_threshold
         dont_reprompt_self = self.trainer.args.dont_reprompt_on_self_success
         feedback_only_without_solution = self.trainer.args.environment_feedback_only_without_solution
-        teacher_messages_list = []
         self_distillation_mask = torch.zeros(total_samples, device=device)
         num_with_solution = 0
         num_with_feedback_available = 0
@@ -211,15 +209,41 @@ class SuccessfulRolloutTeacherContextBuilder:
             )
             if use_feedback:
                 num_with_feedback_used += 1
-
-            if not has_solution and not use_feedback:
-                teacher_messages_list.append(original_prompt)
-                continue
-
-            self_distillation_mask[i] = 1.0
-            solution_text = ""
+            if has_solution or use_feedback:
+                self_distillation_mask[i] = 1.0
             if has_solution:
                 num_with_solution += 1
+
+        local_teacher_messages = []
+        local_self_distillation_mask = self_distillation_mask[process_slice]
+        for global_idx in range(process_start, process_start + num_local):
+            original_prompt = all_prompts[global_idx]
+            raw_feedback = all_feedbacks[global_idx]
+            group_start = (global_idx // num_generations) * num_generations
+            group_end = group_start + num_generations
+
+            successful = []
+            if self.trainer.args.use_successful_as_teacher:
+                for j in range(group_start, group_end):
+                    if dont_reprompt_self and j == global_idx:
+                        continue
+                    if rewards[j].item() >= threshold:
+                        successful.append(j)
+
+            has_solution = len(successful) > 0
+            has_feedback = isinstance(raw_feedback, str) and raw_feedback.strip() != ""
+            use_feedback = (
+                self.trainer.args.include_environment_feedback
+                and has_feedback
+                and (not feedback_only_without_solution or not has_solution)
+            )
+
+            if not has_solution and not use_feedback:
+                local_teacher_messages.append(original_prompt)
+                continue
+
+            solution_text = ""
+            if has_solution:
                 demo_idx = successful[0]
                 demo_ids = all_completion_ids[demo_idx]
                 demo_ids = demo_ids[demo_ids != self.trainer.processing_class.pad_token_id]
@@ -238,13 +262,13 @@ class SuccessfulRolloutTeacherContextBuilder:
                 system_messages = original_prompt[:-1]
                 prompt_text = self._extract_last_user_text(original_prompt)
                 reprompt_text = self._build_reprompt_text(prompt_text, solution_text, feedback_text)
-                teacher_messages_list.append(system_messages + [{"role": "user", "content": reprompt_text}])
+                local_teacher_messages.append(system_messages + [{"role": "user", "content": reprompt_text}])
             else:
-                teacher_messages_list.append(self._build_reprompt_text(original_prompt, solution_text, feedback_text))
+                local_teacher_messages.append(self._build_reprompt_text(original_prompt, solution_text, feedback_text))
 
-        teacher_batch = self._tokenize_teacher_messages(teacher_messages_list)
-        teacher_input_ids = torch.cat([teacher_batch.prompt_ids, all_completion_ids], dim=1)
-        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, all_completion_mask], dim=1)
+        teacher_batch = self._tokenize_teacher_messages(local_teacher_messages)
+        teacher_input_ids = torch.cat([teacher_batch.prompt_ids, completion_ids], dim=1)
+        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, completion_mask], dim=1)
 
         batch_size = total_samples if total_samples > 0 else 1
         num_groups = max(1, total_samples // max(1, num_generations))
@@ -257,7 +281,7 @@ class SuccessfulRolloutTeacherContextBuilder:
         }
 
         return {
-            "teacher_input_ids": teacher_input_ids[process_slice],
-            "teacher_attention_mask": teacher_attention_mask[process_slice],
-            "self_distillation_mask": self_distillation_mask[process_slice],
+            "teacher_input_ids": teacher_input_ids,
+            "teacher_attention_mask": teacher_attention_mask,
+            "self_distillation_mask": local_self_distillation_mask,
         }
