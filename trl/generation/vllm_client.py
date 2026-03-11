@@ -211,7 +211,6 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         logprobs: int | None = 0,
-        truncate_prompt_tokens: int | None = None,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
     ) -> dict[str, list[list[int]]]:
@@ -221,8 +220,9 @@ class VLLMClient:
         Args:
             prompts (`list[str]` or `list[list[int]]`):
                 List of text prompts or list of token ID lists for which the model will generate completions.
-            images (`list[PIL.Image]`, *optional*):
-                List of PIL Images to send along with the prompts. Only valid when `prompts` is a list of strings.
+            images (`list[list[PIL.Image] | None]`, *optional*):
+                List of image lists for VLM support. Each element is a list of PIL images for the corresponding prompt,
+                or `None` if no images for that prompt.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -240,10 +240,6 @@ class VLLMClient:
             logprobs (`int` or `None`, *optional*, defaults to `0`):
                 Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
                 N>0, returns the top-N logprobs sorted by descending probability.
-            truncate_prompt_tokens (`int`, *optional*):
-                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
-                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
-                disabled.
             structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
@@ -265,8 +261,12 @@ class VLLMClient:
         """
         url = f"{self.base_url}/generate/"
 
-        # Convert PIL images to base64 strings
-        images = [pil_to_base64(img) for img in images] if images else None
+        # Convert PIL images to base64 strings. Each element is a list of images for the corresponding prompt,
+        # or None if no images for that prompt.
+        if images:
+            images = [
+                [pil_to_base64(img) for img in img_list] if img_list is not None else None for img_list in images
+            ]
 
         response = self.session.post(
             url,
@@ -281,7 +281,6 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "logprobs": logprobs,
-                "truncate_prompt_tokens": truncate_prompt_tokens,
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
             },
@@ -308,7 +307,6 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         logprobs: int | None = 0,
-        truncate_prompt_tokens: int | None = None,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
         chat_template_kwargs: dict | None = None,
@@ -339,10 +337,6 @@ class VLLMClient:
             logprobs (`int` or `None`, *optional*, defaults to `0`):
                 Number of top logprobs to return per token. When 0, only the sampled token's logprob is returned. When
                 N>0, returns the top-N logprobs sorted by descending probability.
-            truncate_prompt_tokens (`int`, *optional*):
-                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
-                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
-                disabled.
             structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
@@ -398,7 +392,6 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "logprobs": logprobs,
-                "truncate_prompt_tokens": truncate_prompt_tokens,
                 "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
                 "chat_template_kwargs": chat_template_kwargs or {},
