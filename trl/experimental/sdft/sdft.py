@@ -424,6 +424,7 @@ if __name__ == "__main__":
             num_examples=script_args.tool_eval_num_examples,
             metric_prefix="tool_eval_before",
         )
+        trainer.log(pretrain_metrics)
         trainer.log_metrics("eval", pretrain_metrics)
         trainer.save_metrics("eval", pretrain_metrics)
 
@@ -448,6 +449,7 @@ if __name__ == "__main__":
                 if after_key in post_metrics:
                     delta_name = after_key.replace("tool_eval_after/", "tool_eval_delta/")
                     post_metrics[delta_name] = post_metrics[after_key] - value
+        trainer.log(post_metrics)
         trainer.log_metrics("eval", post_metrics)
         trainer.save_metrics("eval", post_metrics)
 

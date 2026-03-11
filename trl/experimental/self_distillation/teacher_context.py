@@ -205,7 +205,8 @@ class SuccessfulRolloutTeacherContextBuilder:
         feedbacks: list[Any] | None = None,
     ) -> dict[str, torch.Tensor]:
         device = self.trainer.accelerator.device
-        num_generations = self.trainer.num_generations
+        mode = "train" if self.trainer.model.training else "eval"
+        num_generations = self.trainer.num_generations if mode == "train" else self.trainer.num_generations_eval
         total_samples = rewards.shape[0]
         completion_ids = output["completion_ids"]
         completion_mask = output["completion_mask"]

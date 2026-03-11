@@ -27,6 +27,7 @@ from ..testing_utils import TrlTestCase
 class SelfDistillationCaptureCallback(TrainerCallback):
     def __init__(self):
         self.captured_teacher_input_text = None
+        self.captured_teacher_input_texts = []
         self.captured_self_distillation_mask = None
         self.captured_teacher_attention_mask = None
         self.captured_completion_mask = None
@@ -43,6 +44,10 @@ class SelfDistillationCaptureCallback(TrainerCallback):
     ):
         if self.captured_teacher_input_text is None and teacher_input_ids is not None:
             self.captured_teacher_input_text = processing_class.decode(teacher_input_ids[0], skip_special_tokens=True)
+        if teacher_input_ids is not None:
+            self.captured_teacher_input_texts.extend(
+                processing_class.decode(ids, skip_special_tokens=True) for ids in teacher_input_ids
+            )
         if self.captured_teacher_attention_mask is None and teacher_attention_mask is not None:
             self.captured_teacher_attention_mask = teacher_attention_mask.detach().cpu()
         if self.captured_completion_mask is None and completion_mask is not None:
@@ -259,6 +264,54 @@ class TestSDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.captured_old_per_token_logps is not None
+
+
+    def test_evaluation_uses_num_generations_eval_for_teacher_grouping(self):
+        eval_dataset = Dataset.from_dict({"prompt": ["Alpha prompt", "Beta prompt", "Gamma prompt", "Delta prompt"]})
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            per_device_eval_batch_size=4,
+            generation_batch_size=3,
+            num_generations=3,
+            num_generations_eval=2,
+            max_completion_length=8,
+            report_to="none",
+            success_reward_threshold=0.5,
+            dont_reprompt_on_self_success=False,
+            distillation_alpha=1.0,
+            distillation_topk=None,
+            distillation_is_clip=None,
+            max_steps=1,
+        )
+
+        def eval_rewards(**kwargs):
+            prompts = kwargs["prompts"]
+            if len(prompts) == 4 and prompts.count("Alpha prompt") == 2 and prompts.count("Beta prompt") == 2:
+                return [1.0, 0.0, 0.0, 0.0]
+            return [0.0] * len(prompts)
+
+        capture_callback = SelfDistillationCaptureCallback()
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=eval_rewards,
+            args=training_args,
+            train_dataset=eval_dataset.select(range(1)),
+            eval_dataset=eval_dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.evaluate()
+
+        assert capture_callback.captured_teacher_input_texts
+        alpha_teachers = [text for text in capture_callback.captured_teacher_input_texts if "Alpha prompt" in text]
+        beta_teachers = [text for text in capture_callback.captured_teacher_input_texts if "Beta prompt" in text]
+        assert alpha_teachers
+        assert beta_teachers
+        assert any("Correct solution:" in text for text in alpha_teachers)
+        assert all("Correct solution:" not in text for text in beta_teachers)
 
     def test_training_with_teacher_regularization_none(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
