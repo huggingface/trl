@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
 from ...trainer.sft_config import SFTConfig
 
 
@@ -94,7 +92,7 @@ class GOLDConfig(SFTConfig):
             low, but waking the engine adds host–device transfer latency.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
