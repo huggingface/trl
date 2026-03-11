@@ -8,6 +8,8 @@ In the current TRL implementation:
 
 - SDFT uses an explicit `ref_model` teacher
 - the dataset must provide both `prompt` and `privileged_context`
+- `privileged_context` contains only the extra teacher-only information; the trainer combines it with `prompt` to build the teacher prompt
+- `teacher_prompt_template` controls how `prompt` and `privileged_context` are combined into the teacher prompt
 - on-policy generation can use either the student prompt or the teacher-conditioned prompt via `generate_from_teacher`
 - `num_loss_tokens_to_skip` can exclude initial completion tokens from the distillation loss
 - SDFT currently supports text-only training and does not support `use_vllm=True`
@@ -23,7 +25,7 @@ from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 dataset = Dataset.from_dict(
     {
         "prompt": ["Solve 2+2."],
-        "privileged_context": ["Solve 2+2. Example answer: 4."],
+        "privileged_context": ["Example answer: 4."],
     }
 )
 
@@ -46,13 +48,14 @@ trainer.train()
 ```
 
 To generate from the teacher-conditioned prompt instead of the student prompt, set `generate_from_teacher=True`.
+To customize how the teacher prompt is built, set `teacher_prompt_template` on `SDFTConfig`.
 
 ## Expected dataset columns
 
 Each example must provide:
 
 - `prompt`: the student-facing prompt
-- `privileged_context`: the teacher-side privileged prompt or teacher-conditioned context for the same example
+- `privileged_context`: only the extra teacher-only information, such as a demonstration, hint, or privileged feedback
 
 Both standard text prompts and conversational prompts are supported by the trainer prompt handling.
 

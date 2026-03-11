@@ -25,8 +25,9 @@ class SelfDistillationConfig(_BaseConfig):
     r"""
     Shared configuration for experimental self-distillation trainers.
 
-    This class contains only the arguments that are specific to the shared self-distillation stack. For the full set
-    of generic training arguments, refer to [`~transformers.TrainingArguments`] via [`trl.trainer.base_config._BaseConfig`].
+    This class contains only the arguments that are specific to the shared self-distillation stack. For the full set of
+    generic training arguments, refer to [`~transformers.TrainingArguments`] via
+    [`trl.trainer.base_config._BaseConfig`].
 
     Parameters:
         > Parameters that control generation and rollout reuse
@@ -40,8 +41,7 @@ class SelfDistillationConfig(_BaseConfig):
         generation_batch_size (`int` or `None`, *optional*):
             Global batch size used for generation. Mutually exclusive with `steps_per_generation`.
         steps_per_generation (`int` or `None`, *optional*):
-            Number of optimizer steps that reuse one generated batch. Mutually exclusive with
-            `generation_batch_size`.
+            Number of optimizer steps that reuse one generated batch. Mutually exclusive with `generation_batch_size`.
 
         > Parameters that control the online policy objective
 
@@ -55,8 +55,8 @@ class SelfDistillationConfig(_BaseConfig):
         > Parameters that control self-distillation
 
         distillation_alpha (`float`, *optional*, defaults to `0.5`):
-            Divergence interpolation coefficient using the official SDPO/SDFT convention:
-            `0.0=forward KL`, `0.5=JSD`, `1.0=reverse KL`.
+            Divergence interpolation coefficient using the official SDPO/SDFT convention: `0.0=forward KL`, `0.5=JSD`,
+            `1.0=reverse KL`.
         distillation_topk (`int` or `None`, *optional*, defaults to `100`):
             Number of top tokens to keep for top-k distillation. If `None`, all logits are used.
         full_logit_distillation (`bool`, *optional*, defaults to `False`):

@@ -30,6 +30,8 @@ class SDFTConfig(SelfDistillationConfig):
             Whether to disable dropout in the student and teacher models.
         generate_from_teacher (`bool`, *optional*, defaults to `False`):
             Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
+        teacher_prompt_template (`str`, *optional*, defaults to `"{prompt}\n\n{privileged_context}"`):
+            Template used to combine the student prompt and privileged context into the teacher prompt.
         num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
             Number of initial completion tokens to exclude from the distillation loss.
     """
@@ -42,6 +44,12 @@ class SDFTConfig(SelfDistillationConfig):
         default=False,
         metadata={"help": "Whether on-policy generation should use the teacher-conditioned prompt."},
     )
+    teacher_prompt_template: str = field(
+        default="{prompt}\n\n{privileged_context}",
+        metadata={
+            "help": "Template used to combine the student prompt and privileged context into the teacher prompt."
+        },
+    )
     num_loss_tokens_to_skip: int = field(
         default=0,
         metadata={"help": "Number of initial completion tokens to exclude from the distillation loss."},
@@ -49,5 +57,12 @@ class SDFTConfig(SelfDistillationConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if (
+            "{prompt}" not in self.teacher_prompt_template
+            or "{privileged_context}" not in self.teacher_prompt_template
+        ):
+            raise ValueError(
+                "teacher_prompt_template must contain both `{prompt}` and `{privileged_context}` placeholders"
+            )
         if self.num_loss_tokens_to_skip < 0:
             raise ValueError("num_loss_tokens_to_skip must be non-negative")

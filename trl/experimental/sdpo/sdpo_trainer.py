@@ -106,7 +106,9 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
 
         output = super()._generate_and_score_completions(inputs)
-        output.update(self.teacher_context_builder.build(output, prompts, output["rewards"], feedbacks=privileged_contexts))
+        output.update(
+            self.teacher_context_builder.build(output, prompts, output["rewards"], feedbacks=privileged_contexts)
+        )
 
         mode = "train" if self.model.training else "eval"
         for key, value in self.teacher_context_builder.last_metrics.items():

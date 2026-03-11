@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 from datasets import Dataset
 from transformers import TrainerCallback
@@ -45,13 +46,40 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDFTTrainer(TrlTestCase):
+    def test_rejects_same_model_and_ref_model_object(self):
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+        )
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+        from transformers import AutoModelForCausalLM
+
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        with pytest.raises(ValueError, match="`model` and `ref_model` cannot be the same object"):
+            SDFTTrainer(
+                model=model,
+                ref_model=model,
+                args=training_args,
+                train_dataset=Dataset.from_dict(
+                    {
+                        "prompt": ["Solve 2+2."],
+                        "privileged_context": ["Example answer: 4."],
+                    }
+                ),
+            )
+
     def test_training_with_required_dataset_columns(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
                 "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Name the capital of France. Example answer: Paris.",
+                    "Example answer: 4.",
+                    "Example answer: Paris.",
                 ],
             }
         )
@@ -91,8 +119,8 @@ class TestSDFTTrainer(TrlTestCase):
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
                 "privileged_context": [
-                    "Solve 2+2. Teacher hint: answer with 4 and explain briefly.",
-                    "Solve 3+3. Teacher hint: answer with 6 and explain briefly.",
+                    "Teacher hint: answer with 4 and explain briefly.",
+                    "Teacher hint: answer with 6 and explain briefly.",
                 ],
             }
         )
@@ -120,6 +148,7 @@ class TestSDFTTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.captured_generation_prompt_text is not None
+        assert "Solve 2+2." in capture_callback.captured_generation_prompt_text
         assert "Teacher hint" in capture_callback.captured_generation_prompt_text
 
     def test_training_with_peft_model_and_no_explicit_ref_model(self):
@@ -130,8 +159,8 @@ class TestSDFTTrainer(TrlTestCase):
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
                 "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Name the capital of France. Example answer: Paris.",
+                    "Example answer: 4.",
+                    "Example answer: Paris.",
                 ],
             }
         )
@@ -166,8 +195,8 @@ class TestSDFTTrainer(TrlTestCase):
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
                 "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Solve 3+3. Example answer: 6.",
+                    "Example answer: 4.",
+                    "Example answer: 6.",
                 ],
             }
         )
@@ -202,8 +231,8 @@ class TestSDFTTrainer(TrlTestCase):
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
                 "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Solve 3+3. Example answer: 6.",
+                    "Example answer: 4.",
+                    "Example answer: 6.",
                 ],
             }
         )
