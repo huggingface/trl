@@ -28,7 +28,7 @@ Expected dataset formats:
 
 1. Native TRL self-distillation format:
    - `prompt`
-   - `privileged_context`
+   - `privileged_context` containing only the extra teacher-only information
 
 2. Demonstration-based format:
    - `prompt`
@@ -84,14 +84,7 @@ from trl.models import unwrap_model_for_generation
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
-DEFAULT_DEMONSTRATION_TEMPLATE = Template(
-    """$orig_content
-
-This is an example for a response to the question: $output_text
-
-Now answer with a response of your own, including the thinking process.
-"""
-)
+DEFAULT_DEMONSTRATION_TEMPLATE = Template("""Example response: $output_text""")
 
 
 @dataclass
@@ -118,7 +111,7 @@ class SDFTScriptArguments(ScriptArguments):
     )
     demonstration_template: str = field(
         default=DEFAULT_DEMONSTRATION_TEMPLATE.template,
-        metadata={"help": "Template used to build privileged context from prompt and demonstration."},
+        metadata={"help": "Template used to build privileged context from demonstration content."},
     )
     tool_eval_num_examples: int | None = field(
         default=None,
@@ -167,18 +160,17 @@ def _build_privileged_context(
     if privileged_context_column in example and example[privileged_context_column] is not None:
         privileged_context = example[privileged_context_column]
     elif golden_response_column in example:
-        privileged_context = template.substitute(
+        privileged_context = template.safe_substitute(
             orig_content=_extract_prompt_text(example["prompt"]),
             output_text=_stringify_golden_response(example[golden_response_column]),
         )
-        if isinstance(example["prompt"], list) and example["prompt"] and isinstance(example["prompt"][0], dict):
-            privileged_context = [{"role": "user", "content": privileged_context}]
     elif "teacher_prompt" in example:
-        privileged_context = example["teacher_prompt"]
-    else:
         raise ValueError(
-            "Dataset must contain either `privileged_context`, `teacher_prompt`, or `golden_response` alongside `prompt`."
+            "Datasets for `trl.experimental.sdft` should provide `privileged_context` or `golden_response`, not "
+            "`teacher_prompt`."
         )
+    else:
+        raise ValueError("Dataset must contain either `privileged_context` or `golden_response` alongside `prompt`.")
 
     return {
         "prompt": example["prompt"],
@@ -201,9 +193,7 @@ def _prepare_split(dataset, script_args: SDFTScriptArguments):
 
 def _can_prepare_privileged_context(dataset) -> bool:
     columns = set(dataset.column_names)
-    return "prompt" in columns and (
-        "privileged_context" in columns or "teacher_prompt" in columns or "golden_response" in columns
-    )
+    return "prompt" in columns and ("privileged_context" in columns or "golden_response" in columns)
 
 
 def _extract_action_and_input(text: str) -> tuple[str | None, str | None]:
@@ -434,6 +424,7 @@ if __name__ == "__main__":
             num_examples=script_args.tool_eval_num_examples,
             metric_prefix="tool_eval_before",
         )
+        trainer.log(pretrain_metrics)
         trainer.log_metrics("eval", pretrain_metrics)
         trainer.save_metrics("eval", pretrain_metrics)
 
@@ -458,6 +449,7 @@ if __name__ == "__main__":
                 if after_key in post_metrics:
                     delta_name = after_key.replace("tool_eval_after/", "tool_eval_delta/")
                     post_metrics[delta_name] = post_metrics[after_key] - value
+        trainer.log(post_metrics)
         trainer.log_metrics("eval", post_metrics)
         trainer.save_metrics("eval", post_metrics)
 

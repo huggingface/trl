@@ -52,6 +52,8 @@ class OnlineRolloutMixin:
             truncation=True,
             add_special_tokens=False,
         )
+        # This path already receives tokenized model inputs. Bypass the buffered trainer hook and use the plain
+        # tensor/device preparation from `_BaseTrainer`.
         generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
         with (
             unwrap_model_for_generation(
@@ -108,6 +110,8 @@ class OnlineRolloutMixin:
                     padding_side="right",
                     add_special_tokens=False,
                 )
+                # Reward functions operate on tokenized tensors too, so they need the base Trainer input preparation
+                # rather than the outer buffered generation hook.
                 reward_inputs = _BaseTrainer._prepare_inputs(self, reward_inputs)
                 with torch.inference_mode():
                     rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]
@@ -213,6 +217,7 @@ class OnlineRolloutMixin:
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "rewards": rewards,
             "advantages": advantages,
             "num_items_in_batch": completion_mask.sum().detach(),
         }

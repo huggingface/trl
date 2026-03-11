@@ -24,6 +24,36 @@ class SDPOConfig(SelfDistillationConfig):
 
     This class extends [`experimental.self_distillation.SelfDistillationConfig`] with the online teacher-construction
     parameters used by Self-Distillation Policy Optimization (SDPO).
+
+    Parameters:
+        > Parameters that control the SDPO loss
+
+        sdpo_policy_loss_mode (`str`, *optional*, defaults to `"distillation_only"`):
+            How SDPO combines the online policy loss and self-distillation loss. Supported: `distillation_only`,
+            `hybrid`.
+        distillation_alpha (`float`, *optional*, defaults to `1.0`):
+            Divergence interpolation coefficient. Token-level SDPO requires the official reverse-KL setting
+            `distillation_alpha=1.0`.
+        distillation_topk (`int` or `None`, *optional*):
+            Top-k approximation for logit-level SDPO. Requires `full_logit_distillation=True`.
+
+        > Parameters that control the teacher
+
+        teacher_regularization (`str`, *optional*, defaults to `"ema"`):
+            Teacher update strategy. Supported: `ema`, `none`.
+        teacher_update_rate (`float` or `None`, *optional*):
+            EMA update rate used when `teacher_regularization="ema"`.
+        ema_update_rate (`float`, *optional*, defaults to `0.05`):
+            Deprecated alias for `teacher_update_rate`.
+
+        > Parameters that control reprompting
+
+        use_successful_as_teacher (`bool`, *optional*, defaults to `True`):
+            Whether successful rollouts are turned into teacher demonstrations.
+        success_reward_threshold (`float`, *optional*, defaults to `1.0`):
+            Minimum reward for a rollout to count as successful.
+        include_environment_feedback (`bool`, *optional*, defaults to `False`):
+            Whether `privileged_context` is injected into teacher reprompts when available.
     """
 
     dont_reprompt_on_self_success: bool = field(
@@ -105,6 +135,8 @@ class SDPOConfig(SelfDistillationConfig):
             raise ValueError("teacher_update_rate must be in [0, 1]")
         if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
             raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
+        if self.max_reprompt_len <= 0:
+            raise ValueError("max_reprompt_len must be positive")
         if not self.full_logit_distillation and self.distillation_alpha != 1.0:
             raise ValueError(
                 "SDPO token-level distillation requires `distillation_alpha=1.0`. "

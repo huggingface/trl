@@ -19,6 +19,7 @@ from collections import defaultdict
 from typing import Any
 
 import torch
+from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from torch import nn
 from transformers import (
@@ -49,6 +50,9 @@ from .self_distillation_mixin import SelfDistillationMixin
 
 if is_peft_available():
     from peft import PeftConfig
+
+
+logger = get_logger(__name__)
 
 
 class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _BaseTrainer):
@@ -83,7 +87,10 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
-            pass
+            logger.warning(
+                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                "instantiated. The `model_init_kwargs` will be ignored."
+            )
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()

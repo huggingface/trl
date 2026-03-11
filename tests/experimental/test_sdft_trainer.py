@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
+import pytest
 from datasets import Dataset
 from transformers import TrainerCallback
 from transformers.utils import is_peft_available
@@ -45,20 +45,16 @@ class SelfDistillationCaptureCallback(TrainerCallback):
 
 
 class TestSDFTTrainer(TrlTestCase):
-    def test_training_with_required_dataset_columns(self):
+    def test_training_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
-                "prompt": ["Solve 2+2.", "Name the capital of France."],
-                "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Name the capital of France. Example answer: Paris.",
-                ],
+                "prompt": ["Solve 2+2."],
+                "privileged_context": [None],
             }
         )
 
         training_args = SDFTConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
             per_device_train_batch_size=1,
             max_completion_length=8,
             max_steps=1,
@@ -73,26 +69,16 @@ class TestSDFTTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        previous_trainable_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        for name, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(name)
-            if param.sum() != 0:
-                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), (
-                    f"Parameter {name} has not changed."
-                )
+        with pytest.raises(ValueError, match="`privileged_context` must not be None"):
+            trainer.train()
 
     def test_training_with_generate_from_teacher(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
                 "privileged_context": [
-                    "Solve 2+2. Teacher hint: answer with 4 and explain briefly.",
-                    "Solve 3+3. Teacher hint: answer with 6 and explain briefly.",
+                    "Teacher hint: answer with 4 and explain briefly.",
+                    "Teacher hint: answer with 6 and explain briefly.",
                 ],
             }
         )
@@ -120,6 +106,7 @@ class TestSDFTTrainer(TrlTestCase):
         trainer.train()
 
         assert capture_callback.captured_generation_prompt_text is not None
+        assert "Solve 2+2." in capture_callback.captured_generation_prompt_text
         assert "Teacher hint" in capture_callback.captured_generation_prompt_text
 
     def test_training_with_peft_model_and_no_explicit_ref_model(self):
@@ -130,8 +117,8 @@ class TestSDFTTrainer(TrlTestCase):
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
                 "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Name the capital of France. Example answer: Paris.",
+                    "Example answer: 4.",
+                    "Example answer: Paris.",
                 ],
             }
         )
@@ -166,8 +153,8 @@ class TestSDFTTrainer(TrlTestCase):
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
                 "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Solve 3+3. Example answer: 6.",
+                    "Example answer: 4.",
+                    "Example answer: 6.",
                 ],
             }
         )
@@ -202,8 +189,8 @@ class TestSDFTTrainer(TrlTestCase):
             {
                 "prompt": ["Solve 2+2.", "Solve 3+3."],
                 "privileged_context": [
-                    "Solve 2+2. Example answer: 4.",
-                    "Solve 3+3. Example answer: 6.",
+                    "Example answer: 4.",
+                    "Example answer: 6.",
                 ],
             }
         )

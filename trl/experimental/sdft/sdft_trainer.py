@@ -19,6 +19,7 @@ from collections import defaultdict
 from typing import Any
 
 import torch
+from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -52,6 +53,9 @@ from .sdft_config import SDFTConfig
 if is_peft_available():
     from peft import PeftConfig
     from peft.peft_model import PeftModel
+
+
+logger = get_logger(__name__)
 
 
 class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
@@ -91,7 +95,15 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
-            pass
+            logger.warning(
+                "You passed `model_init_kwargs` to `SDFTConfig`, but `model` is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
+            )
+        if ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. Pass a separate teacher model, or set "
+                "`ref_model=None` and use the PEFT adapter-disabled teacher path."
+            )
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -236,6 +248,8 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             truncation=True,
             add_special_tokens=False,
         )
+        # This generation helper builds tokenized model inputs directly, so use the base Trainer tensor preparation
+        # instead of re-entering the buffered outer training hook.
         generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
 
         with (
