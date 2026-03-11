@@ -1,4 +1,4 @@
-# TRL - Transformer Reinforcement Learning
+# TRL - Transformers Reinforcement Learning
 
 <div style="text-align: center">
     <picture>
