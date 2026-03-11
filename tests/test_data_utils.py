@@ -1187,6 +1187,19 @@ class TestPackDatasetBfd(TrlTestCase):
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
 
+    def test_with_empty_sequences(self):
+        examples = {
+            "input_ids": [[1, 2], [], [3, 4, 5], [], [6]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[3, 4, 5, 6], [1, 2]],
+            "seq_lengths": [[3, 1], [2]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
+        assert dataset.to_dict() == expected_output
+
 
 class TestTruncateExamples(TrlTestCase):
     def test_with_dataset(self):

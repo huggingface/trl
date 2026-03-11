@@ -717,10 +717,17 @@ def _pack_bfd(
     _check_if_columns_can_be_packed(columns)
     assert len(columns) > 0
 
+    lengths = pc.list_value_length(columns[0])
+
+    # Filter out empty sequences
+    non_empty_mask = pc.greater(lengths, 0)
+    columns = [pc.filter(column, non_empty_mask) for column in columns]
+    lengths = pc.filter(lengths, non_empty_mask)
+
     if on_seq_length_overflow == "truncate":
         columns = [pc.list_slice(column, 0, seq_length) for column in columns]
     elif on_seq_length_overflow == "split":
-        lengths = pc.list_value_length(columns[0]).to_numpy()
+        lengths = lengths.to_numpy()
         # Split the sequences longer than `seq_length` into chunks (of length `seq_length` or less) while respecting sequence boundaries
         num_fragments = np.ceil(lengths / seq_length).astype(int)
         offsets = np.arange(np.sum(num_fragments) + 1, dtype=columns[0].offsets.type.to_pandas_dtype()) * seq_length
