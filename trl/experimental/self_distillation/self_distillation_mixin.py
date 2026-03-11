@@ -15,11 +15,17 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from functools import partial
 from typing import Any
 
+import datasets
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Sampler
+from transformers.trainer_utils import seed_worker
+from transformers.utils import is_datasets_available
 
+from ...trainer.utils import RepeatSampler, entropy_from_logits, selective_log_softmax, split_tensor_dict
 from .self_distillation_config import SelfDistillationConfig
 
 
@@ -49,6 +55,72 @@ class SelfDistillationMixin:
                     **payload,
                 )
 
+    def get_train_dataloader(self):
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": self._train_batch_size * self.args.steps_per_generation,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+            )
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+    def _get_train_sampler(self, dataset=None) -> Sampler:
+        if dataset is None:
+            dataset = self.train_dataset
+        return RepeatSampler(
+            data_source=dataset,
+            mini_repeat_count=self.num_generations,
+            batch_size=self.args.generation_batch_size // self.num_generations,
+            repeat_count=self.num_iterations * self.args.steps_per_generation,
+            shuffle=self.shuffle_dataset,
+            seed=self.args.seed,
+        )
+
+    def _get_eval_sampler(self, eval_dataset) -> Sampler:
+        return RepeatSampler(
+            data_source=eval_dataset,
+            mini_repeat_count=getattr(self, "num_generations_eval", self.num_generations),
+            seed=self.args.seed,
+        )
+
+    def training_step(self, model, inputs, num_items_in_batch):
+        output = super().training_step(model, inputs, num_items_in_batch)
+        self._step += 1
+        return output
+
+    def _prepare_inputs(self, generation_batch):
+        mode = "train" if self.model.training else "eval"
+        if mode == "train":
+            generate_every = self.args.steps_per_generation * self.num_iterations
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                generation_batch = self._build_buffered_batch(generation_batch)
+                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
+                self._dispatch_self_distillation_callback(
+                    "on_generation_batch_built",
+                    generate_every=generate_every,
+                    steps_per_generation=self.args.steps_per_generation,
+                )
+            return self._buffered_inputs[self._step % self.args.steps_per_generation]
+        return self._build_buffered_batch(generation_batch)
+
     @staticmethod
     def _split_prompt_and_privileged_context(inputs: list[dict[str, Any]]) -> tuple[list[Any], list[Any]]:
         prompts = [example["prompt"] for example in inputs]
@@ -57,6 +129,26 @@ class SelfDistillationMixin:
 
     def _allow_topk_without_full_logit_distillation(self) -> bool:
         return True
+
+    def _get_per_token_logps_and_entropies(
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        compute_entropy=False,
+    ):
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
+        if "logits_to_keep" in self.model_kwarg_keys:
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+        logits = model(**model_inputs).logits
+        logits = logits[:, :-1, :]
+        logits = logits[:, -logits_to_keep:, :]
+        logits = logits / self.temperature
+        completion_ids = input_ids[:, -logits_to_keep:]
+        selected_logps = selective_log_softmax(logits, completion_ids)
+        entropies = entropy_from_logits(logits) if compute_entropy else None
+        return selected_logps, entropies
 
     def _compute_self_distillation_loss(
         self,
@@ -248,6 +340,9 @@ class SelfDistillationMixin:
         student_log_probs: torch.Tensor,
         teacher_log_probs: torch.Tensor,
     ) -> torch.Tensor:
+        # This is the token-level reverse-KL surrogate used by the official SDPO implementation for
+        # `full_logit_distillation=False`. It intentionally treats the teacher log-probs as fixed targets
+        # and keeps only the score-function term for the sampled student tokens.
         log_ratio = student_log_probs - teacher_log_probs
         return log_ratio.detach() * student_log_probs
 
@@ -275,9 +370,7 @@ class SelfDistillationMixin:
         if loss_type == "bnpo":
             return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
         if loss_type == "dr_grpo":
-            return (per_token_loss * response_mask).sum() / (
-                self.accelerator.num_processes * self.args.per_device_train_batch_size * self.max_completion_length
-            )
+            return (per_token_loss * response_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
         if loss_type in ["dapo", "luspo", "cispo", "sapo"]:
             return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
         raise ValueError(f"Unsupported loss_type for self-distillation: {loss_type}")

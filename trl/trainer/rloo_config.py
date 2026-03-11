@@ -13,8 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-
-from transformers import TrainingArguments
+from typing import Any
 
 from .base_config import _BaseConfig
 
@@ -215,7 +214,7 @@ class RLOOConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -224,7 +223,7 @@ class RLOOConfig(_BaseConfig):
     )
 
     # Parameters that control the model and reference model
-    model_init_kwargs: dict | str | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "

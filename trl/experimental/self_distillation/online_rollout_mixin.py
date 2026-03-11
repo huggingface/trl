@@ -14,24 +14,14 @@
 
 from __future__ import annotations
 
-from functools import partial
-
-import datasets
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Sampler
-from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, logging
+from transformers.utils import logging
 
 from ...data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ...models import unwrap_model_for_generation
-from ...trainer.utils import (
-    RepeatSampler,
-    entropy_from_logits,
-    pad,
-    selective_log_softmax,
-    split_tensor_dict,
-)
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import pad
 
 
 logger = logging.get_logger(__name__)
@@ -40,92 +30,18 @@ logger = logging.get_logger(__name__)
 class OnlineRolloutMixin:
     """Online rollout, reward, and policy-loss utilities shared by SDPO-like trainers."""
 
-    def get_train_dataloader(self):
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
-
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
-        else:
-            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
-
-        dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.steps_per_generation,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = partial(
-                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-            )
-            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-
-    def _get_train_sampler(self, dataset=None) -> Sampler:
-        if dataset is None:
-            dataset = self.train_dataset
-        return RepeatSampler(
-            data_source=dataset,
-            mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args.steps_per_generation,
-            shuffle=self.shuffle_dataset,
-            seed=self.args.seed,
-        )
-
-    def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        return RepeatSampler(
-            data_source=eval_dataset, mini_repeat_count=self.num_generations_eval, seed=self.args.seed
-        )
-
-    def training_step(self, model, inputs, num_items_in_batch):
-        output = super().training_step(model, inputs, num_items_in_batch)
-        self._step += 1
-        return output
-
-    def _prepare_inputs(self, generation_batch):
-        mode = "train" if self.model.training else "eval"
-        if mode == "train":
-            generate_every = self.args.steps_per_generation * self.num_iterations
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
-                generation_batch = self._generate_and_score_completions(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
-            return self._buffered_inputs[self._step % self.args.steps_per_generation]
-        return self._generate_and_score_completions(generation_batch)
-
     def _apply_prompt_template(self, prompts):
         return [
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
             for prompt in prompts
         ]
 
-    def _get_per_token_logps_and_entropies(
-        self,
-        model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        compute_entropy=False,
-    ):
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        if "logits_to_keep" in self.model_kwarg_keys:
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-        logits = model(**model_inputs).logits
-        logits = logits[:, :-1, :]
-        logits = logits[:, -logits_to_keep:, :]
-        logits = logits / self.temperature
-        completion_ids = input_ids[:, -logits_to_keep:]
-        selected_logps = selective_log_softmax(logits, completion_ids)
-        entropies = entropy_from_logits(logits) if compute_entropy else None
-        return selected_logps, entropies
+    def _build_buffered_batch(self, generation_batch):
+        return self._generate_and_score_completions(generation_batch)
 
     def _generate(self, prompts):
+        # Keep the generation path aligned with the reference trainers: generate from left-padded prompts,
+        # then recover completion token spans by trimming prompt tokens and stopping at the first EOS.
         prompts_text = self._apply_prompt_template(prompts)
         generate_inputs = self.processing_class(
             text=prompts_text,
@@ -136,7 +52,7 @@ class OnlineRolloutMixin:
             truncation=True,
             add_special_tokens=False,
         )
-        generate_inputs = super()._prepare_inputs(generate_inputs)
+        generate_inputs = _BaseTrainer._prepare_inputs(self, generate_inputs)
         with (
             unwrap_model_for_generation(
                 self.model_wrapped,
@@ -192,7 +108,7 @@ class OnlineRolloutMixin:
                     padding_side="right",
                     add_special_tokens=False,
                 )
-                reward_inputs = super()._prepare_inputs(reward_inputs)
+                reward_inputs = _BaseTrainer._prepare_inputs(self, reward_inputs)
                 with torch.inference_mode():
                     rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]
             else:
@@ -226,6 +142,23 @@ class OnlineRolloutMixin:
             eos_and_pad = [self.eos_token_id, self.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
+
+        prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)
+
+        with torch.no_grad():
+            generate_every = self.args.steps_per_generation * self.num_iterations
+            if self.args.gradient_accumulation_steps % generate_every != 0:
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    compute_entropy=False,
+                )
+            else:
+                old_per_token_logps = None
 
         if is_conversational({"prompt": prompts[0]}):
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -261,8 +194,21 @@ class OnlineRolloutMixin:
             torch.tensor([len(ids) for ids in completion_ids_list], device=device)
         )
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        return {
+        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
+        if len(term_completion_lengths) == 0:
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
+
+        output = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -270,6 +216,16 @@ class OnlineRolloutMixin:
             "advantages": advantages,
             "num_items_in_batch": completion_mask.sum().detach(),
         }
+        if old_per_token_logps is not None:
+            output["old_per_token_logps"] = old_per_token_logps
+
+        self._dispatch_self_distillation_callback(
+            "on_self_distillation_batch_prepared",
+            old_per_token_logps=old_per_token_logps,
+            prompt_ids=prompt_ids,
+            completion_ids=completion_ids,
+        )
+        return output
 
     def _record_reward_diagnostics(
         self,
@@ -295,9 +251,9 @@ class OnlineRolloutMixin:
         self._metrics[mode]["self_distillation/reward_min"].append(self.accelerator.gather(reward_min).min().item())
         self._metrics[mode]["self_distillation/reward_max"].append(self.accelerator.gather(reward_max).max().item())
         self._metrics[mode]["self_distillation/group_reward_std_mean"].append(
-            self.accelerator.gather(
-                group_std_rewards.mean() if group_std_rewards.numel() > 0 else reward_std
-            ).mean().item()
+            self.accelerator.gather(group_std_rewards.mean() if group_std_rewards.numel() > 0 else reward_std)
+            .mean()
+            .item()
         )
         self._metrics[mode]["self_distillation/flat_group_fraction"].append(
             self.accelerator.gather(flat_group_fraction).mean().item()

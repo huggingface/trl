@@ -36,6 +36,7 @@ Expected dataset formats:
 
 Example:
 
+```bash
 python trl/experimental/sdft/sdft.py \
     --model_name_or_path Qwen/Qwen3.5-0.8B \
     --dataset_name your-org/your-dataset \
@@ -52,6 +53,7 @@ python trl/experimental/sdft/sdft.py \
     --eval_strategy steps \
     --eval_steps 50 \
     --report_to wandb
+```
 """
 
 import json
@@ -85,8 +87,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 DEFAULT_DEMONSTRATION_TEMPLATE = Template(
     """$orig_content
 
-This is an example for a response to the question:
-$output_text
+This is an example for a response to the question: $output_text
 
 Now answer with a response of your own, including the thinking process.
 """

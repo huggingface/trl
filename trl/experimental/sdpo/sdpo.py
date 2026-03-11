@@ -16,6 +16,8 @@
 # dependencies = [
 #     "trl",
 #     "peft",
+#     "math-verify",
+#     "latex2sympy2_extended",
 #     "trackio",
 #     "kernels",
 # ]
@@ -24,13 +26,12 @@
 """
 Usage:
 
-CLI:
-
+```bash
 python trl/experimental/sdpo/sdpo.py \
     --model_name_or_path Qwen/Qwen3.5-2B \
-    --dataset_name HuggingFaceTB/SDPO \
-    --dataset_config sciknoweval_physics \
-    --output_dir outputs/sdpo-qwen35-2b-sciknoweval-physics \
+    --dataset_name openai/gsm8k \
+    --dataset_config main \
+    --output_dir outputs/sdpo-qwen35-2b-gsm8k \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
     --max_completion_length 128 \
@@ -43,16 +44,11 @@ python trl/experimental/sdpo/sdpo.py \
     --distillation_alpha 1.0 \
     --full_logit_distillation false \
     --sdpo_policy_loss_mode distillation_only
+```
 
-YAML config:
-
-python trl/experimental/sdpo/sdpo.py \
-    --config trl/experimental/sdpo/sciknoweval_physics.yaml
-
-This example uses the `HuggingFaceTB/SDPO` `sciknoweval_physics` subset and reports MCQ answer accuracy before and
-after training. `TrlParser` will load any top-level YAML keys passed with `--config`, and command-line flags still
-override the YAML values. If your dataset already contains textual environment feedback, pass the column name via
-`--feedback_column`; it will be forwarded as `privileged_context` for SDPO reprompting.
+This example uses verifiable math rewards and reports answer accuracy before and after training. If your dataset
+already contains textual environment feedback, pass the column name via `--feedback_column`; it will be forwarded as
+`privileged_context` for SDPO reprompting.
 """
 
 import os
@@ -80,26 +76,19 @@ from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
-DEFAULT_SYSTEM_PROMPT = (
-    "Given a question and four options, please select the right answer. Respond in the following format:\n"
-    "<reasoning>\n...\n</reasoning>\n<answer>\n...\n</answer>\n\n"
-    "For the answer, only output the letter corresponding to the correct option (A, B, C, or D), and nothing else."
+SYSTEM_PROMPT = (
+    "A conversation between user and assistant. The user asks a question, and the assistant solves it. The assistant "
+    "first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning "
+    "process and answer are enclosed within <think></think> tags, i.e., <think>\nThis is my reasoning.\n</think>\n"
+    "This is my answer."
 )
 
 
 @dataclass
 class SDPOScriptArguments(ScriptArguments):
-    dataset_name: str | None = field(
-        default="HuggingFaceTB/SDPO",
-        metadata={"help": "Dataset name. Defaults to `HuggingFaceTB/SDPO`."},
-    )
-    dataset_config: str | None = field(
-        default="sciknoweval_physics",
-        metadata={"help": "Dataset config/subset name. Defaults to `sciknoweval_physics`."},
-    )
     dataset_path: str | None = field(
         default=None,
-        metadata={"help": "Optional local dataset path to load with `load_from_disk`. Overrides dataset defaults."},
+        metadata={"help": "Optional local dataset path to load with `load_from_disk`. Overrides `dataset_name`."},
     )
     feedback_column: str | None = field(
         default=None,
@@ -119,6 +108,8 @@ class SDPOScriptArguments(ScriptArguments):
         default=128,
         metadata={"help": "Maximum completion length for answer-accuracy evaluation generation."},
     )
+
+
 @dataclass
 class ExampleSDPOConfig(SDPOConfig):
     scale_rewards: str = field(
@@ -128,36 +119,27 @@ class ExampleSDPOConfig(SDPOConfig):
 
 
 def _make_conversation(example: dict[str, Any], feedback_column: str | None) -> dict[str, Any]:
-    prompt = example.get("messages")
-    if prompt is None:
-        prompt = example.get("prompt")
-        if isinstance(prompt, str):
-            prompt = [
-                {"role": "system", "content": example.get("system") or DEFAULT_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ]
+    prompt = example.get("prompt")
     if prompt is None and "problem" in example:
         prompt = [
-            {"role": "system", "content": example.get("system") or DEFAULT_SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": example["problem"]},
         ]
     if prompt is None and "question" in example:
         prompt = [
-            {"role": "system", "content": example.get("system") or DEFAULT_SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": example["question"]},
         ]
 
     if prompt is None:
-        raise ValueError("Each example must provide one of: `messages`, `prompt`, `problem`, or `question`.")
+        raise ValueError("Each example must provide one of: `prompt`, `problem`, or `question`.")
 
     output = {"prompt": prompt}
 
-    if "answer" in example:
-        output["answer"] = _normalize_mcq_answer(example["answer"])
-    elif "solution" in example:
-        output["answer"] = _normalize_mcq_answer(example["solution"])
-    else:
-        raise ValueError("Each example must provide an `answer` or `solution` column for MCQ supervision.")
+    if "solution" in example:
+        output["solution"] = example["solution"]
+    elif "answer" in example:
+        output["solution"] = _normalize_gsm8k_answer(example["answer"])
 
     if feedback_column is not None and feedback_column in example:
         output["privileged_context"] = example[feedback_column]
@@ -171,45 +153,43 @@ def _apply_prompt_template(tokenizer, prompt: Any) -> str:
     return maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"]
 
 
-def _normalize_mcq_answer(answer_text: str) -> str:
-    tagged_match = re.search(r"<answer>\s*([A-D])\s*</answer>", answer_text, flags=re.IGNORECASE | re.DOTALL)
-    if tagged_match is not None:
-        return tagged_match.group(1).upper()
-
-    bare_match = re.search(r"\b([A-D])\b", answer_text, flags=re.IGNORECASE)
-    if bare_match is not None:
-        return bare_match.group(1).upper()
-
-    return answer_text.strip().upper()
+def _normalize_gsm8k_answer(answer_text: str) -> str:
+    if "####" not in answer_text:
+        return answer_text.strip()
+    return answer_text.split("####", 1)[1].strip().replace(",", "")
 
 
-def _extract_answer_from_tags(completion_text: str) -> str | None:
-    match = re.search(r"<answer>\s*([A-D])\s*</answer>", completion_text, flags=re.IGNORECASE | re.DOTALL)
-    if match is None:
+def _extract_predicted_answer(completion_text: str) -> str | None:
+    match = re.search(r"####\s*([^\n]+)", completion_text)
+    if match:
+        return match.group(1).strip().replace(",", "")
+
+    matches = re.findall(r"(-?\$?[0-9][0-9,]*(?:\.[0-9]+)?)", completion_text)
+    if not matches:
         return None
-    return match.group(1).upper()
+    return matches[-1].replace("$", "").replace(",", "").strip()
 
 
-def _mcq_accuracy_reward(completions, answer, **kwargs) -> list[float]:
+def _gsm8k_accuracy_reward(completions, solution, **kwargs) -> list[float]:
     rewards = []
-    for completion, gold in zip(completions, answer, strict=True):
+    for completion, gold in zip(completions, solution, strict=True):
         content = completion[0]["content"] if isinstance(completion, list) else completion
-        pred = _extract_answer_from_tags(content)
-        rewards.append(1.0 if pred is not None and pred == _normalize_mcq_answer(gold) else 0.0)
+        pred = _extract_predicted_answer(content)
+        rewards.append(1.0 if pred is not None and pred == gold else 0.0)
     return rewards
 
 
-def _mcq_soft_format_reward(completions, **kwargs) -> list[float]:
-    pattern = r"\s*<reasoning>.*?</reasoning>\s*<answer>.*?</answer>\s*"
+def _gsm8k_soft_format_reward(completions, **kwargs) -> list[float]:
+    pattern = r"<think>.*?</think>\s*.*"
     rewards = []
     for completion in completions:
         content = completion[0]["content"] if isinstance(completion, list) else completion
-        rewards.append(0.25 if re.fullmatch(pattern, content, flags=re.DOTALL) else 0.0)
+        rewards.append(0.25 if re.match(pattern, content, flags=re.DOTALL) else 0.0)
     return rewards
 
 
 def _run_accuracy_eval(
-    trainer: SDPOTrainer, eval_dataset, max_new_tokens: int, num_examples: int | None, metric_prefix: str = "mcq_eval"
+    trainer: SDPOTrainer, eval_dataset, max_new_tokens: int, num_examples: int | None, metric_prefix: str = "math_eval"
 ) -> dict[str, float]:
     if num_examples is not None:
         eval_dataset = eval_dataset.select(range(min(num_examples, len(eval_dataset))))
@@ -239,7 +219,7 @@ def _run_accuracy_eval(
     prompt_length = tokenized["input_ids"].shape[1]
     completions = trainer.processing_class.batch_decode(generated[:, prompt_length:], skip_special_tokens=True)
     completion_messages = [[{"role": "assistant", "content": completion}] for completion in completions]
-    rewards = _mcq_accuracy_reward(completion_messages, answer=eval_dataset["answer"])
+    rewards = _gsm8k_accuracy_reward(completion_messages, solution=eval_dataset["solution"])
     total = max(len(rewards), 1)
     return {
         f"{metric_prefix}/accuracy": sum(rewards) / total,
@@ -281,7 +261,7 @@ if __name__ == "__main__":
             remove_columns=dataset[script_args.dataset_test_split].column_names,
         )
 
-    reward_funcs = [_mcq_soft_format_reward, _mcq_accuracy_reward]
+    reward_funcs = [_gsm8k_soft_format_reward, _gsm8k_accuracy_reward]
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     if tokenizer.pad_token is None:

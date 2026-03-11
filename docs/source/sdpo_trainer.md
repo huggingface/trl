@@ -52,6 +52,19 @@ trainer.train()
 
 SDPO always requires a `prompt` column. To use environment feedback, also include a `privileged_context` column. SDPO will use successful rollouts and, when enabled, that text to build teacher reprompts for self-distillation.
 
+## Callbacks
+
+The trainer emits a small set of callback hooks that are useful for debugging, observability, and tests. These hooks are intended as practical integration points for experimental self-distillation workflows.
+
+Shared self-distillation hooks:
+
+- `on_self_distillation_batch_prepared`: fired when a self-distillation batch is ready. The payload includes `prompt_ids`, `completion_ids`, and `old_per_token_logps` when importance-sampling clipping inputs are available.
+- `on_generation_batch_built`: fired when a new buffered generation batch is created. The payload includes `generate_every` and `steps_per_generation`.
+
+SDPO-specific hook:
+
+- `on_teacher_context_built`: fired after SDPO constructs the teacher-conditioned inputs. The payload includes `teacher_input_ids`, `teacher_attention_mask`, `completion_mask`, and `self_distillation_mask`.
+
 ## SDPOConfig
 
 [[autodoc]] experimental.sdpo.SDPOConfig

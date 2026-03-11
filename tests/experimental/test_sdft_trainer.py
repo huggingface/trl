@@ -26,13 +26,22 @@ if is_peft_available():
     from peft import LoraConfig
 
 
-class GenerationPromptCaptureCallback(TrainerCallback):
+class SelfDistillationCaptureCallback(TrainerCallback):
     def __init__(self):
         self.captured_generation_prompt_text = None
+        self.captured_old_per_token_logps = None
+        self.generation_batch_build_count = 0
 
     def on_generation_prompts_selected(self, generation_prompt_text=None, **kwargs):
         if self.captured_generation_prompt_text is None and generation_prompt_text is not None:
             self.captured_generation_prompt_text = generation_prompt_text[0]
+
+    def on_self_distillation_batch_prepared(self, old_per_token_logps=None, **kwargs):
+        if self.captured_old_per_token_logps is None and old_per_token_logps is not None:
+            self.captured_old_per_token_logps = old_per_token_logps.detach().cpu()
+
+    def on_generation_batch_built(self, **kwargs):
+        self.generation_batch_build_count += 1
 
 
 class TestSDFTTrainer(TrlTestCase):
@@ -99,7 +108,7 @@ class TestSDFTTrainer(TrlTestCase):
             generate_from_teacher=True,
         )
 
-        capture_callback = GenerationPromptCaptureCallback()
+        capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -151,3 +160,74 @@ class TestSDFTTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Solve 3+3."],
+                "privileged_context": [
+                    "Solve 2+2. Example answer: 4.",
+                    "Solve 3+3. Example answer: 6.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=3,
+            steps_per_generation=2,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+        )
+
+        capture_callback = SelfDistillationCaptureCallback()
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.captured_old_per_token_logps is not None
+
+    def test_training_reuses_buffered_generation_batches(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Solve 3+3."],
+                "privileged_context": [
+                    "Solve 2+2. Example answer: 4.",
+                    "Solve 3+3. Example answer: 6.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            steps_per_generation=2,
+            max_completion_length=8,
+            max_steps=2,
+            num_generations=1,
+            report_to="none",
+        )
+
+        capture_callback = SelfDistillationCaptureCallback()
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.generation_batch_build_count == 1
