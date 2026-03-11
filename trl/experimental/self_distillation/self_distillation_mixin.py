@@ -370,9 +370,7 @@ class SelfDistillationMixin:
         if loss_type == "bnpo":
             return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
         if loss_type == "dr_grpo":
-            return (per_token_loss * response_mask).sum() / (
-                self.accelerator.num_processes * self.args.per_device_train_batch_size * self.max_completion_length
-            )
+            return (per_token_loss * response_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
         if loss_type in ["dapo", "luspo", "cispo", "sapo"]:
             return (per_token_loss * response_mask).sum() / response_mask.sum().clamp(min=1.0)
         raise ValueError(f"Unsupported loss_type for self-distillation: {loss_type}")
