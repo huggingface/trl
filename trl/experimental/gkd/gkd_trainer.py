@@ -355,6 +355,17 @@ class GKDTrainer(SFTTrainer):
 
             # Release hidden states after loss computation
             del student_hidden, teacher_hidden, true_labels
+
+            if return_outputs:
+                student_outputs = model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                )
+                empty_cache()
+                return (loss, student_outputs)
+            else:
+                empty_cache()
+                return loss
         else:
             # compute student output
             student_outputs = model(
