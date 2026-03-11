@@ -251,9 +251,9 @@ class OnlineRolloutMixin:
         self._metrics[mode]["self_distillation/reward_min"].append(self.accelerator.gather(reward_min).min().item())
         self._metrics[mode]["self_distillation/reward_max"].append(self.accelerator.gather(reward_max).max().item())
         self._metrics[mode]["self_distillation/group_reward_std_mean"].append(
-            self.accelerator.gather(
-                group_std_rewards.mean() if group_std_rewards.numel() > 0 else reward_std
-            ).mean().item()
+            self.accelerator.gather(group_std_rewards.mean() if group_std_rewards.numel() > 0 else reward_std)
+            .mean()
+            .item()
         )
         self._metrics[mode]["self_distillation/flat_group_fraction"].append(
             self.accelerator.gather(flat_group_fraction).mean().item()

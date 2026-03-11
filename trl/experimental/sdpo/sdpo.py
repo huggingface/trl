@@ -26,6 +26,7 @@
 """
 Usage:
 
+```bash
 python trl/experimental/sdpo/sdpo.py \
     --model_name_or_path Qwen/Qwen3.5-2B \
     --dataset_name openai/gsm8k \
@@ -43,6 +44,7 @@ python trl/experimental/sdpo/sdpo.py \
     --distillation_alpha 1.0 \
     --full_logit_distillation false \
     --sdpo_policy_loss_mode distillation_only
+```
 
 This example uses verifiable math rewards and reports answer accuracy before and after training. If your dataset
 already contains textual environment feedback, pass the column name via `--feedback_column`; it will be forwarded as
