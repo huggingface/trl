@@ -81,7 +81,8 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         self._last_rewards_per_func = None
         self.teacher_context_builder = SuccessfulRolloutTeacherContextBuilder(self)
         if self.args.teacher_regularization == "ema":
-            self.teacher_model = copy.deepcopy(self.model)
+            student_model = self.accelerator.unwrap_model(self.model)
+            self.teacher_model = copy.deepcopy(student_model)
             self.teacher_model.requires_grad_(False)
             self.teacher_model.eval()
             self.teacher_model = self._prepare_auxiliary_model_for_eval(self.teacher_model)
