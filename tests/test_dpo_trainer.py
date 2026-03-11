@@ -22,7 +22,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
-from trl.trainer.dpo_trainer import DataCollatorForPreference
+from trl.trainer.dpo_trainer import (
+    DataCollatorForPreference,
+    flatten_batch_for_padding_free,
+    restore_padding_from_flattened,
+)
 
 from .testing_utils import (
     TrlTestCase,
@@ -130,6 +134,47 @@ class TestDataCollatorForPreference(TrlTestCase):
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
         torch.testing.assert_close(result["input_ids"], expected_input_ids)
+
+
+class TestPaddingFreeHelpers(TrlTestCase):
+    def test_flatten_batch_for_padding_free(self):
+        input_ids = torch.tensor(
+            [
+                [10, 11, 12, 13, 0],
+                [20, 21, 0, 0, 0],
+                [30, 31, 32, 0, 0],
+            ]
+        )
+        attention_mask = torch.tensor(
+            [
+                [1, 1, 1, 1, 0],
+                [1, 1, 0, 0, 0],
+                [1, 1, 1, 0, 0],
+            ]
+        )
+
+        flat_input_ids, flat_position_ids = flatten_batch_for_padding_free(input_ids, attention_mask)
+
+        expected_flat_input_ids = torch.tensor([[10, 11, 12, 13, 20, 21, 30, 31, 32]])
+        expected_flat_position_ids = torch.tensor([[0, 1, 2, 3, 0, 1, 0, 1, 2]])
+
+        torch.testing.assert_close(flat_input_ids, expected_flat_input_ids)
+        torch.testing.assert_close(flat_position_ids, expected_flat_position_ids)
+
+    def test_restore_padding_from_flattened(self):
+        flat_position_ids = torch.tensor([[0, 1, 2, 3, 0, 1, 0, 1, 2]])
+        flattened = torch.arange(16, dtype=torch.float32).view(1, 8, 2)
+
+        restored = restore_padding_from_flattened(flattened, flat_position_ids, padding_value=-100)
+
+        expected = torch.tensor(
+            [
+                [[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]],
+                [[8.0, 9.0], [-100.0, -100.0], [-100.0, -100.0]],
+                [[12.0, 13.0], [14.0, 15.0], [-100.0, -100.0]],
+            ]
+        )
+        torch.testing.assert_close(restored, expected)
 
 
 class TestDPOTrainer(TrlTestCase):
