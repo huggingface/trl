@@ -82,6 +82,20 @@ def main(script_args, training_args, model_args):
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
+    # Merge thinking into message content using <think> tags and remove extra columns
+    def merge_thinking_and_remove_key(example):
+        new_messages = []
+        for msg in example["messages"]:
+            content = msg["content"]
+            thinking = msg.get("thinking")
+            if thinking and isinstance(thinking, str) and thinking.strip():
+                content = f"<think>\n{thinking}\n</think>\n{content}"
+            new_messages.append({"role": msg["role"], "content": content})
+        example["messages"] = new_messages
+        return example
+
+    dataset = dataset.map(merge_thinking_and_remove_key)
+
     # Prepare eval dataset if needed
     eval_dataset = None
     if training_args.eval_strategy != "no" and script_args.dataset_test_split in dataset:
