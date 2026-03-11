@@ -28,22 +28,31 @@ Usage:
 
 ```bash
 python trl/experimental/sdpo/sdpo.py \
-    --model_name_or_path Qwen/Qwen3.5-2B \
+    --model_name_or_path Qwen/Qwen2.5-Math-1.5B-Instruct \
     --dataset_name openai/gsm8k \
     --dataset_config main \
     --output_dir outputs/sdpo-qwen35-2b-gsm8k \
-    --learning_rate 1e-5 \
+    --learning_rate 5e-5 \
     --dtype bfloat16 \
+    --bf16 true \
     --max_completion_length 128 \
     --use_peft \
-    --lora_target_modules q_proj v_proj \
+    --lora_target_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
     --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 4 \
-    --num_generations 4 \
-    --generation_batch_size 4 \
+    --gradient_accumulation_steps 2 \
+    --num_generations 8 \
+    --generation_batch_size 32 \
     --distillation_alpha 1.0 \
     --full_logit_distillation false \
-    --sdpo_policy_loss_mode distillation_only
+    --sdpo_policy_loss_mode hybrid \
+    --report_to none \
+    --eval_strategy steps \
+    --eval_steps 1000 \
+    --save_strategy no \
+    --eval_num_prompts 0 \
+    --accuracy_eval_num_examples 64 \
+    --max_train_examples 256 \
+    --max_eval_examples 128
 ```
 
 This example uses verifiable math rewards and reports answer accuracy before and after training. If your dataset
@@ -79,8 +88,8 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 SYSTEM_PROMPT = (
     "A conversation between user and assistant. The user asks a question, and the assistant solves it. The assistant "
     "first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning "
-    "process and answer are enclosed within <think></think> tags, i.e., <think>\nThis is my reasoning.\n</think>\n"
-    "This is my answer."
+    "must be enclosed within <think></think> tags, and the final answer must be on its own line in the format "
+    "`#### <answer>`."
 )
 
 
@@ -108,6 +117,25 @@ class SDPOScriptArguments(ScriptArguments):
         default=128,
         metadata={"help": "Maximum completion length for answer-accuracy evaluation generation."},
     )
+    feedback_from_solution: str | None = field(
+        default=None,
+        metadata={
+            "help": "Optional synthesized feedback source when the dataset has no feedback column. Supported: "
+            "`final_answer`, `full_solution`."
+        },
+    )
+    max_train_examples: int | None = field(
+        default=None,
+        metadata={"help": "Optional cap on the number of training examples loaded from the selected train split."},
+    )
+    max_eval_examples: int | None = field(
+        default=None,
+        metadata={"help": "Optional cap on the number of evaluation examples loaded from the selected eval split."},
+    )
+    dataset_shuffle_seed: int = field(
+        default=42,
+        metadata={"help": "Random seed used before applying `max_train_examples` or `max_eval_examples`."},
+    )
 
 
 @dataclass
@@ -118,7 +146,31 @@ class ExampleSDPOConfig(SDPOConfig):
     )
 
 
-def _make_conversation(example: dict[str, Any], feedback_column: str | None) -> dict[str, Any]:
+def _make_solution_feedback(
+    final_answer: str, worked_solution: str | None, feedback_from_solution: str | None
+) -> str | None:
+    if feedback_from_solution is None:
+        return None
+    if feedback_from_solution == "final_answer":
+        return (
+            "Your previous answer was incorrect. The correct final answer is:\n\n"
+            f"#### {final_answer}\n\n"
+            "Revise your reasoning and end with the same final answer format."
+        )
+    if feedback_from_solution == "full_solution":
+        if worked_solution is None:
+            worked_solution = f"#### {final_answer}"
+        return (
+            "Your previous answer was incorrect. Here is a correct worked solution:\n\n"
+            f"{worked_solution}\n\n"
+            "Use it to solve the original question correctly."
+        )
+    raise ValueError("feedback_from_solution must be one of: `final_answer`, `full_solution`.")
+
+
+def _make_conversation(
+    example: dict[str, Any], feedback_column: str | None, feedback_from_solution: str | None
+) -> dict[str, Any]:
     prompt = example.get("prompt")
     if prompt is None and "problem" in example:
         prompt = [
@@ -136,15 +188,26 @@ def _make_conversation(example: dict[str, Any], feedback_column: str | None) -> 
 
     output = {"prompt": prompt}
 
+    solution = None
+    worked_solution = None
     if "solution" in example:
-        output["solution"] = example["solution"]
+        solution = example["solution"]
+        worked_solution = example["solution"]
     elif "answer" in example:
-        output["solution"] = _normalize_gsm8k_answer(example["answer"])
+        solution = _normalize_gsm8k_answer(example["answer"])
+        worked_solution = example["answer"].strip()
+
+    if solution is not None:
+        output["solution"] = solution
 
     if feedback_column is not None and feedback_column in example:
         output["privileged_context"] = example[feedback_column]
     elif "privileged_context" in example:
         output["privileged_context"] = example["privileged_context"]
+    elif solution is not None:
+        synthesized_feedback = _make_solution_feedback(solution, worked_solution, feedback_from_solution)
+        if synthesized_feedback is not None:
+            output["privileged_context"] = synthesized_feedback
 
     return output
 
@@ -180,7 +243,7 @@ def _gsm8k_accuracy_reward(completions, solution, **kwargs) -> list[float]:
 
 
 def _gsm8k_soft_format_reward(completions, **kwargs) -> list[float]:
-    pattern = r"<think>.*?</think>\s*.*"
+    pattern = r"<think>.*?</think>\s*####\s*[^\n]+"
     rewards = []
     for completion in completions:
         content = completion[0]["content"] if isinstance(completion, list) else completion
@@ -207,6 +270,8 @@ def _run_accuracy_eval(
     )
     tokenized = {key: value.to(trainer.accelerator.device) for key, value in tokenized.items()}
     model = trainer.accelerator.unwrap_model(trainer.model)
+    was_training = model.training
+    model.eval()
     with torch.no_grad():
         generated = model.generate(
             **tokenized,
@@ -215,6 +280,8 @@ def _run_accuracy_eval(
             pad_token_id=trainer.processing_class.pad_token_id,
             eos_token_id=trainer.processing_class.eos_token_id,
         )
+    if was_training:
+        model.train()
 
     prompt_length = tokenized["input_ids"].shape[1]
     completions = trainer.processing_class.batch_decode(generated[:, prompt_length:], skip_special_tokens=True)
@@ -250,15 +317,31 @@ if __name__ == "__main__":
     if not isinstance(dataset, DatasetDict):
         raise ValueError("SDPO example expects a dataset with named splits.")
 
-    train_dataset = dataset[script_args.dataset_train_split].map(
-        lambda example: _make_conversation(example, script_args.feedback_column),
-        remove_columns=dataset[script_args.dataset_train_split].column_names,
+    train_split = dataset[script_args.dataset_train_split]
+    if script_args.max_train_examples is not None:
+        train_split = train_split.shuffle(seed=script_args.dataset_shuffle_seed).select(
+            range(min(script_args.max_train_examples, len(train_split)))
+        )
+
+    train_dataset = train_split.map(
+        lambda example: _make_conversation(
+            example, script_args.feedback_column, script_args.feedback_from_solution
+        ),
+        remove_columns=train_split.column_names,
     )
     eval_dataset = None
     if training_args.eval_strategy != "no":
-        eval_dataset = dataset[script_args.dataset_test_split].map(
-            lambda example: _make_conversation(example, script_args.feedback_column),
-            remove_columns=dataset[script_args.dataset_test_split].column_names,
+        eval_split = dataset[script_args.dataset_test_split]
+        if script_args.max_eval_examples is not None:
+            eval_split = eval_split.shuffle(seed=script_args.dataset_shuffle_seed).select(
+                range(min(script_args.max_eval_examples, len(eval_split)))
+            )
+
+        eval_dataset = eval_split.map(
+            lambda example: _make_conversation(
+                example, script_args.feedback_column, script_args.feedback_from_solution
+            ),
+            remove_columns=eval_split.column_names,
         )
 
     reward_funcs = [_gsm8k_soft_format_reward, _gsm8k_accuracy_reward]
