@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
 #     "openenv-textarena @ git+https://huggingface.co/spaces/openenv/sudoku",
@@ -131,7 +130,7 @@ def parse_args() -> argparse.Namespace:
         "--difficulty",
         type=str,
         choices=["easy", "medium", "hard"],
-        default="hard",
+        default="easy",
         help="Training difficulty: easy=guaranteed+options, medium=only options, hard=no hints",
     )
     parser.add_argument(
@@ -178,7 +177,7 @@ def parse_args() -> argparse.Namespace:
     # vLLM
     parser.add_argument("--vllm-mode", choices=("colocate", "server"), default="colocate")
     parser.add_argument("--vllm-server-url", type=str, default="http://localhost:8000")
-    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.1)
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.15)
 
     return parser.parse_args()
 

@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
 #     "openenv-browsergym @ git+https://huggingface.co/spaces/openenv/browsergym_env",
@@ -291,10 +290,26 @@ def main() -> None:
             self._done = False
             self._step_count = 0
 
+        def _ensure_large_max_size(self):
+            """Raise WebSocket max message size for large observations (e.g. accessibility trees).
+
+            openenv-core<=0.2.1 does not pass max_size to ws_connect, so the websockets library
+            defaults to 1MB. We force a connection and patch it to 100MB before any messages are sent.
+            """
+            self.client.connect()
+            ws = self.client._ws
+            if ws is not None and hasattr(ws, "protocol"):
+                proto = ws.protocol
+                # websockets <16: max_size; websockets >=16: max_message_size
+                attr = "max_size" if hasattr(proto, "max_size") else "max_message_size"
+                if getattr(proto, attr) == 2**20:
+                    setattr(proto, attr, 100 * 1024 * 1024)
+
         def reset(self, **kwargs) -> str:
             self.reward = 0.0
             self._done = False
             self._step_count = 0
+            self._ensure_large_max_size()
             result = self.client.reset()
             self._done = result.done
             return self._format_observation(result.observation)

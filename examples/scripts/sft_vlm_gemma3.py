@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow>=9.4.0",
-#     "peft",
 #     "trackio",
 #     "kernels",
 # ]

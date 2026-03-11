@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow",
-#     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "torchvision",

@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl[vllm]",
-#     "peft",
+#     "trl[vllm,peft]",
 #     "trackio",
 #     "kernels",
 #     "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env",
