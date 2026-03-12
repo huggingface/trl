@@ -807,10 +807,7 @@ class GOLDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
-        self.model_revision = getattr(args, "student_model_revision", None)
-        if isinstance(model, str) and self.model_revision is not None:
-            args.model_init_kwargs = args.model_init_kwargs or {}
-            args.model_init_kwargs.setdefault("revision", self.model_revision)
+        self.model_revision = (args.model_init_kwargs or {}).get("revision")
 
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
         if data_collator is None:

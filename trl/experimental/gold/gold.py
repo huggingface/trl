@@ -51,7 +51,6 @@ python trl/experimental/gold/gold.py \
 """
 
 import logging
-import os
 
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
@@ -79,22 +78,9 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    if training_args.student_model_revision is None:
-        training_args.student_model_revision = model_args.model_revision
-    elif (
-        model_args.model_revision is not None
-        and training_args.student_model_revision != model_args.model_revision
-    ):
-        raise ValueError(
-            "Conflicting revisions for student model: "
-            f"student_model_revision={training_args.student_model_revision!r} and "
-            f"model_revision={model_args.model_revision!r}. "
-            "Set only one revision, or set both to the same value."
-        )
-
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
-        revision=training_args.student_model_revision,
+        revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=model_args.dtype,
