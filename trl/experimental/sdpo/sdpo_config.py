@@ -135,6 +135,8 @@ class SDPOConfig(SelfDistillationConfig):
             raise ValueError("teacher_update_rate must be in [0, 1]")
         if self.sdpo_policy_loss_mode not in {"distillation_only", "hybrid"}:
             raise ValueError("sdpo_policy_loss_mode must be one of: 'distillation_only', 'hybrid'")
+        if self.sdpo_policy_loss_mode == "distillation_only" and self.distillation_weight <= 0:
+            raise ValueError("distillation_only mode requires `distillation_weight > 0`.")
         if self.max_reprompt_len <= 0:
             raise ValueError("max_reprompt_len must be positive")
         if not self.full_logit_distillation and self.distillation_alpha != 1.0:
