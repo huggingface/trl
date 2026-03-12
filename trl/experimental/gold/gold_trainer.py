@@ -1504,6 +1504,7 @@ class GOLDTrainer(SFTTrainer):
                 prompt_txts,
                 return_tensors="pt",
                 padding="longest",
+                padding_side="left",
                 truncation=True if prompt_max_length else False,
                 max_length=prompt_max_length,
                 add_special_tokens=False,
