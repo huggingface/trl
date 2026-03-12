@@ -336,11 +336,22 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             rejected_type_ids = processed_rejecteds["token_type_ids"]
             completion_token_type_ids = torch.cat(tuple(pad([chosen_type_ids, rejected_type_ids], padding_value=0)))
             token_type_ids = torch.cat((prompt_token_type_ids, completion_token_type_ids), dim=1)
+        if "mm_token_type_ids" in processed_prompts:  # special case for Qwen2.5-VL
+            prompt_mm_token_type_ids = processed_prompts["mm_token_type_ids"]
+            mm_token_type_ids = torch.cat((prompt_mm_token_type_ids, torch.zeros_like(completion_ids)), dim=1)
 
         # Flush left to reduce padding
-        if "token_type_ids" in processed_prompts:
+        if "token_type_ids" in processed_prompts and "mm_token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, token_type_ids, mm_token_type_ids
+            )
+        elif "token_type_ids" in processed_prompts:
             attention_mask, input_ids, completion_mask, token_type_ids = flush_left(
                 attention_mask, input_ids, completion_mask, token_type_ids
+            )
+        elif "mm_token_type_ids" in processed_prompts:
+            attention_mask, input_ids, completion_mask, mm_token_type_ids = flush_left(
+                attention_mask, input_ids, completion_mask, mm_token_type_ids
             )
         else:
             attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
@@ -352,6 +363,8 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         output["completion_mask"] = completion_mask
         if "token_type_ids" in processed_prompts:
             output["token_type_ids"] = token_type_ids
+        if "mm_token_type_ids" in processed_prompts:
+            output["mm_token_type_ids"] = mm_token_type_ids
         return output
 
 
