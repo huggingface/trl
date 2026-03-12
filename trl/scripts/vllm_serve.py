@@ -594,8 +594,10 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
+        structured_outputs_key = (
+            "guided_decoding" if Version(vllm.__version__) <= Version("0.10.2") else "structured_outputs"
+        )
         if Version(vllm.__version__) <= Version("0.10.2"):
-            structured_outputs_key = "guided_decoding"
             if request.structured_outputs_regex is not None:
                 if generation_kwargs.get(structured_outputs_key) is not None:
                     logger.warning(
@@ -609,7 +611,6 @@ def main(script_args: ScriptArguments):
             else:
                 structured_outputs = generation_kwargs.get(structured_outputs_key)
         else:
-            structured_outputs_key = "structured_outputs"
             if request.structured_outputs_regex is not None:
                 if generation_kwargs.get(structured_outputs_key) is not None:
                     logger.warning(
@@ -760,8 +761,10 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
+        structured_outputs_key = (
+            "guided_decoding" if Version(vllm.__version__) <= Version("0.10.2") else "structured_outputs"
+        )
         if Version(vllm.__version__) <= Version("0.10.2"):
-            structured_outputs_key = "guided_decoding"
             if request.structured_outputs_regex is not None:
                 if generation_kwargs.get(structured_outputs_key) is not None:
                     logger.warning(
@@ -775,7 +778,6 @@ def main(script_args: ScriptArguments):
             else:
                 structured_outputs = generation_kwargs.get(structured_outputs_key)
         else:
-            structured_outputs_key = "structured_outputs"
             if request.structured_outputs_regex is not None:
                 if generation_kwargs.get(structured_outputs_key) is not None:
                     logger.warning(
