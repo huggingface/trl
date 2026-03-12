@@ -146,9 +146,7 @@ class ExampleSDPOConfig(SDPOConfig):
     )
 
 
-def _make_solution_feedback(
-    final_answer: str, worked_solution: str | None, feedback_from_solution: str | None
-) -> str | None:
+def _make_solution_feedback(final_answer: str, worked_solution: str, feedback_from_solution: str | None) -> str | None:
     if feedback_from_solution is None:
         return None
     if feedback_from_solution == "final_answer":
@@ -158,8 +156,6 @@ def _make_solution_feedback(
             "Revise your reasoning and end with the same final answer format."
         )
     if feedback_from_solution == "full_solution":
-        if worked_solution is None:
-            worked_solution = f"#### {final_answer}"
         return (
             "Your previous answer was incorrect. Here is a correct worked solution:\n\n"
             f"{worked_solution}\n\n"
@@ -189,13 +185,10 @@ def _make_conversation(
     output = {"prompt": prompt}
 
     solution = None
-    worked_solution = None
     if "solution" in example:
         solution = example["solution"]
-        worked_solution = example["solution"]
     elif "answer" in example:
         solution = _normalize_gsm8k_answer(example["answer"])
-        worked_solution = example["answer"].strip()
 
     if solution is not None:
         output["solution"] = solution
@@ -205,15 +198,16 @@ def _make_conversation(
     elif "privileged_context" in example:
         output["privileged_context"] = example["privileged_context"]
     elif solution is not None:
+        worked_solution = example.get("solution")
+        if worked_solution is None and "answer" in example:
+            worked_solution = example["answer"].strip()
+        if worked_solution is None:
+            worked_solution = f"#### {solution}"
         synthesized_feedback = _make_solution_feedback(solution, worked_solution, feedback_from_solution)
         if synthesized_feedback is not None:
             output["privileged_context"] = synthesized_feedback
 
     return output
-
-
-def _apply_prompt_template(tokenizer, prompt: Any) -> str:
-    return maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"]
 
 
 def _normalize_gsm8k_answer(answer_text: str) -> str:
@@ -258,7 +252,7 @@ def _run_accuracy_eval(
         eval_dataset = eval_dataset.select(range(min(num_examples, len(eval_dataset))))
 
     prompts = eval_dataset["prompt"]
-    prompt_texts = [_apply_prompt_template(trainer.processing_class, prompt) for prompt in prompts]
+    prompt_texts = [maybe_apply_chat_template({"prompt": prompt}, trainer.processing_class)["prompt"] for prompt in prompts]
     tokenized = trainer.processing_class(
         text=prompt_texts,
         return_tensors="pt",
@@ -390,10 +384,9 @@ if __name__ == "__main__":
             max_new_tokens=script_args.accuracy_eval_max_new_tokens,
             num_examples=script_args.accuracy_eval_num_examples,
         )
-        before_metrics = {f"before_{k}": v for k, v in pre_metrics.items()}
         after_metrics = {f"after_{k}": v for k, v in post_metrics.items()}
         delta_metrics = {
-            f"delta_{k.split('/', 1)[1]}": after_metrics[f"after_{k}"] - before_metrics[f"before_{k}"]
+            f"delta_{k.split('/', 1)[1]}": after_metrics[f"after_{k}"] - pre_metrics[k]
             for k in pre_metrics
         }
         trainer.log_metrics("eval", after_metrics | delta_metrics)
