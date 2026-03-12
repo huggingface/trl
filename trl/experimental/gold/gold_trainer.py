@@ -1538,7 +1538,7 @@ class GOLDTrainer(SFTTrainer):
             completion_ids_padded = torch.stack(padded_completion_ids_list)
 
             new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
-            prompt_lengths = (prompt_ids != pad_token_id).sum(dim=1)
+            prompt_lengths = torch.full((prompt_ids.shape[0],), prompt_ids.shape[1], device=device)
             new_attention_mask, new_labels = self._build_sequence_batch(
                 new_input_ids, prompt_lengths, self.processing_class.pad_token_id
             )
