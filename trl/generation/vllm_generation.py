@@ -278,6 +278,23 @@ class VLLMGeneration:
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
 
+        # Detect if vLLM will load a ForConditionalGeneration (VLM) model while the trainer loaded a ForCausalLM
+        # (text-only). VLM models nest the CausalLM under a `language_model` attribute, so all weight names from the
+        # trainer need that prefix prepended during sync.
+        self._vllm_param_prefix = ""
+        unwrapped = model.base_model.model if is_peft_model(model) else model
+        config = getattr(unwrapped, "config", None)
+        if config is not None:
+            archs = getattr(config, "architectures", None) or []
+            vllm_arch = archs[0] if archs else ""
+            trainer_cls_name = type(unwrapped).__name__
+            if "ForConditionalGeneration" in vllm_arch and trainer_cls_name != vllm_arch:
+                self._vllm_param_prefix = "language_model."
+                logger.info(
+                    f"VLM architecture mismatch: trainer={trainer_cls_name}, vLLM will load {vllm_arch}. "
+                    f"Prepending '{self._vllm_param_prefix}' to weight names during sync."
+                )
+
         self._init_vllm()
 
     def _init_vllm(self):
@@ -371,6 +388,8 @@ class VLLMGeneration:
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
         for prefix in prefixes:
             name = name.replace(prefix, "")
+        if self._vllm_param_prefix:
+            name = self._vllm_param_prefix + name
         return name
 
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited: set[str] | None = None):
