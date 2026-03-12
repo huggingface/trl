@@ -252,7 +252,9 @@ def _run_accuracy_eval(
         eval_dataset = eval_dataset.select(range(min(num_examples, len(eval_dataset))))
 
     prompts = eval_dataset["prompt"]
-    prompt_texts = [maybe_apply_chat_template({"prompt": prompt}, trainer.processing_class)["prompt"] for prompt in prompts]
+    prompt_texts = [
+        maybe_apply_chat_template({"prompt": prompt}, trainer.processing_class)["prompt"] for prompt in prompts
+    ]
     tokenized = trainer.processing_class(
         text=prompt_texts,
         return_tensors="pt",
@@ -318,9 +320,7 @@ if __name__ == "__main__":
         )
 
     train_dataset = train_split.map(
-        lambda example: _make_conversation(
-            example, script_args.feedback_column, script_args.feedback_from_solution
-        ),
+        lambda example: _make_conversation(example, script_args.feedback_column, script_args.feedback_from_solution),
         remove_columns=train_split.column_names,
     )
     eval_dataset = None
@@ -386,8 +386,7 @@ if __name__ == "__main__":
         )
         after_metrics = {f"after_{k}": v for k, v in post_metrics.items()}
         delta_metrics = {
-            f"delta_{k.split('/', 1)[1]}": after_metrics[f"after_{k}"] - pre_metrics[k]
-            for k in pre_metrics
+            f"delta_{k.split('/', 1)[1]}": after_metrics[f"after_{k}"] - pre_metrics[k] for k in pre_metrics
         }
         trainer.log_metrics("eval", after_metrics | delta_metrics)
         trainer.save_metrics("eval", after_metrics | delta_metrics)

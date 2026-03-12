@@ -17,6 +17,7 @@ from datasets import Dataset
 from transformers import TrainerCallback
 from transformers.utils import is_peft_available
 
+from trl.data_utils import maybe_apply_chat_template
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
 from ..testing_utils import TrlTestCase
@@ -108,6 +109,50 @@ class TestSDFTTrainer(TrlTestCase):
         assert capture_callback.captured_generation_prompt_text is not None
         assert "Solve 2+2." in capture_callback.captured_generation_prompt_text
         assert "Teacher hint" in capture_callback.captured_generation_prompt_text
+
+    def test_training_with_chat_template_kwargs(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "Solve 2+2."}],
+                    [{"role": "user", "content": "Solve 3+3."}],
+                ],
+                "privileged_context": [
+                    "Teacher hint: answer with 4.",
+                    "Teacher hint: answer with 6.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+            chat_template_kwargs={"enable_thinking": False},
+        )
+
+        capture_callback = SelfDistillationCaptureCallback()
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            ref_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        expected_prompt = maybe_apply_chat_template(
+            {"prompt": dataset[0]["prompt"]},
+            trainer.processing_class,
+            **training_args.chat_template_kwargs,
+        )["prompt"]
+
+        trainer.train()
+
+        assert capture_callback.captured_generation_prompt_text == expected_prompt
 
     def test_training_with_peft_model_and_no_explicit_ref_model(self):
         if not is_peft_available():

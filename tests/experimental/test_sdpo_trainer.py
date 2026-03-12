@@ -183,7 +183,6 @@ class TestSDPOTrainer(TrlTestCase):
 
         assert capture_callback.captured_old_per_token_logps is not None
 
-
     def test_evaluation_uses_num_generations_eval_for_teacher_grouping(self):
         eval_dataset = Dataset.from_dict({"prompt": ["Alpha prompt", "Beta prompt", "Gamma prompt", "Delta prompt"]})
 

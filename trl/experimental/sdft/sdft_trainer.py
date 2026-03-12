@@ -45,7 +45,7 @@ from ...trainer.utils import (
     use_adapter,
 )
 from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
-from ..self_distillation.teacher_context import DemonstrationTeacherContextBuilder, PromptTokenizer
+from ..self_distillation.teacher_context import PromptTokenizer
 from ..utils import prepare_peft_model
 from .sdft_config import SDFTConfig
 
@@ -56,6 +56,83 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
+
+
+class DemonstrationTeacherContextBuilder:
+    """Builds student and teacher contexts from prompts plus privileged context, as in SDFT."""
+
+    def __init__(self, trainer):
+        self.trainer = trainer
+        self.prompt_tokenizer = PromptTokenizer(trainer)
+
+    def _extract_last_user_text(self, prompt: list[dict[str, Any]]) -> str:
+        last_message = prompt[-1]
+        content = last_message.get("content", "")
+        if isinstance(content, list):
+            return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+        return content
+
+    def _stringify_privileged_context(self, privileged_context: Any) -> str:
+        if privileged_context is None:
+            raise ValueError(
+                "`privileged_context` must not be None for self-distillation teacher prompt construction."
+            )
+        if isinstance(privileged_context, str):
+            return privileged_context
+        if isinstance(privileged_context, list) and privileged_context and isinstance(privileged_context[0], dict):
+            chunks = []
+            for message in privileged_context:
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    text = " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+                else:
+                    text = str(content)
+                if text:
+                    chunks.append(text)
+            return "\n".join(chunks)
+        return str(privileged_context)
+
+    def _compose_teacher_prompt(self, prompt: Any, privileged_context: Any) -> Any:
+        privileged_text = self._stringify_privileged_context(privileged_context)
+        if isinstance(prompt, list):
+            system_messages = prompt[:-1]
+            prompt_text = self._extract_last_user_text(prompt)
+            teacher_text = self.trainer.args.teacher_prompt_template.format(
+                prompt=prompt_text,
+                privileged_context=privileged_text,
+            )
+            return system_messages + [{"role": "user", "content": teacher_text}]
+        return self.trainer.args.teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_text)
+
+    def select_generation_prompts(self, prompts: list[Any], privileged_contexts: list[Any]) -> list[Any]:
+        if not self.trainer.generate_from_teacher:
+            return prompts
+        return [
+            self._compose_teacher_prompt(prompt, privileged_context)
+            for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
+        ]
+
+    def build(
+        self,
+        prompts: list[Any],
+        privileged_contexts: list[Any],
+        completion_ids: torch.Tensor,
+        completion_mask: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        student_batch = self.prompt_tokenizer.tokenize_prompts(prompts)
+        teacher_prompts = [
+            self._compose_teacher_prompt(prompt, privileged_context)
+            for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
+        ]
+        teacher_batch = self.prompt_tokenizer.tokenize_prompts(teacher_prompts)
+        teacher_input_ids = torch.cat([teacher_batch.prompt_ids, completion_ids], dim=1)
+        teacher_attention_mask = torch.cat([teacher_batch.prompt_mask, completion_mask], dim=1)
+        return {
+            "prompt_ids": student_batch.prompt_ids,
+            "prompt_mask": student_batch.prompt_mask,
+            "teacher_input_ids": teacher_input_ids,
+            "teacher_attention_mask": teacher_attention_mask,
+        }
 
 
 class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
@@ -148,6 +225,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         self.shuffle_dataset = args.shuffle_dataset
         self.generate_from_teacher = args.generate_from_teacher
         self.num_loss_tokens_to_skip = args.num_loss_tokens_to_skip
+        self.chat_template_kwargs = args.chat_template_kwargs or {}
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
