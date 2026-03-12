@@ -603,14 +603,9 @@ def main(script_args: ScriptArguments):
                     f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
                     "`structured_outputs_regex` takes precedence."
                 )
-            structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
-        elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
-            structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
-            structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
-        else:
-            structured_outputs = generation_kwargs.get(structured_outputs_key)
-
-        generation_kwargs[structured_outputs_key] = structured_outputs
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
@@ -759,14 +754,9 @@ def main(script_args: ScriptArguments):
                     f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
                     "`structured_outputs_regex` takes precedence."
                 )
-            structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
-        elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
-            structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
-            structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
-        else:
-            structured_outputs = generation_kwargs.get(structured_outputs_key)
-
-        generation_kwargs[structured_outputs_key] = structured_outputs
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
