@@ -16,8 +16,6 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
 from ...trainer.sft_config import SFTConfig
 
 
@@ -40,16 +38,16 @@ class GOLDConfig(SFTConfig):
             beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
         max_completion_length (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
-        teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        teacher_model_name_or_path (`str`, *optional*):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
             trained.
         teacher_model_revision (`str` or `None`, *optional*, defaults to `None`):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash). If `None`, the default
             revision is used.
-        teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
+        teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
-        teacher_tokenizer_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        teacher_tokenizer_name_or_path (`str`, *optional*):
             Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same tokenizer as
             the student model (not recommended for cross-tokenizer distillation).
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -93,7 +91,7 @@ class GOLDConfig(SFTConfig):
             to set this to a low value if the student and teacher models share the same GPU.
         vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Tensor parallel size for the colocated student vLLM engine (if `vllm_mode="colocate"`).
-        vllm_structured_outputs_regex (`str` or `None`, *optional*, defaults to `None`):
+        vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs for the student model.
         vllm_sync_frequency (`int`, *optional*, defaults to `1`):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after
@@ -103,7 +101,7 @@ class GOLDConfig(SFTConfig):
             low, but waking the engine adds host–device transfer latency.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -163,7 +161,7 @@ class GOLDConfig(SFTConfig):
             "default revision is used."
         },
     )
-    teacher_model_init_kwargs: dict[str, Any] | None = field(
+    teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
