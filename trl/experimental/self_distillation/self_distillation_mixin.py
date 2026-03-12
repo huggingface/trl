@@ -230,7 +230,9 @@ class SelfDistillationMixin:
         elif self.args.full_logit_distillation:
             student_log_probs = F.log_softmax(student_logits, dim=-1)
             teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
-            per_token_loss = self._compute_divergence(student_log_probs, teacher_log_probs, self.args.distillation_alpha)
+            per_token_loss = self._compute_divergence(
+                student_log_probs, teacher_log_probs, self.args.distillation_alpha
+            )
         else:
             if self.args.distillation_alpha != 1.0:
                 raise ValueError(
