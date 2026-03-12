@@ -284,14 +284,26 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="NemotronH models were introduced in transformers-5.3.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
+        # NemotronH does not support gradient checkpointing
+        gradient_checkpointing = "NemotronH" not in model_id
+
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=gradient_checkpointing
+        )
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
         # Save the initial parameters to compare them later

@@ -58,6 +58,8 @@ from transformers import (
     LlavaForConditionalGeneration,
     LlavaNextForConditionalGeneration,
     MistralConfig,
+    NemotronHConfig,
+    NemotronHForCausalLM,
     MistralForCausalLM,
     OPTConfig,
     OPTForCausalLM,
@@ -226,6 +228,32 @@ for model_id, config_class, model_class, dtype, suffix in [
     model = model_class(config).to(dtype=dtype)
     init_weights_tiny_model(model)
     push_to_hub(model, tokenizer, generation_config, "tiny", suffix)
+
+# Hybrid Mamba-Attention models
+tokenizer = AutoTokenizer.from_pretrained("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
+generation_config = GenerationConfig.from_pretrained("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
+config = NemotronHConfig(
+    vocab_size=len(tokenizer.vocab),
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    intermediate_size=32,
+    layers_block_type=["mamba", "attention"],  # 2 layers: one Mamba + one Attention
+    mamba_num_heads=4,
+    mamba_head_dim=2,
+    mamba_n_groups=1,
+    ssm_state_size=8,
+    mamba_d_conv=4,
+    mamba_expand=2,
+    n_routed_experts=4,
+    num_experts_per_tok=2,
+    moe_intermediate_size=32,
+    moe_shared_expert_intermediate_size=32,
+    use_mamba_kernels=False,  # CPU-friendly for testing
+)
+model = NemotronHForCausalLM(config).to(dtype=torch.bfloat16)
+init_weights_tiny_model(model)
+push_to_hub(model, tokenizer, generation_config, "tiny")
 
 # Two slightly bigger models, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")

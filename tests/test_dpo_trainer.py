@@ -139,17 +139,28 @@ class TestDPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="NemotronH models were introduced in transformers-5.3.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
+        # NemotronH does not support gradient checkpointing
+        gradient_checkpointing = "NemotronH" not in model_id
+
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
+            gradient_checkpointing=gradient_checkpointing,
         )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
