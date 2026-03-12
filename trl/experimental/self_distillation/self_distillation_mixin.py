@@ -205,33 +205,10 @@ class SelfDistillationMixin:
             teacher_logits = teacher_logits[:, -logits_to_keep:, :]
             teacher_logits = teacher_logits / self.temperature
 
-        if self.args.full_logit_distillation:
-            if self.args.distillation_topk is not None:
-                student_logsumexp = torch.logsumexp(student_logits, dim=-1, keepdim=True)
-                topk_student_logits, topk_indices = torch.topk(student_logits, k=self.args.distillation_topk, dim=-1)
-                topk_student_log_probs = topk_student_logits - student_logsumexp
-
-                teacher_logsumexp = torch.logsumexp(teacher_logits, dim=-1, keepdim=True)
-                topk_teacher_logits = torch.gather(teacher_logits, dim=-1, index=topk_indices)
-                topk_teacher_log_probs = topk_teacher_logits - teacher_logsumexp
-
-                if self.args.distillation_add_tail:
-                    topk_student_log_probs = self._add_tail(topk_student_log_probs)
-                    topk_teacher_log_probs = self._add_tail(topk_teacher_log_probs)
-                else:
-                    topk_student_log_probs = self._renorm_topk_log_probs(topk_student_log_probs)
-                    topk_teacher_log_probs = self._renorm_topk_log_probs(topk_teacher_log_probs)
-
-                per_token_loss = self._compute_divergence(
-                    topk_student_log_probs, topk_teacher_log_probs, self.args.distillation_alpha
-                )
-            else:
-                student_log_probs = F.log_softmax(student_logits, dim=-1)
-                teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
-                per_token_loss = self._compute_divergence(
-                    student_log_probs, teacher_log_probs, self.args.distillation_alpha
-                )
-        elif self.args.distillation_topk is not None and self._allow_topk_without_full_logit_distillation():
+        use_topk_distillation = self.args.distillation_topk is not None and (
+            self.args.full_logit_distillation or self._allow_topk_without_full_logit_distillation()
+        )
+        if use_topk_distillation:
             student_logsumexp = torch.logsumexp(student_logits, dim=-1, keepdim=True)
             topk_student_logits, topk_indices = torch.topk(student_logits, k=self.args.distillation_topk, dim=-1)
             topk_student_log_probs = topk_student_logits - student_logsumexp
@@ -250,6 +227,10 @@ class SelfDistillationMixin:
             per_token_loss = self._compute_divergence(
                 topk_student_log_probs, topk_teacher_log_probs, self.args.distillation_alpha
             )
+        elif self.args.full_logit_distillation:
+            student_log_probs = F.log_softmax(student_logits, dim=-1)
+            teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+            per_token_loss = self._compute_divergence(student_log_probs, teacher_log_probs, self.args.distillation_alpha)
         else:
             if self.args.distillation_alpha != 1.0:
                 raise ValueError(
@@ -279,7 +260,6 @@ class SelfDistillationMixin:
                     per_token_loss, student_per_token_logps, old_log_probs, self.args.distillation_is_clip
                 )
 
-        per_token_loss = per_token_loss * response_mask
         loss = self._aggregate_self_distillation_loss(per_token_loss, response_mask)
 
         mode = "train" if model.training else "eval"
