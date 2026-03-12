@@ -43,6 +43,9 @@ class GOLDConfig(SFTConfig):
         teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
             trained.
+        teacher_model_revision (`str` or `None`, *optional*, defaults to `None`):
+            Model revision of the teacher model (e.g., branch name, tag, or commit hash). If `None`, the default
+            revision is used.
         teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
@@ -151,6 +154,13 @@ class GOLDConfig(SFTConfig):
         metadata={
             "help": "Model name or path of the teacher model. If `None`, the teacher model will be the same as the "
             "model being trained."
+        },
+    )
+    teacher_model_revision: str | None = field(
+        default=None,
+        metadata={
+            "help": "Model revision of the teacher model (e.g., branch name, tag, or commit hash). If `None`, the "
+            "default revision is used."
         },
     )
     teacher_model_init_kwargs: dict[str, Any] | None = field(

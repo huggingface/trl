@@ -850,6 +850,8 @@ class GOLDTrainer(SFTTrainer):
 
         if isinstance(teacher_model, str):
             init_kwargs = dict(teacher_model_init_kwargs)
+            if args.teacher_model_revision is not None:
+                init_kwargs.setdefault("revision", args.teacher_model_revision)
             if "torch_dtype" in init_kwargs and "dtype" not in init_kwargs:
                 init_kwargs["dtype"] = init_kwargs.pop("torch_dtype")
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)

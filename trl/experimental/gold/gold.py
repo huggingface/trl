@@ -93,6 +93,7 @@ if __name__ == "__main__":
     if training_args.teacher_tokenizer_name_or_path is None and training_args.use_uld_loss:
         training_args.teacher_tokenizer_name_or_path = training_args.teacher_model_name_or_path
     teacher_model_kwargs = dict(
+        revision=training_args.teacher_model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=model_args.dtype,
