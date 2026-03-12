@@ -423,7 +423,7 @@ def main(script_args: ScriptArguments):
         from vllm.utils.network_utils import get_open_port
 
     if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams
+        from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
     else:
         from vllm.sampling_params import StructuredOutputsParams
 
@@ -602,10 +602,10 @@ def main(script_args: ScriptArguments):
                         f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
                         "`structured_outputs_regex` takes precedence."
                     )
-                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
             elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
                 structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
-                structured_outputs = GuidedDecodingParams(**structured_outputs_dict)
+                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
             else:
                 structured_outputs = generation_kwargs.get(structured_outputs_key)
         else:
@@ -768,10 +768,10 @@ def main(script_args: ScriptArguments):
                         f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
                         "`structured_outputs_regex` takes precedence."
                     )
-                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
+                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
             elif isinstance(generation_kwargs.get(structured_outputs_key), dict):
                 structured_outputs_dict = generation_kwargs.get(structured_outputs_key)
-                structured_outputs = GuidedDecodingParams(**structured_outputs_dict)
+                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
             else:
                 structured_outputs = generation_kwargs.get(structured_outputs_key)
         else:
