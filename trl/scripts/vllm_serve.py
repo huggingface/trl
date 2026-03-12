@@ -422,11 +422,6 @@ def main(script_args: ScriptArguments):
     else:
         from vllm.utils.network_utils import get_open_port
 
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
-
     if is_vision_available():
         from PIL import Image
 
@@ -594,9 +589,14 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
-        structured_outputs_key = (
-            "guided_decoding" if Version(vllm.__version__) <= Version("0.10.2") else "structured_outputs"
-        )
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+
+            structured_outputs_key = "guided_decoding"
+        else:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            structured_outputs_key = "structured_outputs"
         if request.structured_outputs_regex is not None:
             if generation_kwargs.get(structured_outputs_key) is not None:
                 logger.warning(
@@ -745,9 +745,14 @@ def main(script_args: ScriptArguments):
         generation_kwargs.update(request.generation_kwargs)
 
         # Structured outputs, if enabled
-        structured_outputs_key = (
-            "guided_decoding" if Version(vllm.__version__) <= Version("0.10.2") else "structured_outputs"
-        )
+        if Version(vllm.__version__) <= Version("0.10.2"):
+            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
+
+            structured_outputs_key = "guided_decoding"
+        else:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            structured_outputs_key = "structured_outputs"
         if request.structured_outputs_regex is not None:
             if generation_kwargs.get(structured_outputs_key) is not None:
                 logger.warning(
