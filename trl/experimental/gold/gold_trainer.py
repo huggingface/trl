@@ -2118,14 +2118,18 @@ class GOLDTrainer(SFTTrainer):
         prompt_mask = inputs.get("prompt_attention_mask")
         pad_token_id = pad_token_id if pad_token_id is not None else self.processing_class.pad_token_id
 
-        # Use the full padded prompt width for label masking, since model.generate() returns
-        # sequences where completions start after the full prompt tensor (including padding).
-        prompt_lengths = torch.full(
-            (batch_size,),
-            inputs["prompts"].shape[1],
-            dtype=torch.long,
-            device=device,
-        )
+        if self.use_transformers_paged:
+            # generate_batch() returns completion-only tokens, so the entire tensor is completion.
+            prompt_lengths = torch.zeros(batch_size, dtype=torch.long, device=device)
+        else:
+            # model.generate() returns full sequences (prompt + completion), so completions start
+            # after the full padded prompt width.
+            prompt_lengths = torch.full(
+                (batch_size,),
+                inputs["prompts"].shape[1],
+                dtype=torch.long,
+                device=device,
+            )
 
         new_input_ids = generated_tokens
         new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
