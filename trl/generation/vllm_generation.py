@@ -286,6 +286,18 @@ class VLLMGeneration:
         config = getattr(unwrapped, "config", None)
         if config is not None:
             archs = getattr(config, "architectures", None) or []
+            if not archs:
+                # model.config may be a sub-config (e.g. text_config for VLM models) that lacks architectures.
+                # Re-fetch the full checkpoint config to get the actual architecture vLLM will load.
+                model_id = getattr(unwrapped, "name_or_path", None) or getattr(config, "_name_or_path", None)
+                if model_id:
+                    from transformers import AutoConfig
+
+                    try:
+                        full_config = AutoConfig.from_pretrained(model_id)
+                        archs = getattr(full_config, "architectures", None) or []
+                    except Exception:
+                        pass
             vllm_arch = archs[0] if archs else ""
             trainer_cls_name = type(unwrapped).__name__
             if "ForConditionalGeneration" in vllm_arch and trainer_cls_name != vllm_arch:
