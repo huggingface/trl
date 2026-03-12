@@ -992,7 +992,14 @@ class DPOTrainer(_BaseTrainer):
         shift_completion_mask = completion_mask[..., 1:].contiguous()
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
+        for key in (
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+            "token_type_ids",
+            "mm_token_type_ids",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
@@ -1113,7 +1120,14 @@ class DPOTrainer(_BaseTrainer):
         input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes", "token_type_ids"):
+        for key in (
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+            "token_type_ids",
+            "mm_token_type_ids",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
