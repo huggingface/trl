@@ -331,6 +331,9 @@ class KTOTrainer(_BaseTrainer):
         if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
 
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
