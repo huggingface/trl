@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
 from .base_config import _BaseConfig
 
 
@@ -82,7 +80,7 @@ class RewardConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-4` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -91,7 +89,7 @@ class RewardConfig(_BaseConfig):
     )
 
     # Parameters that control the model
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "

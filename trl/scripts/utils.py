@@ -21,13 +21,16 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-import datasets
-import yaml
-from datasets import DatasetDict, concatenate_datasets
-from transformers import HfArgumentParser
-from transformers.hf_argparser import DataClass, DataClassType
-from transformers.utils import is_rich_available
+# Temporarily import from the local module instead of transformers to avoid an upstream latency issue
+# See: https://github.com/huggingface/transformers/issues/44273
+# This workaround can be reverted once the fix is included in the minimum required transformers version
+from trl.scripts._hf_argparser import DataClass, DataClassType, HfArgumentParser
+
+
+if TYPE_CHECKING:
+    from datasets import DatasetDict
 
 
 logger = logging.getLogger(__name__)
@@ -199,6 +202,8 @@ def init_zero_verbose():
     import logging
     import warnings
 
+    from transformers.utils import is_rich_available
+
     FORMAT = "%(message)s"
 
     if is_rich_available():
@@ -292,6 +297,7 @@ class TrlParser(HfArgumentParser):
         args: Iterable[str] | None = None,
         return_remaining_strings: bool = False,
         fail_with_unknown_args: bool = True,
+        separate_remaining_strings: bool = False,
     ) -> tuple[DataClass, ...]:
         """
         Parse command-line args and config file into instances of the specified dataclass types.
@@ -301,6 +307,8 @@ class TrlParser(HfArgumentParser):
         default values in the dataclasses. Command line arguments can override values set by the config file. The
         method also sets any environment variables specified in the `env` field of the config file.
         """
+        import yaml
+
         args = list(args) if args is not None else sys.argv[1:]
         if "--config" in args:
             # Get the config file path from
@@ -329,6 +337,8 @@ class TrlParser(HfArgumentParser):
         # Merge remaining strings from the config file with the remaining strings from the command line
         if return_remaining_strings:
             args_remaining_strings = output[-1]
+            if separate_remaining_strings:
+                return output[:-1] + (config_remaining_strings, args_remaining_strings)
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
         elif fail_with_unknown_args and config_remaining_strings:
             raise ValueError(
@@ -391,7 +401,7 @@ def get_git_commit_hash(package_name):
         return f"Error: {str(e)}"
 
 
-def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
+def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
     """
     Load a mixture of datasets based on the configuration.
 
@@ -423,6 +433,8 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
     })
     ```
     """
+    import datasets
+
     logger.info(f"Creating dataset mixture with {len(mixture_config.datasets)} datasets")
     datasets_list = []
     for dataset_config in mixture_config.datasets:
@@ -440,7 +452,7 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
         datasets_list.append(dataset)
 
     if datasets_list:
-        combined_dataset = concatenate_datasets(datasets_list)
+        combined_dataset = datasets.concatenate_datasets(datasets_list)
         if isinstance(combined_dataset, datasets.Dataset):  # IterableDataset does not have a length
             logger.info(f"Created dataset mixture with {len(combined_dataset)} examples")
 
@@ -449,6 +461,6 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
             combined_dataset = combined_dataset.train_test_split(test_size=mixture_config.test_split_size)
             return combined_dataset
         else:
-            return DatasetDict({"train": combined_dataset})
+            return datasets.DatasetDict({"train": combined_dataset})
     else:
         raise ValueError("No datasets were loaded from the mixture configuration")
