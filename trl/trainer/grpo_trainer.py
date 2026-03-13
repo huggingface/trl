@@ -15,6 +15,7 @@
 import asyncio
 import atexit
 import copy
+import math
 import importlib.resources as pkg_resources
 import inspect
 import os
@@ -1557,6 +1558,14 @@ class GRPOTrainer(_BaseTrainer):
                 elif lp_len < comp_len:
                     logprobs[i] = logprobs[i] + [0.0] * (comp_len - lp_len)
 
+        # Truncate to max_completion_length to prevent size mismatches downstream
+        for i in range(len(completion_ids)):
+            if len(completion_ids[i]) > self.max_completion_length:
+                completion_ids[i] = completion_ids[i][: self.max_completion_length]
+                tool_mask[i] = tool_mask[i][: self.max_completion_length]
+                if logprobs is not None:
+                    logprobs[i] = logprobs[i][: self.max_completion_length]
+
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
     def _generate(self, prompts: list):
@@ -2350,7 +2359,10 @@ class GRPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            avg = sum(val) / len(val)
+            metrics[key] = None if math.isnan(avg) else avg
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
