@@ -237,13 +237,14 @@ def main() -> None:
     CATCH_URL = args.catch_url
 
     n = 500  # samples per environment
-    dataset = Dataset.from_dict({
-        "prompt": (
-            [[{"role": "user", "content": wordle_prompt}]] * n
-            + [[{"role": "user", "content": catch_prompt}]] * n
-        ),
-        "env": ["wordle"] * n + ["catch"] * n,
-    })
+    dataset = Dataset.from_dict(
+        {
+            "prompt": (
+                [[{"role": "user", "content": wordle_prompt}]] * n + [[{"role": "user", "content": catch_prompt}]] * n
+            ),
+            "env": ["wordle"] * n + ["catch"] * n,
+        }
+    )
 
     trainer = GRPOTrainer(
         model="Qwen/Qwen3-1.7B",

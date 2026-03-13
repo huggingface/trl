@@ -316,40 +316,15 @@ That's it! Let's unpack how the main pieces fit together:
 
 You can run the example in either colocate mode (1 GPU) or server mode (2 GPUs):
 
-<hfoptions id="vllm_mode">
-
-<hfoption id="colocate">
-
-**Colocate mode (1 GPU, recommended)**
-
 ```bash
-python examples/scripts/openenv/echo.py --vllm-mode colocate
+python examples/scripts/openenv/echo.py
 ```
 
-This runs vLLM in the same process as training, requiring only a single GPU.
-
-</hfoption>
-
-<hfoption id="server">
-
-**Server mode (2+ GPUs, scalable)**
+You can customize the model and environment URL:
 
 ```bash
-# Terminal 1: Start vLLM inference server
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-0.6B --host 0.0.0.0 --port 8000
-
-# Terminal 2: Run GRPO training with OpenEnv
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
+python examples/scripts/openenv/echo.py --model Qwen/Qwen3-0.6B --env-host https://openenv-echo-env.hf.space
 ```
-
-This runs vLLM as a separate server process, useful when you want to:
-- Share the inference server across multiple training jobs
-- Use multiple GPUs for the vLLM server (via `--tensor-parallel-size`)
-- Scale up training to many GPUs while sharing a single inference endpoint
-
-</hfoption>
-
-</hfoptions>
 
 Below is the reward curve from training:
 
@@ -512,6 +487,9 @@ The resulting model improves its performance on the game, both by reducing the n
 
 <iframe src="https://burtenshaw-wordle-grpo.hf.space?project=group-Qwen-Qwen3-17B&metrics=reward&runs=run-2025-10-26_09-39-49,run-2025-10-26_08-04-49&sidebar=hidden&navbar=hidden" style="width:1600px; height:500px; border:0;"></iframe>
 
+> [!NOTE]
+> With `enable_thinking=False` (the default in these examples), small models like Qwen3-1.7B can learn to improve their guesses but should not be expected to consistently solve the game. For significantly better results, use larger models or enable thinking mode (`enable_thinking=True`), which allows the model to reason before making a guess at the cost of longer completions.
+
 We experimented with larger models like `gpt-oss-20b` and found that the model was able to consistently win the game. However, this requires a lot of compute to train the model. Why not try this out yourself?
 
 ## Multi-Environment Training
@@ -587,6 +565,7 @@ Key patterns:
 - **Lazy client initialization**: Create clients in `reset()`, not `__init__()`, to avoid unnecessary WebSocket connections.
 - **Close before reopen**: Close the previous client before creating a new one to avoid server capacity errors.
 - **`kwargs` routing**: The `"env"` column from the dataset is passed to `reset()` as a keyword argument.
+- **All tools are exposed simultaneously**: The model sees `guess`, `move`, and `stay` as available tools regardless of the active environment. If it calls the wrong tool (e.g., `move` during Wordle), the method raises a `ValueError` that the trainer catches gracefully. In practice, models learn to use the correct tools based on the system prompt.
 
 ### Per-environment reward functions
 

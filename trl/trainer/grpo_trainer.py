@@ -15,9 +15,9 @@
 import asyncio
 import atexit
 import copy
-import math
 import importlib.resources as pkg_resources
 import inspect
+import math
 import os
 import sys
 import textwrap
@@ -1249,6 +1249,7 @@ class GRPOTrainer(_BaseTrainer):
                 images=images,
                 num_generations=num_generations,
                 profiler=profiling_context(self, "vLLM.generate"),
+                tools=self.tools,
             )
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
             logprobs = [[lp[0] for lp in seq] for seq in logprobs]
@@ -1504,8 +1505,9 @@ class GRPOTrainer(_BaseTrainer):
             for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True):
                 if not tool_call:
                     continue
-                # If the environment has a _done attribute and it's True, stop calling tools for it
-                if hasattr(self.environments[idx], "_done") and self.environments[idx]._done:
+                # If the environment signals it's done, stop calling tools for it
+                env = self.environments[idx]
+                if getattr(env, "_done", False) or getattr(env, "done", False):
                     continue
                 filtered_idxs.append(idx)
                 filtered_tool_calls.append(tool_call)

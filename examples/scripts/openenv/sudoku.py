@@ -170,7 +170,9 @@ def parse_args() -> argparse.Namespace:
     )
 
     # LoRA / PEFT
-    parser.add_argument("--use-lora", action="store_true", default=False, help="Use LoRA for memory-efficient training")
+    parser.add_argument(
+        "--use-lora", action="store_true", default=False, help="Use LoRA for memory-efficient training"
+    )
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
 
@@ -499,7 +501,7 @@ def main() -> None:
 
             # Only check the NEW content for feedback (messages are cumulative)
             full_content = observation.messages[0].content if observation.messages else ""
-            new_content = full_content[len(self._last_full_content):]
+            new_content = full_content[len(self._last_full_content) :]
             self._last_full_content = full_content
 
             new_content_lower = new_content.lower()

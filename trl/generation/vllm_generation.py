@@ -523,6 +523,7 @@ class VLLMGeneration:
         images: list[list | None] | None,
         num_generations: int,
         profiler: ProfilingContext | None = None,
+        tools: list | None = None,
     ) -> tuple:
         """Generate completions using vLLM.
 
