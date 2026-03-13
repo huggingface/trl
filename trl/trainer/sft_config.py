@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..data_utils import PackingStrategy
 from .base_config import _BaseConfig
 
 
@@ -71,9 +71,9 @@ class SFTConfig(_BaseConfig):
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
-        packing_strategy (`str` or [`PackingStrategy`], *optional*, defaults to `"bfd"`):
-            Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd-requeue"`
-            (best-fit decreasing, re-queues overflow tokens), or `"wrapped"` (aggressive, cuts mid-sequence).
+        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
+            Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd-split"`
+            (best-fit decreasing, splits overflow sequences), or `"wrapped"` (aggressive, cuts mid-sequence).
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
@@ -189,13 +189,13 @@ class SFTConfig(_BaseConfig):
             "and reduce padding. Uses `max_length` to define sequence length."
         },
     )
-    packing_strategy: str | PackingStrategy = field(
+    packing_strategy: str = field(
         default="bfd",
         metadata={
             "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
-            "`'bfd_split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
+            "`'bfd-split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
             "mid-sequence).",
-            "choices": ["bfd", "bfd_split", "wrapped"],
+            "choices": ["bfd", "bfd-split", "wrapped"],
         },
     )
     padding_free: bool = field(
@@ -255,6 +255,11 @@ class SFTConfig(_BaseConfig):
     )
 
     def __post_init__(self):
-        self.packing_strategy = PackingStrategy(self.packing_strategy)
+        super().__post_init__()
 
-        return super().__post_init__()
+        if self.packing_strategy == "bfd-requeue":
+            warnings.warn(
+                "The `bfd-requeue` packing strategy has been renamed to `bfd-split`. Please update your configuration accordingly. "
+                "The `bfd-requeue` strategy is deprecated and will be removed in a future version.",
+                FutureWarning,
+            )

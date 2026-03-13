@@ -23,7 +23,6 @@ from packaging.version import Version
 from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
-    PackingStrategy,
     apply_chat_template,
     extract_prompt,
     is_conversational,
@@ -1087,16 +1086,6 @@ class TestPackDatasetWrapped(TrlTestCase):
         assert formatting == dataset._formatting
 
 
-class TestPackingStrategy(TrlTestCase):
-    def test_aliases(self):
-        assert PackingStrategy("bfd-split") is PackingStrategy.BFD_SPLIT
-        assert PackingStrategy("bfd-truncate") is PackingStrategy.BFD
-
-    def test_missing_value_raises_value_error(self):
-        with pytest.raises(ValueError, match="not a valid PackingStrategy"):
-            PackingStrategy("missing")
-
-
 class TestPackDatasetBfd(TrlTestCase):
     def test_with_dataset(self):
         examples = {
@@ -1144,7 +1133,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
             "seq_lengths": [[4], [4], [2, 1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-split")
         assert dataset.to_dict() == expected_output
 
     def test_with_overlong_two_coluns(self):
@@ -1159,7 +1148,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
             "seq_lengths": [[4], [4], [3], [3], [2]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-split")
         assert dataset.to_dict() == expected_output
 
     def test_with_non_power_of_2(self):
@@ -1172,7 +1161,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
             "seq_lengths": [[5], [4, 1], [3]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-split")
         assert dataset.to_dict() == expected_output
 
     def test_default_no_split(self):
@@ -1200,7 +1189,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[3, 4, 5, 6], [1, 2]],
             "seq_lengths": [[3, 1], [2]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd-split")
         assert dataset.to_dict() == expected_output
 
 

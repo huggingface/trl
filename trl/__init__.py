@@ -28,7 +28,6 @@ except PackageNotFoundError:
 _import_structure = {
     "chat_template_utils": ["add_response_schema", "clone_chat_template", "get_training_chat_template"],
     "data_utils": [
-        "PackingStrategy",
         "apply_chat_template",
         "extract_prompt",
         "is_conversational",
@@ -73,7 +72,6 @@ _import_structure = {
 if TYPE_CHECKING:
     from .chat_template_utils import add_response_schema, clone_chat_template, get_training_chat_template
     from .data_utils import (
-        PackingStrategy,
         apply_chat_template,
         extract_prompt,
         is_conversational,
