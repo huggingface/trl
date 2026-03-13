@@ -34,5 +34,4 @@ cursor:
 	ln -snf .ai/AGENTS.md .cursorrules
 
 clean-ai:
-	rm -f AGENTS.md CLAUDE.md .cursorrules
 	rm -rf .agents/skills .claude/skills
