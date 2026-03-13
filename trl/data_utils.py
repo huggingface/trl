@@ -895,7 +895,7 @@ def pack_dataset(
     else:  # PackingStrategy.WRAPPED
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     if strategy in {PackingStrategy.BFD, PackingStrategy.BFD_SPLIT} and "columns" in format:
-        format["columns"].append("seq_lengths")
+        format["columns"] = format["columns"] + ["seq_lengths"]
     dataset = dataset.with_format(**format)
     return dataset
 
