@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -71,8 +72,8 @@ class SFTConfig(_BaseConfig):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
         packing_strategy (`str`, *optional*, defaults to `"bfd"`):
-            Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd-requeue"`
-            (best-fit decreasing, re-queues overflow tokens), or `"wrapped"` (aggressive, cuts mid-sequence).
+            Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd_split"`
+            (best-fit decreasing, splits overflow sequences), or `"wrapped"` (aggressive, cuts mid-sequence).
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
@@ -192,9 +193,9 @@ class SFTConfig(_BaseConfig):
         default="bfd",
         metadata={
             "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
-            "`'bfd-requeue'` (best-fit decreasing, re-queues overflow tokens), or `'wrapped'` (aggressive, cuts "
+            "`'bfd_split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
             "mid-sequence).",
-            "choices": ["bfd", "bfd-requeue", "wrapped"],
+            "choices": ["bfd", "bfd_split", "wrapped"],
         },
     )
     padding_free: bool = field(
@@ -252,3 +253,14 @@ class SFTConfig(_BaseConfig):
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.packing_strategy == "bfd-requeue":
+            warnings.warn(
+                "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
+                "The `bfd-requeue` strategy is deprecated and will be removed in a future version.",
+                FutureWarning,
+            )
+            self.packing_strategy = "bfd_split"
