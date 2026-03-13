@@ -507,6 +507,60 @@ class VLLMClient:
             self.communicator.broadcast(weights, src=self.rank)
             self.communicator.group.barrier()
 
+    def batch_update_named_params(self, params: list[tuple[str, torch.Tensor]], chunk_size: int | None = None):
+        """
+        Updates multiple named parameters in a single batch, reducing HTTP round-trips.
+
+        Sends parameter metadata via HTTP POST, then broadcasts each tensor via NCCL in sequence.
+        When chunk_size is set, splits params into chunks whose total element count doesn't exceed
+        the limit, avoiding large HTTP requests regardless of individual parameter sizes.
+
+        Args:
+            params: List of (name, weights_tensor) tuples.
+            chunk_size: Max total elements per HTTP call. None = all in one call. Use smaller
+                        values for large models to avoid HTTP request size limits.
+        """
+        if chunk_size is None:
+            chunks = [params]
+        else:
+            chunks = []
+            current_chunk = []
+            current_elements = 0
+            for name, weights in params:
+                n = weights.numel()
+                if current_chunk and current_elements + n > chunk_size:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                    current_elements = 0
+                current_chunk.append((name, weights))
+                current_elements += n
+            if current_chunk:
+                chunks.append(current_chunk)
+
+        for chunk in chunks:
+            # Send metadata for this chunk
+            param_metadata = [
+                {"name": name, "dtype": str(weights.dtype), "shape": list(weights.shape)}
+                for name, weights in chunk
+            ]
+            url = f"{self.base_url}/batch_update_named_params/"
+            response = self.session.post(url, json={"params": param_metadata})
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+            # Broadcast each tensor via NCCL
+            for _name, weights in chunk:
+                if is_torch_xpu_available():
+                    self.communicator.broadcast(weights, root=self.rank)
+                else:
+                    self.communicator.broadcast(weights, src=self.rank)
+
+            # Barrier after each chunk
+            if is_torch_xpu_available():
+                self.communicator.barrier()
+            else:
+                self.communicator.group.barrier()
+
     def update_model_params(self, model: nn.Module):
         """
         Updates all parameters of the given model by calling `update_named_param` for each parameter in the model.
