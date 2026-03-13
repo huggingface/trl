@@ -129,7 +129,6 @@ class TestAccuracyReward:
         assert rewards[0] is None
         assert rewards[1] is None
 
-
     @require_math_latex
     def test_accuracy_reward_in_worker_thread(self):
         """Test that accuracy_reward works when called from a non-main thread."""
