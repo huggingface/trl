@@ -21,11 +21,9 @@ import time
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
-from functools import partial
 from pathlib import Path
 from typing import Any
 
-import datasets
 import numpy as np
 import pandas as pd
 import torch
@@ -37,7 +35,7 @@ from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.utils.data import DataLoader, Sampler
+from torch.utils.data import Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
@@ -50,8 +48,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
-from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -608,37 +605,15 @@ class RLOOTrainer(_BaseTrainer):
     # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
     # splitting internally.
     # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification. As a result, some parts of the method aren't relevant to RLOO, but we keep them to stay one line
-    # apart from the super method, ensuring easier maintenance in the future.
+    # modification.
     def get_train_dataloader(self):
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
-
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
-        else:
-            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
-
-        dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.steps_per_generation,  # < this is the change
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
-
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = partial(
-                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-            )
-
-            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+        return self._get_dataloader(
+            dataset=self.train_dataset,
+            description="Training",
+            batch_size=self._train_batch_size * self.args.steps_per_generation,  # < this is the change
+            sampler_fn=self._get_train_sampler,
+            is_training=True,
+        )
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
         # Returns a sampler that
@@ -885,11 +860,8 @@ class RLOOTrainer(_BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _generate_single_turn(self, prompts: list):
-        device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
-
-        # Tokenize prompts once, shared across all generation backends
+    def _tokenize_prompts(self, prompts: list):
+        """Tokenize prompts and extract images/multimodal fields for generation."""
         if is_conversational({"prompt": prompts[0]}):
             # Extract images from messages for VLM support
             images = []
@@ -927,6 +899,11 @@ class RLOOTrainer(_BaseTrainer):
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None
             multimodal_fields = {}
+        return prompt_ids, images, multimodal_fields
+
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1026,7 +1003,8 @@ class RLOOTrainer(_BaseTrainer):
         # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        prompt_ids, completion_ids = self._generate_single_turn(prompts)
+        prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
+        prompt_ids, completion_ids = self._generate_single_turn(prompt_ids, images, multimodal_fields)
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
