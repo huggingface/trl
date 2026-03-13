@@ -371,6 +371,9 @@ class PPOTrainer(_BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         peft_config: "PeftConfig | None" = None,
     ) -> None:
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
