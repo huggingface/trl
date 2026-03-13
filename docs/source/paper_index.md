@@ -556,6 +556,23 @@ Note that this method only has an effect when training involve more than one rew
 
 The authors provide a easy-to-use, slurm-free training example that enable the community to quickly validate GDPO’s effectiveness over GRPO, see [Experiment-"Aha" moment](https://github.com/NVlabs/GDPO/tree/main/trl-GDPO).
 
+### Maximum Likelihood Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2602.02710
+
+MaxRL frames RL with binary feedback as a sampling-based approximation of maximum likelihood. The key insight is that normalizing advantages by the group mean — rather than the group standard deviation — is equivalent to normalizing by the empirical success rate for binary (0/1) rewards. MaxRL proves this converges to exact maximum likelihood in the infinite-compute limit, and empirically Pareto-dominates standard GRPO across models and tasks with up to 20× test-time compute efficiency gains.
+
+TRL supports the MaxRL advantage formulation via `scale_rewards="mean"` (⚠️ experimental, only supported with `multi_objective_aggregation="sum_then_normalize"`):
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    scale_rewards="mean",  # A_i = (r_i - mean(r)) / (mean(r) + eps)
+    multi_objective_aggregation="sum_then_normalize",  # Required for scale_rewards="mean"
+)
+```
+
 ### Length-Unbiased Sequence Policy Optimization: Revealing and Controlling Response Length Variation in RLVR
 
 **📜 Paper**: https://huggingface.co/papers/2602.05261
