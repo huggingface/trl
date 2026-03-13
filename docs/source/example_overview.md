@@ -30,18 +30,25 @@ These notebooks are easier to run and are designed for quick experimentation wit
 | Notebook | Description | Open in Colab |
 |----------|-------------|---------------|
 | [`grpo_trl_lora_qlora.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_trl_lora_qlora.ipynb) | GRPO using QLoRA on free Colab | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_trl_lora_qlora.ipynb) |
-| [`grpo_functiongemma_browsergym_openenv.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) | GRPO on FunctionGemma in the BrowserGym environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) |
 | [`grpo_agent.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_agent.ipynb) | GRPO for agent training | Not available due to OOM with Colab GPUs |
 | [`grpo_rnj_1_instruct.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) | GRPO rnj-1-instruct with QLoRA using TRL on Colab to add reasoning capabilities | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_rnj_1_instruct.ipynb) |
 | [`sft_ministral3_vl.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_ministral3_vl.ipynb) | Supervised Fine-Tuning (SFT) Ministral 3 with QLoRA using TRL on free Colab | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_ministral3_vl.ipynb) |
 | [`grpo_ministral3_vl.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_ministral3_vl.ipynb) | GRPO Ministral 3 with QLoRA using TRL on free Colab | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_ministral3_vl.ipynb) |
-| [`openenv_sudoku_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_sudoku_grpo.ipynb) | GRPO to play Sudoku on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_sudoku_grpo.ipynb) |
-| [`openenv_wordle_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_wordle_grpo.ipynb) | GRPO to play Worldle on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb) |
 | [`sft_nemotron_3.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_nemotron_3.ipynb) | SFT with LoRA on NVIDIA Nemotron 3 models | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_nemotron_3.ipynb) |
 | [`sft_trl_lora_qlora.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_trl_lora_qlora.ipynb) | Supervised Fine-Tuning (SFT) using QLoRA on free Colab | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb) |
 | [`sft_qwen_vl.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_qwen_vl.ipynb) | Supervised Fine-Tuning (SFT) Qwen3-VL with QLoRA using TRL on free Colab | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_qwen_vl.ipynb) |
 | [`sft_tool_calling.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/sft_tool_calling.ipynb) | Teaching tool calling to a model without native tool-calling support using SFT with QLoRA | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/sft_tool_calling.ipynb) |
 | [`grpo_qwen3_vl.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_qwen3_vl.ipynb) | GRPO Qwen3-VL with QLoRA using TRL on free Colab | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_qwen3_vl.ipynb) |
+
+### OpenEnv Notebooks
+
+These notebooks demonstrate how to train models with [OpenEnv](openenv) environments using [`GRPOTrainer`]'s `environment_factory`. See the [OpenEnv Integration](openenv) guide for more details.
+
+| Notebook | Description | Open in Colab |
+|----------|-------------|---------------|
+| [`openenv_wordle_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_wordle_grpo.ipynb) | GRPO to play Wordle on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb) |
+| [`openenv_sudoku_grpo.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/openenv_sudoku_grpo.ipynb) | GRPO to play Sudoku on an OpenEnv environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/openenv_sudoku_grpo.ipynb) |
+| [`grpo_functiongemma_browsergym_openenv.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) | GRPO on FunctionGemma in the BrowserGym environment | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/notebooks/grpo_functiongemma_browsergym_openenv.ipynb) |
 
 ## Scripts
 
@@ -66,13 +73,6 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 | [`examples/scripts/nemo_gym/train_multi_environment.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/nemo_gym/train_multi_environment.py) | This script shows how to use the [`GRPOTrainer`] to train language models in NVIDIA NeMo-Gym environments. Supports multi-turn and tool calling environments, and multi-environment training. See the [NeMo-Gym Integration](nemo_gym) guide for setup and usage. |
 | [`examples/scripts/online_dpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/online_dpo.py) | This script shows how to use the [`experimental.online_dpo.OnlineDPOTrainer`] to fine-tune a model. |
 | [`examples/scripts/online_dpo_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/online_dpo_vlm.py) | This script shows how to use the [`experimental.online_dpo.OnlineDPOTrainer`] to fine-tune a a Vision Language Model. |
-| [`examples/scripts/openenv/browsergym.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym.py) | Simple script to run GRPO training via the [`GRPOTrainer`] with OpenEnv's BrowserGym environment and vLLM for VLMs |
-| [`examples/scripts/openenv/browsergym_llm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym_llm.py) | Simple script to run GRPO training via the [`GRPOTrainer`] with OpenEnv's BrowserGym environment and vLLM for LLMs |
-| [`examples/scripts/openenv/carla.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla.py) | Simple script to run GRPO training via the [`GRPOTrainer`] with OpenEnv's CARLA environment for autonomous driving scenarios. |
-| [`examples/scripts/openenv/catch.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/catch.py) | Simple script to run GRPO training via the [`GRPOTrainer`] with OpenEnv's Catch environment (OpenSpiel) and vLLM |
-| [`examples/scripts/openenv/echo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) | Simple script to run GRPO training via the [`GRPOTrainer`] with OpenEnv's Echo environment and vLLM. |
-| [`examples/scripts/openenv/sudoku.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/sudoku.py) | Simple script to run GRPO training via the [`GRPOTrainer`] with OpenEnv's Sudoku environment and vLLM. |
-| [`examples/scripts/openenv/wordle.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/wordle.py) | Simple script to run GRPO training via the [`GRPOTrainer`] with OpenEnv's Wordle environment and vLLM. |
 | [`examples/scripts/orpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/orpo.py) | This script shows how to use the [`experimental.orpo.ORPOTrainer`] to fine-tune a model to increase helpfulness and harmlessness using the [Anthropic/hh-rlhf](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset. |
 | [`examples/scripts/ppo/ppo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/ppo/ppo.py) | This script shows how to use the [`experimental.ppo.PPOTrainer`] to fine-tune a model to improve its ability to continue text with positive sentiment or physically descriptive language. |
 | [`examples/scripts/ppo/ppo_tldr.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/ppo/ppo_tldr.py) | This script shows how to use the [`experimental.ppo.PPOTrainer`] to fine-tune a model to improve its ability to generate TL;DR summaries. |
@@ -88,6 +88,21 @@ Scripts are maintained in the [`trl/scripts`](https://github.com/huggingface/trl
 | [`examples/scripts/sft_vlm_gemma3.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm_gemma3.py) | This script shows how to use the [`SFTTrainer`] to fine-tune a Gemma 3 model on vision to text tasks. |
 | [`examples/scripts/sft_vlm_smol_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm_smol_vlm.py) | This script shows how to use the [`SFTTrainer`] to fine-tune a SmolVLM model. |
 | [`examples/scripts/xpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/xpo.py) | This script shows how to use the [`experimental.xpo.XPOTrainer`] to fine-tune a model. |
+
+### OpenEnv Scripts
+
+These scripts demonstrate how to train models with [OpenEnv](openenv) environments using [`GRPOTrainer`]'s `environment_factory`. See the [OpenEnv Integration](openenv) guide for more details.
+
+| File | Description |
+| --- | --- |
+| [`examples/scripts/openenv/echo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) | GRPO training with the Echo environment (minimal example). |
+| [`examples/scripts/openenv/wordle.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/wordle.py) | GRPO training with the Wordle (TextArena) environment. |
+| [`examples/scripts/openenv/catch.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/catch.py) | GRPO training with the Catch (OpenSpiel) environment. |
+| [`examples/scripts/openenv/sudoku.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/sudoku.py) | GRPO training with the Sudoku environment. |
+| [`examples/scripts/openenv/multi_env.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/multi_env.py) | Multi-environment GRPO training: Wordle + Catch in the same training run. |
+| [`examples/scripts/openenv/browsergym.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym.py) | GRPO training with the BrowserGym environment for VLMs. |
+| [`examples/scripts/openenv/browsergym_llm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/browsergym_llm.py) | GRPO training with the BrowserGym environment for LLMs. |
+| [`examples/scripts/openenv/carla.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/carla.py) | GRPO training with the CARLA environment for autonomous driving. |
 
 ## Distributed Training (for scripts)
 

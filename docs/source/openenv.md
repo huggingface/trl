@@ -1,8 +1,8 @@
 # OpenEnv Integration for Training LLMs with Environments
 
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework from Meta's PyTorch team for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It offers [Gymnasium-style APIs](https://gymnasium.farama.org) (e.g., `reset()` and `step()`) to interface with environments in a standard manner, and supports running these environments as backend servers (for example, via HTTP or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
+[OpenEnv](https://github.com/meta-pytorch/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It offers [Gymnasium-style APIs](https://gymnasium.farama.org) (e.g., `reset()` and `step()`) to interface with environments in a standard manner, and supports running these environments as backend servers (for example, via HTTP or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
 
-In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel free to explore the links above to dive deeper into OpenEnv itself.
+In this guide, we'll focus on **how to integrate OpenEnv with TRL**, but feel free to explore the links above to dive deeper into OpenEnv itself.
 
 > [!NOTE]
 > You can explore ready-to-use example [scripts](example_overview#scripts) and [notebooks](example_overview#notebooks) in the Examples Overview.
@@ -12,13 +12,31 @@ In this guide, we’ll focus on **how to integrate OpenEnv with TRL**, but feel 
 
 ## Installation
 
-To use OpenEnv with TRL, install the environment package. You have two options:
+To use OpenEnv with TRL, install the environment package. OpenEnv environments can be hosted as Hugging Face Spaces, which are also pip-installable Git repositories. When you run:
+
+```bash
+pip install "openenv-echo-env @ git+https://huggingface.co/spaces/openenv/echo_env"
+```
+
+this clones the Space's Git repository (which contains a `pyproject.toml` or `setup.py`) and installs it as a Python package. This gives you the **environment client** (e.g., `EchoEnv`) that communicates with the remote environment server via WebSocket, along with the action/observation models and all required dependencies (including `openenv-core`).
+
+You have two options:
 
 **Option A - Install from HF Space (recommended):**
 
 ```bash
-pip install git+https://huggingface.co/spaces/openenv/echo_env
+# Echo environment
+pip install "openenv-echo-env @ git+https://huggingface.co/spaces/openenv/echo_env"
+
+# Wordle (TextArena) environment
+pip install "openenv-textarena @ git+https://huggingface.co/spaces/openenv/wordle"
+
+# Catch (OpenSpiel) environment
+pip install "openenv-openspiel-env @ git+https://huggingface.co/spaces/openenv/openspiel_env"
 ```
+
+> [!TIP]
+> You can find the install command for any environment on its HF Space page. Click the **⋮ (three dots)** menu and select **"Use this Space"** to see the install instructions.
 
 > [!TIP]
 > You can also install the core package from PyPI with `pip install "openenv-core[core]>=0.2.1"`, but note that environment-specific dependencies may need to be installed separately.
@@ -31,66 +49,77 @@ cd OpenEnv/envs/echo_env
 pip install -e .
 ```
 
-## Using `rollout_func` with OpenEnv environments
+> [!NOTE]
+> Each environment script in TRL includes inline dependency metadata (PEP 723) so you can also run them directly with [uv](https://docs.astral.sh/uv/):
+> ```bash
+> uv run examples/scripts/openenv/echo.py
+> ```
+> This automatically installs the required environment package in an isolated environment.
 
-TRL's [`GRPOTrainer`] supports _custom rollout logic_ through the `rollout_func` argument. This lets you override the trainer's default text-generation loop and directly interact with OpenEnv environments — for instance, to compute environment-driven rewards instead of relying solely on model-based signals.
+## Using `environment_factory` with OpenEnv environments
 
-### Rollout Function Signature
+TRL's [`GRPOTrainer`] supports interactive environment training through the `environment_factory` argument. When provided, the trainer automatically handles the multi-turn tool-calling loop: it generates completions, parses tool calls, executes them against the environment, and feeds the results back to the model, all without custom rollout code.
 
-A rollout function must have the following signature:
+### How it works
+
+1. You define an **environment class** with a `reset()` method and one or more **tool methods**.
+2. You pass the class (not an instance) as `environment_factory` to [`GRPOTrainer`].
+3. The trainer creates N instances of your environment (one per generation), discovers tool methods via introspection, and exposes them to the model as function-calling tools.
+4. During training, the trainer runs a multi-turn loop: generate → parse tool calls → execute tools → append results → generate again, until the model stops calling tools or `max_completion_length` is reached.
+
+### Environment class requirements
+
+Your environment class must follow these rules:
+
+- **`__init__(self)`**: Takes no arguments. Initialize any state here.
+- **`reset(self, **kwargs)`**: Called at the start of each episode. Receives all dataset columns as keyword arguments. Return a string observation (or `None` for no initial observation).
+- **Tool methods**: Any public method (not starting with `_`) other than `reset` is automatically exposed as a tool. Each tool method must have a docstring with argument descriptions, since the trainer uses these to generate the tool schema for the model.
+- **Reward state**: Store reward information as instance attributes (e.g., `self.reward`) and access them in your reward function via the `environments` parameter.
 
 ```python
-def rollout_func(
-    prompts: list[str],
-    trainer: GRPOTrainer,
-) -> dict[str, list]:
-    """
-    Custom rollout function for generation and reward computation.
+class MyEnv:
+    def __init__(self):
+        self.reward = 0.0
 
-    Args:
-        prompts: List of prompts routed to the current process
-        trainer: Active GRPOTrainer (gives access to tokenizer, config and helper utilities)
+    def reset(self, **kwargs) -> str | None:
+        self.reward = 0.0
+        # kwargs contains all dataset columns for this sample
+        return "Initial observation for the model"
 
-    Returns:
-        Dictionary containing:
-        - prompt_ids: List of token IDs for each prompt
-        - completion_ids: List of token IDs for each completion
-        - logprobs: List of log probabilities for each token
-        - Any additional fields are forwarded to reward functions as kwargs
-    """
-    pass
+    def my_tool(self, arg1: str, arg2: int) -> str:
+        """
+        Description of what this tool does.
+
+        Args:
+            arg1: Description of arg1
+            arg2: Description of arg2
+
+        Returns:
+            The result message.
+        """
+        # Interact with your environment
+        self.reward = 1.0
+        return "Tool result"
 ```
 
-> [!NOTE]
-> Any extra fields in the returned dictionary (beyond the required three) are automatically forwarded to your reward functions. This makes it easy to propagate signals such as environment rewards or auxiliary metrics from the rollout step.
+> [!IMPORTANT]
+> Tools must be **individual methods** with descriptive names and typed arguments (e.g., `guess(word: str)`, `move(direction: str)`). Do NOT use generic methods like `step(action)`, since the model needs meaningful tool names and argument descriptions to learn tool calling.
 
-### Integration pattern
+### Reward functions
 
-The typical pattern when combining OpenEnv with TRL looks like this:
+Reward functions receive the `environments` parameter, a list of environment instances, so you can access any state stored during the episode:
 
-1. Start or connect to an OpenEnv environment (e.g., a Dockerized env or HTTP endpoint).
-2. Generate completions from your model — either via `trl.experimental.openenv.generate_rollout_completions` when using colocated vLLM, or by hitting your inference server when using vLLM in server mode.
-3. Step through the environment using each completion to compute rewards or metrics.
-4. Add environment results (e.g., `env_reward`) to the rollout result dict.
-5. Access those rewards inside your reward function via `**kwargs`.
-
-By using OpenEnv in this loop, you can:
-
-* Train with realistic or interactive feedback (not just static reward functions).
-* Plug in custom simulators, web APIs, or evaluators as environments.
-* Pass structured reward signals back into RL training seamlessly.
+```python
+def reward_func(environments, **kwargs) -> list[float]:
+    return [env.reward for env in environments]
+```
 
 ### vLLM Modes
 
 TRL supports two vLLM execution modes for generation:
 
-- **`colocate` mode** (default): vLLM runs in the same process as training. Requires 1 GPU. Use `trl.experimental.openenv.generate_rollout_completions` for generation.
-- **`server` mode**: vLLM runs as a separate server process. Requires at least 2 GPUs (one for vLLM server, one for training), but is highly scalable:
-  - You can allocate multiple GPUs to the vLLM server for tensor parallelism (faster inference)
-  - You can run multiple training processes that share the same vLLM server
-  - You can use different GPU types for inference vs training (e.g., A100 for vLLM, H100 for training)
-  - The vLLM server can serve multiple experiments simultaneously
-  - Use `trl.experimental.openenv.generate_rollout_completions` which will communicate with the server via `vllm_server_url`
+- **`colocate` mode** (default): vLLM runs in the same process as training. Requires 1 GPU.
+- **`server` mode**: vLLM runs as a separate server process. Requires at least 2 GPUs (one for vLLM server, one for training), but is highly scalable.
 
 Configure the mode via `GRPOConfig`:
 
@@ -116,7 +145,7 @@ args = GRPOConfig(
 
 ## Running the Environments
 
-You can run OpenEnv environments in three different ways: 
+You can run OpenEnv environments in three different ways:
 
 - We can load the environment from the Hugging Face Hub and execute it as a Docker container.
 - We can connect to a hosted environment running on the Hugging Face Hub.
@@ -128,10 +157,10 @@ You can run OpenEnv environments in three different ways:
 
 **Load from Hugging Face Hub** *(recommended)*
 
-We can use the [`from_hub`](https://meta-pytorch.org/OpenEnv/core/#core.http_env_client.HTTPEnvClient.from_hub) method to load the environment from the hub. This method will automatically start a Docker container for the environment on your local machine. [`openenv/echo-env`](https://huggingface.co/spaces/openenv/echo_env) is the repo_id of the space on the hub.
+We can use the [`from_docker_image`](https://meta-pytorch.org/OpenEnv/core.html) method to load the environment from a Docker image. This method will automatically start a Docker container for the environment on your local machine.
 
 ```python
-env = EchoEnv.from_hub("openenv/echo-env")
+env = EchoEnv.from_docker_image("registry.hf.space/openenv-echo-env:latest")
 ```
 
 If you want to launch the environment manually, you can use the following command to pull and run the Docker container:
@@ -153,14 +182,14 @@ Here, we map the ports from 8001 to 8000 to make space for a vLLM server, but yo
 >
 > * Open the space page on the hub.
 > * Click the **⋮ (three dots)** menu.
-> * Select **“Run locally.”**
+> * Select **"Run locally."**
 > * Copy and execute the provided command in your terminal.
 >
 > ![open_env_launch_docker](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/open_env_launch_docker.png)
 
 > [!NOTE]
-> You can also use the **Docker option** with `from_docker_image` by providing the image name..
-> For more details, refer to the official [OpenEnv documentation](https://meta-pytorch.org/OpenEnv/core/).
+> You can also use the **Docker option** with `from_docker_image` by providing the image name.
+> For more details, refer to the official [OpenEnv documentation](https://meta-pytorch.org/OpenEnv/core.html).
 
 </hfoption>
 <hfoption id="space">
@@ -178,11 +207,11 @@ env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
 >
 > * Open the space page on the hub.
 > * Click the **⋮ (three dots)** menu.
-> * Select **“Embed this Space.”**
+> * Select **"Embed this Space."**
 > * Copy the connection URL.
 
 > [!WARNING]
-> **Currently**, it is recommended to **duplicate the Space to your own account** to avoid potential concurrency issues.  
+> **Currently**, it is recommended to **duplicate the Space to your own account** to avoid potential concurrency issues.
 
 </hfoption>
 
@@ -190,8 +219,8 @@ env = EchoEnv(base_url="https://openenv-echo-env.hf.space")
 
 **Local Python process**
 
-You can start the server manually as a local Python process. For more details about the available environments, refer to the [OpenEnv catalog](https://meta-pytorch.org/OpenEnv/environments/).
-   
+You can start the server manually as a local Python process. For more details about the available environments, refer to the [OpenEnv catalog](https://meta-pytorch.org/OpenEnv/environments.html).
+
 ```bash
 hf download openenv/echo_env --repo-type=space --local-dir=echo_env
 python -m uvicorn echo_env.src.envs.echo_env.server.app:app --host 0.0.0.0 --port 8001
@@ -212,7 +241,7 @@ env = EchoEnv(base_url="http://0.0.0.0:8001")
 Environment development is active and evolving.
 The best way to explore the **current catalog of maintained environments** is by visiting the official OpenEnv [catalog](https://huggingface.co/collections/openenv/environment-hub).
 
-Custom environments are also supported. To learn how to create your own, check out the guide on [Building Your Own Environment with OpenEnv](https://meta-pytorch.org/OpenEnv/environment-builder/).
+Custom environments are also supported. To learn how to create your own, check out the guide on [Building Your Own Environment with OpenEnv](https://meta-pytorch.org/OpenEnv/auto_getting_started/plot_03_building_environments.html).
 
 Environments are tightly integrated with the Hub, allowing you to **push new environments directly** so the community can easily pull, reuse, and adapt them for their own use cases.
 
@@ -221,84 +250,67 @@ Environments are tightly integrated with the Hub, allowing you to **push new env
 > [!NOTE]
 > You can explore more ready-to-use example scripts in the [`examples/scripts/openenv/`](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/) directory.
 
-The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the [Echo environment](https://meta-pytorch.org/OpenEnv/environments/echo/) rewards completions based on their text length, encouraging the model to generate longer outputs. This pattern can be extended to any custom environment that provides structured feedback or task-based rewards:
+The [echo.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/echo.py) script demonstrates a minimal, end-to-end integration between TRL and OpenEnv. In this example, the [Echo environment](https://meta-pytorch.org/OpenEnv/environments/echo.html) rewards completions based on their text length, encouraging the model to generate longer outputs:
 
 ```python
-from echo_env import EchoEnv, EchoAction
+from datasets import Dataset
+from echo_env import EchoEnv
+from echo_env.models import EchoAction
+
 from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openenv import generate_rollout_completions
 
-# Create HTTP client for Echo Environment
-client = EchoEnv.from_hub("openenv/echo-env")
+ENV_URL = "https://openenv-echo-env.hf.space"
 
-"""
-Alternatively, you can start the environment manually with Docker and connect to it:
+class EchoToolEnv:
+    def __init__(self):
+        self.env = EchoEnv(base_url=ENV_URL)
+        self.reward = 0.0
 
-# Step 1: Start the Echo environment
-docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
+    def reset(self, **kwargs) -> None | str:
+        self.reward = 0.0
+        return None
 
-# Step 2: Connect the client to the running container
-client = EchoEnv(base_url="http://0.0.0.0:8001")
-"""
+    def echo(self, message: str) -> str:
+        """
+        Echo the message back from the environment.
 
-def rollout_func(prompts: list[str], trainer: GRPOTrainer):
-    # 1. Generate completions using TRL's helper (works for colocated vLLM)
-    outputs = generate_rollout_completions(trainer, prompts)
-    tokenizer = trainer.processing_class
-    completions_text = [
-        tokenizer.decode(out["completion_ids"], skip_special_tokens=True) for out in outputs
-    ]
+        Args:
+            message: The message to echo
 
-    # 2. Step through the environment to get rewards
-    client.reset()
-    env_rewards = []
-    for msg in completions_text:
-        env_result = client.step(EchoAction(message=msg))
-        env_rewards.append(env_result.reward)
+        Returns:
+            The echoed message.
+        """
+        observation = self.env.step(EchoAction(message=message))
+        self.reward = observation.observation.reward
+        return observation.observation.echoed_message
 
-    # 3. Add environment rewards as extra field
-    return {
-        "prompt_ids": [out["prompt_ids"] for out in outputs],
-        "completion_ids": [out["completion_ids"] for out in outputs],
-        "logprobs": [out["logprobs"] for out in outputs],
-        "env_reward": env_rewards,
-    }
+def reward_func(completions, environments, **kwargs):
+    return [environment.reward for environment in environments]
 
-def reward_from_env(completions, **kwargs):
-    """Extract environment rewards passed via rollout_func kwargs."""
-    env_rewards = kwargs.get("env_reward", [])
-    return [float(reward) for reward in env_rewards] if env_rewards else [0.0] * len(completions)
+dataset = Dataset.from_dict(
+    {"prompt": [[{"role": "user", "content": "Try to echo 'Hello World!' in the environment."}]] * 64}
+)
 
-dataset = Dataset.from_dict({"prompt": ["You are an AI that interacts with an *Echo* environment. Word to echo:"] * 64})
-
-# Setup trainer with custom rollout
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
-    reward_funcs=reward_from_env,
+    model="Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    rollout_func=rollout_func,  # Use custom rollout
+    reward_funcs=reward_func,
     args=GRPOConfig(
-        use_vllm=True,
-        vllm_mode="colocate",  # Use colocate mode (default)
-        num_train_epochs=1,
-        num_generations=8,
-        max_completion_length=2048,
-        per_device_train_batch_size=8,
-        gradient_accumulation_steps=4,
+        chat_template_kwargs={"enable_thinking": False},
+        log_completions=True,
     ),
+    environment_factory=EchoToolEnv,
 )
 trainer.train()
 ```
 
-That's it! Now that you've seen the full example, let's unpack how the main pieces fit together.
+That's it! Let's unpack how the main pieces fit together:
 
-1. **Environment Client:** `EchoEnv` implements an HTTP interface to interact with the environment server.
-2. **Custom rollout:** The `rollout_func` generates completions and steps through the environment to collect rewards.
-3. **Extra fields:** The rollout adds `env_reward` to the result dictionary, which is automatically passed to reward functions.
-4. **Reward function:** Extracts `env_reward` from `kwargs` to apply environment-computed rewards during training.
-
-> [!TIP]
-> The trainer-aware rollout hook works in both vLLM server and colocate modes. Use `trl.experimental.openenv.generate_rollout_completions` so you reuse TRL's sampling configuration automatically.
+1. **Environment class:** `EchoToolEnv` wraps the OpenEnv client and exposes `echo()` as a tool method with a descriptive docstring.
+2. **`reset()`:** Called at the start of each episode to reset state. Returns `None` (no initial observation needed for Echo).
+3. **Tool discovery:** The trainer automatically discovers `echo()` via introspection and exposes it to the model as a function-calling tool.
+4. **Reward function:** Reads `environment.reward` from each environment instance, no need to pass rewards through `kwargs`.
+5. **`environment_factory`:** Pass the class itself (not an instance). The trainer creates one instance per generation.
 
 ### Running the Example
 
@@ -311,7 +323,7 @@ You can run the example in either colocate mode (1 GPU) or server mode (2 GPUs):
 **Colocate mode (1 GPU, recommended)**
 
 ```bash
-python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode colocate
+python examples/scripts/openenv/echo.py --vllm-mode colocate
 ```
 
 This runs vLLM in the same process as training, requiring only a single GPU.
@@ -324,10 +336,10 @@ This runs vLLM in the same process as training, requiring only a single GPU.
 
 ```bash
 # Terminal 1: Start vLLM inference server
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-0.6B --host 0.0.0.0 --port 8000
 
 # Terminal 2: Run GRPO training with OpenEnv
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --env-mode space --env-host https://openenv-echo-env.hf.space --vllm-mode server --vllm-server-url http://localhost:8000
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/echo.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 
 This runs vLLM as a separate server process, useful when you want to:
@@ -339,25 +351,15 @@ This runs vLLM as a separate server process, useful when you want to:
 
 </hfoptions>
 
-Alternatively, you can manually start the Echo environment in a Docker container before running the training:
-
-```bash
-# Launch the Echo environment
-docker run -d -p 8001:8001 registry.hf.space/openenv-echo-env:latest
-
-# Run training with docker-local mode
-python examples/scripts/openenv/echo.py --env-mode docker-local --vllm-mode colocate
-```
-
 Below is the reward curve from training:
 
 <iframe src="https://trl-lib-trackio.hf.space?project=openenv&metrics=train/rewards/reward_from_env/mean&runs=qgallouedec-1761202871&sidebar=hidden&navbar=hidden" style="width:600px; height:500px; border:0;"></iframe>
 
 ## Advanced Example
 
-Let's level this up a bit by training a model to interact with a more complex environment. We'll use the game word guessing game [wordle](https://www.nytimes.com/games/wordle/index.html) from the [`TextArena`](https://meta-pytorch.org/OpenEnv/environments/textarena/) environment.
+Let's level this up by training a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://meta-pytorch.org/OpenEnv/environments/textarena.html) environment.
 
-> [!NOTE]  
+> [!NOTE]
 > You can explore the notebook version of this example [here](https://github.com/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb).
 
 ### The TextArena Environment
@@ -366,15 +368,15 @@ Let's level this up a bit by training a model to interact with a more complex en
 
 ![image of TextArena](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/text_arena_evals.png)
 
-We will use the `TextArena` environment to train a model to play Wordle. The environment is a simple text based response environment that allows the model to interact with the game by making guesses and receive feedback on them.
+We will use the `TextArena` environment to train a model to play Wordle.
 
 ### Wordle
 
 Wordle is a useful game to train a model on because it requires the model to reason about the word and the feedback provided by the environment. Also, it is a purely language based game that requires no external tools or knowledge. Furthermore, we found that models from 1 billion parameters and up are able to improve on wordle and only require 8 tokens to generate a guess, which makes the game a good benchmark to experiment with Reinforcement Learning environments without significant compute requirements.
 
 > [!NOTE] How does Wordle work?
-> Wordle is a word guessing game where the player has to guess a 5-letter word. The player can make 6 guesses, and for each guess, the environment will provide feedback on the correctness of the guess. The player wins if they guess the word in 6 guesses or fewer. It challenges the model to generate words that are likely to be correct, and to learn from the feedback provided by the environment. 
-> 
+> Wordle is a word guessing game where the player has to guess a 5-letter word. The player can make 6 guesses, and for each guess, the environment will provide feedback on the correctness of the guess. The player wins if they guess the word in 6 guesses or fewer. It challenges the model to generate words that are likely to be correct, and to learn from the feedback provided by the environment.
+>
 > For example, if the wordle environment returns the following feedback:
 >
 > ```
@@ -382,173 +384,97 @@ Wordle is a useful game to train a model on because it requires the model to rea
 > X G Y X X
 > ```
 > The model has guessed the word "GUESS" and the environment has provided feedback as the letters X, G, and Y. Referring to colors in the original game as blank, green, and yellow. From this feedback, the model should learn that the word "GUESS" is incorrect. The letter "E" is in the word, but in the wrong position. The letter "U" is correct and in the correct position.
- 
-In the TextArena environment, a reward is only given when the model wins the game. The reward is 1.0 if the model wins, and 0.0 otherwise. This is not a very efficient reward signal for the model, so we have added a number of custom reward functions to the script to help the model learn to play the game. The extensible nature of `reward_funcs` and `rollout_func` allows you to add any custom reward function you want to the script.  
 
-### Rollout Function
+### Environment Class
 
-The rollout function runs one full Wordle episode, prompting the model for a guess each turn and capturing both environment rewards and auxiliary signals such as letter coverage and repetition penalties.
+The `WordleEnv` class wraps the TextArena OpenEnv client and exposes `guess()` as the tool the model uses to play:
 
 ```python
-def rollout_once(
-    trainer: GRPOTrainer,
-    env: TextArenaEnv,
-    tokenizer: AutoTokenizer,
-    dataset_prompt: str,
-    system_prompt: str,
-    max_turns: int,
-) -> dict[str, list]:
-    result = env.reset()
-    observation = result.observation
+from textarena_env import TextArenaAction, TextArenaEnv
 
-    prompt_ids: list[int] = []
-    completion_ids: list[int] = []
-    logprobs: list[float] = []
-    raw_rewards: list[float] = []
-    green_scores: list[float] = []
-    yellow_scores: list[float] = []
-    repetition_scores: list[float] = []
-    correct_scores: list[float] = []
-    guess_counts: dict[str, int] = {}
+class WordleEnv:
+    def __init__(self):
+        self.client = TextArenaEnv(base_url="https://openenv-wordle.hf.space")
 
-    for _turn in range(max_turns):
-        # when the game is over the environment will return a done=True
-        if result.done:
-            break
+    def reset(self, **kwargs) -> str | None:
+        result = self.client.reset()
+        self._last_full_feedback = result.observation.messages[0].content
+        self.reward = 0.0
+        self.done = False
+        return self._last_full_feedback
 
-        # set up the prompt for the model
-        base_prompt = observation.prompt or dataset_prompt
-        user_prompt = make_user_prompt(base_prompt, observation.messages)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        prompt_text = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=False,
-            enable_thinking=False,
-        )
+    def guess(self, guess: str) -> str:
+        """
+        Make a guess in the Wordle environment.
 
-        # Generate completion using trainer (works for both colocate and server modes)
-        rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
-        prompt_ids.extend(rollout_outputs["prompt_ids"])
-        completion_ids.extend(rollout_outputs["completion_ids"])
-        logprobs.extend(rollout_outputs["logprobs"])
-        completion_text = rollout_outputs.get("text") or tokenizer.decode(
-            rollout_outputs["completion_ids"], skip_special_tokens=True
-        )
+        Args:
+            guess: The guessed word, formatted as '[abcde]'
 
-        # extract the guess from the completion
-        guess = extract_guess(completion_text)
-
-        # step the environment with the guess
-        result = env.step(TextArenaAction(message=guess))
-        raw_rewards.append(float(result.reward or 0.0))
-        observation = result.observation
-        correct_score = float(result.reward or 0.0)
-        feedback = extract_wordle_feedback(observation)
-
-        # Update guess counts
-        previous_occurrences = guess_counts.get(guess, 0)
-        repetition_score = scale_repetition_score(previous_occurrences, len(guess_counts))
-        guess_counts[guess] = previous_occurrences + 1
-
-        # calculate custom reward signals from the feedback
-        if not feedback:
-            green_score = 0.0
-            yellow_score = 0.0
+        Returns:
+            The feedback message from the environment.
+        """
+        if self.done:
+            self.reward = 0.0
+            raise ValueError("Game over.")
+        result = self.client.step(TextArenaAction(message=guess))
+        _full_feedback = result.observation.messages[0].content
+        feedback = _full_feedback[len(self._last_full_feedback):]
+        self._last_full_feedback = _full_feedback
+        if "You attempted an invalid move" in feedback:
+            self.reward = 0.0
         else:
-            green_count, yellow_count = extract_feedback_counts(feedback)
-            green_score = green_count / 5.0
-            yellow_score = yellow_count / 5.0
-
-        repetition_scores.append(repetition_score)
-        green_scores.append(green_score)
-        yellow_scores.append(yellow_score)
-        correct_scores.append(correct_score)
-
-    correct_reward_value = correct_scores[-1] if correct_scores else (raw_rewards[-1] if raw_rewards else 0.0)
-
-    return {
-        "prompt_ids": prompt_ids,
-        "completion_ids": completion_ids,
-        "logprobs": logprobs,
-        "raw_rewards": raw_rewards,
-        "correct_reward": correct_reward_value,
-        "green_reward": green_scores[-1] if green_scores else 0.0,
-        "yellow_reward": yellow_scores[-1] if yellow_scores else 0.0,
-        "repetition_reward": repetition_scores[-1] if repetition_scores else 0.0,
-    }
+            self.reward = result.reward
+        self.done = result.done
+        return feedback
 ```
 
-The environment has a reward signal based on the completion of the game. We found that most models struggle to ever win the game, so we have added a number of custom reward functions to the script to help the model learn to play the game more iteratively. At first, the model will learn to cover new letters and avoid repeating guesses. As it improves, it will learn to win the game.
+Key design choices:
 
-### Reward Functions
+- **`reset()`** returns the initial game message as the first observation the model sees.
+- **`guess()`** is the only tool, and the model calls it each turn with a 5-letter word.
+- **Cumulative feedback slicing**: The TextArena environment returns the full game history each turn. We slice out only the new feedback to avoid repeating context.
+- **`self.done`**: Tracks game completion. If the model tries to guess after the game ends, it raises an error (the trainer catches this gracefully).
 
-We log four reward streams that encourage the model to solve the puzzle, cover new letters, and avoid repeating guesses:
+### Reward Function
 
-- `reward_correct`: final win/loss signal from the environment.
-- `reward_greens`: density of green letters in the last feedback.
-- `reward_yellows`: density of yellow letters in the last feedback.
-- `reward_repetition`: penalty for guessing the same token multiple times.
+The reward function simply reads the environment's reward after the episode:
 
 ```python
-def reward_correct(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
-    rewards = kwargs.get("correct_reward") if kwargs else None
-    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
-
-
-def reward_greens(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
-    rewards = kwargs.get("green_reward") if kwargs else None
-    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
-
-
-def reward_yellows(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
-    rewards = kwargs.get("yellow_reward") if kwargs else None
-    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
-
-
-def reward_repetition(completions: List[str], **kwargs: Optional[Dict]) -> List[float]:
-    rewards = kwargs.get("repetition_reward") if kwargs else None
-    return [float(r) for r in rewards] if rewards is not None else [0.0] * len(completions)
+def reward(environments, **kwargs) -> list[float]:
+    return [environment.reward for environment in environments]
 ```
+
+The environment returns `1.0` if the model wins and `0.0` otherwise.
 
 ### Training the Model
 
-The training script wires the custom rollout and rewards into `GRPOTrainer`. The CLI exposes the configuration used during development as defaults, so you can override endpoints or hyperparameters at launch time.
-
 ```python
-parser = argparse.ArgumentParser()
-# ... add CLI arguments with sensible defaults ...
-cli_args = parser.parse_args()
+from datasets import Dataset
+from trl import GRPOConfig, GRPOTrainer
+
+prompt = """You are an expert Wordle solver with deep knowledge of English vocabulary...
+Use the tool `guess` to make a guess."""
+
+dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": prompt}]] * 1000})
 
 trainer = GRPOTrainer(
-    model=cli_args.model_id,
-    processing_class=tokenizer,
-    reward_funcs=[
-        reward_correct,
-        reward_greens,
-        reward_yellows,
-        reward_repetition,
-    ],
+    model="Qwen/Qwen3-1.7B",
+    reward_funcs=reward,
     train_dataset=dataset,
-    args=grpo_config,
-    rollout_func=lambda prompts, trainer: rollout_func(
-        env=env,
-        tokenizer=tokenizer,
-        prompts=prompts,
-        trainer=trainer,
-        cli_args=cli_args,
-        system_prompt=system_prompt,
+    args=GRPOConfig(
+        use_vllm=True,
+        vllm_mode="colocate",
+        chat_template_kwargs={"enable_thinking": False},
+        max_completion_length=1024,
+        num_generations=4,
+        gradient_accumulation_steps=64,
     ),
+    environment_factory=WordleEnv,
 )
 trainer.train()
 ```
 
 ### Running the Advanced Example
-
-You can run the Wordle example in either colocate mode (1 GPU) or server mode (2 GPUs):
 
 <hfoptions id="wordle_vllm_mode">
 
@@ -576,23 +502,9 @@ CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-1.7B --host 0.0.0.0 --p
 CUDA_VISIBLE_DEVICES=1 python examples/scripts/openenv/wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
 ```
 
-This runs vLLM as a separate server process, useful when you want to:
-- Share the inference server across multiple training jobs
-- Use multiple GPUs for the vLLM server (via `--tensor-parallel-size`)
-- Scale up training to many GPUs while sharing a single inference endpoint
-
 </hfoption>
 
 </hfoptions>
-
-You can also manually start the TextArena environment in a Docker container before running the training:
-
-```bash
-# Launch the TextArena environment
-docker run -d -p 8001:8001 registry.hf.space/burtenshaw-textarena:latest
-```
-
-Then connect to it using `--env-mode docker-local--env-host localhost --env-port 8001`.
 
 ### Results
 
@@ -601,3 +513,217 @@ The resulting model improves its performance on the game, both by reducing the n
 <iframe src="https://burtenshaw-wordle-grpo.hf.space?project=group-Qwen-Qwen3-17B&metrics=reward&runs=run-2025-10-26_09-39-49,run-2025-10-26_08-04-49&sidebar=hidden&navbar=hidden" style="width:1600px; height:500px; border:0;"></iframe>
 
 We experimented with larger models like `gpt-oss-20b` and found that the model was able to consistently win the game. However, this requires a lot of compute to train the model. Why not try this out yourself?
+
+## Multi-Environment Training
+
+You can train a single model across multiple environments simultaneously. This is useful when you want a model to learn different skills in parallel, for example, playing Wordle (language reasoning) and Catch (spatial reasoning) in the same training run.
+
+The key idea is to create a **meta-environment class** that wraps multiple environments and routes each sample to the correct one using a dataset column.
+
+### How it works
+
+1. Add an `"env"` column (or similar) to your dataset that identifies which environment each sample belongs to.
+2. In `reset(**kwargs)`, read `kwargs["env"]` to select the active environment for that episode.
+3. Expose tools from all environments; the trainer discovers all public methods.
+4. Use separate reward functions per environment, returning `None` for samples that don't belong to that environment. TRL handles `None` values with `nansum`/`nanmean`.
+
+### Example: Wordle + Catch
+
+The [multi_env.py](https://github.com/huggingface/trl/blob/main/examples/scripts/openenv/multi_env.py) script trains on Wordle and Catch simultaneously:
+
+```python
+class MultiEnv:
+    def __init__(self):
+        self._wordle_client = None
+        self._catch_client = None
+        self.active = None
+        self.reward = 0.0
+        self._done = False
+
+    def reset(self, **kwargs) -> str | None:
+        self.active = kwargs.get("env", "wordle")
+        self.reward = 0.0
+        self._done = False
+
+        if self.active == "wordle":
+            if self._wordle_client is not None:
+                try:
+                    self._wordle_client.close()
+                except Exception:
+                    pass
+            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL)
+            result = self._wordle_client.reset()
+            self._last_full_feedback = result.observation.messages[0].content
+            self.reward = -1.0
+            return self._last_full_feedback
+        elif self.active == "catch":
+            if self._catch_client is not None:
+                try:
+                    self._catch_client.close()
+                except Exception:
+                    pass
+            self._catch_client = OpenSpielEnv(base_url=CATCH_URL)
+            result = self._catch_client.reset()
+            self._done = result.observation.done
+            return _format_catch_obs(result.observation.info_state)
+
+    # Wordle tool
+    def guess(self, guess: str) -> str:
+        """Make a guess in the Wordle environment. ..."""
+        ...
+
+    # Catch tools
+    def move(self, direction: str) -> str:
+        """Move the paddle left or right. ..."""
+        ...
+
+    def stay(self) -> str:
+        """Do nothing and let the ball fall one step. ..."""
+        ...
+```
+
+Key patterns:
+
+- **Lazy client initialization**: Create clients in `reset()`, not `__init__()`, to avoid unnecessary WebSocket connections.
+- **Close before reopen**: Close the previous client before creating a new one to avoid server capacity errors.
+- **`kwargs` routing**: The `"env"` column from the dataset is passed to `reset()` as a keyword argument.
+
+### Per-environment reward functions
+
+Each reward function returns `None` for samples from other environments:
+
+```python
+def wordle_reward(environments, **kwargs) -> list[float | None]:
+    return [env.reward if env.active == "wordle" else None for env in environments]
+
+def catch_reward(environments, **kwargs) -> list[float | None]:
+    rewards = []
+    for env in environments:
+        if env.active != "catch":
+            rewards.append(None)
+        elif env._done:
+            rewards.append(max(env.reward, 0.0))
+        else:
+            rewards.append(0.0)
+    return rewards
+```
+
+TRL converts `None` to `nan` internally and uses `nansum`/`nanmean` for aggregation, so each sample is only scored by its relevant reward function.
+
+### Dataset with environment routing
+
+```python
+n = 500
+dataset = Dataset.from_dict({
+    "prompt": (
+        [[{"role": "user", "content": wordle_prompt}]] * n
+        + [[{"role": "user", "content": catch_prompt}]] * n
+    ),
+    "env": ["wordle"] * n + ["catch"] * n,
+})
+```
+
+### Running the multi-environment example
+
+```bash
+python examples/scripts/openenv/multi_env.py \
+    --wordle-url https://openenv-wordle.hf.space \
+    --catch-url https://openenv-openspiel-env.hf.space \
+    --vllm-mode colocate \
+    --gradient-accumulation-steps 4 \
+    --num-generations 8
+```
+
+> [!TIP]
+> When training across multiple environments, monitor the per-reward-function metrics (`train/reward_func_0`, `train/reward_func_1`, etc.) rather than the combined `train/reward`. The combined metric alternates between environments and can appear noisy.
+
+## Server Concurrency
+
+When using `environment_factory`, the trainer creates N environment instances (one per generation), each opening a WebSocket connection to the server. By default, OpenEnv servers allow only 1 concurrent session.
+
+To support parallel training, configure the server for concurrency:
+
+1. In your environment file, declare concurrent session support:
+```python
+SUPPORTS_CONCURRENT_SESSIONS: bool = True
+```
+
+2. In your server app, set the concurrency limit:
+```python
+app = create_app(
+    create_my_environment,
+    MyAction,
+    MyObservation,
+    max_concurrent_envs=64,  # match or exceed generation_batch_size
+)
+```
+
+> [!TIP]
+> `max_concurrent_envs` should be ≥ `generation_batch_size` (which defaults to `per_device_train_batch_size × gradient_accumulation_steps`). For example, with `gradient_accumulation_steps=64` and batch size 1, you need at least 64 concurrent sessions.
+
+## Migrating from `rollout_func`
+
+If you have existing code using `rollout_func`, here's how to migrate to `environment_factory`:
+
+| `rollout_func` pattern | `environment_factory` equivalent |
+|------------------------|----------------------------------|
+| Manual generation loop | Handled automatically by the trainer |
+| `generate_rollout_completions()` | Not needed, trainer generates internally |
+| `env.step(Action(...))` in rollout | Wrap in a tool method on the environment class |
+| Reward via `kwargs["env_reward"]` | Reward via `environments` parameter |
+| `env_mask` construction | Automatic, trainer builds `tool_mask` |
+| Token concatenation | Automatic, trainer manages token sequences |
+
+### Before (rollout_func)
+
+```python
+def rollout_func(prompts, trainer):
+    outputs = generate_rollout_completions(trainer, prompts)
+    env_rewards = []
+    for out in outputs:
+        text = tokenizer.decode(out["completion_ids"], skip_special_tokens=True)
+        result = client.step(EchoAction(message=text))
+        env_rewards.append(result.reward)
+    return {
+        "prompt_ids": [out["prompt_ids"] for out in outputs],
+        "completion_ids": [out["completion_ids"] for out in outputs],
+        "logprobs": [out["logprobs"] for out in outputs],
+        "env_reward": env_rewards,
+    }
+
+trainer = GRPOTrainer(..., rollout_func=rollout_func)
+```
+
+### After (environment_factory)
+
+```python
+class EchoToolEnv:
+    def __init__(self):
+        self.env = EchoEnv(base_url=url)
+        self.reward = 0.0
+
+    def reset(self, **kwargs) -> None | str:
+        self.reward = 0.0
+        return None
+
+    def echo(self, message: str) -> str:
+        """Echo the message back.
+
+        Args:
+            message: The message to echo
+
+        Returns:
+            The echoed message.
+        """
+        result = self.env.step(EchoAction(message=message))
+        self.reward = result.observation.reward
+        return result.observation.echoed_message
+
+def reward_func(environments, **kwargs):
+    return [env.reward for env in environments]
+
+trainer = GRPOTrainer(..., environment_factory=EchoToolEnv, reward_funcs=reward_func)
+```
+
+> [!NOTE]
+> `rollout_func` remains available for advanced use cases that are incompatible with `environment_factory`, such as external agent servers (NeMo-Gym) or environments requiring multimodal tool responses (screenshots, images).
