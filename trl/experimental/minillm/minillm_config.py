@@ -49,7 +49,7 @@ class MiniLLMConfig(GRPOConfig):
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
-    teacher_model_init_kwargs: dict[str, Any] | None = field(
+    teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "

@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
 from ...trainer.sft_config import SFTConfig
 
 
@@ -52,7 +50,7 @@ class GKDConfig(SFTConfig):
             teacher-generated output).
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = SFTConfig._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
     temperature: float = field(
         default=0.9,
@@ -84,7 +82,7 @@ class GKDConfig(SFTConfig):
             "model being trained."
         },
     )
-    teacher_model_init_kwargs: dict[str, Any] | None = field(
+    teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "

@@ -795,7 +795,7 @@ class SFTTrainer(_BaseTrainer):
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
+        self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
         use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
@@ -864,7 +864,7 @@ class SFTTrainer(_BaseTrainer):
                 dataset_text_field=args.dataset_text_field,
             )
 
-        if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
+        if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
             logger.warning(
                 "You are using packing, but the attention implementation is not set to a supported flash attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
