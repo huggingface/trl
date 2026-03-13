@@ -14,7 +14,6 @@
 
 """vLLM-based generation backend for TRL trainers."""
 
-import json
 import logging
 import math
 import os
@@ -29,7 +28,6 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import is_torch_mlu_available, is_torch_npu_available, is_torch_xpu_available
 
-from ..data_utils import is_conversational, prepare_multimodal_messages_vllm
 from ..extras.profiling import ProfilingContext
 from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
@@ -245,10 +243,6 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
-        # Chat/tool configuration
-        chat_template: str | None = None,
-        chat_template_kwargs: dict | None = None,
-        tools: list | None = None,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -283,11 +277,6 @@ class VLLMGeneration:
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
         self.generation_kwargs = generation_kwargs or {}
-
-        # Chat/tool configuration
-        self.chat_template = chat_template
-        self.chat_template_kwargs = chat_template_kwargs or {}
-        self.tools = tools
 
         self._init_vllm()
 
@@ -528,22 +517,29 @@ class VLLMGeneration:
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
 
-    def generate(self, prompts: list, num_generations: int, profiler: ProfilingContext | None = None) -> tuple:
+    def generate(
+        self,
+        prompts: list[list[int]],
+        images: list[list | None] | None,
+        num_generations: int,
+        profiler: ProfilingContext | None = None,
+    ) -> tuple:
         """Generate completions using vLLM.
 
         Args:
-            prompts: List of prompts (strings or chat conversations)
-            num_generations: Number of generations per prompt
-            profiler: Optional profiler for performance tracking
+            prompts: List of token ID lists, one per prompt (already tokenized).
+            images: Optional list of image lists for VLM support. Each element is a list of PIL images for the
+                corresponding prompt, or `None` if no images for that prompt. `None` if no images at all.
+            num_generations: Number of generations per prompt.
+            profiler: Optional profiler for performance tracking.
 
         Returns:
-            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields).
+            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids).
 
             - `prompt_ids`: `list[list[int]]` of shape `(batch_size, prompt_len)`.
             - `completion_ids`: `list[list[int]]` of shape `(batch_size, completion_len)`.
             - `logprobs`: `list[list[list[float | None]]]` of shape `(batch_size, completion_len, num_logprobs)`.
             - `logprob_token_ids`: `list[list[list[int]]]` of shape `(batch_size, completion_len, num_logprobs)`.
-            - `extra_fields`: `dict` of additional per-completion fields from a custom `rollout_func`.
 
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
@@ -567,9 +563,6 @@ class VLLMGeneration:
         min_p = self.min_p
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
-        chat_template_kwargs = self.chat_template_kwargs
-        tools = self.tools
-        chat_template = self.chat_template
 
         # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
         if self.mode == "colocate" and self.enable_sleep_mode:
@@ -582,28 +575,21 @@ class VLLMGeneration:
                 # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
                 pass
 
-        if is_conversational({"prompt": prompts[0]}):
-            prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in prompts]
-
-        # In vLLM, tool call arguments must be JSON strings. See https://github.com/vllm-project/vllm/pull/28820
-        for prompt in prompts:  # iterate over each conversation
-            if is_conversational({"prompt": prompt}):
-                for message in prompt:  # iterate over each message
-                    if "tool_calls" in message:  # check if message has tool calls
-                        for call in message["tool_calls"]:
-                            args_value = call["function"]["arguments"]
-                            if isinstance(args_value, dict):  # only convert dict → JSON string
-                                call["function"]["arguments"] = json.dumps(args_value)
-
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
             all_prompts = gather_object(prompts)
+            # Always gather images (even when None) to avoid deadlock: images may be None on some ranks
+            # and non-None on others in mixed datasets, and gather_object is a collective operation.
+            all_images = gather_object(images if images is not None else [None] * len(prompts))
+            if all(img is None for img in all_images):
+                all_images = None
 
             if accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                # prompt individually.
-                ordered_set_of_prompts = all_prompts[::num_generations]
+                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and
+                # generate num_generations outputs for each one. This is faster than generating outputs for each
+                # duplicate prompt individually.
+                ordered_set_of_prompt_ids = all_prompts[::num_generations]
+                ordered_set_of_images = all_images[::num_generations] if all_images is not None else None
 
                 sampling_params = {
                     "n": num_generations,
@@ -617,27 +603,17 @@ class VLLMGeneration:
                     "structured_outputs_regex": self.structured_outputs_regex,
                     "generation_kwargs": self.generation_kwargs,
                 }
-                with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
-                    if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                        output = self.vllm_client.chat(
-                            messages=ordered_set_of_prompts,
-                            **sampling_params,
-                            chat_template_kwargs=chat_template_kwargs,
-                            tools=tools,
-                            chat_template=chat_template,
-                        )
-                    else:
-                        ordered_set_of_prompt_ids = self.processing_class(text=ordered_set_of_prompts)["input_ids"]
-                        output = self.vllm_client.generate(prompts=ordered_set_of_prompt_ids, **sampling_params)
-                    # Extract required fields and collect any extra fields for reward functions
-                    required_keys = {"prompt_ids", "completion_ids", "logprobs", "logprob_token_ids"}
-                    extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+                with profiler:
+                    output = self.vllm_client.generate(
+                        prompts=ordered_set_of_prompt_ids,
+                        images=ordered_set_of_images,
+                        **sampling_params,
+                    )
                     payload = (
                         output["prompt_ids"],
                         output["completion_ids"],
                         output["logprobs"],
                         output.get("logprob_token_ids"),
-                        extra_fields,
                     )
             else:
                 payload = None
@@ -645,9 +621,9 @@ class VLLMGeneration:
             # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
             obj_list = [payload]
             broadcast_object_list(obj_list, from_process=0)
-            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids, all_extra_fields = obj_list[0]
+            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids = obj_list[0]
 
-            # vllm_client.generate/chat(n=num_generations) returns num_generations completions per prompt.
+            # vllm_client.generate(n=num_generations) returns num_generations completions per prompt.
             # Duplicate prompt_ids to align with per-completion entries.
             all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(num_generations)]
 
@@ -659,14 +635,6 @@ class VLLMGeneration:
             completion_ids = all_completion_ids[process_slice]
             logprobs = all_logprobs[process_slice] if all_logprobs is not None else None
             logprob_token_ids = all_logprob_token_ids[process_slice] if all_logprob_token_ids is not None else None
-
-            # Slice extra fields dict-of-lists per process (extra fields are per-completion, like completion_ids)
-            extra_fields = {}
-            for key, values in all_extra_fields.items():
-                if isinstance(values, list):
-                    extra_fields[key] = values[process_slice]
-                else:
-                    extra_fields[key] = values
 
         # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
         elif self.mode == "colocate":
@@ -702,24 +670,34 @@ class VLLMGeneration:
                 gathered_prompts = [None for _ in range(self.tensor_parallel_size)]
                 torch.distributed.all_gather_object(gathered_prompts, prompts, group=self.tp_group)
                 all_prompts = [p for sublist in gathered_prompts for p in sublist]
+                # Always gather images (even when None) to avoid deadlock: images may be None on some
+                # ranks and non-None on others in mixed datasets, and all_gather_object is collective.
+                local_images = images if images is not None else [None] * len(prompts)
+                gathered_images = [None for _ in range(self.tensor_parallel_size)]
+                torch.distributed.all_gather_object(gathered_images, local_images, group=self.tp_group)
+                all_images = [img for sublist in gathered_images for img in sublist]
+                if all(img is None for img in all_images):
+                    all_images = None
             else:
                 all_prompts = prompts
+                all_images = images
 
             if self.enable_sleep_mode:
                 self.llm.wake_up(tags=["kv_cache"])
 
-            with profiler:  # TODO: profiling_context(trainer, "vLLM.generate"):
-                if is_conversational({"prompt": prompts[0]}):
-                    all_outputs = self.llm.chat(
-                        all_prompts,
-                        sampling_params=sampling_params,
-                        use_tqdm=False,
-                        chat_template_kwargs=chat_template_kwargs,
-                        tools=tools,
-                        chat_template=chat_template,
-                    )
-                else:
-                    all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+            # Build vLLM-compatible prompt inputs with token IDs and optional multi-modal data
+            vllm_prompts = []
+            if all_images is not None:
+                for ids, img_list in zip(all_prompts, all_images, strict=True):
+                    row = {"prompt_token_ids": ids}
+                    if img_list is not None:
+                        row["multi_modal_data"] = {"image": img_list if len(img_list) > 1 else img_list[0]}
+                    vllm_prompts.append(row)
+            else:
+                vllm_prompts = [{"prompt_token_ids": ids} for ids in all_prompts]
+
+            with profiler:
+                all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
 
             all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
             all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
@@ -740,9 +718,7 @@ class VLLMGeneration:
                 logprobs = all_logprobs
                 logprob_token_ids = all_logprob_token_ids
 
-            extra_fields = {}  # No extra fields for colocate mode
-
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
 
-        return prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields
+        return prompt_ids, completion_ids, logprobs, logprob_token_ids
