@@ -1318,14 +1318,15 @@ class GRPOTrainer(_BaseTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool(), strict=True)]
+            completion_ids = [
+                c[m].tolist() for c, m in zip(completion_ids.cpu(), completion_mask.bool().cpu(), strict=True)
+            ]
             logprobs = None  # not used in this case
 
         return completion_ids, logprobs
 
     def _get_tool_suffix_ids(self, tool_messages):
-        """
-        Get token IDs for tool result formatting by using a minimal dummy conversation."""
+        """Get token IDs for tool result formatting by using a minimal dummy conversation."""
         dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
         prefix_ids = self.processing_class.apply_chat_template(
             dummy_messages,
