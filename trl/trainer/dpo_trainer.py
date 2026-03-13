@@ -970,27 +970,38 @@ class DPOTrainer(_BaseTrainer):
         return dataset
 
     def _truncate_inputs(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, completion_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        completion_mask: torch.Tensor,
+        *extra: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
         if self.args.max_length is None:
-            return input_ids, attention_mask, completion_mask
+            return input_ids, attention_mask, completion_mask, *extra
 
         if self.args.truncation_mode == "keep_start":
             input_ids = input_ids[:, : self.args.max_length]
             attention_mask = attention_mask[:, : self.args.max_length]
             completion_mask = completion_mask[:, : self.args.max_length]
+            extra = tuple(t[:, : self.args.max_length] for t in extra)
         elif self.args.truncation_mode == "keep_end":
-            attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
+            attention_mask, input_ids, completion_mask, *extra = flush_right(
+                attention_mask, input_ids, completion_mask, *extra
+            )
             input_ids = input_ids[:, -self.args.max_length :]
             attention_mask = attention_mask[:, -self.args.max_length :]
             completion_mask = completion_mask[:, -self.args.max_length :]
-            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+            extra = tuple(t[:, -self.args.max_length :] for t in extra)
+            attention_mask, input_ids, completion_mask, *extra = flush_left(
+                attention_mask, input_ids, completion_mask, *extra
+            )
+            extra = tuple(extra)
         else:
             raise ValueError(
                 f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
             )
 
-        return input_ids, attention_mask, completion_mask
+        return input_ids, attention_mask, completion_mask, *extra
 
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
