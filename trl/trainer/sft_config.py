@@ -72,7 +72,7 @@ class SFTConfig(_BaseConfig):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
         packing_strategy (`str`, *optional*, defaults to `"bfd"`):
-            Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd-split"`
+            Strategy for packing sequences. Can be `"bfd"` (best-fit decreasing, truncates overflow), `"bfd_split"`
             (best-fit decreasing, splits overflow sequences), or `"wrapped"` (aggressive, cuts mid-sequence).
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
@@ -193,9 +193,9 @@ class SFTConfig(_BaseConfig):
         default="bfd",
         metadata={
             "help": "Strategy for packing sequences. Can be `'bfd'` (best-fit decreasing, truncates overflow), "
-            "`'bfd-split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
+            "`'bfd_split'` (best-fit decreasing, splits overflow sequences), or `'wrapped'` (aggressive, cuts "
             "mid-sequence).",
-            "choices": ["bfd", "bfd-split", "wrapped"],
+            "choices": ["bfd", "bfd_split", "wrapped"],
         },
     )
     padding_free: bool = field(
@@ -259,7 +259,7 @@ class SFTConfig(_BaseConfig):
 
         if self.packing_strategy == "bfd-requeue":
             warnings.warn(
-                "The `bfd-requeue` packing strategy has been renamed to `bfd-split`. Please update your configuration accordingly. "
+                "The `bfd-requeue` packing strategy has been renamed to `bfd_split`. Please update your configuration accordingly. "
                 "The `bfd-requeue` strategy is deprecated and will be removed in a future version.",
                 FutureWarning,
             )

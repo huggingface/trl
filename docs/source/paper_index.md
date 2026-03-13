@@ -1144,14 +1144,14 @@ SFTConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2404.10830
 
-The paper shows that the standard concat-and-chunk preprocessing (`packing_strategy="wrapped"`) used for LLM training causes many documents to be arbitrarily truncated, which harms learning. It proposes packing document chunks into context windows using a Best-Fit Decreasing bin-packing algorithm, greatly reducing truncation while keeping high token utilization and improving model performance. TRL implements this as the `"bfd-split"` packing strategy in [`SFTConfig`]. For more details on packing, see the [SFT documentation](sft_trainer#packing).
+The paper shows that the standard concat-and-chunk preprocessing (`packing_strategy="wrapped"`) used for LLM training causes many documents to be arbitrarily truncated, which harms learning. It proposes packing document chunks into context windows using a Best-Fit Decreasing bin-packing algorithm, greatly reducing truncation while keeping high token utilization and improving model performance. TRL implements this as the `"bfd_split"` packing strategy in [`SFTConfig`]. For more details on packing, see the [SFT documentation](sft_trainer#packing).
 
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(
     packing=True,
-    packing_strategy="bfd-split",
+    packing_strategy="bfd_split",
     max_length=4096,
 )
 ```
