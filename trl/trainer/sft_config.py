@@ -263,3 +263,4 @@ class SFTConfig(_BaseConfig):
                 "The `bfd-requeue` strategy is deprecated and will be removed in a future version.",
                 FutureWarning,
             )
+            self.packing_strategy = "bfd_split"
