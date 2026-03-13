@@ -1015,6 +1015,10 @@ class DPOTrainer(_BaseTrainer):
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
+        # token_type_ids and mm_token_type_ids are sequence-length-aligned; truncate to match input_ids
+        for key in ("token_type_ids", "mm_token_type_ids"):
+            if key in model_kwargs:
+                model_kwargs[key] = model_kwargs[key][:, : input_ids.shape[1]]
 
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             if is_peft_model(self.model) and self.ref_model is None:
@@ -1143,6 +1147,10 @@ class DPOTrainer(_BaseTrainer):
         ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
+        # token_type_ids and mm_token_type_ids are sequence-length-aligned; truncate to match input_ids
+        for key in ("token_type_ids", "mm_token_type_ids"):
+            if key in model_kwargs:
+                model_kwargs[key] = model_kwargs[key][:, : input_ids.shape[1]]
 
         outputs = model(**model_kwargs)
         shift_logits = outputs.logits[..., :-1, :].contiguous()
