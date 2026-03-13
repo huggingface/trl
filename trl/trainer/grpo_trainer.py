@@ -1712,7 +1712,7 @@ class GRPOTrainer(_BaseTrainer):
         num_questions = rewards.size(0) // num_generations
         acc_rewards = rewards_per_func[:, self.dgpo_dqw_acc_reward_index]
         mean_per_q_acc = acc_rewards.view(-1, num_generations).nanmean(dim=1)  # (num_questions,)
-        std_per_q_acc = acc_rewards.view(-1, num_generations).std(dim=1)  # (num_questions,)
+        std_per_q_acc = nanstd(acc_rewards.view(-1, num_generations), dim=1)   # (num_questions,)
         is_std_zero_q = std_per_q_acc < 1e-8
         num_zero_variance_questions = is_std_zero_q.sum().item()
         difficulty_balancing_weights = torch.ones(
