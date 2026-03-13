@@ -1212,6 +1212,33 @@ class TestDPOTrainer(TrlTestCase):
             else:
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @pytest.mark.parametrize(
+        "model_id, max_length",
+        [
+            # max_length is set to total_len-1, which truncates 1 completion token while keeping all
+            # image tokens. Values derived from the zen-image/conversational_preference dataset.
+            # Qwen2.5-VL returns mm_token_type_ids (sequence-aligned, must be truncated with input_ids)
+            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", 37),
+            # Gemma3 returns token_type_ids (sequence-aligned, must be truncated with input_ids)
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", 278),
+        ],
+    )
+    @require_vision
+    def test_train_vlm_with_max_length(self, model_id, max_length):
+        # Regression test: sequence-aligned side-inputs (token_type_ids, mm_token_type_ids) must be
+        # truncated alongside input_ids when max_length is set, otherwise a shape mismatch crashes
+        # the model forward pass.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=max_length,
+            per_device_train_batch_size=2,
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     @require_peft
     @require_bitsandbytes
     def test_peft_with_quantization(self):
