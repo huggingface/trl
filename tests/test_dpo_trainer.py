@@ -1267,3 +1267,21 @@ class TestDPOTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+    @require_vision
+    def test_train_vlm_keep_end_raises(self):
+        # Regression test for #5285: keep_end with a VLM must raise at init time, not silently corrupt training.
+        # Image tokens live at the start of the sequence (in the prompt); keep_end would drop them.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=32,
+            truncation_mode="keep_end",
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="truncation_mode='keep_end' is not supported for vision-language models"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
