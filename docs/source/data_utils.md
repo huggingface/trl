@@ -15,15 +15,3 @@
 ## unpair_preference_dataset
 
 [[autodoc]] unpair_preference_dataset
-
-## truncate_dataset
-
-[[autodoc]] truncate_dataset
-
-## pack_dataset
-
-[[autodoc]] pack_dataset
-
-## PackingStrategy
-
-[[autodoc]] PackingStrategy
