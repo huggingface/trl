@@ -1671,8 +1671,8 @@ class GRPOTrainer(_BaseTrainer):
         completion_length_local = completion_mask.sum(dim=1)
         completion_length_global = gather(completion_length_local)
 
-        global_completion_length_sum = completion_length_global.sum().clamp(min=1e-8)
-        local_completion_length_sum = completion_length_local.sum()
+        global_completion_length_sum = completion_length_global.sum().float().clamp(min=1e-8)
+        local_completion_length_sum = completion_length_local.sum().float()
 
         global_balancing_ratio = (
             self.accelerator.num_processes * local_completion_length_sum / global_completion_length_sum
@@ -1680,10 +1680,10 @@ class GRPOTrainer(_BaseTrainer):
 
         valid_mask_global = ~is_std_zero
         if valid_mask_global.any():
-            valid_completion_length_sum = completion_length_global[valid_mask_global].sum().clamp(min=1e-8)
+            valid_completion_length_sum = completion_length_global[valid_mask_global].sum().float().clamp(min=1e-8)
             zero_mask_ratio = global_completion_length_sum / valid_completion_length_sum
         else:
-            zero_mask_ratio = torch.tensor(1.0, device=completion_mask.device, dtype=completion_mask.dtype)
+            zero_mask_ratio = torch.tensor(1.0, device=completion_mask.device, dtype=torch.float32)
 
         return zero_mask_ratio, global_balancing_ratio
 
