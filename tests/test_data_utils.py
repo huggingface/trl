@@ -1111,7 +1111,10 @@ class TestPackDatasetBfd(TrlTestCase):
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        expected_format = dataset.format
         assert dataset.to_dict() == expected_output
+        assert "seq_lengths" in expected_format["columns"]
+        expected_format["columns"].remove("seq_lengths")
         assert format == dataset.format
 
     def test_with_iterable_dataset(self):
