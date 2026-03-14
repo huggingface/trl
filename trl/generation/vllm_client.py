@@ -181,7 +181,7 @@ class VLLMClient:
 
         while True:
             try:
-                response = requests.get(url)
+                response = requests.get(url, timeout=10.0)
             except requests.exceptions.RequestException as exc:
                 # Check if the total timeout duration has passed
                 elapsed_time = time.time() - start_time
@@ -424,7 +424,7 @@ class VLLMClient:
         """
         # Get the world size from the server
         url = f"{self.base_url}/get_world_size/"
-        response = requests.get(url)
+        response = requests.get(url, timeout=10.0)
         if response.status_code == 200:
             vllm_world_size = response.json()["world_size"]
         else:
