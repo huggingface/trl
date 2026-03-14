@@ -206,6 +206,8 @@ class ScriptArguments:
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to trust remote code when loading models. Set to `True` to allow executing code from model
             repositories. This is required for some custom models but introduces security risks.
+        language_model_only (`bool`, *optional*, defaults to `False`):
+            Whether to force vLLM to load the model in language-model-only mode.
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
@@ -293,6 +295,10 @@ class ScriptArguments:
             "repositories. This is required for some custom models but introduces security risks."
         },
     )
+    language_model_only: bool = field(
+        default=False,
+        metadata={"help": "Whether to force vLLM to load the model in language-model-only mode."},
+    )
     log_level: str = field(
         default="info",
         metadata={
@@ -351,6 +357,7 @@ def llm_worker(
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
         model_impl=script_args.vllm_model_impl,
+        language_model_only=script_args.language_model_only,
         limit_mm_per_prompt=limit_mm_per_prompt,
         # Important so temperature scaling/logit tweaking affects the TIS log probs
         logprobs_mode="processed_logprobs",
