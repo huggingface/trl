@@ -1212,6 +1212,26 @@ class TestDPOTrainer(TrlTestCase):
             else:
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @require_vision
+    def test_train_vlm_with_max_length(self):
+        # Regression test for #5283: mm_token_type_ids must be truncated alongside input_ids when max_length is set,
+        # otherwise a shape mismatch crashes the model forward pass.
+        # max_length=37 truncates 1 completion token (total_len=38) while keeping all image tokens (prompt_len=34) safe.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=37,  # total_len=38, prompt_len=34 — truncates completion, not image tokens
+            per_device_train_batch_size=2,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     @require_peft
     @require_bitsandbytes
     def test_peft_with_quantization(self):
