@@ -1461,9 +1461,7 @@ class GRPOTrainer(_BaseTrainer):
             # Filter images and multimodal fields to match the current subset (index into full batch)
             loop_images = [images[i] for i in idxs_with_tool] if images else None
             loop_multimodal_fields = (
-                {k: [v[i] for i in idxs_with_tool] for k, v in multimodal_fields.items()}
-                if multimodal_fields
-                else None
+                {k: [v[i] for i in idxs_with_tool] for k, v in multimodal_fields.items()} if multimodal_fields else {}
             )
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
