@@ -22,7 +22,9 @@ if is_math_verify_available():
 
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[float | None]:
     r"""
-    Reward function that checks if the completion matches the ground truth.
+    Reward function that checks if the completion matches the ground truth. This function was built based on the
+    descrition in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
+    Models](https://arxiv.org/abs/2402.03300)
         - If both gold and prediction are parseable → use math verification.
         - If gold is not parseable → return `None` to skip the example.
 
