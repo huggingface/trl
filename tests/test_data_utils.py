@@ -203,6 +203,48 @@ class TestPrepareMultimodalMessages:
 
         assert messages == expected
 
+    def test_message_with_tool_calling_turns(self):
+        """Test that both the assistant tool call and the tool role turns messages are properly transformed."""
+        messages = [
+            {"role": "user", "content": "What's the weather like in New York?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {"role": "assistant", "content": "The current weather in New York is 22.0 degrees Celsius."},
+        ]
+
+        messages = prepare_multimodal_messages(messages, images=[])
+
+        expected = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What's the weather like in New York?"}],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": "22.0"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "The current weather in New York is 22.0 degrees Celsius."}],
+            },
+        ]
+
+        assert messages == expected
+
 
 @require_vision
 class TestPrepareMultimodalMessagesVLLM:
@@ -1014,6 +1056,8 @@ class TestPackDatasetWrapped(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
         seq_length = 3
         expected_output = {
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
@@ -1021,6 +1065,7 @@ class TestPackDatasetWrapped(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         assert dataset.to_dict() == expected_output
+        assert format == dataset.format
 
     def test_with_iterable_dataset(self):
         examples = {
@@ -1028,6 +1073,8 @@ class TestPackDatasetWrapped(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
         seq_length = 3
         expected_output = {
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
@@ -1035,28 +1082,37 @@ class TestPackDatasetWrapped(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
 
 
 class TestPackDatasetBfd(TrlTestCase):
-    def test_simple(self):
+    def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
         }
         dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
             "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        expected_format = dataset.format
         assert dataset.to_dict() == expected_output
+        assert "seq_lengths" in expected_format["columns"]
+        expected_format["columns"].remove("seq_lengths")
+        assert format == dataset.format
 
     def test_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
         seq_length = 4
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
@@ -1064,7 +1120,8 @@ class TestPackDatasetBfd(TrlTestCase):
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
 
     def test_with_overlong_0(self):
         examples = {
@@ -1076,7 +1133,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 5, 12]],
             "seq_lengths": [[4], [4], [2, 1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
     def test_with_overlong_two_coluns(self):
@@ -1091,7 +1148,7 @@ class TestPackDatasetBfd(TrlTestCase):
             "col2": [[-1, 2, -3, 4], [-13, 14, -15, 16], [-7, 8, -9], [10, -11, 12], [-5, 6]],
             "seq_lengths": [[4], [4], [3], [3], [2]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
     def test_with_non_power_of_2(self):
@@ -1104,10 +1161,10 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
             "seq_lengths": [[5], [4, 1], [3]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="bfd-requeue")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
         assert dataset.to_dict() == expected_output
 
-    def test_default_no_requeue(self):
+    def test_default_no_split(self):
         """Test default 'bfd' strategy for SFT datasets (truncates overflow)."""
         examples = {
             "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
@@ -1122,6 +1179,19 @@ class TestPackDatasetBfd(TrlTestCase):
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         assert dataset.to_dict() == expected_output
 
+    def test_with_empty_sequences(self):
+        examples = {
+            "input_ids": [[1, 2], [], [3, 4, 5], [], [6]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[3, 4, 5, 6], [1, 2]],
+            "seq_lengths": [[3, 1], [2]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd_split")
+        assert dataset.to_dict() == expected_output
+
 
 class TestTruncateExamples(TrlTestCase):
     def test_with_dataset(self):
@@ -1130,6 +1200,8 @@ class TestTruncateExamples(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples)
+        dataset = dataset.with_format("numpy", dtype="float32")
+        format = dataset.format
         max_length = 2
         expected_output = {
             "input_ids": [[1, 2], [4, 5], [8]],
@@ -1137,6 +1209,7 @@ class TestTruncateExamples(TrlTestCase):
         }
         dataset = truncate_dataset(dataset, max_length)
         assert dataset.to_dict() == expected_output
+        assert format == dataset.format
 
     def test_with_iterable_dataset(self):
         examples = {
@@ -1144,6 +1217,8 @@ class TestTruncateExamples(TrlTestCase):
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
         }
         dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        dataset = dataset.with_format("numpy")
+        formatting = dataset._formatting
         max_length = 2
         expected_output = {
             "input_ids": [[1, 2], [4, 5], [8]],
@@ -1151,7 +1226,8 @@ class TestTruncateExamples(TrlTestCase):
         }
         dataset = truncate_dataset(dataset, max_length)
         num_examples = len(examples[next(iter(examples))])
-        assert next(iter(dataset.batch(batch_size=num_examples))) == expected_output
+        assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
+        assert formatting == dataset._formatting
 
     def test_with_extra_column(self):
         examples = {

@@ -123,7 +123,7 @@ class ORPOConfig(_BaseConfig):
             "argument, you need to specify if the model returned by the callable is an encoder-decoder model."
         },
     )
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "

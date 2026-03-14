@@ -23,7 +23,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from transformers.hf_argparser import DataClass, DataClassType, HfArgumentParser
+# Temporarily import from the local module instead of transformers to avoid an upstream latency issue
+# See: https://github.com/huggingface/transformers/issues/44273
+# This workaround can be reverted once the fix is included in the minimum required transformers version
+from trl.scripts._hf_argparser import DataClass, DataClassType, HfArgumentParser
 
 
 if TYPE_CHECKING:
@@ -294,6 +297,7 @@ class TrlParser(HfArgumentParser):
         args: Iterable[str] | None = None,
         return_remaining_strings: bool = False,
         fail_with_unknown_args: bool = True,
+        separate_remaining_strings: bool = False,
     ) -> tuple[DataClass, ...]:
         """
         Parse command-line args and config file into instances of the specified dataclass types.
@@ -333,6 +337,8 @@ class TrlParser(HfArgumentParser):
         # Merge remaining strings from the config file with the remaining strings from the command line
         if return_remaining_strings:
             args_remaining_strings = output[-1]
+            if separate_remaining_strings:
+                return output[:-1] + (config_remaining_strings, args_remaining_strings)
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
         elif fail_with_unknown_args and config_remaining_strings:
             raise ValueError(

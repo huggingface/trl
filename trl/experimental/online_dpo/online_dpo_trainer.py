@@ -96,9 +96,11 @@ if is_bitsandbytes_available():
 
 logger = logging.get_logger(__name__)
 
-# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
-# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = str | PreTrainedModel | Callable[[list, list], list[float]]
+# A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
+# a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
+# arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
+# accept **kwargs.
+RewardFunc = str | PreTrainedModel | Callable[..., list[float]]
 
 
 class OnlineDPOTrainer(_BaseTrainer):
@@ -197,6 +199,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -750,7 +755,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             # prompt individually.
             ordered_set_of_prompts = all_prompts[:: self.num_generations]
             if has_images:
-                ordered_set_of_images = all_images[:: self.num_generations]
+                ordered_set_of_images = [
+                    [img] if img is not None else None for img in all_images[:: self.num_generations]
+                ]
             else:
                 ordered_set_of_images = None
             completion_ids = self.vllm_client.generate(
@@ -1396,7 +1403,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         elif self.args.loss_type == "ipo":
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
-            raise NotImplementedError(f"invalid loss type {self.loss_type}")
+            raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
         loss = losses.mean()
 
