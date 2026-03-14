@@ -312,6 +312,26 @@ class GRPOConfig(_BaseConfig):
             Whether to use the unbiased KL divergence estimator with importance sampling correction. This corrects the
             KL divergence estimate by multiplying it with the importance sampling ratio. This is described in the
             [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556).
+        use_dgpo_dgae (`bool`, *optional*, defaults to `False`):
+            Whether to use difficulty-balanced group advantage estimation (DGAE). When `True`, group-relative
+            advantages are normalized by the mean absolute deviation (MAD) of rewards (instead of the standard
+            deviation): `advantage = (reward - mean) / (MAD + eps)`, where `MAD = mean(|reward - mean|)`. Introduced
+            in the [MathForge paper](https://huggingface.co/papers/2601.20614).
+        use_dgpo_dqw (`bool`, *optional*, defaults to `False`):
+            Whether to use difficulty-aware question-level weighting (DQW). When `True`, each question gets a weight
+            based on its estimated difficulty, and that weight is multiplied into the advantages—so harder questions
+            produce larger effective updates. Difficulty is computed as a softmax over the negative per-question mean
+            accuracy reward from `reward_funcs[dgpo_dqw_acc_reward_index]`. Introduced in the [MathForge
+            paper](https://huggingface.co/papers/2601.20614).
+        dgpo_dqw_temp (`float`, *optional*, defaults to `2.0`):
+            Temperature for the DQW softmax over difficulty scores (negative mean accuracy reward). Higher values make
+            weights more uniform across questions; lower values concentrate weight on the hardest questions.
+            Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614).
+        dgpo_dqw_acc_reward_index (`int`, *optional*, defaults to `0`):
+            Index into `reward_funcs` selecting the reward used as the "accuracy" signal for DQW's difficulty
+            estimate. For each question, DQW uses the mean reward at this index across the group to compute the
+            difficulty score (lower mean ⇒ harder), which is then turned into a weight via the DQW softmax.
+            Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614).
 
         > Parameters that control the logging
 
@@ -833,6 +853,42 @@ class GRPOConfig(_BaseConfig):
             "help": "Whether to use the unbiased KL divergence estimator with importance sampling correction. This "
             "corrects the KL divergence estimate by multiplying it with the importance sampling ratio. "
             "This is described in the [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556)."
+        },
+    )
+    use_dgpo_dgae: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use difficulty-balanced group advantage estimation (DGAE). When `True`, group-relative "
+            "advantages are normalized by the mean absolute deviation (MAD) of rewards (instead of the standard "
+            "deviation): `advantage = (reward - mean) / (MAD + eps)`, where `MAD = mean(|reward - mean|)`. Introduced "
+            "in the [MathForge paper](https://huggingface.co/papers/2601.20614)."
+        },
+    )
+    use_dgpo_dqw: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use difficulty-aware question-level weighting (DQW). When `True`, each question gets a "
+            "weight based on its estimated difficulty, and that weight is multiplied into the advantages—so harder "
+            "questions produce larger effective updates. Difficulty is computed as a softmax over the negative "
+            "per-question mean accuracy reward from `reward_funcs[dgpo_dqw_acc_reward_index]`. Introduced in the "
+            "[MathForge paper](https://huggingface.co/papers/2601.20614)."
+        },
+    )
+    dgpo_dqw_temp: float = field(
+        default=2.0,
+        metadata={
+            "help": "Temperature for the DQW softmax over difficulty scores (negative mean accuracy reward). Higher "
+            "values make weights more uniform across questions; lower values concentrate weight on the hardest "
+            "questions. Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614)."
+        },
+    )
+    dgpo_dqw_acc_reward_index: int = field(
+        default=0,
+        metadata={
+            "help": "Index into `reward_funcs` selecting the reward used as the \"accuracy\" signal for DQW's "
+            "difficulty estimate. For each question, DQW uses the mean reward at this index across the group to "
+            "compute the difficulty score (lower mean ⇒ harder), which is then turned into a weight via the DQW "
+            "softmax. Introduced in the [MathForge paper](https://huggingface.co/papers/2601.20614)."
         },
     )
 
