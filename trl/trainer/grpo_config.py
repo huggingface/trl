@@ -187,18 +187,18 @@ class GRPOConfig(_BaseConfig):
             Temperature for tokens with positive advantage scores used in the `sapo` loss function. This parameter is
             introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
         vespo_k_pos (`float`, *optional*, defaults to `2.0`):
-            k parameter for positive advantages, it is the power exponent in the `vespo` loss. Controls how
-            aggressively we down-weight samples with low importance weights (when the importance sampling ratio < 1).
+            k parameter for positive advantages, it is the power exponent in the VESPO loss. Controls how aggressively
+            we down-weight samples with low importance weights (when the importance sampling ratio < 1).
         vespo_lambda_pos (`float`, *optional*, defaults to `3.0`):
-            lambda parameter for positive advantages, it is the decay factor in the `vespo` loss. Controls how
+            lambda parameter for positive advantages, it is the decay factor in the VESPO loss. Controls how
             aggressively we down-weight samples with high importance weights (when the importance sampling ratio > 1).
         vespo_k_neg (`float`, *optional*, defaults to `3.0`):
-            k parameter for negative advantages, it is the power exponent in the `vespo` loss. Controls how aggressively
+            k parameter for negative advantages, it is the power exponent in the VESPO loss. Controls how aggressively
             we down-weight samples with low importance weights (when the importance sampling ratio < 1).
         vespo_lambda_neg (`float`, *optional*, defaults to `2.0`):
-            lambda parameter for negative advantages, it is the exponential decay factor in the `vespo` loss.
-            Controls how aggressively we down-weight samples with high importance weights
-            (when the importance sampling ratio > 1).
+            lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. Controls
+            how aggressively we down-weight samples with high importance weights (when the importance sampling ratio >
+            1).
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
             keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
@@ -638,33 +638,31 @@ class GRPOConfig(_BaseConfig):
     vespo_k_pos: float = field(
         default=2.0,
         metadata={
-            "help": "k parameter for positive advantages, it is the power exponent in the `vespo` loss. "
-            "Controls how aggressively we down-weight samples with low importance weights "
-            "(when the importance sampling ratio < 1)."
+            "help": "k parameter for positive advantages, it is the power exponent in the VESPO loss. Controls how "
+            "aggressively we down-weight samples with low importance weights (when the importance sampling ratio < 1)."
         },
     )
     vespo_lambda_pos: float = field(
         default=3.0,
         metadata={
-            "help": "lambda parameter for positive advantages, it is the decay factor in the `vespo` loss. "
-            "Controls how aggressively we down-weight samples with high importance weights "
-            "(when the importance sampling ratio > 1)."
+            "help": "lambda parameter for positive advantages, it is the decay factor in the VESPO loss. Controls "
+            "how aggressively we down-weight samples with high importance weights (when the importance sampling ratio "
+            "> 1)."
         },
     )
     vespo_k_neg: float = field(
         default=3.0,
         metadata={
-            "help": "k parameter for negative advantages, it is the power exponent in the `vespo` loss. "
-            "Controls how aggressively we down-weight samples with low importance weights "
-            "(when the importance sampling ratio < 1)."
+            "help": "k parameter for negative advantages, it is the power exponent in the VESPO loss. Controls how "
+            "aggressively we down-weight samples with low importance weights (when the importance sampling ratio < 1)."
         },
     )
     vespo_lambda_neg: float = field(
         default=2.0,
         metadata={
-            "help": "lambda parameter for negative advantages, it is the exponential decay factor in the `vespo` loss. "
-            "Controls how aggressively we down-weight samples with high importance weights "
-            "(when the importance sampling ratio > 1)."
+            "help": "lambda parameter for negative advantages, it is the exponential decay factor in the VESPO loss. "
+            "Controls how aggressively we down-weight samples with high importance weights (when the importance "
+            "sampling ratio > 1)."
         },
     )
     importance_sampling_level: str = field(
