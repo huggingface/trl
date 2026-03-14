@@ -241,7 +241,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @require_torch_accelerator
     @require_vllm
     @pytest.mark.slow
-    def test_training_with_vllm(self, config_name):
+    def test_training_with_vllm_server(self, config_name):
         def cleanup_vllm_communicator(trainer):
             """Clean up vLLM communicator to avoid conflicts between test runs"""
             try:
@@ -258,6 +258,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             use_vllm=True,
+            vllm_mode="server",
             vllm_gpu_memory_utilization=0.2,
             report_to="none",
         )
@@ -351,7 +352,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         # Test default values
         config = OnlineDPOConfig()
-        assert config.vllm_mode == "server"
+        assert config.vllm_mode == "colocate"
         assert config.vllm_server_base_url is None
         assert config.vllm_server_host == "0.0.0.0"
         assert config.vllm_server_port == 8000
