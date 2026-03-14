@@ -166,6 +166,14 @@ class TestVLLMClientServer(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_generate_with_logprobs_none(self):
+        outputs = self.client.generate(["Hello, AI!"], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
+
     def test_chat(self):
         messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
         outputs = self.client.chat(messages)
@@ -185,6 +193,14 @@ class TestVLLMClientServer(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_logprobs_none(self):
+        outputs = self.client.chat([[{"role": "user", "content": "Hello, AI!"}]], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
 
     def test_chat_with_tools(self):
         def multiply(a: int, b: int) -> int:
@@ -395,6 +411,14 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_generate_with_logprobs_none(self):
+        outputs = self.client.generate(["Hello, AI!"], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
+
     def test_chat(self):
         messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
         outputs = self.client.chat(messages)
@@ -414,6 +438,14 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_logprobs_none(self):
+        outputs = self.client.chat([[{"role": "user", "content": "Hello, AI!"}]], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
 
     def test_chat_with_tools(self):
         def multiply(a: int, b: int) -> int:
@@ -545,6 +577,14 @@ class TestVLLMClientServerTP(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_generate_with_logprobs_none(self):
+        outputs = self.client.generate(["Hello, AI!"], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
+
     def test_chat(self):
         messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
         outputs = self.client.chat(messages)
@@ -564,6 +604,14 @@ class TestVLLMClientServerTP(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_logprobs_none(self):
+        outputs = self.client.chat([[{"role": "user", "content": "Hello, AI!"}]], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
 
     def test_chat_with_tools(self):
         def multiply(a: int, b: int) -> int:
@@ -699,6 +747,14 @@ class TestVLLMClientServerDP(TrlTestCase):
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
 
+    def test_generate_with_logprobs_none(self):
+        outputs = self.client.generate(["Hello, AI!"], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
+
     def test_chat(self):
         messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
         outputs = self.client.chat(messages)
@@ -718,6 +774,14 @@ class TestVLLMClientServerDP(TrlTestCase):
             assert all(isinstance(tok, int) for tok in seq)
         for seq in completion_ids:
             assert all(isinstance(tok, int) for tok in seq)
+
+    def test_chat_with_logprobs_none(self):
+        outputs = self.client.chat([[{"role": "user", "content": "Hello, AI!"}]], logprobs=None)
+
+        assert isinstance(outputs["prompt_ids"], list)
+        assert isinstance(outputs["completion_ids"], list)
+        assert outputs["logprobs"] is None
+        assert outputs["logprob_token_ids"] is None
 
     def test_chat_with_tools(self):
         def multiply(a: int, b: int) -> int:
