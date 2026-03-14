@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
-from trl.trainer.dpo_trainer import DataCollatorForPreference
+from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVisionPreference
 
 from .testing_utils import (
     TrlTestCase,
@@ -130,6 +130,38 @@ class TestDataCollatorForPreference(TrlTestCase):
 
         assert set(result.keys()) == {"input_ids", "attention_mask", "completion_mask"}
         torch.testing.assert_close(result["input_ids"], expected_input_ids)
+
+
+class TestDataCollatorForVisionPreference(TrlTestCase):
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.3.0"),
+        reason="mm_token_type_ids are returned by default since transformers-5.3.0 (see transformers#43972)",
+    )
+    @require_vision
+    def test_mm_token_type_ids_shape(self):
+        # Regression test: when the processor returns mm_token_type_ids (e.g. Qwen2.5-VL after
+        # transformers#43972), the collator must concatenate it with zeros for the completion part
+        # so that its shape matches input_ids. Without the fix this raises an IndexError in the model.
+        from PIL import Image
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+        collator = DataCollatorForVisionPreference(processor)
+        image = Image.new("RGB", (16, 16))
+        examples = [
+            {
+                "images": [image],
+                "prompt": [{"role": "user", "content": "What is this?"}],
+                "chosen": [{"role": "assistant", "content": "A red square."}],
+                "rejected": [{"role": "assistant", "content": "A blue circle."}],
+            }
+        ]
+        output = collator(examples)
+        assert "mm_token_type_ids" in output
+        assert output["mm_token_type_ids"].shape == output["input_ids"].shape, (
+            f"mm_token_type_ids shape {output['mm_token_type_ids'].shape} != "
+            f"input_ids shape {output['input_ids'].shape}"
+        )
 
 
 class TestDPOTrainer(TrlTestCase):
@@ -1008,6 +1040,13 @@ class TestDPOTrainer(TrlTestCase):
                         reason="Blocked by upstream transformers bug (transformers#43334)",
                     ),
                 ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )

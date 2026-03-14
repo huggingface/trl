@@ -206,7 +206,20 @@ We support two ways of using vLLM during training: **server mode** and **colocat
 > [!TIP]
 > By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
 
-#### 🔌 Option 1: Server mode
+#### Option 1: Colocate mode
+
+In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs. This is the default mode.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+#### Option 2: Server mode
 
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
@@ -224,26 +237,12 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
    training_args = GRPOConfig(
        ...,
        use_vllm=True,
-       vllm_mode="server",  # default value, can be omitted
+       vllm_mode="server",
    )
    ```
 
 > [!WARNING]
 > Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
-
-#### 🧩 Option 2: Colocate mode
-
-In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
-
-```python
-from trl import GRPOConfig
-
-training_args = GRPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
 
 > [!TIP]
 > Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
@@ -349,6 +348,7 @@ def main():
     training_args = GRPOConfig(
         per_device_train_batch_size=4,
         use_vllm=True,
+        vllm_mode="server",
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 
@@ -695,7 +695,8 @@ trainer.train()
 
 Tested with:
 
-- **Qwen3** — e.g., `Qwen/Qwen3-0.6B`
+- [**Qwen3**](https://huggingface.co/collections/Qwen/qwen3) — e.g., `Qwen/Qwen3-0.6B`
+- [**Qwen3.5**](https://huggingface.co/collections/Qwen/qwen35) — e.g., `Qwen/Qwen3.5-2B`
 
 > [!TIP]
 > Compatibility with all LLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
