@@ -171,17 +171,33 @@ class TestDPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="NemotronH models were introduced in transformers-5.3.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
+        # NemotronH (hybrid Mamba-Attention) does not support gradient checkpointing. The Mamba CUDA
+        # kernels require strides to be multiples of 8, which is incompatible with tiny model dimensions.
+        # Force CPU so that the model uses the pure PyTorch path (works fine on GPU without kernels).
+        kwargs = {}
+        if "NemotronH" in model_id:
+            kwargs["gradient_checkpointing"] = False
+            kwargs["use_cpu"] = True
+
         # Initialize the trainer
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
+            **kwargs,
         )
         trainer = DPOTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
