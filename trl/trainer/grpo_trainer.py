@@ -579,6 +579,12 @@ class GRPOTrainer(_BaseTrainer):
                 "paper's setup."
             )
 
+        if args.loss_type == "vespo" and args.importance_sampling_level != "token":
+            logger.warning(
+                "VESPO computes sequence-level importance weights internally. `importance_sampling_level` should be "
+                "set to `'token'` (the default)."
+            )
+
         if self.loss_type == "vespo" and self.use_vllm and self.vllm_importance_sampling_correction:
             if self.vllm_importance_sampling_mode not in ["token_truncate", "token_mask"]:
                 raise ValueError(
@@ -2119,15 +2125,14 @@ class GRPOTrainer(_BaseTrainer):
         lambda_neg: float = 2.0,
     ) -> torch.Tensor:
         """
-        Computes the Gamma weights for the VESPO loss.
-        For reference:
+        Computes the Gamma weights for the VESPO loss. For reference:
             φ(w) = e^λ × w^k × e^{-λw} is the gamma weighting (normalized so φ(1)=1)
                 with w = sequence-level importance sampling ratio
         note: we will compute φ(w) in log space
 
         φ(w) is detached via @torch.no_grad(), only acts as gradient scaling coefficient
 
-        VESPO loss =  -φ(w) × A × log_prob, gradient naturally gives φ(w) × A × ∇log π
+        VESPO loss = -φ(w) × A × log_prob, gradient naturally gives φ(w) × A × ∇log π
         """
         # reducing clamp range directly to log(1e-8) ~ -18.42, to avoid recomputing log_w=log(w.clamp(min=1e-8)) later
         # This is solely for matching truthfully the original implementation, otherwise keeping -20 could be fine.
