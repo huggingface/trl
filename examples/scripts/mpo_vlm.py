@@ -14,9 +14,8 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[peft]",
 #     "Pillow",
-#     "peft",
 #     "torchvision",
 #     "trackio",
 #     "kernels",

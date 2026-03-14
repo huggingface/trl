@@ -1263,6 +1263,7 @@ class GRPOTrainer(_BaseTrainer):
                 images=images,
                 num_generations=num_generations,
                 profiler=profiling_context(self, "vLLM.generate"),
+                tools=self.tools,
             )
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
             logprobs = [[lp[0] for lp in seq] for seq in logprobs]
@@ -1424,7 +1425,9 @@ class GRPOTrainer(_BaseTrainer):
                 **self.chat_template_kwargs,
             )
             if self.use_vllm and self.vllm_mode == "colocate":
-                max_model_len = self.llm.llm_engine.model_config.max_model_len
+                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
+            elif self.use_vllm and self.vllm_mode == "server":
+                max_model_len = self.model.config.max_position_embeddings
             elif not self.use_vllm:
                 max_model_len = self.model.config.max_position_embeddings
             else:
@@ -1509,11 +1512,51 @@ class GRPOTrainer(_BaseTrainer):
                 if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
                     completions[idx_with_tool].append(post_tool_completions[idx])
 
-            # Check for further tool calls
+            # Check for further tool calls, but skip environments that are done
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
-            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
-            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
+            filtered_idxs = []
+            filtered_tool_calls = []
+            for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True):
+                if not tool_call:
+                    continue
+                # If the environment signals it's done, stop calling tools for it
+                env = self.environments[idx]
+                if getattr(env, "_done", False) or getattr(env, "done", False):
+                    continue
+                filtered_idxs.append(idx)
+                filtered_tool_calls.append(tool_call)
+            idxs_with_tool = filtered_idxs
+            tool_calls = filtered_tool_calls
             iteration_num += 1
+
+        # Ensure tool_mask, logprobs, and completion_ids have the same length per sequence.
+        # Re-tokenization across tool call iterations can cause length mismatches due to token
+        # boundary merging/splitting, since tool_mask and logprobs are accumulated with += while
+        # completion_ids is replaced with the re-tokenized version.
+        for i in range(len(tool_mask)):
+            comp_len = len(completion_ids[i])
+            mask_len = len(tool_mask[i])
+            if mask_len > comp_len:
+                tool_mask[i] = tool_mask[i][:comp_len]
+            elif mask_len < comp_len:
+                tool_mask[i] = tool_mask[i] + [1] * (comp_len - mask_len)
+        if logprobs is not None:
+            for i in range(len(logprobs)):
+                comp_len = len(completion_ids[i])
+                lp_len = len(logprobs[i])
+                if lp_len > comp_len:
+                    logprobs[i] = logprobs[i][:comp_len]
+                elif lp_len < comp_len:
+                    logprobs[i] = logprobs[i] + [0.0] * (comp_len - lp_len)
+
+        # Truncate to max_completion_length to prevent size mismatches downstream
+        for i in range(len(completion_ids)):
+            if len(completion_ids[i]) > self.max_completion_length:
+                completion_ids[i] = completion_ids[i][: self.max_completion_length]
+                tool_mask[i] = tool_mask[i][: self.max_completion_length]
+                if logprobs is not None:
+                    logprobs[i] = logprobs[i][: self.max_completion_length]
+
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
     def _generate(self, prompts: list):
@@ -2372,7 +2415,10 @@ class GRPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            avg = sum(val) / len(val)
+            metrics[key] = None if math.isnan(avg) else avg
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

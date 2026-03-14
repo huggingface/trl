@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "peft",
+#     "trl[peft]",
 #     "einops",
 #     "scikit-learn",
 #     "joblib",
