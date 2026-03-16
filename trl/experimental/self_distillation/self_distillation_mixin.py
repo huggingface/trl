@@ -34,14 +34,6 @@ class SelfDistillationMixin:
 
     config_cls = SelfDistillationConfig
 
-    @classmethod
-    def _coerce_self_distillation_args(cls, args: Any | None):
-        if isinstance(args, cls.config_cls):
-            return args
-        if args is None:
-            return cls.config_cls()
-        return cls.config_cls(**args.__dict__)
-
     def _dispatch_self_distillation_callback(self, event_name: str, **payload) -> None:
         for callback in self.callback_handler.callbacks:
             callback_fn = getattr(callback, event_name, None)

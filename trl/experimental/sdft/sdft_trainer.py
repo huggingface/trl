@@ -154,8 +154,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: PeftConfig | None = None,
     ):
-        args = self._coerce_sdft_args(args)
-
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
         if isinstance(train_dataset, IterableDataset):
@@ -308,20 +306,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
                 )
 
         self.model_accepts_loss_kwargs = False
-
-    @classmethod
-    def _coerce_sdft_args(cls, args: Any | None):
-        if isinstance(args, cls.config_cls):
-            return args
-        if args is None:
-            return cls.config_cls(output_dir="sdft-output")
-        if hasattr(args, "to_dict"):
-            dict_args = args.to_dict()
-            if hasattr(args, "hub_token"):
-                dict_args["hub_token"] = args.hub_token
-        else:
-            dict_args = args.__dict__.copy()
-        return cls.config_cls(**dict_args)
 
     def _generate_completion_ids(self, prompts: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
         generate_inputs = self.processing_class(

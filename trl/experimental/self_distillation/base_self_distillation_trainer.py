@@ -75,7 +75,6 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: PeftConfig | None = None,
     ):
-        args = self._coerce_self_distillation_args(args)
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
         if args.use_vllm:

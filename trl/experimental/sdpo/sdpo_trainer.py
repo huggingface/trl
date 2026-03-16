@@ -255,7 +255,6 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config=None,
     ):
-        args = self._coerce_self_distillation_args(args)
         if reward_funcs is None or (isinstance(reward_funcs, list) and len(reward_funcs) == 0):
             raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
         super().__init__(
