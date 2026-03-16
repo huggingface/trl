@@ -336,19 +336,11 @@ class OnlineRolloutMixin:
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
         per_token_loss = -torch.min(coef_1 * advantages, coef_2 * advantages)
 
+        loss = self._aggregate_self_distillation_loss(per_token_loss, completion_mask)
+
         mode = "train" if self.model.training else "eval"
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-            loss = loss / (self.current_gradient_accumulation_steps if mode == "train" else 1.0)
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            loss = loss / (self.current_gradient_accumulation_steps if mode == "train" else 1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-            loss = loss / (self.current_gradient_accumulation_steps if mode == "train" else 1.0)
-        else:
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            loss = loss / (self.current_gradient_accumulation_steps if mode == "train" else 1.0)
+        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+        loss = loss / accumulation_scale
 
         self._metrics[mode]["self_distillation/policy_loss"].append(
             self.accelerator.gather(loss.detach()).mean().item()
