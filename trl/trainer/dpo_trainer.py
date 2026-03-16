@@ -589,9 +589,10 @@ class DPOTrainer(_BaseTrainer):
             )
         if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
-                "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside in "
-                "the prompt at the beginning of the sequence; keeping the end would drop them. Use "
-                "truncation_mode='keep_start' (the default) or set max_length=None."
+                "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
+                "inside the prompt portion of the sequence; depending on the example, keep_end may silently "
+                "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
+                "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
             )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
