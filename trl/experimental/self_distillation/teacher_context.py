@@ -24,6 +24,15 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import pad
 
 
+def extract_last_user_text(prompt: list[dict[str, Any]]) -> str:
+    """Extract the text content from the last message in a conversational prompt."""
+    last_message = prompt[-1]
+    content = last_message.get("content", "")
+    if isinstance(content, list):
+        return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+    return content
+
+
 @dataclass
 class TokenizedPromptBatch:
     prompt_ids: torch.Tensor

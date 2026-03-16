@@ -25,7 +25,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixi
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import pad
 from ..self_distillation.base_self_distillation_trainer import BaseSelfDistillationTrainer
-from ..self_distillation.teacher_context import TokenizedPromptBatch
+from ..self_distillation.teacher_context import TokenizedPromptBatch, extract_last_user_text
 from .sdpo_config import SDPOConfig
 
 
@@ -49,13 +49,6 @@ class SuccessfulRolloutTeacherContextBuilder:
     def __init__(self, trainer):
         self.trainer = trainer
         self.last_metrics: dict[str, float] = {}
-
-    def _extract_last_user_text(self, prompt: list[dict[str, Any]]) -> str:
-        last_message = prompt[-1]
-        content = last_message.get("content", "")
-        if isinstance(content, list):
-            return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
-        return content
 
     def _build_reprompt_text(self, prompt_text: str, solution_text: str, feedback_text: str) -> str:
         return self.trainer.args.reprompt_template.format(
@@ -203,7 +196,7 @@ class SuccessfulRolloutTeacherContextBuilder:
 
             if isinstance(original_prompt, list):
                 system_messages = original_prompt[:-1]
-                prompt_text = self._extract_last_user_text(original_prompt)
+                prompt_text = extract_last_user_text(original_prompt)
                 reprompt_text = self._build_reprompt_text(prompt_text, solution_text, feedback_text)
                 local_teacher_messages.append(system_messages + [{"role": "user", "content": reprompt_text}])
             else:

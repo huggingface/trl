@@ -45,7 +45,7 @@ from ...trainer.utils import (
     use_adapter,
 )
 from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
-from ..self_distillation.teacher_context import PromptTokenizer
+from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
 from ..utils import prepare_peft_model
 from .sdft_config import SDFTConfig
 
@@ -64,13 +64,6 @@ class DemonstrationTeacherContextBuilder:
     def __init__(self, trainer):
         self.trainer = trainer
         self.prompt_tokenizer = PromptTokenizer(trainer)
-
-    def _extract_last_user_text(self, prompt: list[dict[str, Any]]) -> str:
-        last_message = prompt[-1]
-        content = last_message.get("content", "")
-        if isinstance(content, list):
-            return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
-        return content
 
     def _stringify_privileged_context(self, privileged_context: Any) -> str:
         if privileged_context is None:
@@ -96,7 +89,7 @@ class DemonstrationTeacherContextBuilder:
         privileged_text = self._stringify_privileged_context(privileged_context)
         if isinstance(prompt, list):
             system_messages = prompt[:-1]
-            prompt_text = self._extract_last_user_text(prompt)
+            prompt_text = extract_last_user_text(prompt)
             teacher_text = self.trainer.args.teacher_prompt_template.format(
                 prompt=prompt_text,
                 privileged_context=privileged_text,
@@ -351,7 +344,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             pad(completion_mask, padding_value=0, padding_side="right"),
         )
 
-    def _generate_and_prepare_batch(self, inputs: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
+    def _build_buffered_batch(self, inputs: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
         prompts, privileged_contexts = self._split_prompt_and_privileged_context(inputs)
         generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
         generation_prompt_text = self.prompt_tokenizer.apply_prompt_template(generation_prompts)
@@ -400,13 +393,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
         return output
-
-    def _build_buffered_batch(self, generation_batch):
-        return self._generate_and_prepare_batch(generation_batch)
-
-    def _log_self_distillation_metric(self, mode: str, metric_name: str, value: float) -> None:
-        self._metrics[mode][f"self_distillation/{metric_name}"].append(value)
-        self._metrics[mode][f"sdft/{metric_name}"].append(value)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
