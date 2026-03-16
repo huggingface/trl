@@ -672,6 +672,60 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
+    @require_peft
+    def test_train_peft_model_with_target_parameters(self):
+        """Test that DPOTrainer initializes correctly when the PEFT model uses `target_parameters`.
+
+        When `target_parameters` is set (e.g. for fused MoE expert layers), PEFT does not support creating
+        a second adapter. The trainer should skip creating the "ref" adapter and fall back to disabling
+        adapters entirely for reference logprobs. Regression test for
+        https://github.com/huggingface/trl/issues/5222
+        """
+        # Get the MoE base model
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+
+        # Get the base model parameter names
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        # Turn the model into a peft model with target_parameters
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # Initialize the trainer — this should NOT raise even though target_parameters is set
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        # Verify that the "ref" adapter was NOT created
+        unwrapped = trainer.accelerator.unwrap_model(trainer.model)
+        assert "ref" not in unwrapped.peft_config, (
+            "The 'ref' adapter should not be created when target_parameters is set"
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:
+                torch.testing.assert_close(param, new_param), f"Parameter {n} has changed"
+            elif "base_layer" not in n:
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
     # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
     # enabled by default in `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still
     # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.

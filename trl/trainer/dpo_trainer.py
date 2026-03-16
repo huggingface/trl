@@ -545,12 +545,24 @@ class DPOTrainer(_BaseTrainer):
         if is_peft_available() and is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
             # of the "default" adapter, so that we can use it as the reference model during DPO training.
-            model.add_adapter("ref", model.peft_config["default"])
-            for name, param in model.named_parameters():
-                if ".default." in name:
-                    ref_name = name.replace(".default.", ".ref.")
-                    ref_param = model.get_parameter(ref_name)
-                    ref_param.data.copy_(param.data)
+            default_peft_config = model.peft_config["default"]
+            if getattr(default_peft_config, "target_parameters", None):
+                # When `target_parameters` is set (e.g. for fused MoE expert layers), PEFT does not support
+                # creating a second adapter. Skip creating the "ref" adapter; the fallback path in
+                # `concatenated_forward` will disable adapters entirely, which gives correct base-model
+                # reference logprobs since LoRA weights are initialized to zero.
+                logger.warning(
+                    "The default PEFT config uses `target_parameters`, which does not support multiple "
+                    "adapters. Skipping creation of the 'ref' adapter; the base model (adapters disabled) "
+                    "will be used for reference logprobs instead."
+                )
+            else:
+                model.add_adapter("ref", default_peft_config)
+                for name, param in model.named_parameters():
+                    if ".default." in name:
+                        ref_name = name.replace(".default.", ".ref.")
+                        ref_param = model.get_parameter(ref_name)
+                        ref_param.data.copy_(param.data)
 
         # Create PEFT model
         if peft_config is not None:
