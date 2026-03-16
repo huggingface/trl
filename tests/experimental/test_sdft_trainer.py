@@ -60,7 +60,6 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
-            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -91,7 +90,6 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
-            report_to="none",
             generate_from_teacher=True,
         )
 
@@ -131,7 +129,6 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
-            report_to="none",
             chat_template_kwargs={"enable_thinking": False},
         )
 
@@ -173,7 +170,6 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
-            report_to="none",
         )
 
         trainer = SDFTTrainer(
@@ -210,7 +206,6 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=2,
             num_generations=1,
-            report_to="none",
             sync_ref_model=True,
             ref_model_mixup_alpha=0.05,
             ref_model_sync_steps=1,
@@ -307,7 +302,6 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=1,
             num_generations=1,
-            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()
@@ -342,7 +336,6 @@ class TestSDFTTrainer(TrlTestCase):
             max_completion_length=8,
             max_steps=2,
             num_generations=1,
-            report_to="none",
         )
 
         capture_callback = SelfDistillationCaptureCallback()

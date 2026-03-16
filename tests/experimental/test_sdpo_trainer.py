@@ -75,7 +75,6 @@ class TestSDPOTrainer(TrlTestCase):
             generation_batch_size=2,
             num_generations=2,
             max_completion_length=8,
-            report_to="none",
             include_environment_feedback=True,
             max_steps=1,
         )
@@ -102,7 +101,6 @@ class TestSDPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            report_to="none",
             distillation_topk=5,
             full_logit_distillation=True,
             distillation_is_clip=None,
@@ -134,9 +132,6 @@ class TestSDPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            report_to="none",
-            distillation_alpha=1.0,
-            distillation_topk=None,
             distillation_is_clip=None,
         )
 
@@ -166,7 +161,6 @@ class TestSDPOTrainer(TrlTestCase):
             steps_per_generation=2,
             num_generations=2,
             max_completion_length=8,
-            report_to="none",
             max_steps=1,
         )
 
@@ -195,11 +189,8 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=3,
             num_generations_eval=2,
             max_completion_length=8,
-            report_to="none",
             success_reward_threshold=0.5,
             dont_reprompt_on_self_success=False,
-            distillation_alpha=1.0,
-            distillation_topk=None,
             distillation_is_clip=None,
             max_steps=1,
         )
@@ -249,9 +240,6 @@ class TestSDPOTrainer(TrlTestCase):
             generation_batch_size=2,
             num_generations=2,
             max_completion_length=8,
-            report_to="none",
-            distillation_alpha=1.0,
-            distillation_topk=None,
             distillation_is_clip=None,
             success_reward_threshold=0.5,
             dont_reprompt_on_self_success=False,
@@ -299,9 +287,6 @@ class TestSDPOTrainer(TrlTestCase):
             generation_batch_size=2,
             num_generations=2,
             max_completion_length=8,
-            report_to="none",
-            distillation_alpha=1.0,
-            distillation_topk=None,
             distillation_is_clip=None,
             include_environment_feedback=True,
             max_steps=1,
@@ -336,7 +321,6 @@ class TestSDPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            report_to="none",
             diagnostics_warning_interval=2,
             max_steps=2,
         )
@@ -367,7 +351,6 @@ class TestSDPOTrainer(TrlTestCase):
             generation_batch_size=2,
             num_generations=2,
             max_completion_length=8,
-            report_to="none",
             success_reward_threshold=0.5,
             dont_reprompt_on_self_success=False,
             max_steps=1,
