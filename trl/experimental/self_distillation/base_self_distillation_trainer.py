@@ -248,7 +248,3 @@ class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _Ba
         if self.is_fsdp_enabled:
             return prepare_fsdp(aux_model, self.accelerator)
         return self.accelerator.prepare_model(aux_model, evaluation_mode=True)
-
-    def _set_signature_columns_if_needed(self):
-        if self._signature_columns is None:
-            self._signature_columns = ["prompt", "privileged_context"]

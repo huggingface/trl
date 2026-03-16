@@ -339,10 +339,9 @@ class OnlineRolloutMixin:
         loss = self._aggregate_self_distillation_loss(per_token_loss, completion_mask)
 
         mode = "train" if self.model.training else "eval"
-        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
-        loss = loss / accumulation_scale
-
         self._metrics[mode]["self_distillation/policy_loss"].append(
             self.accelerator.gather(loss.detach()).mean().item()
         )
-        return loss
+
+        accumulation_scale = self.current_gradient_accumulation_steps if mode == "train" else 1.0
+        return loss / accumulation_scale
