@@ -69,6 +69,7 @@ class SuccessfulRolloutTeacherContextBuilder:
     ) -> TokenizedPromptBatch:
         teacher_prompt_ids_list = []
         device = self.trainer.accelerator.device
+        chat_template_kwargs = getattr(self.trainer, "chat_template_kwargs", {})
         for msg in teacher_messages_list:
             if isinstance(msg, list) and isinstance(msg[0], dict):
                 tokenized = self.trainer.processing_class.apply_chat_template(
@@ -76,6 +77,7 @@ class SuccessfulRolloutTeacherContextBuilder:
                     tokenize=True,
                     add_generation_prompt=True,
                     return_tensors="pt",
+                    **chat_template_kwargs,
                 )
                 if isinstance(tokenized, torch.Tensor):
                     ids = tokenized.squeeze(0)

@@ -20,7 +20,7 @@ from transformers.utils import is_peft_available
 from trl.data_utils import maybe_apply_chat_template
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
@@ -154,10 +154,8 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert capture_callback.captured_generation_prompt_text == expected_prompt
 
+    @require_peft
     def test_training_with_peft_model_and_no_explicit_ref_model(self):
-        if not is_peft_available():
-            self.skipTest("PEFT is not available")
-
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],

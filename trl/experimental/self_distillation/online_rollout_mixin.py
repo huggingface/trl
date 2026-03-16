@@ -192,6 +192,7 @@ class OnlineRolloutMixin:
         local_batch_size = completion_ids.size(0)
         process_start = self.accelerator.process_index * local_batch_size
         process_slice = slice(process_start, process_start + local_batch_size)
+        rewards = rewards[process_slice]
         advantages = advantages[process_slice]
 
         agg_completion_lengths = self.accelerator.gather(
