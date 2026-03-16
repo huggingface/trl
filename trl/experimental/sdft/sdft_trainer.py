@@ -292,13 +292,20 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             self.teacher_model = None
 
         if args.sync_ref_model:
-            if self.ref_model is None:
-                raise NotImplementedError(
-                    "You passed `sync_ref_model=True` while using PEFT without an explicit `ref_model`. In this "
-                    "setup, SDFT recovers teacher behavior by temporarily disabling the adapter, so there is no "
-                    "standalone reference model to synchronize."
+            if self.ref_model is not None:
+                self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            elif is_peft_available() and is_peft_model(self.model):
+                from ...trainer.callbacks import PEFTAdapterEMACallback
+
+                self.add_callback(
+                    PEFTAdapterEMACallback(
+                        model=self.model,
+                        teacher_adapter_name="teacher",
+                        update_rate=args.ref_model_mixup_alpha,
+                        sync_steps=args.ref_model_sync_steps,
+                        accelerator=self.accelerator,
+                    )
                 )
-            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         self.model_accepts_loss_kwargs = False
 
@@ -432,7 +439,11 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         return loss / self.current_gradient_accumulation_steps
 
     def _get_teacher_context_for_self_distillation(self, model):
-        if is_peft_available() and isinstance(self.model, PeftModel) and self.ref_model is None:
+        if is_peft_available() and isinstance(self.model, PeftModel):
             model = self.accelerator.unwrap_model(self.model)
-            return use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None)
+            if self.ref_model is not None:
+                return use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None)
+            if self.args.sync_ref_model and "teacher" in model.peft_config:
+                return use_adapter(model, adapter_name="teacher")
+            return use_adapter(model, adapter_name=None)
         return super()._get_teacher_context_for_self_distillation(model)

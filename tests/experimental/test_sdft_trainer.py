@@ -191,6 +191,102 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+    @require_peft
+    def test_training_with_peft_model_and_sync_ref_model(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": [
+                    "Example answer: 4.",
+                    "Example answer: Paris.",
+                ],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            max_completion_length=8,
+            max_steps=2,
+            num_generations=1,
+            report_to="none",
+            sync_ref_model=True,
+            ref_model_mixup_alpha=0.05,
+            ref_model_sync_steps=1,
+        )
+
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            ref_model=None,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(
+                task_type="CAUSAL_LM",
+                target_modules=["q_proj", "v_proj"],
+            ),
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @require_peft
+    def test_peft_adapter_ema_callback(self):
+        import torch
+        from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
+        from transformers import AutoModelForCausalLM, TrainerControl, TrainerState, TrainingArguments
+
+        from trl.trainer.callbacks import PEFTAdapterEMACallback
+
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            device_map="cpu",
+        )
+        lora_config = LoraConfig(
+            task_type="CAUSAL_LM",
+            target_modules=["q_proj", "v_proj"],
+            r=8,
+        )
+        model = get_peft_model(model, lora_config, adapter_name="default")
+
+        update_rate = 0.5
+        callback = PEFTAdapterEMACallback(
+            model=model,
+            teacher_adapter_name="teacher",
+            update_rate=update_rate,
+            sync_steps=1,
+        )
+
+        # Initialize and verify teacher adapter was created with zero weights
+        callback._initialize_teacher_adapter()
+        assert "teacher" in model.peft_config
+        assert callback.shadow_weights is not None
+
+        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
+        for key, param in teacher_state.items():
+            assert torch.all(param == 0), f"Teacher param {key} should be zero-initialized"
+
+        # Verify shadow weights keys match student state dict keys
+        student_state = {k: v.clone() for k, v in get_peft_model_state_dict(model, adapter_name="default").items()}
+        assert set(callback.shadow_weights.keys()) == set(student_state.keys())
+
+        # Simulate a training step and verify EMA update
+        args = TrainingArguments(output_dir=self.tmp_dir)
+        state = TrainerState(global_step=1)
+        control = TrainerControl()
+        callback.on_step_end(args, state, control)
+
+        # shadow = (1 - rate) * 0 + rate * student = rate * student
+        for key in callback.shadow_weights:
+            expected = update_rate * student_state[key]
+            torch.testing.assert_close(callback.shadow_weights[key], expected)
+
+        # Verify teacher adapter received the shadow weights
+        teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
+        for key in teacher_state:
+            torch.testing.assert_close(teacher_state[key].float(), callback.shadow_weights[key])
+
     def test_training_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict(
             {

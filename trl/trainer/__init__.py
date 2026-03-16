@@ -21,6 +21,7 @@ _import_structure = {
     "callbacks": [
         "BEMACallback",
         "LogCompletionsCallback",
+        "PEFTAdapterEMACallback",
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WeaveCallback",
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from .callbacks import (
         BEMACallback,
         LogCompletionsCallback,
+        PEFTAdapterEMACallback,
         RichProgressCallback,
         SyncRefModelCallback,
         WeaveCallback,
