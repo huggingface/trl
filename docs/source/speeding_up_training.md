@@ -27,7 +27,7 @@ Then, run the training script and pass `use_vllm=True` in the training arguments
 ```python
 from trl.experimental.online_dpo import OnlineDPOConfig
 
-training_args = OnlineDPOConfig(..., use_vllm=True)
+training_args = OnlineDPOConfig(..., use_vllm=True, vllm_mode="server")
 ```
 
 </hfoption>
@@ -44,7 +44,7 @@ Then, run the training script and pass `use_vllm=True` in the training arguments
 ```python
 from trl import GRPOConfig
 
-training_args = GRPOConfig(..., use_vllm=True)
+training_args = GRPOConfig(..., use_vllm=True, vllm_mode="server")
 ```
 
 You can customize the server configuration by passing additional arguments. For more information, see [vLLM integration](vllm_integration).
@@ -78,7 +78,7 @@ Then, run the training script and pass `use_vllm=True` in the training arguments
 ```python
 from trl import RLOOConfig
 
-training_args = RLOOConfig(..., use_vllm=True)
+training_args = RLOOConfig(..., use_vllm=True, vllm_mode="server")
 ```
 
 You can customize the server configuration by passing additional arguments. For more information, see [vLLM integration](vllm_integration).
