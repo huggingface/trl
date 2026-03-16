@@ -16,8 +16,6 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
 from ...trainer.base_config import _BaseConfig
 
 
@@ -161,7 +159,7 @@ class OnlineDPOConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `5e-7` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
