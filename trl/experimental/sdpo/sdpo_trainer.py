@@ -107,7 +107,6 @@ class SuccessfulRolloutTeacherContextBuilder:
         device = self.trainer.accelerator.device
         mode = "train" if self.trainer.model.training else "eval"
         num_generations = self.trainer.num_generations if mode == "train" else self.trainer.num_generations_eval
-        total_samples = rewards.shape[0]
         completion_ids = output["completion_ids"]
         completion_mask = output["completion_mask"]
 
@@ -115,11 +114,12 @@ class SuccessfulRolloutTeacherContextBuilder:
         process_start = self.trainer.accelerator.process_index * num_local
         process_slice = slice(process_start, process_start + num_local)
 
-        # Rewards are already globally gathered before this builder runs, but prompts and completions are still local.
-        # Gather only the pieces needed to mine successful rollouts across generation groups; the returned teacher
-        # tensors remain local to the current process.
+        # Rewards arrive already locally sliced (per-process) from the rollout mixin; re-gather them so
+        # the mining loop can find successful rollouts across all processes within each generation group.
+        all_rewards = self.trainer.accelerator.gather(rewards)
         all_completion_ids = self.trainer.accelerator.gather(completion_ids)
         all_prompts = gather_object(prompts)
+        total_samples = all_rewards.shape[0]
         all_feedbacks = gather_object(feedbacks) if feedbacks is not None else [None] * total_samples
 
         threshold = self.trainer.args.success_reward_threshold
@@ -143,7 +143,7 @@ class SuccessfulRolloutTeacherContextBuilder:
                 for j in range(group_start, group_end):
                     if dont_reprompt_self and j == i:
                         continue
-                    if rewards[j].item() >= threshold:
+                    if all_rewards[j].item() >= threshold:
                         successful.append(j)
 
             if i % num_generations == 0 and len(successful) > 0:
