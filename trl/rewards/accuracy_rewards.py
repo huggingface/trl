@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+import threading
+
 from ..import_utils import is_math_verify_available
 
 
@@ -53,8 +56,20 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
 
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
+
+    # math_verify uses signal.alarm() for timeouts, which only works in the main thread.
+    # Disable timeouts when running in a non-main thread to avoid ValueError.
+    is_main_thread = threading.current_thread() is threading.main_thread()
+    parsing_timeout = None if not is_main_thread else 10
+    verify_timeout = None if not is_main_thread else 5
+
+    # Suppress the "Timeout is disabled" warnings from math_verify when we intentionally disable timeouts
+    if not is_main_thread:
+        logging.getLogger("math_verify.parser").setLevel(logging.ERROR)
+        logging.getLogger("math_verify.grader").setLevel(logging.ERROR)
+
     for content, sol in zip(contents, solution, strict=True):
-        gold_parsed = parse(sol)
+        gold_parsed = parse(sol, parsing_timeout=parsing_timeout)
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
             answer_parsed = parse(
@@ -68,8 +83,9 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
                     )
                 ],
                 extraction_mode="first_match",
+                parsing_timeout=parsing_timeout,
             )
-            reward = float(verify(gold_parsed, answer_parsed))
+            reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=verify_timeout))
         else:
             # If the gold solution cannot be parsed, we assign `None` to skip this example
             reward = None
@@ -140,6 +156,18 @@ def reasoning_accuracy_reward(
 
     rewards = []
     contents = [completion[0]["content"] for completion in completions]
+
+    # math_verify uses signal.alarm() for timeouts, which only works in the main thread.
+    # Disable timeouts when running in a non-main thread to avoid ValueError.
+    is_main_thread = threading.current_thread() is threading.main_thread()
+    parsing_timeout = None if not is_main_thread else 10
+    verify_timeout = None if not is_main_thread else 5
+
+    # Suppress the "Timeout is disabled" warnings from math_verify when we intentionally disable timeouts
+    if not is_main_thread:
+        logging.getLogger("math_verify.parser").setLevel(logging.ERROR)
+        logging.getLogger("math_verify.grader").setLevel(logging.ERROR)
+
     for content, sol in zip(contents, solution, strict=True):
         # Split final answer from reasoning content
         is_reasoning_complete = False
@@ -153,7 +181,7 @@ def reasoning_accuracy_reward(
             rewards.append(0.0)
             continue
 
-        gold_parsed = parse(sol)
+        gold_parsed = parse(sol, parsing_timeout=parsing_timeout)
         if len(gold_parsed) != 0:
             # We require the answer to be provided in correct latex (no malformed operators)
             answer_parsed = parse(
@@ -168,8 +196,9 @@ def reasoning_accuracy_reward(
                     )
                 ],
                 extraction_mode="first_match",
+                parsing_timeout=parsing_timeout,
             )
-            reward = float(verify(gold_parsed, answer_parsed))
+            reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=verify_timeout))
         else:
             # If the gold solution cannot be parsed, we assign `None` to skip this example
             reward = None
