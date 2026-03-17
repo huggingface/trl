@@ -62,9 +62,11 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-# AutoModelForSequenceClassification adds a new classification head when loading a CausalLM. That head is randomly
-# initialized and triggers a harmless warning about uninitialized weights. We suppress just that specific warning to
-# avoid confusing users.
+# Loading a CausalLM checkpoint into AutoModelForSequenceClassification triggers two harmless warnings:
+#   - MISSING  score.weight : the new seq-clf head was not in the checkpoint and is randomly initialized.
+#   - UNEXPECTED lm_head.weight : the causal LM head is in the checkpoint but absent from seq-clf.
+# Both are expected consequences of intentional cross-architecture loading. We suppress them to avoid
+# confusing users.
 
 
 # Old approach using logging filter (for transformers < 4.57.0)
