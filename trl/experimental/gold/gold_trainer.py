@@ -1078,10 +1078,10 @@ class GOLDTrainer(SFTTrainer):
         """
         Override Trainer.get_train_dataloader to load one generation batch per optimizer window.
 
-        The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`.
-        The `RepeatSampler` (with `repeat_count=gradient_accumulation_steps`) ensures each generation batch is
-        sampled `gradient_accumulation_steps` times so Trainer's loop iterates the correct number of times.
-        Only the first batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`.
+        The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`. The
+        `RepeatSampler` (with `repeat_count=gradient_accumulation_steps`) ensures each generation batch is sampled
+        `gradient_accumulation_steps` times so Trainer's loop iterates the correct number of times. Only the first
+        batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`.
         """
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
