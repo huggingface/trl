@@ -72,15 +72,19 @@ logger = get_logger(__name__)
 # Old approach using logging filter (for transformers < 4.57.0)
 @contextmanager
 def suppress_from_pretrained_warning(logger: logging.Logger):
-    pattern = re.compile(
+    missing_pattern = re.compile(
         r"^Some weights of \S+ were not initialized from the model checkpoint at \S+ and are newly initialized: "
         r"\[.*\]\nYou should probably TRAIN this model on a down-stream task to be able to use it for predictions and "
         r"inference\.$"
     )
+    unexpected_pattern = re.compile(
+        r"^Some weights of the model checkpoint at \S+ were not used when initializing \S+: \[.*lm_head.*\]"
+    )
 
     class _Filter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:
-            return not pattern.search(record.getMessage())
+            msg = record.getMessage()
+            return not (missing_pattern.search(msg) or unexpected_pattern.search(msg))
 
     f = _Filter()
     logger.addFilter(f)
