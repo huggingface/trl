@@ -233,7 +233,6 @@ def build_teacher_inputs_from_texts(
     return teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_prompt_length
 
 
-
 class ULDLoss(nn.Module):
     """
     Universal Logit Distillation Loss.
@@ -1149,7 +1148,9 @@ class GOLDTrainer(SFTTrainer):
             clean_up_tokenization_spaces=False,
         )
 
-    def _ensure_original_text_fields(self, slice_inputs: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
+    def _ensure_original_text_fields(
+        self, slice_inputs: dict[str, torch.Tensor | Any]
+    ) -> dict[str, torch.Tensor | Any]:
         """Populate original prompt/completion text fields when missing."""
         if "original_prompt_text" in slice_inputs and "original_completion_text" in slice_inputs:
             return slice_inputs
@@ -1255,7 +1256,9 @@ class GOLDTrainer(SFTTrainer):
 
         max_completion_length = self.generation_config.max_new_tokens
         temperature = self.generation_config.temperature
-        top_k = self.generation_config.top_k if self.generation_config.top_k and self.generation_config.top_k > 0 else -1
+        top_k = (
+            self.generation_config.top_k if self.generation_config.top_k and self.generation_config.top_k > 0 else -1
+        )
         top_p = self.args.top_p if hasattr(self.args, "top_p") else 1.0
         repetition_penalty = self.args.repetition_penalty if hasattr(self.args, "repetition_penalty") else 1.0
         min_p = self.args.min_p if hasattr(self.args, "min_p") else 0.0
@@ -1439,9 +1442,7 @@ class GOLDTrainer(SFTTrainer):
 
         return completion_ids
 
-    def _generate_non_vllm_for_slices(
-        self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
-    ):
+    def _generate_non_vllm_for_slices(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
         """Fallback generation without vLLM (uses model.generate per slice)."""
         with unwrap_model_for_generation(
             self.model,
@@ -1542,9 +1543,7 @@ class GOLDTrainer(SFTTrainer):
 
             new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
             prompt_lengths = torch.full((prompt_ids.shape[0],), prompt_ids.shape[1], device=device)
-            new_attention_mask, new_labels = self._build_sequence_batch(
-                new_input_ids, prompt_lengths, pad_token_id
-            )
+            new_attention_mask, new_labels = self._build_sequence_batch(new_input_ids, prompt_lengths, pad_token_id)
 
             completion_texts = self.processing_class.batch_decode(
                 completion_ids_for_text,

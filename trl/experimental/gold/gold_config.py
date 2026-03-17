@@ -405,8 +405,7 @@ class GOLDConfig(SFTConfig):
             self.generation_batch_size = local_sequence_batch_size // self.num_generations
         if self.generation_batch_size < 1:
             raise ValueError(
-                "generation_batch_size must be at least 1. "
-                f"Got generation_batch_size={self.generation_batch_size}."
+                f"generation_batch_size must be at least 1. Got generation_batch_size={self.generation_batch_size}."
             )
         if self.generation_batch_size * self.num_generations != local_sequence_batch_size:
             raise ValueError(
