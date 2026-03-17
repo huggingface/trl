@@ -439,6 +439,9 @@ class BCOTrainer(_BaseTrainer):
         if type(args) is TrainingArguments:
             raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
 
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if not isinstance(model, str) and model is not None and ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "

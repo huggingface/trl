@@ -169,6 +169,9 @@ class PRMTrainer(_BaseTrainer):
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: dict | None = None,
     ):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
 
