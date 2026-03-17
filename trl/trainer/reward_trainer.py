@@ -97,17 +97,26 @@ def suppress_from_pretrained_warning(logger: logging.Logger):
 # New approach using scoped override (for transformers >= 4.57.0)
 @contextmanager
 def ignore_seqcls_score_missing_key():
-    # Scoped override: ignore only the expected seq-clf head key.
-    old = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_missing", None)
-    merged = list(old) if old is not None else []
-    pattern = r"^score\.weight$"
-    if pattern not in merged:
-        merged.append(pattern)
-    GenericForSequenceClassification._keys_to_ignore_on_load_missing = merged
+    # Scoped override: ignore the expected seq-clf head key (newly added) and the causal LM head
+    # key (present in the checkpoint but absent from seq-clf).
+    old_missing = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_missing", None)
+    old_unexpected = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_unexpected", None)
+
+    merged_missing = list(old_missing) if old_missing is not None else []
+    if r"^score\.weight$" not in merged_missing:
+        merged_missing.append(r"^score\.weight$")
+
+    merged_unexpected = list(old_unexpected) if old_unexpected is not None else []
+    if r"^lm_head\." not in merged_unexpected:
+        merged_unexpected.append(r"^lm_head\.")
+
+    GenericForSequenceClassification._keys_to_ignore_on_load_missing = merged_missing
+    GenericForSequenceClassification._keys_to_ignore_on_load_unexpected = merged_unexpected
     try:
         yield
     finally:
-        GenericForSequenceClassification._keys_to_ignore_on_load_missing = old
+        GenericForSequenceClassification._keys_to_ignore_on_load_missing = old_missing
+        GenericForSequenceClassification._keys_to_ignore_on_load_unexpected = old_unexpected
 
 
 # Version-aware wrapper that chooses the appropriate approach
