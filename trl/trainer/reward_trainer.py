@@ -71,7 +71,7 @@ logger = get_logger(__name__)
 
 # Old approach using logging filter (for transformers < 4.57.0)
 @contextmanager
-def suppress_from_pretrained_warning(logger: logging.Logger):
+def _suppress_seqcls_cross_arch_keys(logger: logging.Logger):
     missing_pattern = re.compile(
         r"^Some weights of \S+ were not initialized from the model checkpoint at \S+ and are newly initialized: "
         r"\[.*\]\nYou should probably TRAIN this model on a down-stream task to be able to use it for predictions and "
@@ -130,7 +130,7 @@ def suppress_seqcls_warning():
     else:
         # Get the transformers logger
         transformers_logger = logging.getLogger("transformers.modeling_utils")
-        with suppress_from_pretrained_warning(transformers_logger):
+        with _suppress_seqcls_cross_arch_keys(transformers_logger):
             yield
 
 
