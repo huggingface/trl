@@ -62,29 +62,26 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-# Loading a CausalLM checkpoint into AutoModelForSequenceClassification triggers two harmless warnings:
-#   - MISSING  score.weight : the new seq-clf head was not in the checkpoint and is randomly initialized.
-#   - UNEXPECTED lm_head.weight : the causal LM head is in the checkpoint but absent from seq-clf.
+# Loading a CausalLM checkpoint into AutoModelForSequenceClassification triggers harmless warnings:
+#   - MISSING  score.weight    : the new seq-clf head was not in the checkpoint and is randomly initialized.
+#   - UNEXPECTED lm_head.weight: the causal LM head is in the checkpoint but absent from seq-clf (>= 4.57.0 only).
 # Both are expected consequences of intentional cross-architecture loading. We suppress them to avoid
 # confusing users.
 
 
 # Old approach using logging filter (for transformers < 4.57.0)
+# Note: in transformers < 4.57.0, only the MISSING score.weight warning is emitted; lm_head.weight is not reported.
 @contextmanager
 def _suppress_seqcls_cross_arch_keys(logger: logging.Logger):
-    missing_pattern = re.compile(
+    pattern = re.compile(
         r"^Some weights of \S+ were not initialized from the model checkpoint at \S+ and are newly initialized: "
         r"\[.*\]\nYou should probably TRAIN this model on a down-stream task to be able to use it for predictions and "
         r"inference\.$"
     )
-    unexpected_pattern = re.compile(
-        r"^Some weights of the model checkpoint at \S+ were not used when initializing \S+: \[.*lm_head.*\]"
-    )
 
     class _Filter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:
-            msg = record.getMessage()
-            return not (missing_pattern.search(msg) or unexpected_pattern.search(msg))
+            return not pattern.search(record.getMessage())
 
     f = _Filter()
     logger.addFilter(f)
