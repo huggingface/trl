@@ -464,7 +464,9 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     prompt_tensor[0, pad_width:] = torch.tensor(prompt_ids, dtype=torch.long)
     prompt_mask = (prompt_tensor != pad_id).long()
 
-    generated_sequence = torch.tensor(prompt_ids + completion_ids, dtype=torch.long).unsqueeze(0)
+    # model.generate() returns full sequences including left-padding from the input
+    completion_tensor = torch.tensor(completion_ids, dtype=torch.long).unsqueeze(0)
+    generated_sequence = torch.cat([prompt_tensor, completion_tensor], dim=1)
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
@@ -488,9 +490,9 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     else:
         assert torch.all(new_mask == 1)
 
-    prompt_len = len(prompt_ids)
-    assert torch.all(new_labels[0, :prompt_len] == -100)
-    assert torch.equal(new_labels[0, prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
+    padded_prompt_len = prompt_tensor.shape[1]
+    assert torch.all(new_labels[0, :padded_prompt_len] == -100)
+    assert torch.equal(new_labels[0, padded_prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
 
     assert prompt_texts[0] == llama_tokenizer.decode(prompt_ids, skip_special_tokens=False)
     assert completion_texts[0] == llama_tokenizer.decode(completion_ids, skip_special_tokens=False)
