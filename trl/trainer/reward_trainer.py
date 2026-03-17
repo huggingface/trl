@@ -96,7 +96,7 @@ def suppress_from_pretrained_warning(logger: logging.Logger):
 
 # New approach using scoped override (for transformers >= 4.57.0)
 @contextmanager
-def ignore_seqcls_score_missing_key():
+def _ignore_seqcls_cross_arch_keys():
     # Scoped override: ignore the expected seq-clf head key (newly added) and the causal LM head
     # key (present in the checkpoint but absent from seq-clf).
     old_missing = getattr(GenericForSequenceClassification, "_keys_to_ignore_on_load_missing", None)
@@ -125,7 +125,7 @@ def suppress_seqcls_warning():
     # Use the new approach for transformers >= 4.57.0, old approach for earlier versions
     # The old approach is needed for 4.56.2 to avoid meta tensor issues with device_map=None
     if Version(transformers.__version__) >= Version("4.57.0"):
-        with ignore_seqcls_score_missing_key():
+        with _ignore_seqcls_cross_arch_keys():
             yield
     else:
         # Get the transformers logger
