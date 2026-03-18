@@ -109,6 +109,12 @@ class DataCollatorForPreference(DataCollatorMixin):
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
+        max_length (`int`, *optional*):
+            Maximum length of the sequences after concatenation. Sequences longer than `max_length` are truncated
+            before padding, which avoids allocating oversized tensors for batches containing very long sequences.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode when a concatenated sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -140,16 +146,31 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
 
     pad_token_id: int
+    max_length: int | None = None
+    truncation_mode: str = "keep_start"
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         prompt_chosen_ids = [example["prompt_ids"] + example["chosen_ids"] for example in examples]
         prompt_rejected_ids = [example["prompt_ids"] + example["rejected_ids"] for example in examples]
-        chosen_attention_mask = [[1] * len(example["prompt_ids"] + example["chosen_ids"]) for example in examples]
-        rejected_attention_mask = [[1] * len(example["prompt_ids"] + example["rejected_ids"]) for example in examples]
         chosen_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["chosen_ids"]) for example in examples]
         rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
+
+        if self.max_length is not None:
+            if self.truncation_mode == "keep_start":
+                prompt_chosen_ids = [ids[: self.max_length] for ids in prompt_chosen_ids]
+                prompt_rejected_ids = [ids[: self.max_length] for ids in prompt_rejected_ids]
+                chosen_mask = [m[: self.max_length] for m in chosen_mask]
+                rejected_mask = [m[: self.max_length] for m in rejected_mask]
+            elif self.truncation_mode == "keep_end":
+                prompt_chosen_ids = [ids[-self.max_length :] for ids in prompt_chosen_ids]
+                prompt_rejected_ids = [ids[-self.max_length :] for ids in prompt_rejected_ids]
+                chosen_mask = [m[-self.max_length :] for m in chosen_mask]
+                rejected_mask = [m[-self.max_length :] for m in rejected_mask]
+
+        chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
+        rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
         input_ids = prompt_chosen_ids + prompt_rejected_ids
         attention_mask = chosen_attention_mask + rejected_attention_mask
         completion_mask = chosen_mask + rejected_mask
@@ -216,6 +237,10 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         processor ([`~transformers.ProcessorMixin`]):
             The processor used to tokenize text and process images. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
+        max_length (`int`, *optional*):
+            Maximum sequence length. Sequences longer than `max_length` are truncated before padding, which avoids
+            allocating oversized tensors for batches containing very long sequences. Only `"keep_start"` truncation
+            applies to vision datasets; `"keep_end"` is rejected upstream.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, optional, defaults to `"pt"`):
@@ -270,6 +295,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     """
 
     processor: ProcessorMixin
+    max_length: int | None = None
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
@@ -355,6 +381,15 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             )
         else:
             attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = token_type_ids[:, : self.max_length]
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
@@ -607,11 +642,14 @@ class DPOTrainer(_BaseTrainer):
                 )
             data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
+                max_length=args.max_length,
+                truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionPreference(
                 processor=processing_class,
+                max_length=args.max_length,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
