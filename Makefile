@@ -19,13 +19,11 @@ test_experimental:
 	pytest -n auto -s -v tests/experimental
 
 codex:
-	ln -snf .ai/AGENTS.md AGENTS.md
 	mkdir -p .agents
 	rm -rf .agents/skills
 	ln -snf ../.ai/skills .agents/skills
 
 claude:
-	ln -snf .ai/AGENTS.md CLAUDE.md
 	mkdir -p .claude
 	rm -rf .claude/skills
 	ln -snf ../.ai/skills .claude/skills
