@@ -15,13 +15,11 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
-from ...trainer.base_config import BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class ORPOConfig(BaseConfig):
+class ORPOConfig(_BaseConfig):
     # docstyle-ignore
     r"""
     Configuration class for the [`experimental.orpo.ORPOTrainer`].
@@ -71,7 +69,7 @@ class ORPOConfig(BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -123,7 +121,7 @@ class ORPOConfig(BaseConfig):
             "argument, you need to specify if the model returned by the callable is an encoder-decoder model."
         },
     )
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "

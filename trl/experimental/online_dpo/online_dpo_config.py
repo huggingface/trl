@@ -16,11 +16,11 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...trainer.base_config import BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class OnlineDPOConfig(BaseConfig):
+class OnlineDPOConfig(_BaseConfig):
     # docstyle-ignore
     r"""
     Configuration class for the [`experimental.online_dpo.OnlineDPOTrainer`].
@@ -99,7 +99,7 @@ class OnlineDPOConfig(BaseConfig):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-        vllm_mode (`str`, *optional*, defaults to `"server"`):
+        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
 
@@ -157,12 +157,19 @@ class OnlineDPOConfig(BaseConfig):
     > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `5e-7` instead of `5e-5`.
+    > - `remove_unused_columns`: Defaults to `False` instead of `True`.
     """
+
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=5e-7,
         metadata={"help": "The initial learning rate for AdamW."},
+    )
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to automatically remove the columns unused by the model forward method."},
     )
 
     reward_model_path: str | None = field(
@@ -299,7 +306,7 @@ class OnlineDPOConfig(BaseConfig):
         },
     )
     vllm_mode: str = field(
-        default="server",
+        default="colocate",
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
@@ -361,7 +368,7 @@ class OnlineDPOConfig(BaseConfig):
             "is not compatible with vLLM generation."
         },
     )
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "

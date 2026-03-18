@@ -37,7 +37,7 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import disable_dropout_in_model
 from ..utils import prepare_peft_model
 from .prm_config import PRMConfig
@@ -94,7 +94,7 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
     return {"accuracy": accuracy}
 
 
-class PRMTrainer(BaseTrainer):
+class PRMTrainer(_BaseTrainer):
     """
     Initialize PRMTrainer.
 
@@ -169,6 +169,9 @@ class PRMTrainer(BaseTrainer):
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: dict | None = None,
     ):
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
 

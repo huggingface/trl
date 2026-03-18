@@ -71,6 +71,8 @@ from transformers import (
     Qwen2ForSequenceClassification,
     Qwen2VLConfig,
     Qwen2VLForConditionalGeneration,
+    Qwen3_5Config,
+    Qwen3_5ForConditionalGeneration,
     Qwen3Config,
     Qwen3ForCausalLM,
     Qwen3ForSequenceClassification,
@@ -325,9 +327,10 @@ for model_id, model_class, dtype in [
     ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLForConditionalGeneration, torch.bfloat16),
     ("Qwen/Qwen3-VL-2B-Instruct", Qwen3VLForConditionalGeneration, torch.bfloat16),
+    ("Qwen/Qwen3.5-0.8B", Qwen3_5ForConditionalGeneration, torch.bfloat16),
 ]:
     processor = AutoProcessor.from_pretrained(model_id)
-    generation_config = GenerationConfig.from_pretrained(model_id)
+    generation_config = GenerationConfig.from_pretrained(model_id) if model_id != "Qwen/Qwen3.5-0.8B" else None
 
     text_config = {
         "num_hidden_layers": 2,
@@ -371,6 +374,21 @@ for model_id, model_class, dtype in [
         vision_config["depth"] = 2
         vision_config["out_hidden_size"] = 16
 
+    if issubclass(model_class.config_class, Qwen3_5Config):
+        # For tiny layer counts, default `layer_types` can end up with no full-attention layers (e.g. 2 layers and
+        # default interval 4), which breaks Qwen3.5 dynamic cache logic. Keep one full-attention layer at the end.
+        text_config["layer_types"] = ["linear_attention", "full_attention"]
+        text_config["full_attention_interval"] = 2
+        # Qwen3.5-VL vision config expects `depth`/`num_heads`, not `num_hidden_layers`/`num_attention_heads`.
+        vision_config.pop("num_hidden_layers", None)
+        vision_config.pop("num_attention_heads", None)
+        vision_config.pop("num_key_value_heads", None)
+        vision_config.pop("embed_dim", None)
+        vision_config["depth"] = 2
+        vision_config["num_heads"] = 4
+        vision_config["intermediate_size"] = 32
+        vision_config["out_hidden_size"] = 16
+
     if model_id == "llava-hf/llava-v1.6-mistral-7b-hf":
         # Hotfix: llava-hf/llava-v1.6-mistral-7b-hf mistakesly sets text_config.dtype to "bfloat16".
         # See https://huggingface.co/llava-hf/llava-v1.6-mistral-7b-hf/discussions/46
@@ -378,6 +396,14 @@ for model_id, model_class, dtype in [
 
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
     model = model_class(config).to(dtype=dtype)
+
+    if issubclass(model_class.config_class, Qwen3_5Config):
+        # Qwen3.5 models has some weights in float32, to mirror this in the tiny model we need to convert them to float32 manually.
+        for layer in model.model.language_model.layers:
+            if hasattr(layer, "linear_attn"):  # applies to linear attention layers only
+                layer.linear_attn.A_log.data = layer.linear_attn.A_log.data.float()
+                layer.linear_attn.norm.weight.data = layer.linear_attn.norm.weight.data.float()
+
     push_to_hub(model, processor, generation_config, "tiny")
 
 # PEFT models

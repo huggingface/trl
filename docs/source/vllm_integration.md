@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions `0.10.2`, `0.11.0`, `0.11.1`, `0.11.2` and `0.12.0`. Please ensure you have one of these versions installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.10.2` to `0.17.0`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
@@ -31,12 +31,12 @@ pip install "trl[vllm]"
 Then run the server on specific GPUs (e.g., GPUs 0-3):
 
 ```sh
-CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 4
 ```
 
 Once the server is running, you can use it to generate completions for training. In the example below, we are using the different supported trainers using the vLLM server for generation. The `--tensor-parallel-size` and `--data-parallel-size` arguments control how the model and data are sharded across GPUs.
 
-In this example, we are sharding two copies of the model across 4 GPUs. Increasing data parallelism increases throughput, while increasing tensor parallelism allows for serving larger models. Then, run the training script on different GPUs (e.g., GPUs 4-7) by passing `use_vllm=True` in the training arguments as follows:
+In this example, we shard one model across 4 GPUs with tensor parallelism. Then, run the training script on different GPUs (e.g., GPUs 4-7) by passing `use_vllm=True` in the training arguments as follows:
 
 Sample of a simple `train.py` script:
 
@@ -52,7 +52,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=GRPOConfig(use_vllm=True),
+    args=GRPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -72,7 +72,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = OnlineDPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=OnlineDPOConfig(use_vllm=True),
+    args=OnlineDPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -92,7 +92,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = NashMDTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=NashMDConfig(use_vllm=True),
+    args=NashMDConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -112,7 +112,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = XPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=XPOConfig(use_vllm=True),
+    args=XPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -132,7 +132,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = RLOOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=RLOOConfig(use_vllm=True),
+    args=RLOOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -166,19 +166,15 @@ If you've ever done autoregressive decoder training, you know all the input toke
 When you run for example
 
 ```sh
-CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 1 --data-parallel-size 4
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 4
 ```
 
-the following happens:
+1. vLLM first spawns multiple workers to handle incoming requests in parallel. The number of workers is determined by multiplying the `--tensor-parallel-size` and `--data-parallel-size` values. In this example, it spawns 4 workers (4 × 1).
+Each worker operates independently and processes a chunk of the incoming requests — which are basically the prompts sent to the server for generation.
 
-![vllm](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/vllm-doc.png)
+2. Once the incoming requests (prompts) are distributed across the workers, the model starts generating completions. Internally, the model’s weights are split across multiple GPUs based on the `--tensor-parallel-size` argument — this is how tensor parallelism is handled.
 
-1. vLLM first spawns multiple workers to handle incoming requests in parallel. The number of workers is determined by multiplying the `--tensor-parallel-size` and `--data-parallel-size` values. In this example, it spawns 4 workers (1 × 4).
-Each worker operates independently and processes a chunk of the incoming requests — which are basically the prompts sent to the server for generation. A key point to understand is that these 4 workers are running in parallel, and each one is responsible for handling a subset of the total incoming load.
-
-2. Once the incoming requests (prompts) are distributed across the workers, the model starts generating completions. Internally, the model’s weights are split across multiple GPUs based on the `--tensor-parallel-size` argument — this is how tensor parallelism is handled. Meanwhile, data parallelism (controlled by `--data-parallel-size`) ensures that different sets of requests are processed independently across the workers. In short: tensor parallelism splits the model across GPUs, and data parallelism splits the batch of requests across different model replicas.
-
-3. Although the GPUs process requests independently and in parallel, they still need to communicate with each other. Remember that each GPU handles only a slice of the incoming prompts (for example, with 4 GPUs and 8 prompts using `--data-parallel-size=4`, each GPU processes 2 prompts).
+3. Although the GPUs process requests independently and in parallel, they still need to communicate with each other. Remember that each GPU handles only a slice of the incoming prompts (for example, with 4 GPUs and 8 prompts using `--tensor-parallel-size=4`, each GPU participates in serving the full model).
 This GPU-to-GPU communication is managed efficiently by NVIDIA’s NCCL library. The communication mainly ensures that each GPU gets its correct portion of the incoming requests — it’s lightweight and doesn’t interfere with generation itself.
 Separately, the number of completions to generate per prompt is controlled by the `num_generations` setting in the GRPO config. For instance, if you set `num_generations=2` (like in the picture above), each prompt will have 2 completions. So, with 8 prompts and `num_generations=2`, you would end up with 16 completions total — regardless of the number of GPUs or parallelism settings.
 
@@ -224,7 +220,9 @@ options:
   --tensor_parallel_size TENSOR_PARALLEL_SIZE, --tensor-parallel-size TENSOR_PARALLEL_SIZE
                         Number of tensor parallel workers to use. (default: 1)
   --data_parallel_size DATA_PARALLEL_SIZE, --data-parallel-size DATA_PARALLEL_SIZE
-                        Number of data parallel workers to use. (default: 1)
+                        Number of data parallel workers to use. For dense models, keep this at 1. Starting from vLLM `0.14.0`, setting
+                        this above `1` for dense models is no longer supported/useful and will error out (see vLLM PR #30739).
+                        (default: 1)
   --host HOST           Host address to run the server on. (default: 0.0.0.0)
   --port PORT           Port to run the server on. (default: 8000)
   --gpu_memory_utilization GPU_MEMORY_UTILIZATION, --gpu-memory-utilization GPU_MEMORY_UTILIZATION
@@ -259,20 +257,8 @@ options:
 ![tp dp throughput 8 gpus](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_8_gpus.png)
 ![tp dp throughput 4 gpus](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_4_gpus.png)
 
-First and foremost, always remember that the optimal setup depends on:
-
-- The model size
-- The number of GPUs you have
-- The GPU memory size
-- The batch size you are using
-- The number of requests you are sending to the server (prompts)
-- The `max_model_len` you are using (this is the max length of the input sequence that the model can process, a.k.a. the context window size)
-- The number of completions you are generating for each request (`num_generations`)
-
-Given these factors, our experiments on the Qwen model family (3B, 7B, 14B, 32B) using 8 H100 GPUs show that:
-
-- For reasonable-sized models (3B–14B) and a moderate context window (`max_len < 8k`), using full capacity for data parallelism gives better throughput. The setup `(tp=1, dp=8)` yields the best results.
-- For larger models (32B) and longer context windows (`max_len > 8k`), a smaller DP size combined with some model-side parallelism performs better. For example, `(tp=2, dp=4)` is a good setup for 32B models with a larger context window.
+> [!WARNING]
+> The benchmark plots above were collected with older vLLM versions. Starting with [vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel scaling for non-MoE (dense) models is no longer supported. To follow the latest recommendations, do not scale DP for non-MoE models.
 
 ### vLLM with Transformers Backend
 
@@ -290,7 +276,77 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/
 
 ### Modes of Using vLLM During Training
 
-TRL supports **two modes** for integrating vLLM during training: **server mode** and **colocate mode**.
+TRL supports **two modes** for integrating vLLM during training: **colocate mode** (default) and **server mode**.
+
+#### Colocate Mode
+
+In **colocate mode**, vLLM runs inside the trainer process and shares GPU memory with the training model.
+This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs. This is the default mode.
+
+Example configuration:
+
+<hfoptions id="vllm examples">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="OnlineDPO">
+
+```python
+from trl.experimental.online_dpo import OnlineDPOConfig
+
+training_args = OnlineDPOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="NashMD">
+
+```python
+from trl.experimental.nash_md import NashMDConfig
+
+training_args = NashMDConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="XPO">
+
+```python
+from trl.experimental.xpo import XPOConfig
+
+training_args = XPOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+</hfoptions>
 
 #### Server Mode
 
@@ -308,7 +364,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -321,7 +377,7 @@ from trl.experimental.online_dpo import OnlineDPOConfig
 training_args = OnlineDPOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -334,7 +390,7 @@ from trl.experimental.nash_md import NashMDConfig
 training_args = NashMDConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -347,7 +403,7 @@ from trl.experimental.xpo import XPOConfig
 training_args = XPOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -360,82 +416,7 @@ from trl import RLOOConfig
 training_args = RLOOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
-)
-```
-
-</hfoption>
-</hfoptions>
-
-#### Colocate Mode
-
-In **colocate mode**, vLLM runs inside the trainer process and shares GPU memory with the training model.
-This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
-
-Example configuration:
-
-<hfoptions id="vllm examples">
-<hfoption id="GRPO">
-
-```python
-from trl import GRPOConfig
-
-training_args = GRPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="OnlineDPO">
-
-```python
-from trl.experimental.online_dpo import OnlineDPOConfig
-
-training_args = OnlineDPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="NashMD">
-
-```python
-from trl.experimental.nash_md import NashMDConfig
-
-training_args = NashMDConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="XPO">
-
-```python
-from trl.experimental.xpo import XPOConfig
-
-training_args = XPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="RLOO">
-
-```python
-from trl import RLOOConfig
-
-training_args = RLOOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
+    vllm_mode="server",
 )
 ```
 

@@ -15,13 +15,11 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from transformers import TrainingArguments
-
-from ...trainer.base_config import BaseConfig
+from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class BCOConfig(BaseConfig):
+class BCOConfig(_BaseConfig):
     # docstyle-ignore
     r"""
     Configuration class for the [`experimental.bco.BCOTrainer`].
@@ -78,7 +76,7 @@ class BCOConfig(BaseConfig):
     > - `learning_rate`: Defaults to `5e-7` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -142,7 +140,7 @@ class BCOConfig(BaseConfig):
             "needed."
         },
     )
-    model_init_kwargs: dict[str, Any] | None = field(
+    model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "

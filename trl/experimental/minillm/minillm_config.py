@@ -29,7 +29,7 @@ class MiniLLMConfig(GRPOConfig):
     arguments, please refer to the [`~transformers.TrainingArguments`] and [`GRPOConfig`] documentation.
 
     Args:
-        teacher_model_init_kwargs (`dict[str, Any]]`, *optional*):
+        teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -47,7 +47,9 @@ class MiniLLMConfig(GRPOConfig):
             Whether to apply length normalization to the rewards.
     """
 
-    teacher_model_init_kwargs: dict[str, Any] | None = field(
+    _VALID_DICT_FIELDS = GRPOConfig._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
+
+    teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "

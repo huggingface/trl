@@ -812,7 +812,7 @@ class TestSFTTrainer(TrlTestCase):
             "attention_mask": torch.tensor([[1, 1, 1, 1, 1]]),
         }
 
-        with patch("trl.trainer.sft_trainer.BaseTrainer.compute_loss", side_effect=mock_super_compute_loss):
+        with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
             trainer.compute_loss(trainer.model, inputs)
 
         assert captured["skip_logits"] is True
@@ -846,7 +846,7 @@ class TestSFTTrainer(TrlTestCase):
             dummy_outputs = (dummy_loss, torch.randn(1, 5, trainer.model.config.vocab_size))
             return (dummy_loss, dummy_outputs)
 
-        with patch("trl.trainer.sft_trainer.BaseTrainer.compute_loss", side_effect=mock_super_compute_loss):
+        with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
             trainer.predict(trainer.train_dataset)
 
         assert captured["skip_logits"] is False
@@ -1542,6 +1542,13 @@ class TestSFTTrainer(TrlTestCase):
                         reason="Upstream transformers bug (transformers#43334) in 5.0.x; fixed in 5.1.0",
                     ),
                 ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )

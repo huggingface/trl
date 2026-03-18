@@ -49,7 +49,7 @@ from transformers.trainer_callback import CallbackHandler, ExportableState, Prin
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ...models.utils import unwrap_model_for_generation
-from ...trainer.base_trainer import BaseTrainer
+from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     log_table_to_comet_experiment,
@@ -289,13 +289,21 @@ class PolicyAndValueWrapper(nn.Module):
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
         self.is_gradient_checkpointing = policy.is_gradient_checkpointing
 
+    def gradient_checkpointing_enable(self, **kwargs):
+        self.policy.gradient_checkpointing_enable(**kwargs)
+        self.is_gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self):
+        self.policy.gradient_checkpointing_disable()
+        self.is_gradient_checkpointing = False
+
     def forward(self, **kwargs):
         output = self.critic_backbone(**kwargs)
         logits = self.value_model.score(output.hidden_states[-1])
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(BaseTrainer):
+class PPOTrainer(_BaseTrainer):
     """Trainer for Proximal Policy Optimization (PPO).
 
     For details on PPO, see the paper: [Proximal Policy Optimization
@@ -363,6 +371,9 @@ class PPOTrainer(BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         peft_config: "PeftConfig | None" = None,
     ) -> None:
+        if train_dataset is None:
+            raise ValueError("`train_dataset` is required")
+
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
