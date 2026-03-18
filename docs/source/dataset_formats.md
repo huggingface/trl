@@ -176,13 +176,13 @@ def control_light(room: str, state: str) -> str:
     return f"The lights in {room} are now {state}."
 
 # Generate JSON schema
-json_schema = json.dumps([get_json_schema(control_light)])
+json_schema = get_json_schema(control_light)]
 ```
 
 The generated schema would look like:
 
 ```python
-'[{"type": "function", "function": {"name": "control_light", "description": "Controls the lights in a room.", "parameters": {"type": "object", "properties": {"room": {"type": "string", "description": "The name of the room."}, "state": {"type": "string", "description": "The desired state of the light (\\"on\\" or \\"off\\")."}}, "required": ["room", "state"]}, "return": {"type": "string", "description": "str: A message indicating the new state of the lights."}}}]'
+{"type": "function", "function": {"name": "control_light", "description": "Controls the lights in a room.", "parameters": {"type": "object", "properties": {"room": {"type": "string", "description": "The name of the room."}, "state": {"type": "string", "description": "The desired state of the light (\\"on\\" or \\"off\\")."}}, "required": ["room", "state"]}, "return": {"type": "string", "description": "str: A message indicating the new state of the lights."}}}
 ```
 
 A complete dataset entry for SFT might look like:
@@ -191,11 +191,34 @@ A complete dataset entry for SFT might look like:
 {"messages": messages, "tools": json_schema}
 ```
 
-For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
+To get a `Dataset` you need to use the `Json()` type for tool arguments since they are arbitrary JSON objects, and not dictionaries with fixed fields and types:
 
-> [!NOTE]  
-> TRL also accepts `tools` as a Python `list[dict]` (for backward compatibility).  
-> This is a legacy format and is **not recommended** for new datasets. Prefer storing `tools` as a JSON `str` (with `json.dumps([...])`).
+```python
+data = {
+    "messages": [messages],
+    "tools": [json_schema],
+}
+# auto-apply the Json() type
+dataset = Dataset.from_dict(data, on_mixed_types="use_json")
+
+# or specify the features manually
+features = Features({
+    "messages:": List({"role": Value("string"), "content": Value("string"), "tool_calls": List(Json())}),
+    "tools:": List(Json())
+})
+dataset = Dataset.from_dict(data, features=features)
+```
+
+On older versions of `datasets` (<4.8) that don't have the `Json()` type, you should store `tools` as a JSON `str` (with `json.dumps([...])`):
+
+```python
+dataset = Dataset.from_dict({
+    "messages": [messages],
+    "tools": json.dumps([json_schema]),
+})
+```
+
+For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
 
 ### Harmony
 
