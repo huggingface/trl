@@ -188,7 +188,7 @@ The generated schema would look like:
 A complete dataset entry for SFT might look like:
 
 ```python
-{"messages": messages, "tools": json_schema}
+{"messages": messages, "tools": [json_schema]}
 ```
 
 To get a `Dataset` you need to use the `Json()` type for tool arguments since they are arbitrary JSON objects, and not dictionaries with fixed fields and types:
