@@ -914,6 +914,8 @@ def truncate_dataset(
      'attention_mask': [[0, 1], [0, 0], [1]]}
     ```
     """
+    if truncation_mode not in {"keep_start", "keep_end"}:
+        raise ValueError(f"Invalid truncation mode '{truncation_mode}'.")
     if map_kwargs is None:
         map_kwargs = {}
 
