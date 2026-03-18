@@ -190,6 +190,10 @@ While training and evaluating, we record the following reward metrics:
 - `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `sampling/frac_modified_importance_sampling_ratio`: The fraction of tokens or sequences for which the vLLM importance sampling ratio was clipped or masked due to exceeding the `vllm_importance_sampling_cap` threshold.
+- `sampling/importance_sampling_ratio/max,mean,min`: The maximum, mean, and minimum values of the vLLM importance sampling ratio after clipping or masking due to exceeding the `vllm_importance_sampling_cap` threshold.
+- `sampling/raw_importance_sampling_ratio/max,mean,min`: The maximum, mean, and minimum values of the vLLM importance sampling ratio before clipping or masking due to exceeding the `vllm_importance_sampling_cap` threshold.
+- `sampling/sampling_logp_difference/max,mean`: The maximum and mean values of the absolute difference between the log probabilities of generated tokens under the training model and the vLLM inference model.
 
 ## Customization
 
