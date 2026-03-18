@@ -83,6 +83,7 @@ test = [
     "pytest"
 ]
 vllm = [
+    "vllm>=0.10.2,<=0.17.1",
     "fastapi",
     "pydantic",
     "requests",
