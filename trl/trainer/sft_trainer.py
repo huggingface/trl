@@ -1181,7 +1181,9 @@ class SFTTrainer(_BaseTrainer):
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs, args.truncation_mode)
+                dataset = truncate_dataset(
+                    dataset, args.max_length, truncation_mode=args.truncation_mode, map_kwargs=map_kwargs
+                )
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}

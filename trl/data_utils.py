@@ -880,8 +880,8 @@ def pack_dataset(
 def truncate_dataset(
     dataset: DatasetType,
     max_length: int,
-    map_kwargs: dict[str, Any] | None = None,
     truncation_mode: str = "keep_start",
+    map_kwargs: dict[str, Any] | None = None,
 ) -> DatasetType:
     r"""
     Truncate sequences in a dataset to a specified `max_length`.
@@ -891,10 +891,10 @@ def truncate_dataset(
             Dataset to truncate.
         max_length (`int`):
             Maximum sequence length to truncate to.
-        map_kwargs (`dict`, *optional*):
-            Additional keyword arguments to pass to the dataset's map method when truncating examples.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
             Whether to keep the start (`"keep_start"`) or the end (`"keep_end"`) of the sequence when truncating.
+        map_kwargs (`dict`, *optional*):
+            Additional keyword arguments to pass to the dataset's map method when truncating examples.
 
     Returns:
         [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with truncated sequences.
