@@ -45,6 +45,7 @@ Concretely:
 - Do not add layers of indirection (registries, factory patterns, plugin systems). A contributor should be able to read a trainer top to bottom and understand the full flow.
 - Prefer a simple implementation that covers 90% of cases over a complex one that covers 100%. A function that handles the common path in 20 lines is better than a catch-all that handles every edge case in 80.
 - Do not add defensive code, fallback paths, or configuration options "just in case". Only handle cases that actually exist today.
+- Avoid `hasattr` and `getattr`. Their use is almost always a symptom of overly defensive programming or a disguised version check (e.g., "this attribute was added in version X"). Instead, either drop the conditional entirely or express the version check explicitly with a version comparison. There is nearly always a cleaner alternative.
 - When in doubt, prefer less code. Every new function, parameter, or branch is maintenance burden. The best abstraction is often no abstraction.
 
 ## Documentation
