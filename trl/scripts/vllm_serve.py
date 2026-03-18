@@ -194,6 +194,9 @@ class ScriptArguments:
         enable_prefix_caching (`bool`, *optional*):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
+        enable_expert_parallel (`bool`, *optional*):
+            Whether to enable expert parallelism in vLLM for MoE models. If set to `True`, experts will be distributed
+            across tensor parallel workers.
         enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
@@ -274,6 +277,13 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
+    enable_expert_parallel: bool | None = field(
+        default=None,
+        metadata={
+            "help": "Whether to enable expert parallelism in vLLM for MoE models. If set to `True`, experts will "
+            "be distributed across tensor parallel workers."
+        },
+    )
     enforce_eager: bool | None = field(
         default=False,
         metadata={
@@ -352,6 +362,7 @@ def llm_worker(
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
         # This is particularly useful here because we generate completions from the same prompts.
         enable_prefix_caching=script_args.enable_prefix_caching,
+        enable_expert_parallel=script_args.enable_expert_parallel,
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
