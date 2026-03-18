@@ -877,7 +877,12 @@ def pack_dataset(
     return dataset
 
 
-def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str, Any] | None = None) -> DatasetType:
+def truncate_dataset(
+    dataset: DatasetType,
+    max_length: int,
+    map_kwargs: dict[str, Any] | None = None,
+    truncation_mode: str = "keep_start",
+) -> DatasetType:
     r"""
     Truncate sequences in a dataset to a specified `max_length`.
 
@@ -888,6 +893,8 @@ def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str
             Maximum sequence length to truncate to.
         map_kwargs (`dict`, *optional*):
             Additional keyword arguments to pass to the dataset's map method when truncating examples.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Whether to keep the start (`"keep_start"`) or the end (`"keep_end"`) of the sequence when truncating.
 
     Returns:
         [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with truncated sequences.
@@ -914,7 +921,10 @@ def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str
         truncated_columns = []
         for column in examples.columns:
             if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-                column = pc.list_slice(column, 0, max_length)
+                if truncation_mode == "keep_start":
+                    column = pc.list_slice(column, 0, max_length)
+                else:  # keep_end
+                    column = pc.list_slice(column, -max_length)
             truncated_columns.append(column)
         return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
 
