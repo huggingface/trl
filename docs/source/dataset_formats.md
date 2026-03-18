@@ -182,7 +182,7 @@ json_schema = get_json_schema(control_light)]
 The generated schema would look like:
 
 ```python
-{"type": "function", "function": {"name": "control_light", "description": "Controls the lights in a room.", "parameters": {"type": "object", "properties": {"room": {"type": "string", "description": "The name of the room."}, "state": {"type": "string", "description": "The desired state of the light (\\"on\\" or \\"off\\")."}}, "required": ["room", "state"]}, "return": {"type": "string", "description": "str: A message indicating the new state of the lights."}}}
+{"type": "function", "function": {"name": "control_light", "description": "Controls the lights in a room.", "parameters": {"type": "object", "properties": {"room": {"type": "string", "description": "The name of the room."}, "state": {"type": "string", "description": "The desired state of the light (\"on\" or \"off\")."}}, "required": ["room", "state"]}, "return": {"type": "string", "description": "str: A message indicating the new state of the lights."}}}
 ```
 
 A complete dataset entry for SFT might look like:
