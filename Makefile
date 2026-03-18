@@ -1,4 +1,4 @@
-.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental codex claude cursor clean-ai
+.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental codex claude clean-ai
 
 check_dirs := examples tests trl
 
@@ -29,9 +29,6 @@ claude:
 	mkdir -p .claude
 	rm -rf .claude/skills
 	ln -snf ../.ai/skills .claude/skills
-
-cursor:
-	ln -snf .ai/AGENTS.md .cursorrules
 
 clean-ai:
 	rm -rf .agents/skills .claude/skills
