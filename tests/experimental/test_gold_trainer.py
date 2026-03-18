@@ -289,6 +289,88 @@ def pad_labels(labels, target_length):
     return labels + [-100] * (target_length - len(labels))
 
 
+def test_process_completions_to_buffer_left_pads_prompt_retokenization():
+    class DummyBatch:
+        def __init__(self, input_ids):
+            self.input_ids = input_ids
+
+        def to(self, device):
+            self.input_ids = self.input_ids.to(device)
+            return self
+
+    class RecordingTokenizer:
+        pad_token_id = 0
+        pad_token = "<pad>"
+
+        def __init__(self):
+            self.padding_side = "right"
+            self.calls = []
+            self._prompt_ids = {
+                "short": [11],
+                "longer": [21, 22],
+            }
+
+        def __call__(
+            self,
+            texts,
+            return_tensors,
+            padding,
+            truncation,
+            max_length,
+            add_special_tokens,
+            padding_side=None,
+        ):
+            assert return_tensors == "pt"
+            assert padding == "longest"
+            assert not truncation
+            assert max_length is None
+            assert not add_special_tokens
+            self.calls.append(padding_side)
+
+            side = padding_side or self.padding_side
+            encoded = [torch.tensor(self._prompt_ids[text], dtype=torch.long) for text in texts]
+            max_len = max(len(ids) for ids in encoded)
+
+            padded = []
+            for ids in encoded:
+                pad_width = max_len - len(ids)
+                if pad_width:
+                    pad = torch.full((pad_width,), self.pad_token_id, dtype=torch.long)
+                    ids = torch.cat([pad, ids]) if side == "left" else torch.cat([ids, pad])
+                padded.append(ids)
+
+            return DummyBatch(torch.stack(padded))
+
+        def batch_decode(self, sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
+            del skip_special_tokens, clean_up_tokenization_spaces
+            return [" ".join(str(token) for token in sequence) for sequence in sequences]
+
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer.processing_class = RecordingTokenizer()
+    trainer.args = SimpleNamespace(max_length=None)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+
+    GOLDTrainer._process_completions_to_buffer(
+        trainer,
+        slices=[{"slice": "original"}],
+        on_policy_indices=[0],
+        local_slice_indices=[0, 0],
+        completion_ids=[[31], [41]],
+        prompts_text=["short", "longer"],
+        prompts_text_with_special=["short", "longer"],
+        max_completion_length=1,
+    )
+
+    buffered_inputs = trainer._buffered_inputs[0]
+    assert trainer.processing_class.calls == ["left"]
+    assert trainer.processing_class.padding_side == "right"
+    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[0, 11, 31], [21, 22, 41]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["attention_mask"], torch.tensor([[0, 1, 1], [1, 1, 1]], dtype=torch.long))
+    assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, 31], [-100, -100, 41]]))
+
+
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
@@ -382,7 +464,9 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     prompt_tensor[0, pad_width:] = torch.tensor(prompt_ids, dtype=torch.long)
     prompt_mask = (prompt_tensor != pad_id).long()
 
-    generated_sequence = torch.tensor(prompt_ids + completion_ids, dtype=torch.long).unsqueeze(0)
+    # model.generate() returns full sequences including left-padding from the input
+    completion_tensor = torch.tensor(completion_ids, dtype=torch.long).unsqueeze(0)
+    generated_sequence = torch.cat([prompt_tensor, completion_tensor], dim=1)
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
@@ -406,9 +490,9 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     else:
         assert torch.all(new_mask == 1)
 
-    prompt_len = len(prompt_ids)
-    assert torch.all(new_labels[0, :prompt_len] == -100)
-    assert torch.equal(new_labels[0, prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
+    padded_prompt_len = prompt_tensor.shape[1]
+    assert torch.all(new_labels[0, :padded_prompt_len] == -100)
+    assert torch.equal(new_labels[0, padded_prompt_len:], torch.tensor(completion_ids, dtype=torch.long))
 
     assert prompt_texts[0] == llama_tokenizer.decode(prompt_ids, skip_special_tokens=False)
     assert completion_texts[0] == llama_tokenizer.decode(completion_ids, skip_special_tokens=False)

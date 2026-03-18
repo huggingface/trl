@@ -118,13 +118,14 @@ class VLLMGeneration:
 
         > Parameters for vLLM:
 
-        mode (`str`, *optional*, defaults to `"server"`): vLLM mode. Must be one of `"server"` or
-            `"colocate"`.
+        mode (`str`, *optional*, defaults to `"colocate"`):
+            vLLM mode. Must be one of `"colocate"` or `"server"`.
 
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+              server is running (start with `trl vllm-serve`).
+
         structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
@@ -219,7 +220,7 @@ class VLLMGeneration:
         is_fsdp_enabled: bool,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin,
         # vLLM configuration
-        mode: str = "server",
+        mode: str = "colocate",
         structured_outputs_regex: str | None = None,
         # Server mode configuration
         server_base_url: str | None = None,

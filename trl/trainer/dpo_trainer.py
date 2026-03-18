@@ -587,6 +587,13 @@ class DPOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
+            raise ValueError(
+                "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
+                "inside the prompt portion of the sequence; depending on the example, keep_end may silently "
+                "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
+                "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
+            )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -970,27 +977,38 @@ class DPOTrainer(_BaseTrainer):
         return dataset
 
     def _truncate_inputs(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, completion_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        completion_mask: torch.Tensor,
+        *extra: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
         if self.args.max_length is None:
-            return input_ids, attention_mask, completion_mask
+            return input_ids, attention_mask, completion_mask, *extra
 
         if self.args.truncation_mode == "keep_start":
             input_ids = input_ids[:, : self.args.max_length]
             attention_mask = attention_mask[:, : self.args.max_length]
             completion_mask = completion_mask[:, : self.args.max_length]
+            extra = tuple(t[:, : self.args.max_length] for t in extra)
         elif self.args.truncation_mode == "keep_end":
-            attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
+            attention_mask, input_ids, completion_mask, *extra = flush_right(
+                attention_mask, input_ids, completion_mask, *extra
+            )
             input_ids = input_ids[:, -self.args.max_length :]
             attention_mask = attention_mask[:, -self.args.max_length :]
             completion_mask = completion_mask[:, -self.args.max_length :]
-            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+            extra = tuple(t[:, -self.args.max_length :] for t in extra)
+            attention_mask, input_ids, completion_mask, *extra = flush_left(
+                attention_mask, input_ids, completion_mask, *extra
+            )
+            extra = tuple(extra)
         else:
             raise ValueError(
                 f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
             )
 
-        return input_ids, attention_mask, completion_mask
+        return input_ids, attention_mask, completion_mask, *extra
 
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
@@ -999,20 +1017,19 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
+        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
+        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
+        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
+            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
+        )
 
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "token_type_ids",
-            "mm_token_type_ids",
-        ):
+        for key, val in zip(extra_keys, extra, strict=False):
+            model_kwargs[key] = val
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
@@ -1130,17 +1147,16 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
+        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
+        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
+        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
+            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
+        )
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "token_type_ids",
-            "mm_token_type_ids",
-        ):
+        for key, val in zip(extra_keys, extra, strict=False):
+            model_kwargs[key] = val
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 

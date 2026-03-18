@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,9 @@ class GOLDConfig(SFTConfig):
         teacher_model_name_or_path (`str`, *optional*):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
             trained.
+        teacher_model_revision (`str` or `None`, *optional*, defaults to `None`):
+            Model revision of the teacher model (e.g., branch name, tag, or commit hash). If `None`, the default
+            revision is used.
         teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
@@ -51,6 +55,11 @@ class GOLDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
             teacher-generated output).
+        num_generations (`int`, *optional*, defaults to `1`):
+            Number of generations per prompt. Each prompt is repeated this many times in the generation batch.
+        generation_batch_size (`int` or `None`, *optional*, defaults to `None`):
+            Number of unique prompts per worker per optimizer step. If `None`, it is computed from
+            `(per_device_train_batch_size * gradient_accumulation_steps) // num_generations`.
         use_uld_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Universal Logit Distillation (ULD) loss instead of Generalized Jensen-Shannon Divergence
             loss.
@@ -68,7 +77,7 @@ class GOLDConfig(SFTConfig):
             Whether to skip EOS token for teacher in ULD loss computation.
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
-        vllm_mode (`str`, *optional*, defaults to `"server"`):
+        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
             (run vLLM in the same process).
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
@@ -138,17 +147,18 @@ class GOLDConfig(SFTConfig):
         default=128,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
-    student_model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "Revision of the student model to use. If not specified, the default revision of the model will be used."
-        },
-    )
     teacher_model_name_or_path: str | None = field(
         default=None,
         metadata={
             "help": "Model name or path of the teacher model. If `None`, the teacher model will be the same as the "
             "model being trained."
+        },
+    )
+    teacher_model_revision: str | None = field(
+        default=None,
+        metadata={
+            "help": "Model revision of the teacher model (e.g., branch name, tag, or commit hash). If `None`, the "
+            "default revision is used."
         },
     )
     teacher_model_init_kwargs: dict[str, Any] | str | None = field(
@@ -176,10 +186,17 @@ class GOLDConfig(SFTConfig):
             "FT on teacher-generated output)."
         },
     )
-    steps_per_generation: int | None = field(
+    num_generations: int = field(
+        default=1,
+        metadata={
+            "help": "Number of generations per prompt. Increasing this will decrease the number of unique prompts per optimization step."
+        },
+    )
+    generation_batch_size: int | None = field(
         default=None,
         metadata={
-            "help": "Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps."
+            "help": "Number of unique prompts per worker per optimizer step. "
+            "If None, computed from (per_device_train_batch_size * gradient_accumulation_steps) // num_generations."
         },
     )
 
@@ -274,7 +291,7 @@ class GOLDConfig(SFTConfig):
         metadata={"help": "Whether to use vLLM for generating completions. Requires `vllm` to be installed."},
     )
     vllm_mode: str = field(
-        default="server",
+        default="colocate",
         metadata={
             "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
         },
@@ -362,15 +379,8 @@ class GOLDConfig(SFTConfig):
     hub_model_revision: str | None = field(
         default="main", metadata={"help": "The Hub model branch to push the model to."}
     )
-    num_completions_to_print: int = field(default=5, metadata={"help": "Number of completions to print."})
     overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
     push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
-    trl_project: str = field(
-        default="smollm3",
-        metadata={
-            "help": "The TRL project to use for evaluation. This is used to determine the path to the evaluation script."
-        },
-    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -387,8 +397,29 @@ class GOLDConfig(SFTConfig):
                 f"to leave room for the prompt. Consider increasing max_length or reducing max_completion_length."
             )
 
-        if self.steps_per_generation is None:
-            self.steps_per_generation = self.gradient_accumulation_steps
+        if self.num_generations < 1:
+            raise ValueError(f"num_generations must be at least 1, got {self.num_generations}.")
+        local_sequence_batch_size = self.per_device_train_batch_size * self.gradient_accumulation_steps
+        if self.generation_batch_size is None:
+            self.generation_batch_size = local_sequence_batch_size // self.num_generations
+        if self.generation_batch_size < 1:
+            raise ValueError(
+                f"generation_batch_size must be at least 1. Got generation_batch_size={self.generation_batch_size}."
+            )
+        if self.generation_batch_size * self.num_generations != local_sequence_batch_size:
+            raise ValueError(
+                "generation_batch_size and num_generations must exactly partition the local optimizer-step batch. "
+                "Expected generation_batch_size * num_generations == per_device_train_batch_size * "
+                f"gradient_accumulation_steps, got {self.generation_batch_size} * {self.num_generations} != "
+                f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
+            )
+        if self.num_generations > 1 and self.lmbda < 1.0:
+            warnings.warn(
+                f"num_generations={self.num_generations} with lmbda={self.lmbda} means off-policy batches include "
+                f"{self.num_generations} copies of each sample; consider lmbda=1.0 when num_generations > 1.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Validate ULD parameters
         if self.use_uld_loss:
