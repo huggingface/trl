@@ -929,7 +929,7 @@ def truncate_dataset(
                     column = (
                         pa.array([[] for _ in range(len(column))], type=column.type)
                         if max_length == 0
-                        else pc.list_slice(column, -max_length)
+                        else pa.array([values[-max_length:] for values in column.to_pylist()], type=column.type)
                     )
             truncated_columns.append(column)
         return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
