@@ -237,6 +237,10 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         processor ([`~transformers.ProcessorMixin`]):
             The processor used to tokenize text and process images. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
+        max_length (`int`, *optional*):
+            Maximum sequence length. Sequences longer than `max_length` are truncated before padding, which avoids
+            allocating oversized tensors for batches containing very long sequences. Only `"keep_start"` truncation
+            applies to vision datasets; `"keep_end"` is rejected upstream.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, optional, defaults to `"pt"`):
@@ -291,6 +295,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     """
 
     processor: ProcessorMixin
+    max_length: int | None = None
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
@@ -376,6 +381,15 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             )
         else:
             attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = token_type_ids[:, : self.max_length]
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
@@ -635,6 +649,7 @@ class DPOTrainer(_BaseTrainer):
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionPreference(
                 processor=processing_class,
+                max_length=args.max_length,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
