@@ -184,6 +184,17 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
             The truncated responses tensor with pad tokens filled after the stop token.
     """
     trunc_idxs = first_true_indices(responses == stop_token_id).unsqueeze(-1)
+    # unsqueeze(-1) 的作用：在最后一个维度（-1 表示最后一维）增加一个维度，将 [B] 变成 [B, 1]。为什么要加这个维度？→ 为了后续和 idxs 做广播对比（batch 维度对齐，后续维度可广播）。承接例子：[3,1,5] → [[3], [1], [5]]（形状 [3,1]）
+    
+    # 再通过 view(*new_size) 调整形状为 [1, seq_len]
+    # torch.arange(responses.shape[1]) 的形状：生成 0 到 L-1 的连续整数，形状为 [L]（例如 L=5 → [0,1,2,3,4]
+    # new_size 的计算：
+    # len(responses.size()) 是输入的维度数（2D 输入则为 2）；
+    # [1] * (2-1) → [1]（batch 相关的维度都设为 1）；
+    # 最后拼接 [responses.shape[1]]（即 [L]）；
+    # 最终 new_size = [1, L]（2D 输入场景）
+    # view(*new_size) 后的形状：将 [L] 调整为 [1, L]（例如 L=5 → [[0,1,2,3,4]]）
+    # 运用广播机制去填充。
     new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
     idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
     postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, pad_token_id)
@@ -210,6 +221,26 @@ def forward(
         `ModelOutput`:
             The output of the model, including hidden states.
     """
+    # 1. attention_mask = query_responses != pad_token_id
+    # 作用：生成「注意力掩码」，标记序列中哪些是有效 token、哪些是填充 token（pad）。
+    # 逻辑：
+    # query_responses 是输入序列的 token ID 矩阵（形状通常为 [batch_size, seq_len]）；
+    # pad_token_id 是填充 token 的 ID（如 0，用于将不同长度的序列补齐到同一长度）；
+    # 不等式判断后，得到布尔矩阵：有效 token 位置为 True，pad 位置为 False（后续会转成 0/1 用于掩码）。
+    # 2. position_ids = attention_mask.cumsum(1) - attention_mask.long()
+    # 作用：生成「位置编码 ID」，仅对有效 token 分配连续位置，pad 位置固定为 0。
+    # 拆解逻辑：
+    # attention_mask.long()：将布尔掩码转成整数（True→1，False→0）；
+    # cumsum(1)：按「序列长度维度（dim=1）」累计求和 —— 有效 token 位置会累计计数（1,2,3,...），但 pad 位置会继承前一个有效位置的累计值（比如序列 [有效,有效,pad,pad] 累计后是 [1,2,2,2]）；
+    # 减去 attention_mask.long() 后：有效 token 位置的累计值减 1（变成 0,1,2,...，符合 Transformer 位置编码的起始习惯），pad 位置的累计值减 0（仍为原累计值，但因 pad 位置本身是 False，后续会被掩码忽略，最终等效为 0）。
+    # 示例：若 attention_mask 为 [True,True,False,False]，则：
+    # cumsum(1) → [1,2,2,2]；
+    # 减 [1,1,0,0] 后 → [0,1,2,2]（pad 位置的 2 会被后续掩码无效化，实际按 0 处理）。
+    # 3. input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    # 作用：将输入序列中的 pad 位置 token ID 强制设为 0（兜底处理，避免 pad_token_id 非 0 时对模型的干扰）。
+    # 逻辑：
+    # ~attention_mask：取反掩码（有效 token→False，pad→True）；
+    #masked_fill：仅对 ~attention_mask 为 True 的位置（pad 位置）填充 0，有效 token 位置保持原 ID 不变。
     attention_mask = query_responses != pad_token_id
     position_ids = attention_mask.cumsum(1) - attention_mask.long()
     input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
@@ -279,6 +310,14 @@ class PolicyAndValueWrapper(nn.Module):
         super().__init__()
         self.policy = policy
         self.value_model = value_model
+        # 这行代码的核心作用是 从 value_model 实例中，动态获取其 “基础模型骨干” 对应的属性，并赋值给 self.critic_backbone（通常用于强化学习 / 对抗学习中的 “评判器（Critic）” 网络骨干）。
+        # 简要解析拆解：
+        # value_model：一个实例对象（结合命名，大概率是强化学习中的 “价值网络模型”，比如基于 Hugging Face transformers 库的预训练模型封装）。
+        # value_model.base_model_prefix：value_model 的一个属性，存储了 “基础模型骨干” 的属性名前缀（字符串类型）。
+        # 例：在 Hugging Face 模型中，base_model_prefix 通常是 'transformer'（如 BERT、GPT 类模型）或 'bert' 等，用于指向模型的核心骨干网络（而非外层的分类头、池化层等封装）。
+        # getattr(obj, name)：Python 内置函数，动态获取对象 obj 中名为 name 的属性 / 方法。
+        # 等价于 obj.name，但 name 可以是变量（这里就是 base_model_prefix 对应的字符串），更灵活。
+        # self.critic_backbone：当前类（比如 Critic 网络类）的实例属性，用于存储 “评判器” 的核心骨干网络（直接复用 value_model 的基础骨干，避免重复构建）
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
         self.is_gradient_checkpointing = policy.is_gradient_checkpointing
 
@@ -572,20 +611,27 @@ class PPOTrainer(BaseTrainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
-        backup_model = self.model
-        self.model = self.model.policy  # save only the policy
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
 
+        # DeepSpeed: 手动保存 unwrapped policy，避免 transformers 里读取 self.deepspeed.config.get(...) 报错
         if self.is_deepspeed_enabled:
-            backup_deepspeed = self.deepspeed
-            self.deepspeed = self.model
+            os.makedirs(output_dir, exist_ok=True)
+            policy_to_save = self.accelerator.unwrap_model(self.model).policy
+            policy_to_save.save_pretrained(
+                output_dir,
+                safe_serialization=self.args.save_safetensors,
+            )
+            if self.processing_class is not None and self.accelerator.is_main_process:
+                self.processing_class.save_pretrained(output_dir)
+            return
 
+        # 非 DeepSpeed：沿用原逻辑（仅保存 policy）
+        backup_model = self.model
+        self.model = self.model.policy
         super().save_model(output_dir, _internal_call)
-
         self.model = backup_model
 
-        if self.is_deepspeed_enabled:
-            self.deepspeed = backup_deepspeed
-
+        
     def train(self):
         args = self.args
         accelerator = self.accelerator
@@ -610,7 +656,11 @@ class PPOTrainer(BaseTrainer):
             "do_sample": True,
         }
         generation_config = GenerationConfig(**generation_kwargs)
-
+        # 定义统计指标的维度，对应 PPO 训练的三层循环逻辑：
+        # num_ppo_epochs：PPO 的迭代轮数（对同一批数据重复训练的次数）；
+        # num_mini_batches：每轮 PPO 中将数据拆分成的小批量数量（用于随机梯度下降）；
+        # gradient_accumulation_steps：梯度累积步数（多步小批量训练后再更新参数，模拟更大批次）。
+        # 最终每个统计指标会是一个 3 维数组，记录每一轮、每一批、每一步的训练数据。
         accelerator.print("===training policy===")
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
@@ -627,6 +677,9 @@ class PPOTrainer(BaseTrainer):
         self.state.global_step = 0
         self.state.episode = 0
         self.state.max_steps = args.num_total_batches
+        # 核心操作：将变量 self.state.num_train_epochs（模型训练的总轮次）赋值。
+        # 计算逻辑：赋值结果由 args.total_episodes（总训练样本数 / 总任务数，来自外部参数）除以 self.train_dataset_len（训练数据集的样本总数）得到。
+        # 本质含义：通过 “总训练量 ÷ 单轮训练量”，计算出模型需要完成的完整训练轮次，用于控制训练过程的总迭代周期
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
@@ -647,6 +700,7 @@ class PPOTrainer(BaseTrainer):
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         # backward compatibility
+        # 这段代码是深度学习框架（常见于 Hugging Face Transformers 等场景）中 DeepSpeed 分布式训练的初始化逻辑，核心作用是：当启用 DeepSpeed 时，将模型相关引用指向原始模型（或已被 DeepSpeed 包装后的模型），统一后续代码对模型的调用接口。
         if self.is_deepspeed_enabled:
             self.deepspeed = self.model
             self.model_wrapped = self.model
@@ -699,7 +753,7 @@ class PPOTrainer(BaseTrainer):
                     ref_logprob = selective_log_softmax(ref_logits, response)
                     del ref_output, ref_logits
                     empty_cache()
-
+                    # 等价于策略已经出来了，同时对数概率也计算好了，反应出策略对这一选择的偏好
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
                     if self.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
@@ -711,14 +765,16 @@ class PPOTrainer(BaseTrainer):
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == processing_class.pad_token_id) - 1
                     unwrapped_value_model = accelerator.unwrap_model(model).value_model
+                    # full_value 是对完整序列的奖励值，是输出序列的奖励值，维度为 (batch_size, sequence_length)，
+                    # 而 value 是对截断序列的奖励值，是输入序列的奖励值，维度为 (batch_size, sequence_length - context_length + 1)
                     full_value, _, _ = get_reward(
                         unwrapped_value_model, query_response, processing_class.pad_token_id, context_length
                     )
                     value = full_value[:, context_length - 1 : -1].squeeze(-1)
+                    # 这里的score是对序列最后一个有效token的奖励值，维度为 (batch_size,)
                     _, score, _ = get_reward(
                         reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
                     )
-
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
                     logprobs.append(logprob)
@@ -726,6 +782,7 @@ class PPOTrainer(BaseTrainer):
                     sequence_lengths.append(sequence_length)
                     scores.append(score)
                     values.append(value)
+                # 将各个batch计算结果存储起来，最后再concat起来构成一整个batch的计算结果
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
@@ -733,6 +790,7 @@ class PPOTrainer(BaseTrainer):
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
                 values = torch.cat(values, 0)
+                # 删除中间计算结果，释放内存
                 del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
                 empty_cache()
                 gc.collect()
@@ -750,9 +808,22 @@ class PPOTrainer(BaseTrainer):
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
                 ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
                 sequence_lengths_p1 = sequence_lengths + 1
+                # 作用：将 “最后有效 token 位置”+1，得到「下一个本应生成但未生成的位置」（即 “序列结束位置”）；
+                # 示例：sequence_lengths=[10,15] → sequence_lengths_p1=[11,16]；
+                # 核心逻辑：对齐 RL 中 “状态价值” 的定义 ——V 函数预测的是「当前状态下的累积回报」，而自回归生成中，“第 t 个 token 生成后” 的状态，对应的是 “第 t+1 个 token 的决策点”。
                 padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
                 values = torch.masked_fill(values, padding_mask_p1, 0)
-
+                # 三、关键：为什么需要两个不同的 mask？（核心设计逻辑）
+                # 这是你代码注释中 “padding_mask_p1 不同于 padding_mask” 的核心原因 ——logprobs 和 values 的 “有效范围” 不同，必须分开 mask，根源是 LLM 自回归生成与 RL 中 “动作 - 状态” 的对应关系：
+                # 1. logprobs（策略相关）的有效范围：0 ~ sequence_lengths
+                # 策略模型的 “动作” 是「生成每个 token」：第 0 个 token 是第一个动作，第 t 个 token 是第 t+1 个动作；
+                # 有效动作只到「最后有效 token」（sequence_lengths 对应的位置）—— 之后的 padding token 不是模型生成的动作，因此 logprobs 的有效范围是 [0, sequence_lengths]，超过的位置用INVALID_LOGPROB mask（不参与策略损失）。
+                # 2. values（价值相关）的有效范围：0 ~ sequence_lengths_p1
+                # 价值模型的 “状态” 是「生成第 t 个 token 后的上下文」：
+                # 生成第 0 个 token 前的状态 → 对应价值估计values[:,0]；
+                # 生成第 t 个 token 后的状态 → 对应价值估计values[:,t+1]；
+                # 生成最后一个有效 token（sequence_lengths）后的状态 → 对应价值估计values[:, sequence_lengths+1]（即sequence_lengths_p1对应的位置）—— 这个状态的价值是 “后续无更多动作” 的累积回报（通常为 0，即终止状态）；
+                # 因此 values 的有效范围是 [0, sequence_lengths_p1]，超过的位置用 0 mask（终止状态价值为 0，无效 padding 也填充 0，不干扰损失）。
                 # 4. compute rewards
                 # Formula used by http://joschu.net/blog/kl-approx.html for the k1 and k3 estimators
                 logr = ref_logprobs - logprobs
@@ -762,6 +833,12 @@ class PPOTrainer(BaseTrainer):
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
                 actual_end = torch.where(sequence_lengths_p1 < rewards.size(1), sequence_lengths_p1, sequence_lengths)
                 rewards[actual_start, actual_end] += scores
+                # 核心逻辑：按 “样本索引 + 目标 token 位置” 的组合，将每个样本的全局奖励（scores [i]）累加到rewards的对应位置；
+                # 维度对齐与广播：
+                # rewards 是 (B, R)，按索引 (actual_start, actual_end) 取值时，会触发 PyTorch 的 “高级索引（Advanced Indexing）”；
+                # actual_start（B,）和 actual_end（B,）是 “成对索引”—— 每个元素 (actual_start[i], actual_end[i]) 对应rewards中 “第 i 个样本的第 actual_end [i] 个 token 位置”；
+                # scores 是 (B,)，与索引的数量（B 个位置）完全匹配，因此可以直接广播累加；
+                # 结果：rewards 中仅 “每个样本的目标 token 位置” 被加上对应的全局奖励，其余位置仍为 0（维度保持 (B, R) 不变）；
 
                 # 5. whiten rewards
                 if args.whiten_rewards:

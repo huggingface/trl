@@ -381,6 +381,9 @@ def get_reward(
     reward_logits = model.score(output.hidden_states[-1])
     sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
     # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
+    # 一、先明确核心前提：Reward Model（RM）的输出逻辑
+    # RLHF 中的奖励模型（RM），本质是 “序列级评分模型”—— 输入完整的query+response序列（维度：batch_size × sequence_length），输出每个 token 位置的 logit，最终取 “序列最后一个有效 token（非 padding）对应的 logit” 作为整个序列的奖励（因为奖励是基于全序列语义的全局评分）。
+    # 代码中 model.score 是 RM 的评分头，作用是将 LLM backbone 的隐藏态（token 级）映射为 token 级的 logit（表示该 token 位置对应的 “局部奖励信号”，但最终只用最后一个有效 token 的 logit 作为全局奖励）
     return (
         reward_logits,
         reward_logits[

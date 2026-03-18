@@ -14,21 +14,21 @@
 
 from ..import_utils import is_math_verify_available
 
-
+# 导入包
 if is_math_verify_available():
     from latex2sympy2_extended import NormalizationConfig
     from math_verify import LatexExtractionConfig, parse, verify
 
-
+# 批量验证答案
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[float | None]:
     r"""
     Reward function that checks if the completion matches the ground truth.
-        - If both gold and prediction are parseable → use math verification.
-        - If gold is not parseable → return `None` to skip the example.
+        - If both gold（答案） and prediction（预测） are parseable（可解析） → use math verification（用数学验证）.
+        - If gold is not parseable → return `None` to skip the example. 如果不行就跳过
 
     Args:
         completions (`list[list[dict[str, str]]]`):
-            List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
+            List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary 每个回复必须是一个信息的列表
             containing the key `"content"` with the value being the text of the completion.
         solution: (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
@@ -50,15 +50,16 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     """
     if not is_math_verify_available():
         raise ImportError("Please install the `math_verify` package to use accuracy_reward")
-
+    
+    # 提取出回复
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
     for content, sol in zip(contents, solution, strict=True):
         gold_parsed = parse(sol)
         if len(gold_parsed) != 0:
-            # We require the answer to be provided in correct latex (no malformed operators)
+            # We require the answer to be provided in correct latex (no malformed operators) 这里要求答案要以正确的latex格式提供
             answer_parsed = parse(
-                content,
+                content, # 回复
                 extraction_config=[
                     LatexExtractionConfig(
                         normalization_config=NormalizationConfig(units=True),
@@ -67,7 +68,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
                         try_extract_without_anchor=False,
                     )
                 ],
-                extraction_mode="first_match",
+                extraction_mode="first_match", # 分离的模式
             )
             reward = float(verify(gold_parsed, answer_parsed))
         else:
@@ -77,7 +78,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
 
     return rewards
 
-
+# 与上面类似，多一步“去推理内容”
 def reasoning_accuracy_reward(
     completions: list[list[dict[str, str]]],
     solution: list[str],
