@@ -920,6 +920,12 @@ class SFTTrainer(_BaseTrainer):
             and args.dataset_kwargs.get("skip_prepare_dataset", False)
             or self._is_vision_dataset
         )
+        if skip_prepare_dataset and self.padding_free and args.max_length is not None and not self._is_vision_dataset:
+            raise ValueError(
+                "When `padding_free=True`, `max_length` must be enforced during dataset preparation or packing, not in "
+                "the collator. Disable `skip_prepare_dataset`, provide already packed/truncated inputs, or set "
+                "`max_length=None`."
+            )
         if not skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
