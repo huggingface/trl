@@ -26,9 +26,11 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from contextlib import nullcontext
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
+import datasets
 import numpy as np
 import pandas as pd
 import torch
@@ -41,7 +43,7 @@ from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, creat
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
@@ -54,7 +56,8 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.trainer_utils import seed_worker
+from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
 from ..chat_template_utils import add_response_schema, get_training_chat_template, parse_response
 from ..data_utils import (
@@ -112,7 +115,7 @@ logger = get_logger(__name__)
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
 # arguments from the trainer (refer to the trainer's source for details). To ensure forward compatibility, it should
 # accept **kwargs.
-RewardFunc = str | PreTrainedModel | Callable[..., list[float | None]]
+RewardFunc = str | PreTrainedModel | Callable[..., list[float]]
 
 # What we call a rollout function is a callable that takes prompts (list) and the trainer instance as parameters and
 # returns a dict of generation results. Those results must include "prompt_ids", "completion_ids", and "logprobs"
@@ -233,11 +236,10 @@ class GRPOTrainer(_BaseTrainer):
         rollout_func (`RolloutFunc`, *optional*):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
-            `"logprobs"` fields, and can optionally return `"logprob_token_ids"` (same shape as `"logprobs"`). Any
-            other fields are forwarded to the reward functions. The function receives the raw per-process prompt slice
-            with no duplication; it is responsible for returning the correct number of completions per prompt (see
-            `num_generations` / `num_generations_eval` on the trainer). This feature is experimental and may change or
-            be removed at any time without prior notice.
+            `"logprobs"` fields. Any other fields are forwarded to the reward functions. The function receives the raw
+            per-process prompt slice with no duplication; it is responsible for returning the correct number of
+            completions per prompt (see `num_generations` / `num_generations_eval` on the trainer). This feature is
+            experimental and may change or be removed at any time without prior notice.
         environment_factory (`EnvironmentFactory`, *optional*):
             A callable that creates and returns an environment instance. The environment class should define methods
             that can be invoked as tools during generation. Each method should comply with the same requirements as the
@@ -580,19 +582,6 @@ class GRPOTrainer(_BaseTrainer):
                 "paper's setup."
             )
 
-        if args.loss_type == "vespo" and args.importance_sampling_level != "token":
-            logger.warning(
-                "VESPO computes sequence-level importance weights internally. `importance_sampling_level` should be "
-                "set to `'token'` (the default)."
-            )
-
-        if self.loss_type == "vespo" and self.use_vllm and self.vllm_importance_sampling_correction:
-            if self.vllm_importance_sampling_mode not in ["token_truncate", "token_mask"]:
-                raise ValueError(
-                    f"VESPO loss requires `vllm_importance_sampling_mode` to be either 'token_truncate' or "
-                    f"'token_mask'. Got: {self.vllm_importance_sampling_mode}."
-                )
-
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
@@ -713,11 +702,7 @@ class GRPOTrainer(_BaseTrainer):
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
             "advantages": deque(maxlen=args.generation_batch_size),
-            "extra": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
         }
-        # Buffers for user-logged data from reward functions, flushed after gathering
-        self._pending_extra_logs = defaultdict(list)
-        self._pending_metrics = defaultdict(list)
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
@@ -865,15 +850,37 @@ class GRPOTrainer(_BaseTrainer):
     # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
     # splitting internally.
     # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification.
+    # modification. As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
+    # apart from the super method, ensuring easier maintenance in the future.
     def get_train_dataloader(self):
-        return self._get_dataloader(
-            dataset=self.train_dataset,
-            description="Training",
-            batch_size=self._train_batch_size * self.args.steps_per_generation,  # < this is the change
-            sampler_fn=self._get_train_sampler,
-            is_training=True,
-        )
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": self._train_batch_size * self.args.steps_per_generation,  # < this is the change
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+            )
+
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:
         # Returns a sampler that
@@ -1121,31 +1128,6 @@ class GRPOTrainer(_BaseTrainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
-    def _log_completion_extra(self, column: str, values: list):
-        """
-        Log extra columns to the completions table. Called from reward functions via the `log_extra` kwarg.
-
-        Args:
-            column (`str`):
-                Name of the column to add.
-            values (`list`):
-                Values for the column, one per sample in the batch.
-        """
-        self._pending_extra_logs[column].extend(values)
-
-    def _log_metric(self, name: str, value: float):
-        """
-        Log a scalar metric from a reward function. Called via the `log_metric` kwarg. Values are averaged over each
-        logging step and reported alongside built-in metrics like `kl` and `entropy`.
-
-        Args:
-            name (`str`):
-                Name of the metric.
-            value (`float`):
-                Scalar value for this batch.
-        """
-        self._pending_metrics[name].append(value)
-
     @profiling_decorator
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
@@ -1157,12 +1139,6 @@ class GRPOTrainer(_BaseTrainer):
 
         # This allows for dynamic reward shaping based on training progress.
         reward_kwargs["trainer_state"] = self.state
-
-        # Allow reward functions to log extra columns to the completions table.
-        reward_kwargs["log_extra"] = self._log_completion_extra
-
-        # Allow reward functions to log additional scalar metrics.
-        reward_kwargs["log_metric"] = self._log_metric
 
         async_funcs_info = []  # async custom functions for asyncio.gather
 
@@ -1222,9 +1198,7 @@ class GRPOTrainer(_BaseTrainer):
         if torch.isnan(rewards_per_func).all(dim=1).any():
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
             row_reward_kwargs = {
-                key: value[nan_row_idx]
-                for key, value in reward_kwargs.items()
-                if key not in ("trainer_state", "log_extra", "log_metric")
+                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key != "trainer_state"
             }
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]
@@ -1300,7 +1274,6 @@ class GRPOTrainer(_BaseTrainer):
                 images=images,
                 num_generations=num_generations,
                 profiler=profiling_context(self, "vLLM.generate"),
-                tools=self.tools,
             )
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
             logprobs = [[lp[0] for lp in seq] for seq in logprobs]
@@ -1462,9 +1435,7 @@ class GRPOTrainer(_BaseTrainer):
                 **self.chat_template_kwargs,
             )
             if self.use_vllm and self.vllm_mode == "colocate":
-                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
-            elif self.use_vllm and self.vllm_mode == "server":
-                max_model_len = self.model.config.max_position_embeddings
+                max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
                 max_model_len = self.model.config.max_position_embeddings
             else:
@@ -1549,51 +1520,21 @@ class GRPOTrainer(_BaseTrainer):
                 if post_tool_completions[idx]:  # {} if post-tool completions completely truncated
                     completions[idx_with_tool].append(post_tool_completions[idx])
 
-            # Check for further tool calls, but skip environments that are done
+            # Check for further tool calls
             tool_calls = [completion.get("tool_calls") for completion in post_tool_completions]
-            filtered_idxs = []
-            filtered_tool_calls = []
-            for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True):
-                if not tool_call:
-                    continue
-                # If the environment signals it's done, stop calling tools for it
-                env = self.environments[idx]
-                if getattr(env, "_done", False) or getattr(env, "done", False):
-                    continue
-                filtered_idxs.append(idx)
-                filtered_tool_calls.append(tool_call)
-            idxs_with_tool = filtered_idxs
-            tool_calls = filtered_tool_calls
+            idxs_with_tool = [idx for idx, tool_call in zip(idxs_with_tool, tool_calls, strict=True) if tool_call]
+            tool_calls = [tool_call for tool_call in tool_calls if tool_call]
             iteration_num += 1
-
-        # Ensure tool_mask, logprobs, and completion_ids have the same length per sequence.
-        # Re-tokenization across tool call iterations can cause length mismatches due to token
-        # boundary merging/splitting, since tool_mask and logprobs are accumulated with += while
-        # completion_ids is replaced with the re-tokenized version.
+        # Truncate tool_mask and completion_ids to max_completion_length to avoid size mismatches downstream.
+        # The multi-turn tool loop can accumulate tokens beyond max_completion_length when tool results and
+        # post-tool generations are concatenated (line ~1510).
         for i in range(len(tool_mask)):
-            comp_len = len(completion_ids[i])
-            mask_len = len(tool_mask[i])
-            if mask_len > comp_len:
-                tool_mask[i] = tool_mask[i][:comp_len]
-            elif mask_len < comp_len:
-                tool_mask[i] = tool_mask[i] + [1] * (comp_len - mask_len)
-        if logprobs is not None:
-            for i in range(len(logprobs)):
-                comp_len = len(completion_ids[i])
-                lp_len = len(logprobs[i])
-                if lp_len > comp_len:
-                    logprobs[i] = logprobs[i][:comp_len]
-                elif lp_len < comp_len:
-                    logprobs[i] = logprobs[i] + [0.0] * (comp_len - lp_len)
-
-        # Truncate to max_completion_length to prevent size mismatches downstream
-        for i in range(len(completion_ids)):
+            if len(tool_mask[i]) > self.max_completion_length:
+                tool_mask[i] = tool_mask[i][: self.max_completion_length]
             if len(completion_ids[i]) > self.max_completion_length:
                 completion_ids[i] = completion_ids[i][: self.max_completion_length]
-                tool_mask[i] = tool_mask[i][: self.max_completion_length]
-                if logprobs is not None:
-                    logprobs[i] = logprobs[i][: self.max_completion_length]
-
+            if logprobs is not None and len(logprobs[i]) > self.max_completion_length:
+                logprobs[i] = logprobs[i][: self.max_completion_length]
         return tool_mask, completions, completion_ids, logprobs, tool_call_count, tool_failure_count
 
     def _generate(self, prompts: list):
@@ -2040,23 +1981,6 @@ class GRPOTrainer(_BaseTrainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        # Flush user-logged extra columns (from log_extra), gathering across processes.
-        # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
-        # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
-        self._pending_extra_logs.clear()
-
-        # Flush user-logged metrics (from log_metric), averaging across processes.
-        # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
-        # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
-        self._pending_metrics.clear()
-
         if images is not None:
             self._logs["images"].extend(gather_object(images))
 
@@ -2210,56 +2134,6 @@ class GRPOTrainer(_BaseTrainer):
         is_low_kl = avg_seq_kl <= off_policy_threshold
         return (is_pos_adv | is_low_kl).to(dtype=mask.dtype)  # (B, 1)
 
-    @staticmethod
-    @torch.no_grad()
-    def get_gamma_weights(
-        advantages: torch.Tensor,
-        log_ratio_per_token: torch.Tensor,
-        mask: torch.Tensor,
-        importance_sampling_ratio: torch.Tensor | None,  # (B, T)
-        k_pos: float = 2.0,
-        lambda_pos: float = 3.0,
-        k_neg: float = 3.0,
-        lambda_neg: float = 2.0,
-    ) -> torch.Tensor:
-        """
-        Computes the Gamma weights for the VESPO loss. For reference:
-            φ(w) = e^λ × w^k × e^{-λw} is the gamma weighting (normalized so φ(1)=1)
-                with w = sequence-level importance sampling ratio
-        note: we will compute φ(w) in log space
-
-        φ(w) is detached via @torch.no_grad(), only acts as gradient scaling coefficient
-
-        VESPO loss = -φ(w) × A × log_prob, gradient naturally gives φ(w) × A × ∇log π
-        """
-        # reducing clamp range directly to log(1e-8) ~ -18.42, to avoid recomputing log_w=log(w.clamp(min=1e-8)) later
-        # This is solely for matching truthfully the original implementation, otherwise keeping -20 could be fine.
-        lower_clamp = math.log(1e-8)
-
-        # Sequence-level log ratio Σ log(π_θ/π_old) (not a mean like for `log_importance_weights`)
-        log_ratio_clamped = torch.clamp(log_ratio_per_token, -20.0, 20.0)
-        seq_log_ratio = torch.sum(log_ratio_clamped * mask, dim=-1, keepdim=True)  # (B, 1)
-
-        # Apply token-level TIS or MIS correction (in log space)
-        if importance_sampling_ratio is not None:
-            log_is_ratio = torch.clamp(torch.log(importance_sampling_ratio), lower_clamp, 20.0)
-            # log(w) = log(π_θ/π_old) + log(π_old/π_sampler)
-            seq_log_ratio += torch.sum(log_is_ratio, dim=-1, keepdim=True)
-
-        log_w_seq = torch.clamp(seq_log_ratio, lower_clamp, 20.0)
-        w_seq = torch.exp(log_w_seq)
-
-        # compute k and lambda based on advantage sign
-        is_nonneg_adv = advantages >= 0
-        k_seq = torch.where(is_nonneg_adv, k_pos, k_neg)
-        lambda_seq = torch.where(is_nonneg_adv, lambda_pos, lambda_neg).clamp(min=1e-4)
-
-        # log(φ(w)) = λ + k × log(w) - λ × w
-        log_phi = lambda_seq + k_seq * log_w_seq - lambda_seq * w_seq
-        phi_seq = torch.exp(log_phi).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
-
-        return phi_seq  # (B, 1)
-
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -2361,18 +2235,6 @@ class GRPOTrainer(_BaseTrainer):
             temperatures = torch.where(advantages > 0, self.args.sapo_temperature_pos, self.args.sapo_temperature_neg)
             soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures
             per_token_loss = -soft_coef_1 * advantages
-        elif self.loss_type == "vespo":
-            phi_seq = self.get_gamma_weights(
-                advantages=advantages,
-                log_ratio_per_token=log_ratio,
-                mask=mask,
-                importance_sampling_ratio=inputs.get("importance_sampling_ratio"),
-                k_pos=self.args.vespo_k_pos,
-                lambda_pos=self.args.vespo_lambda_pos,
-                k_neg=self.args.vespo_k_neg,
-                lambda_neg=self.args.vespo_lambda_neg,
-            )
-            per_token_loss = -phi_seq * advantages * per_token_logps
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -2382,7 +2244,7 @@ class GRPOTrainer(_BaseTrainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        if self.use_vllm and self.vllm_importance_sampling_correction and self.loss_type != "vespo":
+        if self.use_vllm and self.vllm_importance_sampling_correction:
             per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
 
         if self.beta != 0.0:
@@ -2401,7 +2263,7 @@ class GRPOTrainer(_BaseTrainer):
             loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
-        elif self.loss_type in ["cispo", "dapo", "vespo"]:
+        elif self.loss_type in ["cispo", "dapo"]:
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * mask).sum() / normalizer
         elif self.loss_type == "luspo":
@@ -2451,9 +2313,6 @@ class GRPOTrainer(_BaseTrainer):
             cispo_clip_ratio = masked_batch_mean(is_cispo_clipped.float())
             gathered_cispo_clip_ratio = self.accelerator.gather(cispo_clip_ratio)
             self._metrics[mode]["cispo_clip_ratio"].append(gathered_cispo_clip_ratio.nanmean().item())
-        elif self.loss_type == "vespo":
-            gathered_phi_seq = self.accelerator.gather(phi_seq)
-            self._metrics[mode]["vespo/phi_seq_mean"].append(gathered_phi_seq.nanmean().item())
 
         return loss
 
@@ -2472,7 +2331,9 @@ class GRPOTrainer(_BaseTrainer):
         metrics = {}
         for key, val in self._metrics[mode].items():
             avg = sum(val) / len(val)
-            metrics[key] = None if math.isnan(avg) else avg
+            if math.isnan(avg):
+                avg = None
+            metrics[key] = avg
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
@@ -2505,7 +2366,6 @@ class GRPOTrainer(_BaseTrainer):
                 "prompt": self._logs["prompt"],
                 "completion": self._logs["completion"],
                 **self._logs["rewards"],
-                **self._logs["extra"],
                 "advantage": self._logs["advantages"],
             }
 
