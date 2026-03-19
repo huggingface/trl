@@ -824,8 +824,8 @@ class SFTTrainer(_BaseTrainer):
             if not is_padding_free_compatible_attention:
                 logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to a variant compatible with padding-free training. "
-                    "Padding-free training flattens batches into a single sequence, and only the following implementations are known to reliably support this:\n"
-                    f"{padding_free_compatible_attention_variants_str}\n"
+                    "Padding-free training flattens batches into a single sequence, and only the following implementations are known to reliably support this:"
+                    f"\n{padding_free_compatible_attention_variants_str}\n"
                     "Using other implementations may lead to unexpected behavior. "
                     "To ensure compatibility, set `attn_implementation` in the model configuration to one of these supported options or verify that your attention mechanism can "
                     "handle flattened sequences."
