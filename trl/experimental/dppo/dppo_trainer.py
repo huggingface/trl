@@ -275,7 +275,7 @@ class DPPOTrainer(GRPOTrainer):
         """Generate completions, always extracting sampled token logprobs.
 
         Returns:
-            6-tuple of (prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids, extra_fields).
+            5-tuple of (prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids).
             topk_logprobs and topk_token_ids are None when divergence_type is not topk.
         """
         device = self.accelerator.device
@@ -326,8 +326,7 @@ class DPPOTrainer(GRPOTrainer):
                 topk_logprobs = None
                 topk_token_ids = None
 
-            extra_fields = {}
-            return prompt_ids, completion_ids, sampled_logprobs, topk_logprobs, topk_token_ids, extra_fields
+            return prompt_ids, completion_ids, sampled_logprobs, topk_logprobs, topk_token_ids
         else:
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
             padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
@@ -365,39 +364,40 @@ class DPPOTrainer(GRPOTrainer):
             prompt_length = prompt_ids_tensor.size(1)
             completion_ids = gen_output.sequences[:, prompt_length:]
 
-            # Stack logits: tuple of (batch, vocab_size) per step -> (batch, seq_len, vocab_size)
-            all_logits = torch.stack(gen_output.logits, dim=1)
-            all_logits = all_logits / self.temperature
-            all_log_probs = all_logits.log_softmax(dim=-1)
+            sampled_chunks = []
+            topk_logps_chunks = [] if needs_topk else None
+            topk_ids_chunks = [] if needs_topk else None
 
-            sampled_logprobs = all_log_probs.gather(-1, completion_ids.unsqueeze(-1)).squeeze(-1)
-            if needs_topk:
-                topk_logps, topk_ids = torch.topk(all_log_probs, k=K, dim=-1)
-                # Per the paper, A'_t = TopK(μ, K) ∪ {a_t}. Ensure the sampled token is in the
-                # top-K set; if not, evict the K-th ranked entry and replace with the sampled token.
-                sampled_ids_exp = completion_ids.unsqueeze(-1)  # (B, T, 1)
-                in_topk = (topk_ids == sampled_ids_exp).any(dim=-1)  # (B, T)
-                needs_swap = ~in_topk  # tokens where a_t is not in top-K
-                if needs_swap.any():
-                    sampled_lps = sampled_logprobs.unsqueeze(-1)  # (B, T, 1)
-                    # Replace last (K-th) entry with sampled token
-                    topk_logps = torch.where(
-                        needs_swap.unsqueeze(-1) & (torch.arange(K, device=device) == K - 1),
-                        sampled_lps.expand_as(topk_logps),
-                        topk_logps,
-                    )
-                    topk_ids = torch.where(
-                        needs_swap.unsqueeze(-1) & (torch.arange(K, device=device) == K - 1),
-                        sampled_ids_exp.expand_as(topk_ids),
-                        topk_ids,
-                    )
-            else:
-                topk_logps, topk_ids = None, None
+            for t, logits_t in enumerate(gen_output.logits):
+                # logits_t: (B, V)
+                logits_t = logits_t / self.temperature
+
+                # exact sampled-token logprob without allocating (B, V) log_softmax output
+                logZ_t = torch.logsumexp(logits_t, dim=-1, keepdim=True)
+                sampled_ids_t = completion_ids[:, t : t + 1]
+                sampled_lp_t = logits_t.gather(-1, sampled_ids_t) - logZ_t
+                sampled_chunks.append(sampled_lp_t.cpu())
+
+                if needs_topk:
+                    topk_logits_t, topk_ids_t = torch.topk(logits_t, k=K, dim=-1)  # (B, K), (B, K)
+                    topk_lp_t = topk_logits_t - logZ_t
+
+                    # Ensure sampled token is included in A'_t = TopK ∪ {a_t}
+                    missing = ~(topk_ids_t == sampled_ids_t).any(dim=-1)
+                    if missing.any():
+                        topk_ids_t = topk_ids_t.clone()
+                        topk_lp_t = topk_lp_t.clone()
+                        topk_ids_t[missing, -1] = sampled_ids_t[missing, 0]
+                        topk_lp_t[missing, -1] = sampled_lp_t[missing, 0]
+
+                    topk_ids_chunks.append(topk_ids_t.cpu())
+                    topk_logps_chunks.append(topk_lp_t.cpu())
 
             # Mask everything after the first EOS token
             is_eos = completion_ids == self.eos_token_id
+            has_eos = is_eos.any(dim=1)
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            eos_idx[has_eos] = is_eos.int().argmax(dim=1)[has_eos]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
             prompt_mask_cpu = prompt_mask.bool().cpu()
@@ -405,16 +405,15 @@ class DPPOTrainer(GRPOTrainer):
 
             prompt_ids_out = _strip_padding(prompt_ids_tensor.cpu(), prompt_mask_cpu)
             completion_ids_out = _strip_padding(completion_ids.cpu(), completion_mask_cpu)
-            logprobs_out = _strip_padding(sampled_logprobs.cpu(), completion_mask_cpu)
+            logprobs_out = _strip_padding(torch.cat(sampled_chunks, dim=1), completion_mask_cpu)
             if needs_topk:
-                topk_logprobs = _strip_padding(topk_logps.cpu(), completion_mask_cpu)
-                topk_token_ids = _strip_padding(topk_ids.cpu(), completion_mask_cpu)
+                topk_logprobs = _strip_padding(torch.stack(topk_logps_chunks, dim=1), completion_mask_cpu)
+                topk_token_ids = _strip_padding(torch.stack(topk_ids_chunks, dim=1), completion_mask_cpu)
             else:
                 topk_logprobs = None
                 topk_token_ids = None
 
-            extra_fields = {}
-            return prompt_ids_out, completion_ids_out, logprobs_out, topk_logprobs, topk_token_ids, extra_fields
+            return prompt_ids_out, completion_ids_out, logprobs_out, topk_logprobs, topk_token_ids
 
     def _tool_call_loop(
         self, prompts, prompt_ids, completion_ids, completions, logprobs, topk_logprobs, topk_token_ids
@@ -535,7 +534,6 @@ class DPPOTrainer(GRPOTrainer):
                 post_tool_logprobs,
                 post_tool_topk_logprobs,
                 post_tool_topk_token_ids,
-                _,
             ) = self._generate_single_turn(pct_prompt_ids, pct_images, pct_multimodal_fields)
 
             # Sanity check: chat template must be prefix-preserving
@@ -661,9 +659,10 @@ class DPPOTrainer(GRPOTrainer):
                 )
         else:
             prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-            prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids, extra_fields = (
-                self._generate_single_turn(prompt_ids, images, multimodal_fields)
+            prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids = self._generate_single_turn(
+                prompt_ids, images, multimodal_fields
             )
+            extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
