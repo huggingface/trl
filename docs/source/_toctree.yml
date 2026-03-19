@@ -87,7 +87,9 @@
     title: Experimental Overview
   - local: openenv
     title: OpenEnv Integration
-  - local: bema_for_reference_model # Sorted alphabetically
+  - local: async_grpo_trainer # Sorted alphabetically
+    title: Asynchronous GRPO
+  - local: bema_for_reference_model
     title: BEMA for Reference Model
   - local: bco_trainer
     title: BCO
