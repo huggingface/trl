@@ -74,13 +74,17 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-FLASH_ATTENTION_VARIANTS = {
+PADDING_FREE_COMPATIBLE_ATTENTION_VARIANTS = [
+    "eager",
+    "sdpa",
+    "flex_attention",
     "flash_attention_2",
     "flash_attention_3",
+    "flash_attention_4",
     "kernels-community/flash-attn2",
     "kernels-community/flash-attn3",
     "kernels-community/vllm-flash-attn3",
-}
+]
 
 
 def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
@@ -803,7 +807,12 @@ class SFTTrainer(_BaseTrainer):
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
-        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
+        is_padding_free_compatible_attention = (
+            model.config._attn_implementation in PADDING_FREE_COMPATIBLE_ATTENTION_VARIANTS
+        )
+        padding_free_compatible_attention_variants_str = "\n".join(
+            f"- `{attn}`" for attn in PADDING_FREE_COMPATIBLE_ATTENTION_VARIANTS
+        )
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -812,14 +821,13 @@ class SFTTrainer(_BaseTrainer):
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
                     "recommended. Please refer to the documentation to understand why this is not recommended."
                 )
-            if not use_flash_attention:
+            if not is_padding_free_compatible_attention:
                 logger.warning(
-                    "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
-                    "the following implementations are known to reliably support this: "
-                    f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
-                    "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
-                    "configuration to one of these supported options or verify that your attention mechanism can "
+                    "Padding-free training is enabled, but the attention implementation is not set to a variant compatible with padding-free training. "
+                    "Padding-free training flattens batches into a single sequence, and only the following implementations are known to reliably support this:\n"
+                    f"{padding_free_compatible_attention_variants_str}\n"
+                    "Using other implementations may lead to unexpected behavior. "
+                    "To ensure compatibility, set `attn_implementation` in the model configuration to one of these supported options or verify that your attention mechanism can "
                     "handle flattened sequences."
                 )
 
@@ -871,11 +879,12 @@ class SFTTrainer(_BaseTrainer):
                 dataset_text_field=args.dataset_text_field,
             )
 
-        if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
+        if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not is_padding_free_compatible_attention:
             logger.warning(
-                "You are using packing, but the attention implementation is not set to a supported flash attention "
-                "variant. Packing gathers multiple samples into a single sequence, and only the following "
-                f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
+                "You are using packing, but the attention implementation is not set to a variant compatible with packing. "
+                "Padding-free training flattens batches into a single sequence, and only the following "
+                "implementations are known to reliably support this:"
+                f"\n{padding_free_compatible_attention_variants_str}\n"
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
                 "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
                 "to one of these supported options."

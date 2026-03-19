@@ -77,15 +77,6 @@ if is_liger_kernel_available():
 logger = get_logger(__name__)
 
 
-FLASH_ATTENTION_VARIANTS = {
-    "flash_attention_2",
-    "flash_attention_3",
-    "kernels-community/flash-attn2",
-    "kernels-community/flash-attn3",
-    "kernels-community/vllm-flash-attn3",
-}
-
-
 def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
