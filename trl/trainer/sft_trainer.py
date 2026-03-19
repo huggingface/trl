@@ -108,6 +108,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
+        max_length (`int`, *optional*):
+            Maximum length of the sequences in the batch. Sequences longer than `max_length` are truncated to
+            `max_length`.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         completion_only_loss (`bool`, *optional*, defaults to `True`):
             When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
             that are no in the completion.
@@ -156,6 +162,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
 
     pad_token_id: int
+    max_length: int | None = None
+    truncation_mode: str = "keep_start"
     completion_only_loss: bool = True
     padding_free: bool = False
     pad_to_multiple_of: int | None = None
@@ -168,6 +176,27 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             labels = [torch.tensor(example["labels"]) for example in examples]
         else:
             labels = [torch.tensor(example["input_ids"]) for example in examples]
+        if self.completion_only_loss and "completion_mask" in examples[0]:
+            completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
+        if "assistant_masks" in examples[0]:
+            assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
+
+        # Truncate per sequence if necessary
+        if self.max_length is not None and not self.padding_free:
+            if self.truncation_mode == "keep_start":
+                sl = slice(None, self.max_length)
+            elif self.truncation_mode == "keep_end":
+                sl = slice(-self.max_length, None)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+            input_ids = [ids[sl] for ids in input_ids]
+            labels = [lbl[sl] for lbl in labels]
+            if self.completion_only_loss and "completion_mask" in examples[0]:
+                completion_mask = [m[sl] for m in completion_mask]
+            if "assistant_masks" in examples[0]:
+                assistant_masks = [m[sl] for m in assistant_masks]
 
         # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
         # compute wrong cu_seq_lens from the all-1s mask
@@ -180,10 +209,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
         else:
             attention_mask = [torch.ones_like(ids) for ids in input_ids]
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
-        if "assistant_masks" in examples[0]:
-            assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
         # If padding_free, flatten everything into a single sequence
         output = {}
