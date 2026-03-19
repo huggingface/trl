@@ -166,14 +166,13 @@ class MultiEnv:
         if self.active != "wordle":
             raise ValueError("guess is only available in Wordle")
         if self.done:
-            self.reward = -1.0
             raise ValueError("Game over.")
         result = self._wordle_client.step(TextArenaAction(message=guess))
         _full_feedback = result.observation.messages[0].content
         feedback = _full_feedback[len(self._last_full_feedback) :]
         self._last_full_feedback = _full_feedback
         if "You attempted an invalid move" in feedback:
-            self.reward = -1.0
+            self.reward = 0.0
         else:
             self.reward = result.reward
         self.done = result.done
