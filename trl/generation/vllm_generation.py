@@ -651,7 +651,6 @@ class VLLMGeneration:
             }
             generation_kwargs.update(self.generation_kwargs)
 
-
             if self.structured_outputs_regex is not None:
                 if generation_kwargs.get(structured_outputs_key) is not None:
                     logger.warning(
