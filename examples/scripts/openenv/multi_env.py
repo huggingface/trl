@@ -80,8 +80,8 @@ You have the following tools available:
 Observe the grid, determine where the ball is relative to the paddle, then move accordingly.
 """
 
-WORDLE_URL = "https://openenv-wordle.hf.space"  # overridden by --wordle-url
-CATCH_URL = "https://openenv-openspiel-env.hf.space"  # overridden by --catch-url
+DEFAULT_WORDLE_URL = "https://openenv-wordle.hf.space"
+DEFAULT_CATCH_URL = "https://openenv-openspiel-env.hf.space"
 
 CATCH_ROWS = 10
 CATCH_COLS = 5
@@ -114,17 +114,20 @@ def _format_catch_obs(info_state: list[float]) -> str:
 
 
 class MultiEnv:
+    wordle_url = DEFAULT_WORDLE_URL
+    catch_url = DEFAULT_CATCH_URL
+
     def __init__(self):
         self._wordle_client = None
         self._catch_client = None
         self.active = None
         self.reward = 0.0
-        self._done = False
+        self.done = False
 
     def reset(self, **kwargs) -> str | None:
         self.active = kwargs.get("env", "wordle")
         self.reward = 0.0
-        self._done = False
+        self.done = False
 
         if self.active == "wordle":
             if self._wordle_client is not None:
@@ -132,10 +135,10 @@ class MultiEnv:
                     self._wordle_client.close()
                 except Exception:
                     pass
-            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL)
+            self._wordle_client = TextArenaEnv(base_url=MultiEnv.wordle_url)
             result = self._wordle_client.reset()
             self._last_full_feedback = result.observation.messages[0].content
-            self.reward = -1.0
+            self.reward = 0.0
             return self._last_full_feedback
         elif self.active == "catch":
             if self._catch_client is not None:
@@ -143,9 +146,9 @@ class MultiEnv:
                     self._catch_client.close()
                 except Exception:
                     pass
-            self._catch_client = OpenSpielEnv(base_url=CATCH_URL)
+            self._catch_client = OpenSpielEnv(base_url=MultiEnv.catch_url)
             result = self._catch_client.reset()
-            self._done = result.observation.done
+            self.done = result.observation.done
             return _format_catch_obs(result.observation.info_state)
         else:
             raise ValueError(f"Unknown environment: {self.active}")
@@ -162,7 +165,7 @@ class MultiEnv:
         """
         if self.active != "wordle":
             raise ValueError("guess is only available in Wordle")
-        if self._done:
+        if self.done:
             self.reward = -1.0
             raise ValueError("Game over.")
         result = self._wordle_client.step(TextArenaAction(message=guess))
@@ -173,15 +176,15 @@ class MultiEnv:
             self.reward = -1.0
         else:
             self.reward = result.reward
-        self._done = result.done
+        self.done = result.done
         return feedback
 
     def _catch_action(self, action_id: int) -> str:
-        if self._done:
+        if self.done:
             raise ValueError("Episode is done.")
         result = self._catch_client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
         self.reward += result.reward or 0.0
-        self._done = result.observation.done
+        self.done = result.observation.done
         return _format_catch_obs(result.observation.info_state)
 
     def move(self, direction: str) -> str:
@@ -209,16 +212,16 @@ class MultiEnv:
         return self._catch_action(1)
 
 
-def wordle_reward(environments, **kwargs) -> list[float | None]:
+def wordle_reward(completions, environments, **kwargs) -> list[float | None]:
     return [env.reward if env.active == "wordle" else None for env in environments]
 
 
-def catch_reward(environments, **kwargs) -> list[float | None]:
+def catch_reward(completions, environments, **kwargs) -> list[float | None]:
     rewards = []
     for env in environments:
         if env.active != "catch":
             rewards.append(None)
-        elif env._done:
+        elif env.done:
             rewards.append(max(env.reward, 0.0))  # 1.0 if caught, 0.0 if missed
         else:
             rewards.append(0.0)  # Incomplete episode
@@ -226,15 +229,13 @@ def catch_reward(environments, **kwargs) -> list[float | None]:
 
 
 def main() -> None:
-    global WORDLE_URL, CATCH_URL
-
     parser = argparse.ArgumentParser(description="Multi-environment GRPO training")
-    parser.add_argument("--wordle-url", default=WORDLE_URL, help="Wordle environment URL")
-    parser.add_argument("--catch-url", default=CATCH_URL, help="Catch environment URL")
+    parser.add_argument("--wordle-url", default=DEFAULT_WORDLE_URL, help="Wordle environment URL")
+    parser.add_argument("--catch-url", default=DEFAULT_CATCH_URL, help="Catch environment URL")
     args, remaining = parser.parse_known_args()
 
-    WORDLE_URL = args.wordle_url
-    CATCH_URL = args.catch_url
+    MultiEnv.wordle_url = args.wordle_url
+    MultiEnv.catch_url = args.catch_url
 
     n = 500  # samples per environment
     dataset = Dataset.from_dict(

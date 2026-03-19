@@ -114,7 +114,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B")
 
     # Environment
-    parser.add_argument("--env-host", type=str, default="https://sergiopaniego-sudoku.hf.space")
+    parser.add_argument("--env-host", type=str, default="https://openenv-sudoku.hf.space")
     parser.add_argument("--env-port", type=int, default=8001)
     parser.add_argument("--env-mode", choices=["docker-local", "docker-image", "docker-hub", "space"], default="space")
     parser.add_argument("--env-image", type=str, default="textarena-env:latest")
@@ -140,7 +140,7 @@ def parse_args() -> argparse.Namespace:
     # Sampling
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--top-p", type=float, default=None)
+    parser.add_argument("--top-p", type=float, default=None, help="Top-p sampling parameter")
 
     # Training
     parser.add_argument("--learning-rate", type=float, default=5e-6)
@@ -164,7 +164,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument(
         "--gradient-checkpointing",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Enable gradient checkpointing to save memory",
     )
@@ -335,31 +335,6 @@ def extract_board_only(text: str) -> str:
 
     return "\n".join(board_lines) if board_lines else ""
 
-
-def extract_feedback(observation) -> dict:
-    """Extract feedback from the last environment message (messages are cumulative)."""
-    feedback = {"valid_move": True, "got_warning": False, "board_state": ""}
-
-    if not observation or not observation.messages:
-        return feedback
-
-    # Only check the last message — TextArena accumulates all messages, so checking all
-    # would flag old "invalid" responses as current failures.
-    last_message = observation.messages[-1]
-    content = last_message.content.lower() if last_message.content else ""
-
-    if any(kw in content for kw in ["invalid", "error", "cannot", "already", "violation", "lost"]):
-        feedback["valid_move"] = False
-        if "please resubmit" in content or "avoid penalties" in content:
-            feedback["got_warning"] = True
-
-    # Search all messages for the latest board state
-    for message in reversed(observation.messages):
-        if message.content and "|" in message.content and "R1" in message.content:
-            feedback["board_state"] = message.content
-            break
-
-    return feedback
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +628,7 @@ def main() -> None:
         save_total_limit=args.save_total_limit,
         temperature=args.temperature,
         top_k=args.top_k,
+        top_p=args.top_p,
         report_to="trackio",
         log_completions=True,
         num_completions_to_print=1,

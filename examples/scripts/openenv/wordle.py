@@ -195,61 +195,60 @@ Follow these rules to play Wordle:
 """
 
 
-args = parse_args()
-
-
-class WordleEnv:
-    def __init__(self):
-        self.client = TextArenaEnv(base_url=args.env_url)
-
-    def reset(self, **kwargs) -> None | str:
-        result = self.client.reset()
-        # The game returns cumulative feedback each turn (new text appended at the end), so
-        # we store the previous full response and slice out only the newly appended part.
-        self._last_full_feedback = result.observation.messages[0].content
-        self.reward = 0.0
-        self.done = False
-        return self._last_full_feedback
-
-    def guess(self, guess: str) -> str:
-        """
-        Make a guess in the Wordle environment.
-
-        Args:
-            guess: The guessed word, formatted as '[abcde]'
-
-        Returns:
-            The feedback message from the environment.
-        """
-        if self.done:
-            self.reward = 0.0  # Penalize guesses after game is done
-            raise ValueError("Game over.")
-        result = self.client.step(TextArenaAction(message=guess))
-        _full_feedback = result.observation.messages[0].content
-        # Just take the new feedback since the last guess, which is the part appended to the end of the full feedback
-        feedback = _full_feedback[len(self._last_full_feedback) :]
-        self._last_full_feedback = _full_feedback
-        # For some reason, the environment doesn't penalize invalid moves and just returns the last reward.
-        # We check the feedback for the invalid move message and penalize it if found.
-        if "You attempted an invalid move" in feedback:
-            self.reward = 0.0  # Penalize invalid moves
-        else:
-            self.reward = result.reward
-        self.done = result.done
-        return feedback
-
-
-def reward(environments, **kwargs) -> list[float]:
-    return [environment.reward for environment in environments]
+def reward_func(completions, environments, **kwargs) -> list[float]:
+    return [env.reward for env in environments]
 
 
 def main() -> None:
+    args = parse_args()
+
+    env_url = args.env_url
+
+    class WordleEnv:
+        def __init__(self):
+            self.client = TextArenaEnv(base_url=env_url)
+
+        def reset(self, **kwargs) -> str | None:
+            result = self.client.reset()
+            # The game returns cumulative feedback each turn (new text appended at the end), so
+            # we store the previous full response and slice out only the newly appended part.
+            self._last_full_feedback = result.observation.messages[0].content
+            self.reward = 0.0
+            self.done = False
+            return self._last_full_feedback
+
+        def guess(self, guess: str) -> str:
+            """
+            Make a guess in the Wordle environment.
+
+            Args:
+                guess: The guessed word, formatted as '[abcde]'
+
+            Returns:
+                The feedback message from the environment.
+            """
+            if self.done:
+                raise ValueError("Game over.")
+            result = self.client.step(TextArenaAction(message=guess))
+            _full_feedback = result.observation.messages[0].content
+            # Just take the new feedback since the last guess, which is the part appended to the end of the full feedback
+            feedback = _full_feedback[len(self._last_full_feedback) :]
+            self._last_full_feedback = _full_feedback
+            # For some reason, the environment doesn't penalize invalid moves and just returns the last reward.
+            # We check the feedback for the invalid move message and penalize it if found.
+            if "You attempted an invalid move" in feedback:
+                self.reward = 0.0
+            else:
+                self.reward = result.reward
+            self.done = result.done
+            return feedback
+
     output_dir = args.output_dir or f"{args.model.split('/')[-1]}-wordle-GRPO"
     dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": prompt}] for _ in range(args.dataset_size)]})
 
     trainer = GRPOTrainer(
         model=args.model,
-        reward_funcs=reward,
+        reward_funcs=reward_func,
         train_dataset=dataset,
         args=GRPOConfig(
             output_dir=output_dir,

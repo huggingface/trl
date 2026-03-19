@@ -194,7 +194,7 @@ Observe the grid, determine where the ball is relative to the paddle, then move 
 def reward_from_env(completions, environments, **kwargs):
     rewards = []
     for env in environments:
-        if env._done:
+        if env.done:
             rewards.append(max(env.reward, 0.0))  # 1.0 if caught, 0.0 if missed
         else:
             rewards.append(0.0)  # Incomplete episode
@@ -238,7 +238,7 @@ def main():
         def __init__(self):
             self.client = OpenSpielEnv(base_url=env_url)
             self.reward = 0.0
-            self._done = False
+            self.done = False
 
         @staticmethod
         def _format_obs(info_state: list[float]) -> str:
@@ -270,15 +270,15 @@ def main():
         def reset(self, **kwargs) -> str:
             env_result = self.client.reset()
             self.reward = 0.0
-            self._done = env_result.observation.done
+            self.done = env_result.observation.done
             return self._format_obs(env_result.observation.info_state)
 
         def _do_action(self, action_id: int) -> str:
-            if self._done:
+            if self.done:
                 raise ValueError("Episode is done.")
             env_result = self.client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
             self.reward += env_result.reward or 0.0
-            self._done = env_result.observation.done
+            self.done = env_result.observation.done
             return self._format_obs(env_result.observation.info_state)
 
         def move(self, direction: str) -> str:
@@ -328,12 +328,13 @@ def main():
         callbacks=[RichProgressCallback()],
     )
 
-    trainer.train()
-    time.sleep(5)
-
-    if server_process:
-        print("🛑 Terminating environment server...")
-        server_process.terminate()
+    try:
+        trainer.train()
+    finally:
+        if server_process:
+            print("🛑 Terminating environment server...")
+            server_process.terminate()
+            server_process.wait()
 
 
 if __name__ == "__main__":
