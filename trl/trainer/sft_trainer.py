@@ -883,6 +883,8 @@ class SFTTrainer(_BaseTrainer):
                 )
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
+                max_length=args.max_length,
+                truncation_mode=args.truncation_mode,
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
