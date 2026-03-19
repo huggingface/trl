@@ -64,8 +64,12 @@ class SFTConfig(_BaseConfig):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
-            If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
+            or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
+            this value sets the sequence length.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         shuffle_dataset (`bool`, *optional*, defaults to `False`):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
@@ -174,8 +178,16 @@ class SFTConfig(_BaseConfig):
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
-            "sequence length."
+            "the left or right depending on the `truncation_mode`. If `None`, no truncation is applied. When packing "
+            "is enabled, this value sets the sequence length."
+        },
+    )
+    truncation_mode: str = field(
+        default="keep_start",
+        metadata={
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
+            "and `'keep_start'`.",
+            "choices": ["keep_end", "keep_start"],
         },
     )
     shuffle_dataset: bool = field(
