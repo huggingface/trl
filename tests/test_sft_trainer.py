@@ -267,6 +267,32 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[3, 4, 5], [6, 7, 8]]))
 
+    def test_max_length_keep_start_with_padding_free(self):
+        """Test that padding-free mode still truncates each sequence before concatenation."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=3, padding_free=True)
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 6, 7, 8]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 2]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 7, 8]]))
+
+    def test_max_length_keep_end_with_padding_free(self):
+        """Test keep_end truncation in padding-free mode."""
+        collator = DataCollatorForLanguageModeling(
+            pad_token_id=0, max_length=3, truncation_mode="keep_end", padding_free=True
+        )
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7, 8]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[3, 4, 5, 6, 7, 8]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 2]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 4, 5, -100, 7, 8]]))
+
     def test_max_length_no_truncation_needed(self):
         """Test that max_length larger than sequences does not alter the output."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, max_length=10)
@@ -984,6 +1010,24 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    def test_skip_prepare_dataset_passes_truncation_to_text_collator(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=16,
+            truncation_mode="keep_end",
+            dataset_kwargs={"skip_prepare_dataset": True},
+            report_to="none",
+        )
+
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert isinstance(trainer.data_collator, DataCollatorForLanguageModeling)
+        assert trainer.data_collator.max_length == 16
+        assert trainer.data_collator.truncation_mode == "keep_end"
 
     def test_train_with_iterable_dataset(self):
         # Get the dataset
