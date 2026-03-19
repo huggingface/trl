@@ -21,6 +21,7 @@ from contextlib import nullcontext
 from copy import copy as shallow_copy
 from typing import Any
 
+import numpy as np
 import torch
 import transformers
 from accelerate.utils import gather_object
@@ -230,7 +231,47 @@ class DPPOTrainer(GRPOTrainer):
         if self.divergence_type in ["topk_tv", "topk_kl"] and self.use_vllm:
             self.vllm_generation.logprobs = self.divergence_topk
 
-    def _generate_single_turn(self, prompts: list):
+    def _tokenize_prompts(self, prompts: list):
+        """Tokenize prompts and extract images/multimodal fields for generation."""
+        if is_conversational({"prompt": prompts[0]}):
+            images = []
+            has_images = False
+            for prompt in prompts:
+                prompt_images = []
+                for message in prompt:
+                    if isinstance(message["content"], list):
+                        for part in message["content"]:
+                            if part["type"] == "image":
+                                prompt_images.append(part["image"])
+                                has_images = True
+                images.append(prompt_images if prompt_images else None)
+            images = images if has_images else None
+
+            # We pass padding=True to work around a bug introduced in transformers 5.2.0 in some processors
+            # (e.g. Qwen2.5-VL) that crash on batched unpadded input. We then unpad input_ids using attention_mask.
+            # See: https://github.com/huggingface/transformers/issues/44514
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompts,
+                tools=self.tools,
+                chat_template=self.chat_template,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                padding=True,
+                **self.chat_template_kwargs,
+            )
+            prompt_ids = [
+                [tok for tok, mask in zip(ids, attention_mask, strict=True) if mask]
+                for ids, attention_mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+            ]
+            multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+        else:
+            prompt_ids = self.processing_class(text=prompts)["input_ids"]
+            images = None
+            multimodal_fields = {}
+        return prompt_ids, images, multimodal_fields
+
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
         """Generate completions, always extracting sampled token logprobs.
 
         Returns:
@@ -249,8 +290,11 @@ class DPPOTrainer(GRPOTrainer):
                 self._last_loaded_step = self.state.global_step
 
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            prompt_ids, completion_ids, logprobs, logprob_token_ids, extra_fields = self.vllm_generation.generate(
-                prompts=prompts, num_generations=num_generations, profiler=profiling_context(self, "vLLM.generate")
+            prompt_ids, completion_ids, logprobs, logprob_token_ids = self.vllm_generation.generate(
+                prompts=prompt_ids,
+                images=images,
+                num_generations=num_generations,
+                profiler=profiling_context(self, "vLLM.generate"),
             )
 
             if needs_topk:
@@ -282,25 +326,20 @@ class DPPOTrainer(GRPOTrainer):
                 topk_logprobs = None
                 topk_token_ids = None
 
+            extra_fields = {}
             return prompt_ids, completion_ids, sampled_logprobs, topk_logprobs, topk_token_ids, extra_fields
         else:
-            if is_conversational({"prompt": prompts[0]}):
-                generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts,
-                    tools=self.tools,
-                    chat_template=self.chat_template,
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    padding=True,
-                    padding_side="left",
-                    return_tensors="pt",
-                    return_dict=True,
-                    **self.chat_template_kwargs,
-                )
-            else:
-                generate_inputs = self.processing_class(
-                    text=prompts, padding=True, padding_side="left", return_tensors="pt"
-                )
+            prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
+            padded_ids = pad(prompt_tensors, padding_value=self.pad_token_id, padding_side="left")
+            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
+            for key, value in multimodal_fields.items():
+                if isinstance(value, torch.Tensor):
+                    generate_inputs[key] = value
+                elif isinstance(value, list) and value and isinstance(value[0], list):
+                    generate_inputs[key] = pad([torch.tensor(x) for x in value], padding_value=0, padding_side="left")
+                else:
+                    generate_inputs[key] = torch.tensor(np.array(value))
             generate_inputs = Trainer._prepare_inputs(self, generate_inputs)
 
             gen_config = shallow_copy(self.generation_config)
@@ -322,8 +361,8 @@ class DPPOTrainer(GRPOTrainer):
                     **generate_inputs, generation_config=gen_config, disable_compile=True
                 )
 
-            prompt_ids, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
-            prompt_length = prompt_ids.size(1)
+            prompt_ids_tensor, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
+            prompt_length = prompt_ids_tensor.size(1)
             completion_ids = gen_output.sequences[:, prompt_length:]
 
             # Stack logits: tuple of (batch, vocab_size) per step -> (batch, seq_len, vocab_size)
@@ -361,13 +400,15 @@ class DPPOTrainer(GRPOTrainer):
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+            prompt_mask_cpu = prompt_mask.bool().cpu()
+            completion_mask_cpu = completion_mask.bool().cpu()
 
-            prompt_ids_out = _strip_padding(prompt_ids, prompt_mask)
-            completion_ids_out = _strip_padding(completion_ids, completion_mask)
-            logprobs_out = _strip_padding(sampled_logprobs, completion_mask)
+            prompt_ids_out = _strip_padding(prompt_ids_tensor.cpu(), prompt_mask_cpu)
+            completion_ids_out = _strip_padding(completion_ids.cpu(), completion_mask_cpu)
+            logprobs_out = _strip_padding(sampled_logprobs.cpu(), completion_mask_cpu)
             if needs_topk:
-                topk_logprobs = _strip_padding(topk_logps, completion_mask)
-                topk_token_ids = _strip_padding(topk_ids, completion_mask)
+                topk_logprobs = _strip_padding(topk_logps.cpu(), completion_mask_cpu)
+                topk_token_ids = _strip_padding(topk_ids.cpu(), completion_mask_cpu)
             else:
                 topk_logprobs = None
                 topk_token_ids = None
@@ -401,6 +442,8 @@ class DPPOTrainer(GRPOTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 tool_call_list = tool_calls[idx]
                 prompt_completion_tool = prompt_completion_tools[idx]
+                sync_tool_dict = self._sync_tool_dicts[idx_with_tool]
+                async_tool_dict = self._async_tool_dicts[idx_with_tool]
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
                 async_coros = []
                 tool_call_results = []
@@ -409,13 +452,16 @@ class DPPOTrainer(GRPOTrainer):
                     if tool_call["type"] == "function":
                         function = tool_call["function"]
                         name = function["name"]
-                        if name in self._sync_tool_dict:
-                            tool_call_results.append((name, self._sync_tool_dict[name](**function["arguments"])))
-                        elif name in self._async_tool_dict:
-                            async_coros.append((name, self._async_tool_dict[name](**function["arguments"])))
-                        else:
+                        try:
+                            if name in sync_tool_dict:
+                                tool_call_results.append((name, sync_tool_dict[name](**function["arguments"])))
+                            elif name in async_tool_dict:
+                                async_coros.append((name, async_tool_dict[name](**function["arguments"])))
+                            else:
+                                raise ValueError(f"Tool {name} not found.")
+                        except Exception as err:
                             tool_failure_count += 1
-                            tool_call_results.append((name, {"error": f"Unknown tool: {name}"}))
+                            tool_call_results.append((name, {"error": str(err)}))
                     else:
                         tool_failure_count += 1
                         name = tool_call.get("name", "unknown")
@@ -455,7 +501,7 @@ class DPPOTrainer(GRPOTrainer):
                 **self.chat_template_kwargs,
             )
             if self.use_vllm and self.vllm_mode == "colocate":
-                max_model_len = self.llm.llm_engine.model_config.max_model_len
+                max_model_len = self.vllm_generation.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
                 max_model_len = self.model.config.max_position_embeddings
             else:
@@ -482,6 +528,7 @@ class DPPOTrainer(GRPOTrainer):
                 break
 
             # Generate new completions after tool execution
+            pct_prompt_ids, pct_images, pct_multimodal_fields = self._tokenize_prompts(prompt_completion_tools)
             (
                 prompt_completion_tool_ids,
                 post_tool_ids,
@@ -489,7 +536,7 @@ class DPPOTrainer(GRPOTrainer):
                 post_tool_topk_logprobs,
                 post_tool_topk_token_ids,
                 _,
-            ) = self._generate_single_turn(prompt_completion_tools)
+            ) = self._generate_single_turn(pct_prompt_ids, pct_images, pct_multimodal_fields)
 
             # Sanity check: chat template must be prefix-preserving
             for idx in range(len(idxs_with_tool)):
@@ -580,20 +627,51 @@ class DPPOTrainer(GRPOTrainer):
         """
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
+        needs_topk = self.divergence_type in ["topk_tv", "topk_kl"]
 
+        # Copy the prompts to avoid modifying the original list
         prompts = copy.deepcopy(prompts)
 
-        prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids, extra_fields = self._generate_single_turn(
-            prompts
-        )
+        if self.rollout_func is not None:
+            # Keep vLLM weights in sync for custom rollouts that rely on vLLM utilities.
+            if self.use_vllm and self.state.global_step != self._last_loaded_step:
+                with profiling_context(self, "sync_weights"):
+                    self.vllm_generation.sync_weights()
+                self._last_loaded_step = self.state.global_step
 
-        # Decode completions
+            # Pass prompts to rollout_func preserving structured messages.
+            # Chat templating must happen inside rollout_func, at the backend boundary, so that
+            # multimodal content (images, typed content blocks) is not lost before rollout logic runs.
+            output = self.rollout_func(prompts, self)
+            required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+            missing_keys = required_keys - output.keys()
+            if missing_keys:
+                missing_keys_list = sorted(missing_keys)
+                raise ValueError(f"rollout_func must return keys {missing_keys_list} in its output dict.")
+            extra_fields = {k: v for k, v in output.items() if k not in required_keys}
+            prompt_ids = output["prompt_ids"]
+            completion_ids = output["completion_ids"]
+            logprobs = output["logprobs"]
+            topk_logprobs = extra_fields.pop("topk_logprobs", None)
+            topk_token_ids = extra_fields.pop("topk_token_ids", None)
+            if needs_topk and (topk_logprobs is None or topk_token_ids is None):
+                raise ValueError(
+                    "rollout_func must return keys ['topk_logprobs', 'topk_token_ids'] when divergence_type is "
+                    f"{self.divergence_type!r}."
+                )
+        else:
+            prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
+            prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids, extra_fields = (
+                self._generate_single_turn(prompt_ids, images, multimodal_fields)
+            )
+
+        # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
             if (
-                Version(transformers.__version__) >= Version("5.0.0")
-                and isinstance(self.processing_class, PreTrainedTokenizerBase)
-                and hasattr(self.processing_class, "response_schema")
-                and self.processing_class.response_schema is not None
+                Version(transformers.__version__) >= Version("5.0.0")  # parse_response added in v5
+                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
+                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
+                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
             ):
                 completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
             else:
@@ -769,6 +847,13 @@ class DPPOTrainer(GRPOTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        if self.environments:
+            for prompt, environment, reset_kwargs in zip(prompts, self.environments, inputs, strict=True):
+                observation = environment.reset(**reset_kwargs)
+                if observation is None:
+                    continue
+                prompt[-1]["content"] += observation
+
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
         elif "image" in inputs[0]:
@@ -783,6 +868,13 @@ class DPPOTrainer(GRPOTrainer):
         # [{"role": "user", "content": "What color is the sky?"}] to
         # [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What color is the sky?"}]}]
         if images is not None:
+            if not is_conversational(inputs[0]):
+                raise ValueError(
+                    "Multimodal training requires conversational prompts. It looks like the dataset contains "
+                    "non-conversational inputs, likely because a chat template was applied before passing the dataset "
+                    "to the trainer. Please provide the raw conversational prompts and let the trainer apply the chat "
+                    "template internally."
+                )
             prompts = [
                 prepare_multimodal_messages(prompt, image_list)
                 for prompt, image_list in zip(prompts, images, strict=True)
@@ -801,28 +893,57 @@ class DPPOTrainer(GRPOTrainer):
         ) = self._generate(prompts)
 
         # Convert lists of token IDs to padded tensors
-        prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
+        prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-        prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
-        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
-        completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+        prompt_ids = pad(
+            prompt_ids,
+            padding_value=self.pad_token_id,
+            padding_side="left",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        ).to(device=device)
+        prompt_mask = pad(
+            prompt_mask, padding_value=0, padding_side="left", pad_to_multiple_of=self.pad_to_multiple_of
+        ).to(device=device)
+        completion_ids = [torch.tensor(ids) for ids in completion_ids_list]
         completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
-        completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
-        completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
-        sampling_per_token_logps = [torch.tensor(logps, device=device) for logps in sampling_per_token_logps_list]
-        sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
+        completion_ids = pad(
+            completion_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        ).to(device=device)
+        completion_mask = pad(
+            completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        ).to(device=device)
+        sampling_per_token_logps = [torch.tensor(logps) for logps in sampling_per_token_logps_list]
+        sampling_per_token_logps = pad(
+            sampling_per_token_logps,
+            padding_value=0.0,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        ).to(device=device)
         if tool_mask_list is not None:
-            tool_mask = [torch.tensor(mask, device=device) for mask in tool_mask_list]
-            tool_mask = pad(tool_mask, padding_value=1, padding_side="right")
+            tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
+            tool_mask = pad(
+                tool_mask, padding_value=1, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            ).to(device=device)
         else:
             tool_mask = None
         if topk_logprobs_list is not None:
-            sampling_topk_logps = [torch.tensor(lp, device=device) for lp in topk_logprobs_list]
-            sampling_topk_logps = pad(sampling_topk_logps, padding_value=0.0, padding_side="right")
-            sampling_topk_token_ids = [
-                torch.tensor(tid, device=device, dtype=torch.long) for tid in topk_token_ids_list
-            ]
-            sampling_topk_token_ids = pad(sampling_topk_token_ids, padding_value=0, padding_side="right")
+            sampling_topk_logps = [torch.tensor(lp) for lp in topk_logprobs_list]
+            sampling_topk_logps = pad(
+                sampling_topk_logps,
+                padding_value=0.0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            ).to(device=device)
+            sampling_topk_token_ids = [torch.tensor(tid, dtype=torch.long) for tid in topk_token_ids_list]
+            sampling_topk_token_ids = pad(
+                sampling_topk_token_ids,
+                padding_value=0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            ).to(device=device)
         else:
             sampling_topk_logps = None
             sampling_topk_token_ids = None
@@ -863,12 +984,25 @@ class DPPOTrainer(GRPOTrainer):
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
             token_type_ids = forward_kwargs["token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                padding_size = prompt_ids.size(1) - token_type_ids.size(1)
+                if padding_size > 0:
+                    token_type_ids = torch.cat(
+                        [token_type_ids.new_zeros((token_type_ids.size(0), padding_size)), token_type_ids], dim=1
+                    )
             forward_kwargs["token_type_ids"] = torch.cat(
                 [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
         # If mm_token_type_ids are used, extend them with zeros for the completion part
         if "mm_token_type_ids" in forward_kwargs:
             mm_token_type_ids = forward_kwargs["mm_token_type_ids"]
+            if self.pad_to_multiple_of is not None:
+                padding_size = prompt_ids.size(1) - mm_token_type_ids.size(1)
+                if padding_size > 0:
+                    mm_token_type_ids = torch.cat(
+                        [mm_token_type_ids.new_zeros((mm_token_type_ids.size(0), padding_size)), mm_token_type_ids],
+                        dim=1,
+                    )
             forward_kwargs["mm_token_type_ids"] = torch.cat(
                 [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
             )
