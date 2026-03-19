@@ -1003,6 +1003,21 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.data_collator.max_length == 16
         assert trainer.data_collator.truncation_mode == "keep_end"
 
+    def test_skip_prepare_dataset_with_padding_free_and_max_length_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=16,
+            padding_free=True,
+            dataset_kwargs={"skip_prepare_dataset": True},
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="must be enforced during dataset preparation or packing"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
     def test_train_with_iterable_dataset(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
