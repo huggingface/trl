@@ -89,7 +89,7 @@ def _patch_vllm_disabled_tqdm() -> None:
 
     - Bug introduced in https://github.com/vllm-project/vllm/pull/52
     - Fixed in https://github.com/vllm-project/vllm/pull/28471 (released in v0.11.1)
-    - Since TRL currently supports vLLM v0.10.2-0.17.0, we patch it here
+    - Since TRL currently supports vLLM v0.10.2-0.17.1, we patch it here
     - This can be removed when TRL requires vLLM>=0.11.1
     """
     if _is_package_version_below("vllm", "0.11.1"):

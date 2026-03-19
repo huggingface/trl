@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.10.2` to `0.17.0`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.10.2` to `0.17.1`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
@@ -52,7 +52,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=GRPOConfig(use_vllm=True),
+    args=GRPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -72,7 +72,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = OnlineDPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=OnlineDPOConfig(use_vllm=True),
+    args=OnlineDPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -92,7 +92,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = NashMDTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=NashMDConfig(use_vllm=True),
+    args=NashMDConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -112,7 +112,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = XPOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=XPOConfig(use_vllm=True),
+    args=XPOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -132,7 +132,7 @@ dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = RLOOTrainer(
     model="Qwen/Qwen2.5-7B",
-    args=RLOOConfig(use_vllm=True),
+    args=RLOOConfig(use_vllm=True, vllm_mode="server"),
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -276,7 +276,77 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/
 
 ### Modes of Using vLLM During Training
 
-TRL supports **two modes** for integrating vLLM during training: **server mode** and **colocate mode**.
+TRL supports **two modes** for integrating vLLM during training: **colocate mode** (default) and **server mode**.
+
+#### Colocate Mode
+
+In **colocate mode**, vLLM runs inside the trainer process and shares GPU memory with the training model.
+This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs. This is the default mode.
+
+Example configuration:
+
+<hfoptions id="vllm examples">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="OnlineDPO">
+
+```python
+from trl.experimental.online_dpo import OnlineDPOConfig
+
+training_args = OnlineDPOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="NashMD">
+
+```python
+from trl.experimental.nash_md import NashMDConfig
+
+training_args = NashMDConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="XPO">
+
+```python
+from trl.experimental.xpo import XPOConfig
+
+training_args = XPOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+</hfoption>
+</hfoptions>
 
 #### Server Mode
 
@@ -294,7 +364,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -307,7 +377,7 @@ from trl.experimental.online_dpo import OnlineDPOConfig
 training_args = OnlineDPOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -320,7 +390,7 @@ from trl.experimental.nash_md import NashMDConfig
 training_args = NashMDConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -333,7 +403,7 @@ from trl.experimental.xpo import XPOConfig
 training_args = XPOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
+    vllm_mode="server",
 )
 ```
 
@@ -346,82 +416,7 @@ from trl import RLOOConfig
 training_args = RLOOConfig(
     ...,
     use_vllm=True,
-    vllm_mode="server",  # default value, can be omitted
-)
-```
-
-</hfoption>
-</hfoptions>
-
-#### Colocate Mode
-
-In **colocate mode**, vLLM runs inside the trainer process and shares GPU memory with the training model.
-This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
-
-Example configuration:
-
-<hfoptions id="vllm examples">
-<hfoption id="GRPO">
-
-```python
-from trl import GRPOConfig
-
-training_args = GRPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="OnlineDPO">
-
-```python
-from trl.experimental.online_dpo import OnlineDPOConfig
-
-training_args = OnlineDPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="NashMD">
-
-```python
-from trl.experimental.nash_md import NashMDConfig
-
-training_args = NashMDConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="XPO">
-
-```python
-from trl.experimental.xpo import XPOConfig
-
-training_args = XPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
-
-</hfoption>
-<hfoption id="RLOO">
-
-```python
-from trl import RLOOConfig
-
-training_args = RLOOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
+    vllm_mode="server",
 )
 ```
 

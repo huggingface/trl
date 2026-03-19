@@ -422,11 +422,6 @@ def main(script_args: ScriptArguments):
     else:
         from vllm.utils.network_utils import get_open_port
 
-    if Version(vllm.__version__) <= Version("0.10.2"):
-        from vllm.sampling_params import GuidedDecodingParams
-    else:
-        from vllm.sampling_params import StructuredOutputsParams
-
     if is_vision_available():
         from PIL import Image
 
@@ -506,8 +501,8 @@ def main(script_args: ScriptArguments):
     class GenerateResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[list[float]]]
-        logprob_token_ids: list[list[list[int]]]
+        logprobs: list[list[list[float | None]]] | None
+        logprob_token_ids: list[list[list[int]]] | None
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -533,8 +528,9 @@ def main(script_args: ScriptArguments):
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
-                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
-                  descending probability.
+                  only the sampled token's logprob is returned. When N>0, returns up to N+1 logprobs sorted by
+                  descending probability, because vLLM always includes the sampled token's logprob (which may fall
+                  outside the top-N).
                 - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
                   the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -595,34 +591,22 @@ def main(script_args: ScriptArguments):
 
         # Structured outputs, if enabled
         if Version(vllm.__version__) <= Version("0.10.2"):
-            structured_outputs_key = "guided_decoding"
-            if request.structured_outputs_regex is not None:
-                if generation_kwargs.get("guided_decoding") is not None:
-                    logger.warning(
-                        "Both `structured_outputs_regex` and `generation_kwargs['guided_decoding']` are set; "
-                        "`structured_outputs_regex` takes precedence."
-                    )
-                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
-            else:
-                structured_outputs = generation_kwargs.get("guided_decoding")
-        else:
-            structured_outputs_key = "structured_outputs"
-            if request.structured_outputs_regex is not None:
-                if generation_kwargs.get("structured_outputs") is not None:
-                    logger.warning(
-                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
-                        "`structured_outputs_regex` takes precedence."
-                    )
-                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
-            elif isinstance(generation_kwargs.get("structured_outputs"), dict):
-                # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
-                # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
-                structured_outputs_dict = generation_kwargs.get("structured_outputs")
-                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
-            else:
-                structured_outputs = generation_kwargs.get("structured_outputs")
+            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
 
-        generation_kwargs[structured_outputs_key] = structured_outputs
+            structured_outputs_key = "guided_decoding"
+        else:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            structured_outputs_key = "structured_outputs"
+        if request.structured_outputs_regex is not None:
+            if generation_kwargs.get(structured_outputs_key) is not None:
+                logger.warning(
+                    f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                    "`structured_outputs_regex` takes precedence."
+                )
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
@@ -675,8 +659,8 @@ def main(script_args: ScriptArguments):
     class ChatResponse(BaseModel):
         prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
-        logprobs: list[list[list[float]]]
-        logprob_token_ids: list[list[list[int]]]
+        logprobs: list[list[list[float | None]]] | None
+        logprob_token_ids: list[list[list[int]]] | None
 
     @app.post("/chat/", response_model=ChatResponse)
     async def chat(request: ChatRequest):
@@ -700,8 +684,9 @@ def main(script_args: ScriptArguments):
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
                 - `logprobs` (`int`, *optional*, defaults to `0`): Number of top logprobs to return per token. When 0,
-                  only the sampled token's logprob is returned. When N>0, returns the top-N logprobs sorted by
-                  descending probability.
+                  only the sampled token's logprob is returned. When N>0, returns up to N+1 logprobs sorted by
+                  descending probability, because vLLM always includes the sampled token's logprob (which may fall
+                  outside the top-N).
                 - `structured_outputs_regex` (`str`, *optional*): A regex pattern for structured outputs. If provided,
                   the model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -758,34 +743,22 @@ def main(script_args: ScriptArguments):
 
         # Structured outputs, if enabled
         if Version(vllm.__version__) <= Version("0.10.2"):
-            structured_outputs_key = "guided_decoding"
-            if request.structured_outputs_regex is not None:
-                if generation_kwargs.get("guided_decoding") is not None:
-                    logger.warning(
-                        "Both `structured_outputs_regex` and `generation_kwargs['guided_decoding']` are set; "
-                        "`structured_outputs_regex` takes precedence."
-                    )
-                structured_outputs = GuidedDecodingParams(regex=request.structured_outputs_regex)
-            else:
-                structured_outputs = generation_kwargs.get("guided_decoding")
-        else:
-            structured_outputs_key = "structured_outputs"
-            if request.structured_outputs_regex is not None:
-                if generation_kwargs.get("structured_outputs") is not None:
-                    logger.warning(
-                        "Both `structured_outputs_regex` and `generation_kwargs['structured_outputs']` are set; "
-                        "`structured_outputs_regex` takes precedence."
-                    )
-                structured_outputs = StructuredOutputsParams(regex=request.structured_outputs_regex)
-            elif isinstance(generation_kwargs.get("structured_outputs"), dict):
-                # If structured_outputs is passed as a dictionary in generation_kwargs, convert it to a
-                # StructuredOutputsParams object to ensure compatibility with vLLM's SamplingParams.
-                structured_outputs_dict = generation_kwargs.get("structured_outputs")
-                structured_outputs = StructuredOutputsParams(**structured_outputs_dict)
-            else:
-                structured_outputs = generation_kwargs.get("structured_outputs")
+            from vllm.sampling_params import GuidedDecodingParams as StructuredOutputsParams
 
-        generation_kwargs[structured_outputs_key] = structured_outputs
+            structured_outputs_key = "guided_decoding"
+        else:
+            from vllm.sampling_params import StructuredOutputsParams
+
+            structured_outputs_key = "structured_outputs"
+        if request.structured_outputs_regex is not None:
+            if generation_kwargs.get(structured_outputs_key) is not None:
+                logger.warning(
+                    f"Both `structured_outputs_regex` and `generation_kwargs['{structured_outputs_key}']` are set; "
+                    "`structured_outputs_regex` takes precedence."
+                )
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(regex=request.structured_outputs_regex)
+        elif isinstance(structured_outputs_kwargs := generation_kwargs.get(structured_outputs_key), dict):
+            generation_kwargs[structured_outputs_key] = StructuredOutputsParams(**structured_outputs_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks

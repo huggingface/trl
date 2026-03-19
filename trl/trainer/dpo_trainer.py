@@ -109,6 +109,12 @@ class DataCollatorForPreference(DataCollatorMixin):
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
+        max_length (`int`, *optional*):
+            Maximum length of the sequences after concatenation. Sequences longer than `max_length` are truncated
+            before padding, which avoids allocating oversized tensors for batches containing very long sequences.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Truncation mode when a concatenated sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -140,16 +146,31 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
 
     pad_token_id: int
+    max_length: int | None = None
+    truncation_mode: str = "keep_start"
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         prompt_chosen_ids = [example["prompt_ids"] + example["chosen_ids"] for example in examples]
         prompt_rejected_ids = [example["prompt_ids"] + example["rejected_ids"] for example in examples]
-        chosen_attention_mask = [[1] * len(example["prompt_ids"] + example["chosen_ids"]) for example in examples]
-        rejected_attention_mask = [[1] * len(example["prompt_ids"] + example["rejected_ids"]) for example in examples]
         chosen_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["chosen_ids"]) for example in examples]
         rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
+
+        if self.max_length is not None:
+            if self.truncation_mode == "keep_start":
+                prompt_chosen_ids = [ids[: self.max_length] for ids in prompt_chosen_ids]
+                prompt_rejected_ids = [ids[: self.max_length] for ids in prompt_rejected_ids]
+                chosen_mask = [m[: self.max_length] for m in chosen_mask]
+                rejected_mask = [m[: self.max_length] for m in rejected_mask]
+            elif self.truncation_mode == "keep_end":
+                prompt_chosen_ids = [ids[-self.max_length :] for ids in prompt_chosen_ids]
+                prompt_rejected_ids = [ids[-self.max_length :] for ids in prompt_rejected_ids]
+                chosen_mask = [m[-self.max_length :] for m in chosen_mask]
+                rejected_mask = [m[-self.max_length :] for m in rejected_mask]
+
+        chosen_attention_mask = [[1] * len(ids) for ids in prompt_chosen_ids]
+        rejected_attention_mask = [[1] * len(ids) for ids in prompt_rejected_ids]
         input_ids = prompt_chosen_ids + prompt_rejected_ids
         attention_mask = chosen_attention_mask + rejected_attention_mask
         completion_mask = chosen_mask + rejected_mask
@@ -216,6 +237,10 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
         processor ([`~transformers.ProcessorMixin`]):
             The processor used to tokenize text and process images. It must be a subclass of
             [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
+        max_length (`int`, *optional*):
+            Maximum sequence length. Sequences longer than `max_length` are truncated before padding, which avoids
+            allocating oversized tensors for batches containing very long sequences. Only `"keep_start"` truncation
+            applies to vision datasets; `"keep_end"` is rejected upstream.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, optional, defaults to `"pt"`):
@@ -270,6 +295,7 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     """
 
     processor: ProcessorMixin
+    max_length: int | None = None
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
@@ -355,6 +381,15 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
             )
         else:
             attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = token_type_ids[:, : self.max_length]
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
 
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
@@ -587,6 +622,13 @@ class DPOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
+            raise ValueError(
+                "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
+                "inside the prompt portion of the sequence; depending on the example, keep_end may silently "
+                "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
+                "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
+            )
         if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -600,11 +642,14 @@ class DPOTrainer(_BaseTrainer):
                 )
             data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
+                max_length=args.max_length,
+                truncation_mode=args.truncation_mode,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionPreference(
                 processor=processing_class,
+                max_length=args.max_length,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
@@ -970,27 +1015,38 @@ class DPOTrainer(_BaseTrainer):
         return dataset
 
     def _truncate_inputs(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, completion_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        completion_mask: torch.Tensor,
+        *extra: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
         if self.args.max_length is None:
-            return input_ids, attention_mask, completion_mask
+            return input_ids, attention_mask, completion_mask, *extra
 
         if self.args.truncation_mode == "keep_start":
             input_ids = input_ids[:, : self.args.max_length]
             attention_mask = attention_mask[:, : self.args.max_length]
             completion_mask = completion_mask[:, : self.args.max_length]
+            extra = tuple(t[:, : self.args.max_length] for t in extra)
         elif self.args.truncation_mode == "keep_end":
-            attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
+            attention_mask, input_ids, completion_mask, *extra = flush_right(
+                attention_mask, input_ids, completion_mask, *extra
+            )
             input_ids = input_ids[:, -self.args.max_length :]
             attention_mask = attention_mask[:, -self.args.max_length :]
             completion_mask = completion_mask[:, -self.args.max_length :]
-            attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+            extra = tuple(t[:, -self.args.max_length :] for t in extra)
+            attention_mask, input_ids, completion_mask, *extra = flush_left(
+                attention_mask, input_ids, completion_mask, *extra
+            )
+            extra = tuple(extra)
         else:
             raise ValueError(
                 f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
             )
 
-        return input_ids, attention_mask, completion_mask
+        return input_ids, attention_mask, completion_mask, *extra
 
     def compute_ref_log_probs(self, inputs):
         """Computes reference log probabilities for a single padded batch."""
@@ -999,20 +1055,19 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
+        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
+        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
+        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
+            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
+        )
 
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "token_type_ids",
-            "mm_token_type_ids",
-        ):
+        for key, val in zip(extra_keys, extra, strict=False):
+            model_kwargs[key] = val
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
@@ -1130,17 +1185,16 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
+        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
+        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
+        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
+            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
+        )
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key in (
-            "pixel_values",
-            "pixel_attention_mask",
-            "image_grid_thw",
-            "image_sizes",
-            "token_type_ids",
-            "mm_token_type_ids",
-        ):
+        for key, val in zip(extra_keys, extra, strict=False):
+            model_kwargs[key] = val
+        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 

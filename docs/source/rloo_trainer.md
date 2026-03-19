@@ -161,7 +161,20 @@ pip install trl[vllm]
 
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
-#### 🔌 Option 1: Server mode
+#### Option 1: Colocate mode
+
+In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs. This is the default mode.
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    ...,
+    use_vllm=True,  # vllm_mode="colocate" by default
+)
+```
+
+#### Option 2: Server mode
 
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
@@ -179,26 +192,12 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
    training_args = RLOOConfig(
        ...,
        use_vllm=True,
-       vllm_mode="server",  # default value, can be omitted
+       vllm_mode="server",
    )
    ```
 
 > [!WARNING]
 > Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
-
-#### 🧩 Option 2: Colocate mode
-
-In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
-
-```python
-from trl import RLOOConfig
-
-training_args = RLOOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="colocate",
-)
-```
 
 > [!TIP]
 > Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`RLOOConfig`] to avoid underutilization or out-of-memory errors.
@@ -278,6 +277,7 @@ def main():
         per_device_train_batch_size=4,
         bf16=True,
         use_vllm=True,
+        vllm_mode="server",
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 
@@ -300,6 +300,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `completions` (contains the generated completions),
      - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
+     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
+     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -480,6 +482,28 @@ async def async_reward_func(prompts, completions, **kwargs):
     await asyncio.sleep(0.01)
     # Simple toy reward: 1.0 if the completion is non-empty, else 0.0
     return [1.0 if completion else 0.0 for completion in completions]
+```
+
+#### Example 6: Logging extra columns and metrics
+
+Below is an example of a reward function that logs extra columns to the completions table and scalar metrics as plots.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, log_extra=None, log_metric=None, **kwargs):
+    extracted = [re.search(r"\\boxed\{(.*?)\}", c) for c in completions]
+    extracted = [m.group(1) if m else None for m in extracted]
+    rewards = [1.0 if e == gt else 0.0 for e, gt in zip(extracted, ground_truth)]
+
+    if log_extra:
+        log_extra("golden_answer", list(ground_truth))
+        log_extra("extracted_answer", [e or "[none]" for e in extracted])
+
+    if log_metric:
+        log_metric("accuracy", sum(rewards) / len(rewards))
+
+    return rewards
 ```
 
 #### Passing the reward function to the trainer
