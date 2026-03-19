@@ -877,7 +877,12 @@ def pack_dataset(
     return dataset
 
 
-def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str, Any] | None = None) -> DatasetType:
+def truncate_dataset(
+    dataset: DatasetType,
+    max_length: int,
+    truncation_mode: str = "keep_start",
+    map_kwargs: dict[str, Any] | None = None,
+) -> DatasetType:
     r"""
     Truncate sequences in a dataset to a specified `max_length`.
 
@@ -886,6 +891,8 @@ def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str
             Dataset to truncate.
         max_length (`int`):
             Maximum sequence length to truncate to.
+        truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
+            Whether to keep the start (`"keep_start"`) or the end (`"keep_end"`) of the sequence when truncating.
         map_kwargs (`dict`, *optional*):
             Additional keyword arguments to pass to the dataset's map method when truncating examples.
 
@@ -907,6 +914,8 @@ def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str
      'attention_mask': [[0, 1], [0, 0], [1]]}
     ```
     """
+    if truncation_mode not in {"keep_start", "keep_end"}:
+        raise ValueError(f"Invalid truncation mode '{truncation_mode}'.")
     if map_kwargs is None:
         map_kwargs = {}
 
@@ -914,7 +923,14 @@ def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str
         truncated_columns = []
         for column in examples.columns:
             if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-                column = pc.list_slice(column, 0, max_length)
+                if truncation_mode == "keep_start":
+                    column = pc.list_slice(column, 0, max_length)
+                else:  # keep_end
+                    column = (
+                        pa.array([[] for _ in range(len(column))], type=column.type)
+                        if max_length == 0
+                        else pa.array([values[-max_length:] for values in column.to_pylist()], type=column.type)
+                    )
             truncated_columns.append(column)
         return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
 
