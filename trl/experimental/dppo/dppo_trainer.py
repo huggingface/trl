@@ -1167,6 +1167,7 @@ class DPPOTrainer(GRPOTrainer):
             output["sampling_topk_token_ids"] = sampling_topk_token_ids
         return output
 
+    @torch.no_grad()
     def _compute_divergence_mask(
         self,
         per_token_logps,
@@ -1309,7 +1310,6 @@ class DPPOTrainer(GRPOTrainer):
             current_topk_logps=current_topk_logps,
             sampling_topk_logps=sampling_topk_logps,
         )
-        divergence_mask = divergence_mask.detach()
 
         # DPPO loss: -advantages * ratio * mask * log_prob
         per_token_loss = -advantages * ratio * divergence_mask * per_token_logps
