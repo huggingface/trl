@@ -182,7 +182,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
         # Truncate per sequence if necessary
-        if self.max_length is not None and not self.padding_free:
+        if self.max_length is not None:
             if self.truncation_mode == "keep_start":
                 sl = slice(None, self.max_length)
             elif self.truncation_mode == "keep_end":
