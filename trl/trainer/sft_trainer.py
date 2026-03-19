@@ -172,6 +172,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
+        batch_seq_lengths = [example["seq_lengths"] for example in examples] if "seq_lengths" in examples[0] else None
         if "labels" in examples[0]:
             labels = [torch.tensor(example["labels"]) for example in examples]
         else:
@@ -201,10 +202,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
         # compute wrong cu_seq_lens from the all-1s mask
         if self.padding_free:
-            if "seq_lengths" in examples[0]:
-                position_ids = self.get_position_ids_from_packed_seq_lengths(
-                    [example["seq_lengths"] for example in examples]
-                )
+            if batch_seq_lengths is not None:
+                position_ids = self.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
         else:
@@ -883,7 +882,7 @@ class SFTTrainer(_BaseTrainer):
                 )
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
-                max_length=args.max_length,
+                max_length=None if self.padding_free else args.max_length,
                 truncation_mode=args.truncation_mode,
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
