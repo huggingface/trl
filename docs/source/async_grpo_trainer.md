@@ -55,6 +55,7 @@ The vLLM server and the trainer must run on **separate GPUs**. Use `CUDA_VISIBLE
 # Terminal 1: vLLM server on GPU 0 (dev mode + NCCL weight transfer are required)
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
     --max-model-len 4096 \
+    --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
 ```
 

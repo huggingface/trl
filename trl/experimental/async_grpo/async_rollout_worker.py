@@ -596,7 +596,7 @@ class AsyncRolloutWorker:
             "temperature": self.temperature,
             "n": 1,
             "return_token_ids": True,
-            "logprobs": 1,
+            "logprobs": 0,
         }
         while True:
             try:
