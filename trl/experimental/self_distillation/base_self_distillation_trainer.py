@@ -70,14 +70,6 @@ logger = get_logger(__name__)
 class BaseSelfDistillationTrainer(OnlineRolloutMixin, SelfDistillationMixin, _BaseTrainer):
     """Shared scaffold for experimental self-distillation trainers without GRPO inheritance."""
 
-    config_cls = SelfDistillationConfig
-    _tag_names = ["trl", "self-distillation"]
-    _name = "SelfDistillation"
-
-    def _set_signature_columns_if_needed(self):
-        if self._signature_columns is None:
-            self._signature_columns = ["prompt", "privileged_context"]
-
     def __init__(
         self,
         model: str | PreTrainedModel | nn.Module,
