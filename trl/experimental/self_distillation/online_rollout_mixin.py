@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Online rollout helpers for experimental self-distillation trainers.
+
+This mixin owns generation, reward scoring, grouped reward normalization, and online policy-loss plumbing. It is paired
+with `BaseSelfDistillationTrainer` for SDPO-style methods and intentionally kept separate from the generic distillation
+loss logic in `self_distillation_mixin.py`.
+"""
+
 from __future__ import annotations
 
 import torch

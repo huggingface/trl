@@ -12,20 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Shared self-distillation loss utilities used by experimental trainers.
+
+This module intentionally holds only the reusable distillation mechanics: callback dispatch, common prompt/context
+helpers, and the student-vs-teacher loss computation. Trainer lifecycle and online rollout concerns live in the trainer
+classes or their online-specific base.
+"""
+
 from __future__ import annotations
 
 from contextlib import nullcontext
-from functools import partial
 from typing import Any
 
-import datasets
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Sampler
-from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available
 
-from ...trainer.utils import RepeatSampler, entropy_from_logits, selective_log_softmax, split_tensor_dict
+from ...trainer.utils import entropy_from_logits, selective_log_softmax
 from .self_distillation_config import SelfDistillationConfig
 
 
@@ -33,10 +35,6 @@ class SelfDistillationMixin:
     """Reusable self-distillation helpers shared across experimental trainers."""
 
     config_cls = SelfDistillationConfig
-
-    def _set_signature_columns_if_needed(self):
-        if self._signature_columns is None:
-            self._signature_columns = ["prompt", "privileged_context"]
 
     def _dispatch_self_distillation_callback(self, event_name: str, **payload) -> None:
         for callback in self.callback_handler.callbacks:
@@ -50,75 +48,6 @@ class SelfDistillationMixin:
                     processing_class=self.processing_class,
                     **payload,
                 )
-
-    def get_train_dataloader(self):
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
-
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
-        else:
-            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
-
-        dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.steps_per_generation,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = partial(
-                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-            )
-            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-
-    def _get_train_sampler(self, dataset=None) -> Sampler:
-        if dataset is None:
-            dataset = self.train_dataset
-        return RepeatSampler(
-            data_source=dataset,
-            mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args.steps_per_generation,
-            shuffle=self.shuffle_dataset,
-            seed=self.args.seed,
-        )
-
-    def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        return RepeatSampler(
-            data_source=eval_dataset,
-            mini_repeat_count=getattr(self, "num_generations_eval", self.num_generations),
-            seed=self.args.seed,
-        )
-
-    def training_step(self, model, inputs, num_items_in_batch):
-        output = super().training_step(model, inputs, num_items_in_batch)
-        self._step += 1
-        return output
-
-    def _prepare_inputs(self, generation_batch):
-        mode = "train" if self.model.training else "eval"
-        if mode == "train":
-            generate_every = self.args.steps_per_generation * self.num_iterations
-            # The outer Trainer loop calls `_prepare_inputs` once per optimizer step. In self-distillation trainers
-            # that hook is repurposed to build one larger generation batch, then reuse its slices for the next
-            # `steps_per_generation` optimization steps.
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
-                generation_batch = self._build_buffered_batch(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
-                self._dispatch_self_distillation_callback(
-                    "on_generation_batch_built",
-                    generate_every=generate_every,
-                    steps_per_generation=self.args.steps_per_generation,
-                )
-            return self._buffered_inputs[self._step % self.args.steps_per_generation]
-        return self._build_buffered_batch(generation_batch)
 
     @staticmethod
     def _split_prompt_and_privileged_context(inputs: list[dict[str, Any]]) -> tuple[list[Any], list[Any]]:
@@ -154,6 +83,11 @@ class SelfDistillationMixin:
         model,
         inputs: dict[str, Any],
     ) -> torch.Tensor:
+        # Expected batch contract:
+        # - required: `prompt_ids`, `prompt_mask`, `completion_ids`, `completion_mask`,
+        #   `teacher_input_ids`, `teacher_attention_mask`
+        # - optional: `self_distillation_mask` to zero-out samples without teacher supervision,
+        #   `old_per_token_logps` to enable IS clipping when generation and optimization are misaligned
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         logits_to_keep = completion_ids.size(1)
