@@ -21,7 +21,6 @@ _import_structure = {
     "callbacks": [
         "BEMACallback",
         "LogCompletionsCallback",
-        "PEFTAdapterEMACallback",
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WeaveCallback",

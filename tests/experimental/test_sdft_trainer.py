@@ -232,7 +232,7 @@ class TestSDFTTrainer(TrlTestCase):
         from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
         from transformers import AutoModelForCausalLM, TrainerControl, TrainerState, TrainingArguments
 
-        from trl.trainer.callbacks import PEFTAdapterEMACallback
+        from trl.experimental.self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
 
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",

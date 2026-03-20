@@ -242,7 +242,7 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
         "title": "Reinforcement Learning via Self-Distillation",
         "id": "2601.20802",
         "citation": textwrap.dedent("""\
-            @article{hubotter2025sdpo,
+            @article{hubotter2026sdpo,
                 title        = {{Reinforcement Learning via Self-Distillation}},
                 author       = {Jonas H\\"ubotter and Frederike L\\"ubeck and Lejs Behric and Anton Baumann and Marco Bagatella and Daniel Marta and Ido Hakimi and Idan Shenfeld and Thomas Kleine Buening and Carlos Guestrin and Andreas Krause},
                 year         = 2026,

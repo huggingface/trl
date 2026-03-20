@@ -146,7 +146,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
         "title": "Self-Training with On-Policy Self-Distillation for Language Model Alignment",
         "id": "2601.19897",
         "citation": textwrap.dedent("""\
-            @article{hubotter2025selftraining,
+            @article{hubotter2026selftraining,
                 title        = {{Self-Training with On-Policy Self-Distillation for Language Model Alignment}},
                 author       = {Jonas H\\"ubotter and Frederike L\\"ubeck and Lejs Behric and Anton Baumann and Marco Bagatella and Daniel Marta and Ido Hakimi and Idan Shenfeld and Thomas Kleine Buening and Carlos Guestrin and Andreas Krause},
                 year         = 2026,
@@ -309,7 +309,7 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             if self.ref_model is not None:
                 self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
             elif is_peft_available() and is_peft_model(self.model):
-                from ...trainer.callbacks import PEFTAdapterEMACallback
+                from ..self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
 
                 self.add_callback(
                     PEFTAdapterEMACallback(
