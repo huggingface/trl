@@ -111,6 +111,8 @@ class SuccessfulRolloutTeacherContextBuilder:
         # Rewards arrive already locally sliced (per-process) from the rollout mixin; re-gather them so
         # the mining loop can find successful rollouts across all processes within each generation group.
         all_rewards = self.trainer.accelerator.gather(rewards)
+        # Completion tensors are padded to the local max length per rank; align shapes before gathering.
+        completion_ids = self.trainer.accelerator.pad_across_processes(completion_ids, dim=1, pad_index=self.trainer.pad_token_id)
         all_completion_ids = self.trainer.accelerator.gather(completion_ids)
         all_prompts = gather_object(prompts)
         total_samples = all_rewards.shape[0]
