@@ -1395,7 +1395,7 @@ class GRPOTrainer(_BaseTrainer):
             **self.chat_template_kwargs,
         )
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\\n" after an assistant/tool block.
+        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
         # EOS (not EOS + newline).
         prefix_ids_for_suffix = prefix_ids
