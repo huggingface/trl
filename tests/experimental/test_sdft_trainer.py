@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import torch
 import pytest
 from datasets import Dataset
-from transformers import TrainerCallback
+from transformers import AutoModelForCausalLM, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from transformers.utils import is_peft_available
 
 from trl.data_utils import maybe_apply_chat_template
@@ -24,7 +25,9 @@ from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
+
+    from trl.experimental.self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -228,12 +231,6 @@ class TestSDFTTrainer(TrlTestCase):
 
     @require_peft
     def test_peft_adapter_ema_callback(self):
-        import torch
-        from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
-        from transformers import AutoModelForCausalLM, TrainerControl, TrainerState, TrainingArguments
-
-        from trl.experimental.self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
-
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             device_map="cpu",
