@@ -51,7 +51,6 @@ if TYPE_CHECKING:
     from .callbacks import (
         BEMACallback,
         LogCompletionsCallback,
-        PEFTAdapterEMACallback,
         RichProgressCallback,
         SyncRefModelCallback,
         WeaveCallback,
