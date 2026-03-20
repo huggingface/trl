@@ -45,7 +45,7 @@ from ...trainer.utils import (
     use_adapter,
 )
 from ..self_distillation.self_distillation_mixin import SelfDistillationMixin
-from ..self_distillation.teacher_context import PromptTokenizer, escape_braces, extract_last_user_text
+from ..self_distillation.teacher_context import PromptTokenizer, extract_last_user_text
 from ..utils import prepare_peft_model
 from .sdft_config import SDFTConfig
 
@@ -86,19 +86,16 @@ class DemonstrationTeacherContextBuilder:
         return str(privileged_context)
 
     def _compose_teacher_prompt(self, prompt: Any, privileged_context: Any) -> Any:
-        privileged_text = escape_braces(self._stringify_privileged_context(privileged_context))
+        privileged_text = self._stringify_privileged_context(privileged_context)
         if isinstance(prompt, list):
             system_messages = prompt[:-1]
-            prompt_text = escape_braces(extract_last_user_text(prompt))
+            prompt_text = extract_last_user_text(prompt)
             teacher_text = self.trainer.args.teacher_prompt_template.format(
                 prompt=prompt_text,
                 privileged_context=privileged_text,
             )
             return system_messages + [{"role": "user", "content": teacher_text}]
-        escaped_prompt = escape_braces(prompt) if isinstance(prompt, str) else prompt
-        return self.trainer.args.teacher_prompt_template.format(
-            prompt=escaped_prompt, privileged_context=privileged_text
-        )
+        return self.trainer.args.teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_text)
 
     def select_generation_prompts(self, prompts: list[Any], privileged_contexts: list[Any]) -> list[Any]:
         if not self.trainer.generate_from_teacher:

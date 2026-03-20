@@ -221,6 +221,46 @@ class TestSDPOTrainer(TrlTestCase):
         assert any("Correct solution:" in text for text in alpha_teachers)
         assert all("Correct solution:" not in text for text in beta_teachers)
 
+    def test_teacher_reprompt_preserves_curly_braces_in_solution_and_feedback(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve f(x) = {x^2}."],
+                "privileged_context": ['Feedback: use {"x": 2} as a check.'],
+            }
+        )
+
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            include_environment_feedback=True,
+            success_reward_threshold=0.5,
+            dont_reprompt_on_self_success=False,
+            max_steps=1,
+        )
+
+        def reward_with_one_success(**kwargs):
+            prompts = kwargs["prompts"]
+            return [1.0, 0.0][: len(prompts)]
+
+        capture_callback = SelfDistillationCaptureCallback()
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_with_one_success,
+            args=training_args,
+            train_dataset=dataset,
+            callbacks=[capture_callback],
+        )
+
+        trainer.train()
+
+        assert capture_callback.captured_teacher_input_text is not None
+        assert "{{" not in capture_callback.captured_teacher_input_text
+        assert "}}" not in capture_callback.captured_teacher_input_text
+
     def test_training_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(
             {

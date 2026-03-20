@@ -24,11 +24,6 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import pad
 
 
-def escape_braces(text: str) -> str:
-    """Escape curly braces in content so str.format() doesn't interpret them as placeholders."""
-    return text.replace("{", "{{").replace("}", "}}")
-
-
 def extract_last_user_text(prompt: list[dict[str, Any]]) -> str:
     """Extract the text content from the last message in a conversational prompt."""
     last_message = prompt[-1]

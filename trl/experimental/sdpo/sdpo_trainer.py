@@ -25,7 +25,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixi
 from ...trainer.callbacks import SyncRefModelCallback
 from ...trainer.utils import pad
 from ..self_distillation.base_self_distillation_trainer import BaseSelfDistillationTrainer
-from ..self_distillation.teacher_context import TokenizedPromptBatch, escape_braces, extract_last_user_text
+from ..self_distillation.teacher_context import TokenizedPromptBatch, extract_last_user_text
 from .sdpo_config import SDPOConfig
 
 
@@ -52,9 +52,9 @@ class SuccessfulRolloutTeacherContextBuilder:
 
     def _build_reprompt_text(self, prompt_text: str, solution_text: str, feedback_text: str) -> str:
         return self.trainer.args.reprompt_template.format(
-            prompt=escape_braces(prompt_text),
-            solution=escape_braces(solution_text),
-            feedback=escape_braces(feedback_text),
+            prompt=prompt_text,
+            solution=solution_text,
+            feedback=feedback_text,
         )
 
     def _tokenize_teacher_messages(
@@ -188,13 +188,11 @@ class SuccessfulRolloutTeacherContextBuilder:
                 if self.trainer.args.remove_thinking_from_demonstration:
                     demo_text = re.sub(r"<think>.*?</think>", "", demo_text, flags=re.DOTALL).strip()
 
-                solution_text = self.trainer.args.solution_template.format(
-                    successful_previous_attempt=escape_braces(demo_text)
-                )
+                solution_text = self.trainer.args.solution_template.format(successful_previous_attempt=demo_text)
 
             feedback_text = ""
             if use_feedback:
-                feedback_text = self.trainer.args.feedback_template.format(feedback_raw=escape_braces(raw_feedback))
+                feedback_text = self.trainer.args.feedback_template.format(feedback_raw=raw_feedback)
 
             if isinstance(original_prompt, list):
                 system_messages = original_prompt[:-1]
