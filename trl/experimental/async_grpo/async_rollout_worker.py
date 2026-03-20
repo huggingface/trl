@@ -574,7 +574,7 @@ class AsyncRolloutWorker:
             if last_eos_idx < len(prefix_ids) - 1:
                 prefix_ids_for_suffix = prefix_ids[: last_eos_idx + 1]
 
-        if not prefix_and_messages_ids[: len(prefix_ids_for_suffix)] == prefix_ids_for_suffix:
+        if prefix_and_messages_ids[: len(prefix_ids_for_suffix)] != prefix_ids_for_suffix:
             raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
 
         return prefix_and_messages_ids[len(prefix_ids_for_suffix) :]
