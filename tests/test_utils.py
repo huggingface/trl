@@ -710,9 +710,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_messages_with_reasoning_content(self, mock_stdout):
         prompts = [[{"role": "user", "content": "What color is the sky?"}]]
-        completions = [
-            [{"role": "assistant", "reasoning_content": "I think it is blue.", "content": "It is blue."}]
-        ]
+        completions = [[{"role": "assistant", "reasoning_content": "I think it is blue.", "content": "It is blue."}]]
         rewards = {"Score": [0.5]}
         advantages = [0.9]
         step = 1
@@ -739,9 +737,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_messages_with_thinking(self, mock_stdout):
         prompts = [[{"role": "user", "content": "What color is the sky?"}]]
-        completions = [
-            [{"role": "assistant", "thinking": "I think it is blue.", "content": "It is blue."}]
-        ]
+        completions = [[{"role": "assistant", "thinking": "I think it is blue.", "content": "It is blue."}]]
         rewards = {"Score": [0.5]}
         advantages = [0.9]
         step = 1
