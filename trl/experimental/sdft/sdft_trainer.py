@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import inspect
+import textwrap
 from collections import defaultdict
 from functools import partial
 from typing import Any
@@ -140,6 +141,18 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
     _tag_names = ["trl", "sdft"]
     _name = "SDFT"
     config_cls = SDFTConfig
+    # docstyle-ignore
+    _paper = {
+        "title": "Self-Training with On-Policy Self-Distillation for Language Model Alignment",
+        "id": "2601.19897",
+        "citation": textwrap.dedent("""\
+            @article{hubotter2025selftraining,
+                title        = {{Self-Training with On-Policy Self-Distillation for Language Model Alignment}},
+                author       = {Jonas H\\"ubotter and Frederike L\\"ubeck and Lejs Behric and Anton Baumann and Marco Bagatella and Daniel Marta and Ido Hakimi and Idan Shenfeld and Thomas Kleine Buening and Carlos Guestrin and Andreas Krause},
+                year         = 2026,
+                eprint       = {arXiv:2601.19897}
+            }"""),
+    }
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:

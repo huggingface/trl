@@ -14,6 +14,7 @@
 
 import copy
 import re
+import textwrap
 from typing import Any
 
 import torch
@@ -236,6 +237,18 @@ class SDPOTrainer(BaseSelfDistillationTrainer):
     config_cls = SDPOConfig
     _tag_names = ["trl", "sdpo"]
     _name = "SDPO"
+    # docstyle-ignore
+    _paper = {
+        "title": "Reinforcement Learning via Self-Distillation",
+        "id": "2601.20802",
+        "citation": textwrap.dedent("""\
+            @article{hubotter2025sdpo,
+                title        = {{Reinforcement Learning via Self-Distillation}},
+                author       = {Jonas H\\"ubotter and Frederike L\\"ubeck and Lejs Behric and Anton Baumann and Marco Bagatella and Daniel Marta and Ido Hakimi and Idan Shenfeld and Thomas Kleine Buening and Carlos Guestrin and Andreas Krause},
+                year         = 2026,
+                eprint       = {arXiv:2601.20802}
+            }"""),
+    }
 
     def __init__(
         self,
