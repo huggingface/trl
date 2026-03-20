@@ -564,10 +564,20 @@ class AsyncRolloutWorker:
             tools=self.tools,
             **self.chat_template_kwargs,
         )
-        prefix_len = len(prefix_ids)
-        if prefix_and_messages_ids[:prefix_len] != prefix_ids:
-            raise ValueError("Failed to construct message suffix in token space.")
-        return prefix_and_messages_ids[prefix_len:]
+
+        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\\n" after an assistant/tool block.
+        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
+        # EOS (not EOS + newline).
+        prefix_ids_for_suffix = prefix_ids
+        if self.tokenizer.eos_token_id is not None and self.tokenizer.eos_token_id in prefix_ids:
+            last_eos_idx = max(i for i, tok_id in enumerate(prefix_ids) if tok_id == self.tokenizer.eos_token_id)
+            if last_eos_idx < len(prefix_ids) - 1:
+                prefix_ids_for_suffix = prefix_ids[: last_eos_idx + 1]
+
+        if not prefix_and_messages_ids[: len(prefix_ids_for_suffix)] == prefix_ids_for_suffix:
+            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
+
+        return prefix_and_messages_ids[len(prefix_ids_for_suffix) :]
 
     def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
