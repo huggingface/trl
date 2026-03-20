@@ -266,6 +266,15 @@ class AsyncRolloutWorker:
             raise
         finally:
             loop.close()
+            self._destroy_model_update_group()
+
+    def _destroy_model_update_group(self) -> None:
+        # It's important because otherwise we get errors on exit.
+        if self.model_update_group is None:
+            return  # happens if weight transfer was never initialized
+        self.model_update_group.group.store = None
+        self.model_update_group.group.socket = None
+        self.model_update_group = None
 
     def pause(self) -> None:
         t0 = time.time()
