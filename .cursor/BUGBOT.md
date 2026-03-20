@@ -1,7 +1,4 @@
----
-description: Repository-specific guidelines for TRL development
-alwaysApply: true
----
+# BUGBOT.md
 
 ## Repository-specific guidance
 
