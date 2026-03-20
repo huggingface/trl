@@ -574,7 +574,7 @@ class AsyncRolloutWorker:
             **self.chat_template_kwargs,
         )
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\\n" after an assistant/tool block.
+        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
         # EOS (not EOS + newline).
         last_eos_idx = max(i for i, tok_id in enumerate(prefix_ids) if tok_id == self.tokenizer.eos_token_id)
