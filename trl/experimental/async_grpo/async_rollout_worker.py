@@ -275,7 +275,6 @@ class AsyncRolloutWorker:
         self.model_update_group.group.store = None
         self.model_update_group.group.socket = None
         self.model_update_group = None
-        self.model_update_group = False
 
     def pause(self) -> None:
         t0 = time.time()
