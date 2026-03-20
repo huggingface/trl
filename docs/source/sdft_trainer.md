@@ -24,7 +24,7 @@ from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
 dataset = Dataset.from_dict(
     {
-        "prompt": ["Solve 2+2."],
+        "prompt": [[{"role": "user", "content": "Solve 2+2."}]],
         "privileged_context": ["Example answer: 4."],
     }
 )
@@ -33,8 +33,6 @@ training_args = SDFTConfig(
     output_dir="sdft-model",
     distillation_alpha=0.5,
     distillation_topk=5,
-    generate_from_teacher=False,
-    num_loss_tokens_to_skip=0,
     max_completion_length=64,
 )
 

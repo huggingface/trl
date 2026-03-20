@@ -25,32 +25,34 @@ Each example must provide:
 ## Usage
 
 ```python
+from datasets import Dataset
+
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": "Solve 2+2."}]],
+        "privileged_context": ["Your earlier answer used the wrong format."],
+    }
+)
 
 training_args = SDPOConfig(
     output_dir="sdpo-model",
-    distillation_alpha=1.0,                # Default token-level reverse KL
     distillation_topk=100,                 # Top-K logit distillation approximation
-    full_logit_distillation=True,          # Required for top-K logit-level SDPO; enables non-reverse divergences
-    distillation_is_clip=2.0,              # Importance sampling clipping
-    distillation_weight=1.0,               # Weight for self-distillation loss
-    sdpo_policy_loss_mode="distillation_only",
-    use_successful_as_teacher=True,        # Use successful rollouts as teacher
-    teacher_regularization="ema",          # Supported: "ema", "none"
-    teacher_update_rate=0.05,              # EMA update rate
-    include_environment_feedback=False,    # Use dataset privileged_context for teacher reprompts when available
-    ...
+    full_logit_distillation=True,          # Required for top-K; enables non-reverse divergences
+    include_environment_feedback=True,     # Use dataset privileged_context for teacher reprompts
 )
 
 trainer = SDPOTrainer(
     model="Qwen/Qwen2.5-1.5B-Instruct",
     reward_funcs=reward_func,
     args=training_args,
+    train_dataset=dataset,
 )
 trainer.train()
 ```
 
-SDPO always requires a `prompt` column. To use environment feedback, also include a `privileged_context` column. SDPO will use successful rollouts and, when enabled, that text to build teacher reprompts for self-distillation.
+SDPO always requires a `prompt` column. To use environment feedback, also include a `privileged_context` column and set `include_environment_feedback=True`. SDPO will use successful rollouts and, when enabled, that text to build teacher reprompts for self-distillation.
 
 ## Callbacks
 
