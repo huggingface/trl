@@ -72,11 +72,10 @@ class DPPOTrainer(GRPOTrainer):
     """
     Trainer for Divergence Proximal Policy Optimization (DPPO).
 
-    DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy
-    divergence estimates. PPO-style clipping masks tokens based on probability ratio π/μ, which over-penalizes
-    low-probability tokens and under-penalizes high-probability tokens. In contrast, DPPO masks based on
-    direct approximation of policy divergence (e.g TV or KL) ensuring updates stay within a theoretically
-    grounded trust region.
+    DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence
+    estimates. PPO-style clipping masks tokens based on probability ratio π/μ, which over-penalizes low-probability
+    tokens and under-penalizes high-probability tokens. In contrast, DPPO masks based on direct approximation of policy
+    divergence (e.g TV or KL) ensuring updates stay within a theoretically grounded trust region.
 
 
     Four divergence approximations are supported:
@@ -275,8 +274,8 @@ class DPPOTrainer(GRPOTrainer):
         """Generate completions, always extracting sampled token logprobs.
 
         Returns:
-            5-tuple of (prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids).
-            topk_logprobs and topk_token_ids are None when divergence_type is not topk.
+            5-tuple of (prompt_ids, completion_ids, logprobs, topk_logprobs, topk_token_ids). topk_logprobs and
+            topk_token_ids are None when divergence_type is not topk.
         """
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -420,9 +419,9 @@ class DPPOTrainer(GRPOTrainer):
     ):
         """Tool execution loop that also threads top-K logprob data alongside logprobs.
 
-        Mirrors GRPOTrainer._tool_call_loop but additionally concatenates topk_logprobs and topk_token_ids
-        the same way logprobs is concatenated: real data for model-generated tokens, zero-padding for
-        tool-result tokens. When topk data is None (binary divergence), behaves identically to the parent.
+        Mirrors GRPOTrainer._tool_call_loop but additionally concatenates topk_logprobs and topk_token_ids the same way
+        logprobs is concatenated: real data for model-generated tokens, zero-padding for tool-result tokens. When topk
+        data is None (binary divergence), behaves identically to the parent.
         """
         K = self.divergence_topk
         has_topk = topk_logprobs is not None
@@ -620,8 +619,8 @@ class DPPOTrainer(GRPOTrainer):
         """Generate completions, handling tool calls, and thread top-K logprob data through the full pipeline.
 
         Returns:
-            9-tuple of (prompt_ids, completion_ids, tool_mask, completions, total_completion_tokens,
-            logprobs, topk_logprobs, topk_token_ids, extra_fields).
+            9-tuple of (prompt_ids, completion_ids, tool_mask, completions, total_completion_tokens, logprobs,
+            topk_logprobs, topk_token_ids, extra_fields).
         """
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
@@ -768,8 +767,8 @@ class DPPOTrainer(GRPOTrainer):
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
         """Compute per-token log-probs, (optionally) entropies, and top-K log-probs in one forward pass.
 
-        Evaluates the current policy's log-probs at the rollout's top-K token IDs from the same
-        forward pass used for per_token_logps, avoiding an extra model call.
+        Evaluates the current policy's log-probs at the rollout's top-K token IDs from the same forward pass used for
+        per_token_logps, avoiding an extra model call.
 
         Args:
             topk_token_ids: Rollout policy's top-K token IDs, shape (B, T, K). The current policy's
@@ -1207,11 +1206,11 @@ class DPPOTrainer(GRPOTrainer):
             completion_mask (`torch.Tensor`):
                 Binary mask of shape `(B, T)` where `1` indicates valid completion tokens and `0` padding.
             current_topk_logps (`torch.Tensor` or `None`):
-                Log-probabilities of the current policy at the rollout's top-K token IDs, shape `(B, T, K)`.
-                Required when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
+                Log-probabilities of the current policy at the rollout's top-K token IDs, shape `(B, T, K)`. Required
+                when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
             sampling_topk_logps (`torch.Tensor` or `None`):
-                Log-probabilities of the sampling policy at the rollout's top-K token IDs, shape `(B, T, K)`.
-                Required when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
+                Log-probabilities of the sampling policy at the rollout's top-K token IDs, shape `(B, T, K)`. Required
+                when `divergence_type` is `"topk_tv"` or `"topk_kl"`.
 
         Returns:
             `torch.Tensor`:

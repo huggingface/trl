@@ -23,8 +23,8 @@ class DPPOConfig(GRPOConfig):
     """
     Configuration class for DPPOTrainer.
 
-    DPPO (Divergence Proximal Policy Optimization) replaces PPO/GRPO's heuristic ratio-clipping with a principled
-    trust region based on direct policy divergence estimates.
+    DPPO (Divergence Proximal Policy Optimization) replaces PPO/GRPO's heuristic ratio-clipping with a principled trust
+    region based on direct policy divergence estimates.
 
     Paper: "Rethinking the Trust Region in LLM Reinforcement Learning" (arXiv:2602.04879)
 
@@ -42,13 +42,13 @@ class DPPOConfig(GRPOConfig):
 
         epsilon (`float`, inherited from GRPOConfig, default overridden to `0.15`):
             Divergence threshold δ_low. Tokens whose divergence exceeds this when the policy moves in the
-            advantage-decreasing direction are masked. The paper recommends 0.15 for TV divergence
-            and 0.05 for KL divergence.
+            advantage-decreasing direction are masked. The paper recommends 0.15 for TV divergence and 0.05 for KL
+            divergence.
 
         epsilon_high (`float`, inherited from GRPOConfig, default overridden to `0.15`):
             Divergence threshold δ_high. Tokens whose divergence exceeds this when the policy moves in the
-            advantage-increasing direction are masked. The paper recommends 0.15 for TV divergence
-            and 0.05 for KL divergence.
+            advantage-increasing direction are masked. The paper recommends 0.15 for TV divergence and 0.05 for KL
+            divergence.
     """
 
     divergence_type: Literal["binary_tv", "binary_kl", "topk_tv", "topk_kl"] = field(
