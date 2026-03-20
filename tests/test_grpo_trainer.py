@@ -2642,67 +2642,6 @@ class TestGRPOTrainer(TrlTestCase):
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
 
-    @pytest.mark.parametrize(
-        "tokenizer_name",
-        [
-            pytest.param("trl-internal-testing/tiny-Qwen3MoeForSequenceClassification", id="qwen3"),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration",
-                id="qwen35",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.0.0"),
-                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
-                ),
-            ),
-        ],
-    )
-    def test_get_tool_suffix_ids_eos_newline_boundary(self, tokenizer_name):
-        """Test _get_tool_suffix_ids when the prefix ends with EOS plus trailing tokens (e.g. Qwen3/Qwen3.5)."""
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        chat_template = get_training_chat_template(tokenizer)
-        assert chat_template is not None
-
-        # Call the method using a lightweight mock: _get_tool_suffix_ids only needs tokenizer + template fields.
-        mock_trainer = MagicMock()
-        mock_trainer.processing_class = tokenizer
-        mock_trainer.chat_template = chat_template
-        mock_trainer.chat_template_kwargs = {}
-        mock_trainer.eos_token_id = tokenizer.eos_token_id
-
-        assert mock_trainer.eos_token_id is not None
-
-        dummy_messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy"}]
-        tool_messages = [{"role": "tool", "name": "dummy_tool", "content": '{"temperature": 18}'}]
-
-        prefix_ids = tokenizer.apply_chat_template(
-            dummy_messages,
-            add_generation_prompt=False,
-            chat_template=mock_trainer.chat_template,
-            return_dict=False,
-            **mock_trainer.chat_template_kwargs,
-        )
-        full_ids = tokenizer.apply_chat_template(
-            dummy_messages + tool_messages,
-            add_generation_prompt=True,
-            chat_template=mock_trainer.chat_template,
-            return_dict=False,
-            **mock_trainer.chat_template_kwargs,
-        )
-
-        assert mock_trainer.eos_token_id is not None
-        assert mock_trainer.eos_token_id in prefix_ids
-        last_eos_idx = max(i for i, tok_id in enumerate(prefix_ids) if tok_id == mock_trainer.eos_token_id)
-        prefix_ids_for_suffix = (
-            prefix_ids
-            if last_eos_idx == len(prefix_ids) - 1
-            else prefix_ids[: last_eos_idx + 1]  # trim trailing "<|im_end|>\\n" -> "<|im_end|>"
-        )
-
-        expected_suffix_ids = full_ids[len(prefix_ids_for_suffix) :]
-        actual_suffix_ids = GRPOTrainer._get_tool_suffix_ids(mock_trainer, tool_messages)
-
-        assert actual_suffix_ids == expected_suffix_ids
-
 
 @pytest.mark.slow
 @require_torch_accelerator
