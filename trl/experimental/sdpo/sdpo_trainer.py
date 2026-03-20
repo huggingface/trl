@@ -112,7 +112,11 @@ class SuccessfulRolloutTeacherContextBuilder:
         # the mining loop can find successful rollouts across all processes within each generation group.
         all_rewards = self.trainer.accelerator.gather(rewards)
         # Completion tensors are padded to the local max length per rank; align shapes before gathering.
-        completion_ids = self.trainer.accelerator.pad_across_processes(completion_ids, dim=1, pad_index=self.trainer.pad_token_id)
+        # Both ids and mask must be padded so they stay the same width for the teacher forward pass.
+        completion_ids = self.trainer.accelerator.pad_across_processes(
+            completion_ids, dim=1, pad_index=self.trainer.pad_token_id
+        )
+        completion_mask = self.trainer.accelerator.pad_across_processes(completion_mask, dim=1, pad_index=0)
         all_completion_ids = self.trainer.accelerator.gather(completion_ids)
         all_prompts = gather_object(prompts)
         total_samples = all_rewards.shape[0]
