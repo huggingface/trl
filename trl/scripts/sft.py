@@ -93,6 +93,10 @@ def main(script_args, training_args, model_args, dataset_args):
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
+    # Enable tensor parallelism if configured
+    if int(os.environ.get("PARALLELISM_CONFIG_TP_SIZE", "1")) > 1:
+        model_kwargs["tp_plan"] = "auto"
+
     # Create model
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
