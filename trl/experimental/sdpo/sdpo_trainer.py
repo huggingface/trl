@@ -146,8 +146,12 @@ class SuccessfulRolloutTeacherContextBuilder:
                     if all_rewards[j].item() >= threshold:
                         successful.append(j)
 
-            if i % num_generations == 0 and len(successful) > 0:
-                success_group_count += 1
+            if i % num_generations == 0:
+                # Count groups with any successful rollout, ignoring self-exclusion which only
+                # affects per-sample teacher assignment, not whether the group has successes.
+                group_has_success = any(all_rewards[j].item() >= threshold for j in range(group_start, group_end))
+                if group_has_success:
+                    success_group_count += 1
 
             raw_feedback = all_feedbacks[i]
             has_feedback = isinstance(raw_feedback, str) and raw_feedback.strip() != ""

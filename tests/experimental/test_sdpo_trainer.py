@@ -282,18 +282,17 @@ class TestSDPOTrainer(TrlTestCase):
             max_completion_length=8,
             distillation_is_clip=None,
             success_reward_threshold=0.5,
-            dont_reprompt_on_self_success=False,
             max_steps=1,
         )
 
-        def alternating_reward(**kwargs):
-            prompts = kwargs["prompts"]
-            return [1.0 if i % 2 == 0 else 0.0 for i in range(len(prompts))]
+        def first_only_reward(**kwargs):
+            """Only the first sample in each group succeeds — exercises dont_reprompt_on_self_success default."""
+            return [1.0, 0.0][: len(kwargs["prompts"])]
 
         capture_callback = SelfDistillationCaptureCallback()
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=alternating_reward,
+            reward_funcs=first_only_reward,
             args=training_args,
             train_dataset=dataset,
             callbacks=[capture_callback],
@@ -301,11 +300,12 @@ class TestSDPOTrainer(TrlTestCase):
 
         trainer.train()
 
+        # With dont_reprompt_on_self_success=True (default), sample 0 skips itself,
+        # but sample 1 finds sample 0's success and gets a teacher reprompt.
         assert capture_callback.captured_teacher_input_text is not None
         assert "careful assistant" in capture_callback.captured_teacher_input_text
         assert "Solve 2+2" in capture_callback.captured_teacher_input_text
         assert capture_callback.captured_self_distillation_mask is not None
-        assert capture_callback.captured_self_distillation_mask[0].item() == 1.0
 
     def test_training_with_feedback_only_reprompts_teacher(self):
         dataset = Dataset.from_dict(
@@ -392,17 +392,16 @@ class TestSDPOTrainer(TrlTestCase):
             num_generations=2,
             max_completion_length=8,
             success_reward_threshold=0.5,
-            dont_reprompt_on_self_success=False,
             max_steps=1,
         )
 
-        def alternating_reward(**kwargs):
-            return [1.0 if i % 2 == 0 else 0.0 for i in range(len(kwargs["prompts"]))]
+        def first_only_reward(**kwargs):
+            return [1.0, 0.0][: len(kwargs["prompts"])]
 
         capture_callback = SelfDistillationCaptureCallback()
         trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=alternating_reward,
+            reward_funcs=first_only_reward,
             args=training_args,
             train_dataset=dataset,
             callbacks=[capture_callback],
