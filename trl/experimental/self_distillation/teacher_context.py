@@ -25,8 +25,14 @@ from ...trainer.utils import pad
 
 
 def extract_last_user_text(prompt: list[dict[str, Any]]) -> str:
-    """Extract the text content from the last message in a conversational prompt."""
+    """Extract the text content from the last user message in a conversational prompt."""
     last_message = prompt[-1]
+    if last_message.get("role") != "user":
+        raise ValueError(
+            f"Self-distillation teacher prompt construction expects the conversation to end with a user turn, "
+            f"but the last message has role '{last_message.get('role')}'. "
+            f"Prompts ending with assistant prefills or tool turns are not supported."
+        )
     content = last_message.get("content", "")
     if isinstance(content, list):
         return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
