@@ -36,6 +36,10 @@ class SelfDistillationMixin:
 
     config_cls = SelfDistillationConfig
 
+    def _set_signature_columns_if_needed(self):
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt", "privileged_context"]
+
     def _dispatch_self_distillation_callback(self, event_name: str, **payload) -> None:
         for callback in self.callback_handler.callbacks:
             callback_fn = getattr(callback, event_name, None)

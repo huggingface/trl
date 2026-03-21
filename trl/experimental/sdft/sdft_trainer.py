@@ -154,10 +154,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             }"""),
     }
 
-    def _set_signature_columns_if_needed(self):
-        if self._signature_columns is None:
-            self._signature_columns = ["prompt", "privileged_context"]
-
     def __init__(
         self,
         model: str | PreTrainedModel | nn.Module,
