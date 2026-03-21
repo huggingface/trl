@@ -182,7 +182,7 @@ class CarlaGRPOEnv:
         return self._describe(result.observation)
 
 
-def reward_func(completions, environments, **kwargs):
+def reward_func(environments, **kwargs):
     return [environment.reward for environment in environments]
 
 

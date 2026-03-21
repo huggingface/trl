@@ -72,7 +72,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def reward_func(completions, environments, **kwargs):
+def reward_func(environments, **kwargs):
     return [env.reward for env in environments]
 
 

@@ -2460,9 +2460,12 @@ class GRPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
+        # Average the metrics
         metrics = {}
         for key, val in self._metrics[mode].items():
             avg = sum(val) / len(val)
+            # If a reward function returns None for all samples in a batch, its metric is NaN. Convert to None
+            # for clean serialization (e.g. JSON loggers crash on float NaN).
             metrics[key] = None if math.isnan(avg) else avg
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`

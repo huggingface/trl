@@ -16,6 +16,7 @@ import asyncio
 import atexit
 import copy
 import inspect
+import math
 import textwrap
 import time
 from collections import defaultdict, deque
@@ -1442,7 +1443,13 @@ class RLOOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            avg = sum(val) / len(val)
+            # If a reward function returns None for all samples in a batch, its metric is NaN. Convert to None
+            # for clean serialization (e.g. JSON loggers crash on float NaN).
+            metrics[key] = None if math.isnan(avg) else avg
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

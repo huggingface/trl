@@ -211,11 +211,11 @@ class MultiEnv:
         return self._catch_action(1)
 
 
-def wordle_reward(completions, environments, **kwargs) -> list[float | None]:
+def wordle_reward(environments, **kwargs) -> list[float | None]:
     return [env.reward if env.active == "wordle" else None for env in environments]
 
 
-def catch_reward(completions, environments, **kwargs) -> list[float | None]:
+def catch_reward(environments, **kwargs) -> list[float | None]:
     rewards = []
     for env in environments:
         if env.active != "catch":

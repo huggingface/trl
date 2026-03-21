@@ -195,7 +195,7 @@ Follow these rules to play Wordle:
 """
 
 
-def reward_func(completions, environments, **kwargs) -> list[float]:
+def reward_func(environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 
 

@@ -255,7 +255,7 @@ Complete the given task as efficiently as possible."""
 # ---------------------------------------------------------------------------
 
 
-def reward_completion(completions: list[str], environments, **kwargs) -> list[float]:
+def reward_completion(environments, **kwargs) -> list[float]:
     """Reward for task completion."""
     return [env.reward for env in environments]
 

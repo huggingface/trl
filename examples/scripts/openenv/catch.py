@@ -191,7 +191,7 @@ Observe the grid, determine where the ball is relative to the paddle, then move 
 """
 
 
-def reward_from_env(completions, environments, **kwargs):
+def reward_from_env(environments, **kwargs):
     rewards = []
     for env in environments:
         if env.done:

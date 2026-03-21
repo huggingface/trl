@@ -341,27 +341,27 @@ def extract_board_only(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def reward_empty_cell(completions: list[str], environments, **kwargs) -> list[float]:
+def reward_empty_cell(environments, **kwargs) -> list[float]:
     """Reward for targeting empty cells (learn to pick valid positions first)."""
     return [env.empty_cell_reward for env in environments]
 
 
-def reward_valid_moves(completions: list[str], environments, **kwargs) -> list[float]:
+def reward_valid_moves(environments, **kwargs) -> list[float]:
     """Reward for making valid moves."""
     return [env.valid_move_reward for env in environments]
 
 
-def reward_correct(completions: list[str], environments, **kwargs) -> list[float]:
+def reward_correct(environments, **kwargs) -> list[float]:
     """Reward for solving the puzzle."""
     return [env.correct_reward for env in environments]
 
 
-def reward_repetition(completions: list[str], environments, **kwargs) -> list[float]:
+def reward_repetition(environments, **kwargs) -> list[float]:
     """Penalty for repeating moves."""
     return [env.repetition_reward for env in environments]
 
 
-def reward_progress(completions: list[str], environments, **kwargs) -> list[float]:
+def reward_progress(environments, **kwargs) -> list[float]:
     """Reward for filling more cells in the board."""
     return [env.progress_reward for env in environments]
 

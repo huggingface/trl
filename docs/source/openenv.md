@@ -9,9 +9,7 @@ This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv its
 
 ## When to use environments
 
-[`GRPOTrainer`] supports two ways to compute rewards: **static reward functions** that score a single completion, and **environments** that interact with the model over multiple turns. Use environments when the model needs to take actions and react to feedback. For example, playing a game, browsing the web, or calling APIs where each response depends on the previous action.
-
-If your task can be evaluated by looking at the final completion alone (e.g., checking a math answer against a reference), a static reward function is simpler and sufficient. Environments add value when the reward depends on a sequence of decisions.
+[`GRPOTrainer`] can be used to train agents. For agentic tasks, it supports two modes: **tools**, where the model can call external functions but each call is stateless and independent, and **environments**, which maintain state across turns, enabling genuine multi-turn interaction where the agent's actions shape future observations. Use environments when continuity matters — for example, navigating a game, browsing a web page, or any task where what the agent sees next depends on what it did before.
 
 ## Installation
 
@@ -46,9 +44,11 @@ pip install -e .
 
 > [!NOTE]
 > Each environment script in TRL includes inline dependency metadata (PEP 723) so you can also run them directly with [uv](https://docs.astral.sh/uv/):
+>
 > ```bash
 > uv run examples/scripts/openenv/echo.py
 > ```
+>
 > This automatically installs the required environment package in an isolated virtual environment.
 
 ## Quick start
@@ -87,7 +87,7 @@ class EchoToolEnv:
         self.reward = observation.observation.reward
         return observation.observation.echoed_message
 
-def reward_func(completions, environments, **kwargs):
+def reward_func(environments, **kwargs):
     return [env.reward for env in environments]
 
 dataset = Dataset.from_dict(
@@ -111,9 +111,9 @@ That's it. Here's what happens under the hood:
 
 1. **`environment_factory=EchoToolEnv`**: The trainer creates one `EchoToolEnv` instance per generation (pass the class, not an instance).
 2. **`reset()`** is called at the start of each episode to initialize state. Returns an observation string (or `None`).
-3. **Tool discovery**: The trainer discovers `echo()` via introspection and exposes it to the model as a function-calling tool.
+3. **Tool discovery**: The trainer discovers all public methods on the environment instance (here, `echo()`) and exposes them as function-calling tools. Each method must have a proper docstring with typed arguments, which the trainer uses to build the tool schema.
 4. **Multi-turn loop**: The trainer generates a completion, parses tool calls, executes `echo()`, appends the result, and generates again, until the model stops calling tools or `max_completion_length` is reached.
-5. **Reward function**: Reads `env.reward` from each environment instance after the episode.
+5. **Reward function**: Reads `env.reward` from each environment instance after the episode (before the environment is reset).
 
 ```bash
 # Run the example
@@ -138,10 +138,13 @@ TRL's [`GRPOTrainer`] supports interactive environment training through the `env
 
 Your environment class must follow these rules:
 
-- **`__init__(self)`**: Takes no arguments from the trainer. Initialize any state here. If you need external configuration (e.g., a URL), capture it from the enclosing scope or module-level variables.
+- **`__init__(self)`** *(optional)*: If provided, must take no arguments. Use it to initialize state or clients. If you need external configuration (e.g., a URL), capture it from the enclosing scope or module-level variables.
 - **`reset(self, **kwargs)`**: Called at the start of each episode. Receives all dataset columns as keyword arguments. Return a string observation (or `None` for no initial observation).
 - **Tool methods**: Any public method (not starting with `_`) other than `reset` is automatically exposed as a tool. Each tool method must have a docstring with `Args:` descriptions, since the trainer uses these to generate the tool schema for the model.
-- **Reward state**: Store reward information as instance attributes (e.g., `self.reward`) and access them in your reward function via the `environments` parameter.
+
+### Tips for environment classes
+
+- **State for reward**: You can store any state you want on the environment instance (e.g., `self.reward`, `self.done`, etc.) and access it in your reward function via the `environments` parameter. Refer to the [Quick Start guide](#quick-start) for an example of this pattern.
 - **Error handling**: If a tool method raises an exception (e.g., `ValueError("Game over.")`), the trainer catches it and feeds the error message back to the model as a tool response. This is the recommended way to signal that an action is invalid or that the episode has ended.
 
 ```python
@@ -172,16 +175,18 @@ class MyEnv:
 ```
 
 > [!IMPORTANT]
-> Tools must be **individual methods** with descriptive names and typed arguments (e.g., `guess(word: str)`, `move(direction: str)`). Do NOT use generic methods like `step(action)`, since the model needs meaningful tool names and argument descriptions to learn tool calling.
+> Tools must be **individual methods** with descriptive names and typed arguments (e.g., `guess(word: str)`, `move(direction: str)`). We do not recommend using generic methods like `step(action)`, since the model needs meaningful tool names and argument descriptions to learn tool calling.
 
 ### Reward functions
 
 Reward functions receive the `environments` parameter (a list of environment instances), so you can access any state stored during the episode:
 
 ```python
-def reward_func(completions, environments, **kwargs) -> list[float]:
+def reward_func(environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 ```
+
+For more information on reward functions, see the [GRPO - Custom Reward Functions](grpo_trainer#custom-reward-functions).
 
 ### Tips for reward functions
 
@@ -204,41 +209,12 @@ args = GRPOConfig(
 
 If episodes are being cut short (model stops mid-game), this is likely the cause.
 
-## vLLM modes
-
-TRL supports two vLLM execution modes for generation. These apply to all training, not just environment-based training:
-
-- **`colocate` mode** (default): vLLM runs in the same process as training. Requires 1 GPU.
-- **`server` mode**: vLLM runs as a separate server process. Requires at least 2 GPUs (one for vLLM server, one for training), but is highly scalable.
-
-Configure the mode via `GRPOConfig`:
-
-```python
-# Colocate mode (1 GPU)
-args = GRPOConfig(
-    use_vllm=True,
-    vllm_mode="colocate",
-    # ...
-)
-
-# Server mode (2+ GPUs, scalable)
-args = GRPOConfig(
-    use_vllm=True,
-    vllm_mode="server",
-    vllm_server_base_url="http://localhost:8000",
-    # ...
-)
-
-# Example: Start vLLM server with multiple GPUs for tensor parallelism
-# CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen3-1.7B --tensor-parallel-size 4
-```
-
 ## Advanced example: Wordle
 
 Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://meta-pytorch.org/OpenEnv/environments/textarena.html) environment. This demonstrates multi-turn interaction, cumulative feedback handling, and episode termination via exceptions.
 
 > [!NOTE]
-> You can explore the notebook version of this example [here](https://github.com/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb).
+> You can explore the notebook version of this example in [the OpenEnv Wordle GRPO example](https://github.com/huggingface/trl/blob/main/examples/notebooks/openenv_wordle_grpo.ipynb).
 
 ### The TextArena Environment
 
@@ -314,7 +290,7 @@ Key design choices:
 from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer
 
-def reward_func(completions, environments, **kwargs) -> list[float]:
+def reward_func(environments, **kwargs) -> list[float]:
     return [env.reward for env in environments]
 
 prompt = """You are an expert Wordle solver with deep knowledge of English vocabulary...
@@ -464,10 +440,10 @@ Key patterns:
 Each reward function returns `None` for samples from other environments:
 
 ```python
-def wordle_reward(completions, environments, **kwargs) -> list[float | None]:
+def wordle_reward(environments, **kwargs) -> list[float | None]:
     return [env.reward if env.active == "wordle" else None for env in environments]
 
-def catch_reward(completions, environments, **kwargs) -> list[float | None]:
+def catch_reward(environments, **kwargs) -> list[float | None]:
     rewards = []
     for env in environments:
         if env.active != "catch":
@@ -676,7 +652,7 @@ class EchoToolEnv:
         self.reward = result.observation.reward
         return result.observation.echoed_message
 
-def reward_func(completions, environments, **kwargs):
+def reward_func(environments, **kwargs):
     return [env.reward for env in environments]
 
 trainer = GRPOTrainer(..., environment_factory=EchoToolEnv, reward_funcs=reward_func)
