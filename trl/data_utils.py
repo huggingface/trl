@@ -445,7 +445,14 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc, desc=desc)
+    # Remove all original columns so that extra columns beyond ["chosen", "rejected", "prompt"]
+    # do not cause an ArrowInvalid shape mismatch after _unpair_row doubles the number of rows.
+    columns_to_remove = (
+        list(next(iter(dataset.values())).column_names)
+        if isinstance(dataset, DatasetDict)
+        else dataset.column_names
+    )
+    return dataset.map(_unpair_row, batched=True, remove_columns=columns_to_remove, num_proc=num_proc, desc=desc)
 
 
 def maybe_unpair_preference_dataset(
