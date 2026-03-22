@@ -293,6 +293,9 @@ class GRPOTrainer(_BaseTrainer):
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            # Liger kernel's Triton ops don't support multi-device model parallelism (device_map="auto").
+            if args.use_liger_kernel and model_init_kwargs.get("device_map", "auto") == "auto":
+                model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
         else:
             if args.model_init_kwargs is not None:
@@ -610,6 +613,10 @@ class GRPOTrainer(_BaseTrainer):
         if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
+        # Prevent DataParallel wrapping on multi-GPU when Liger forces single-device placement.
+        if args.use_liger_kernel and not getattr(model, "hf_device_map", None):
+            args._n_gpu = 1
 
         super().__init__(
             model=model,
