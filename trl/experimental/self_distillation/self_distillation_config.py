@@ -296,5 +296,13 @@ class SelfDistillationConfig(_BaseConfig):
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations ({self.num_generations})."
             )
 
+        if self.do_eval and self.eval_strategy != "no":
+            num_generations_eval = self.num_generations_eval or self.num_generations
+            if (self.per_device_eval_batch_size * num_processes) % num_generations_eval != 0:
+                raise ValueError(
+                    f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
+                    f"divisible by the number of generations used for evaluation ({num_generations_eval})."
+                )
+
         if self.epsilon_high is None:
             self.epsilon_high = self.epsilon
