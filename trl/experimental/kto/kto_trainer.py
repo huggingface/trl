@@ -929,7 +929,8 @@ class KTOTrainer(_BaseTrainer):
         per_token_logps = selective_log_softmax(logits, labels)
 
         if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+            denom = loss_mask.sum(-1).clamp(min=1)  # guard against all-masked rows to avoid div-by-zero
+            return (per_token_logps * loss_mask).sum(-1) / denom
         else:
             return (per_token_logps * loss_mask).sum(-1)
 
