@@ -491,7 +491,8 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             inputs["completion_mask"] = completion_mask
 
         loss = self._compute_self_distillation_loss(model, inputs)
-        return loss / self.current_gradient_accumulation_steps
+        accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1.0
+        return loss / accumulation_scale
 
     def _get_teacher_context_for_self_distillation(self, model):
         if is_peft_available() and isinstance(self.model, PeftModel):
