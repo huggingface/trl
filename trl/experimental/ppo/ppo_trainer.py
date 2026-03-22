@@ -750,7 +750,10 @@ class PPOTrainer(_BaseTrainer):
 
                 # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
                 # Completions not passing that filter will receive a lower score.
-                contain_eos_token = torch.any(postprocessed_responses == self.processing_class.eos_token_id, dim=-1)
+                # Use stop_token_id (which may differ from eos_token_id) so that missing_eos_penalty
+                # is applied correctly when a custom stop token is configured.
+                _stop_id = self.stop_token_id if self.stop_token_id is not None else self.processing_class.eos_token_id
+                contain_eos_token = torch.any(postprocessed_responses == _stop_id, dim=-1)
                 if self.args.missing_eos_penalty is not None:
                     scores[~contain_eos_token] -= self.args.missing_eos_penalty
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
@@ -771,7 +774,7 @@ class PPOTrainer(_BaseTrainer):
                 non_score_reward = -args.kl_coef * kl
                 rewards = non_score_reward.clone()
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
-                actual_end = torch.where(sequence_lengths_p1 < rewards.size(1), sequence_lengths_p1, sequence_lengths)
+                actual_end = sequence_lengths  # place score at EOS token, not at the following PAD token
                 rewards[actual_start, actual_end] += scores
 
                 # 5. whiten rewards
