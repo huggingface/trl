@@ -1255,7 +1255,7 @@ class GRPOTrainer(_BaseTrainer):
             if is_conversational({"prompt": prompts[0]}):
                 processor_outputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    tools=self.tools,
+                    tools=self.tools or None,
                     chat_template=self.chat_template,
                     add_generation_prompt=True,
                     tokenize=True,
@@ -1296,7 +1296,7 @@ class GRPOTrainer(_BaseTrainer):
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
                     conversation=prompts,
-                    tools=self.tools,
+                    tools=self.tools or None,
                     chat_template=self.chat_template,
                     add_generation_prompt=True,
                     tokenize=True,
@@ -1415,7 +1415,7 @@ class GRPOTrainer(_BaseTrainer):
             # vLLM and transformers will error out if the input is longer than the model's max length.
             pct_ids = self.processing_class.apply_chat_template(
                 prompt_completion_tools,
-                tools=self.tools,
+                tools=self.tools or None,
                 chat_template=self.chat_template,
                 add_generation_prompt=True,
                 tokenize=True,
@@ -1721,7 +1721,7 @@ class GRPOTrainer(_BaseTrainer):
         if images is not None:
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=self.tools, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=self.tools or None, **self.chat_template_kwargs
                 )["prompt"]
                 for prompt in prompts
             ]
