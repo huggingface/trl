@@ -67,7 +67,6 @@ class TestSDFTTrainer(TrlTestCase):
 
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
         )
@@ -99,7 +98,6 @@ class TestSDFTTrainer(TrlTestCase):
         capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
             callbacks=[capture_callback],
@@ -138,7 +136,6 @@ class TestSDFTTrainer(TrlTestCase):
         capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            ref_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
             callbacks=[capture_callback],
@@ -155,7 +152,7 @@ class TestSDFTTrainer(TrlTestCase):
         assert capture_callback.captured_generation_prompt_text == expected_prompt
 
     @require_peft
-    def test_training_with_peft_model_and_no_explicit_ref_model(self):
+    def test_training_with_peft_model(self):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -177,7 +174,6 @@ class TestSDFTTrainer(TrlTestCase):
 
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            ref_model=None,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(
@@ -216,7 +212,6 @@ class TestSDFTTrainer(TrlTestCase):
 
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            ref_model=None,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(
@@ -304,7 +299,6 @@ class TestSDFTTrainer(TrlTestCase):
         capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
             callbacks=[capture_callback],
@@ -338,7 +332,6 @@ class TestSDFTTrainer(TrlTestCase):
         capture_callback = SelfDistillationCaptureCallback()
         trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            ref_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
             callbacks=[capture_callback],

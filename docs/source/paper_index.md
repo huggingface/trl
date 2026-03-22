@@ -1672,7 +1672,7 @@ For more details, see the [SDPO Trainer documentation](sdpo_trainer).
 
 **📜 Paper**: https://huggingface.co/papers/2601.19897
 
-Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. In TRL, SDFT uses a shared self-distillation core with SDPO while keeping its own explicit `teacher_model` and dataset-provided privileged context.
+Self-Distilled Fine-Tuning (SDFT) performs on-policy self-distillation by generating completions during training, then distilling an explicit teacher-conditioned view of those same completions back into the student. In TRL, SDFT uses a shared self-distillation core with SDPO where the teacher is the model itself (base weights with adapter disabled for PEFT, or the same model under `no_grad` for non-PEFT).
 The teacher prompt is composed internally from the student `prompt` plus the dataset `privileged_context`.
 
 ```python
@@ -1695,7 +1695,6 @@ training_args = SDFTConfig(
 
 trainer = SDFTTrainer(
     model="Qwen/Qwen2.5-1.5B-Instruct",
-    ref_model="Qwen/Qwen2.5-1.5B-Instruct",
     args=training_args,
     train_dataset=dataset,
 )

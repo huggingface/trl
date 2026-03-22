@@ -6,7 +6,7 @@ The TRL implementation adapts SDFT to the experimental trainer API while reusing
 
 In the current TRL implementation:
 
-- SDFT uses an explicit `ref_model` teacher
+- the teacher is the model itself (base weights with adapter disabled for PEFT, or the same model under `no_grad` for non-PEFT); use `sync_ref_model=True` for an EMA teacher
 - the dataset must provide both `prompt` and `privileged_context`
 - `privileged_context` contains only the extra teacher-only information; the trainer combines it with `prompt` to build the teacher prompt
 - `teacher_prompt_template` controls how `prompt` and `privileged_context` are combined into the teacher prompt
@@ -38,7 +38,6 @@ training_args = SDFTConfig(
 
 trainer = SDFTTrainer(
     model="Qwen/Qwen2.5-1.5B-Instruct",
-    ref_model="Qwen/Qwen2.5-1.5B-Instruct",
     args=training_args,
     train_dataset=dataset,
 )

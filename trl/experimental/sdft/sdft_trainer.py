@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import textwrap
 from collections import defaultdict
@@ -60,6 +61,8 @@ from .sdft_config import SDFTConfig
 if is_peft_available():
     from peft import PeftConfig
     from peft.peft_model import PeftModel
+
+    from ..self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
 
 
 logger = get_logger(__name__)
@@ -157,7 +160,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
     def __init__(
         self,
         model: str | PreTrainedModel | nn.Module,
-        ref_model: str | PreTrainedModel | nn.Module | None,
         args: SDFTConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -186,11 +188,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
                 "You passed `model_init_kwargs` to `SDFTConfig`, but `model` is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
-        if ref_model is model:
-            raise ValueError(
-                "`model` and `ref_model` cannot be the same object. Pass a separate teacher model, or set "
-                "`ref_model=None` and use the PEFT adapter-disabled teacher path."
-            )
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -205,8 +202,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
-        if ref_model is None and not (is_peft_available() and is_peft_model(model)):
-            raise ValueError("`ref_model` is required for SDFTTrainer unless `model` is a PEFT model.")
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -274,39 +269,19 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
-        if isinstance(ref_model, str):
-            ref_model_init_kwargs = args.model_init_kwargs or {}
-            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                ref_model_init_kwargs["device_map"] = None
-            ref_model = create_model_from_path(ref_model, **ref_model_init_kwargs)
-
-        self.ref_model = ref_model
-
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
 
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-        if self.ref_model is not None:
-            if self.is_deepspeed_enabled:
-                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
-            elif self.is_fsdp_enabled:
-                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
-            else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-            self.teacher_model = self.ref_model
-        elif is_peft_available() and is_peft_model(self.model):
-            self.teacher_model = None
+        # In self-distillation the teacher is always derived from the student:
+        # - PEFT: base model with adapter disabled (or EMA teacher adapter when sync_ref_model=True)
+        # - Non-PEFT: same model (or deep-copied EMA model when sync_ref_model=True)
+        self.teacher_model = None
 
         if args.sync_ref_model:
-            if self.ref_model is not None:
-                self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
-            elif is_peft_available() and is_peft_model(self.model):
-                from ..self_distillation.peft_adapter_ema_callback import PEFTAdapterEMACallback
-
+            if is_peft_available() and is_peft_model(self.model):
                 self.add_callback(
                     PEFTAdapterEMACallback(
                         model=self.model,
@@ -316,6 +291,18 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
                         accelerator=self.accelerator,
                     )
                 )
+            else:
+                student_model = self.accelerator.unwrap_model(self.model)
+                self.teacher_model = copy.deepcopy(student_model)
+                self.teacher_model.requires_grad_(False)
+                self.teacher_model.eval()
+                if self.is_deepspeed_enabled:
+                    self.teacher_model = prepare_deepspeed(self.teacher_model, self.accelerator)
+                elif self.is_fsdp_enabled:
+                    self.teacher_model = prepare_fsdp(self.teacher_model, self.accelerator)
+                else:
+                    self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
+                self.add_callback(SyncRefModelCallback(ref_model=self.teacher_model, accelerator=self.accelerator))
 
         self.model_accepts_loss_kwargs = False
 
@@ -497,8 +484,6 @@ class SDFTTrainer(SelfDistillationMixin, _BaseTrainer):
     def _get_teacher_context_for_self_distillation(self, model):
         if is_peft_available() and isinstance(self.model, PeftModel):
             model = self.accelerator.unwrap_model(self.model)
-            if self.ref_model is not None:
-                return use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None)
             if self.args.sync_ref_model and "teacher" in model.peft_config:
                 return use_adapter(model, adapter_name="teacher")
             return use_adapter(model, adapter_name=None)
