@@ -385,6 +385,8 @@ class VLLMClient:
 
         if isinstance(tools, list) and len(tools) > 0:
             tools = [get_json_schema(tool) if callable(tool) else tool for tool in tools]
+        else:
+            tools = None  # normalise empty list to None so the server does not activate tool-use mode
 
         response = self.session.post(
             url,
