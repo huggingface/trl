@@ -645,8 +645,8 @@ class ORPOTrainer(_BaseTrainer):
         """
 
         # Derived from Eqs. (4) and (7) from https://huggingface.co/papers/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
-        policy_chosen_logps = policy_chosen_logps.float()
-        policy_rejected_logps = policy_rejected_logps.float()
+        policy_chosen_logps = policy_chosen_logps.float().clamp(max=-1e-6)  # keep away from 0 to avoid log1mexp(-inf)
+        policy_rejected_logps = policy_rejected_logps.float().clamp(max=-1e-6)
         log_odds = (policy_chosen_logps - policy_rejected_logps) - (
             log1mexp(policy_chosen_logps) - log1mexp(policy_rejected_logps)
         )
@@ -695,7 +695,8 @@ class ORPOTrainer(_BaseTrainer):
         per_token_logps = selective_log_softmax(logits, labels)
 
         if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+            denom = loss_mask.sum(-1).clamp(min=1)  # guard against all-masked rows (e.g. DeepSpeed padding)
+            return (per_token_logps * loss_mask).sum(-1) / denom
         else:
             return (per_token_logps * loss_mask).sum(-1)
 
