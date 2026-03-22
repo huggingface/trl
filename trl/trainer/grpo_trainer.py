@@ -15,6 +15,7 @@
 import asyncio
 import atexit
 import copy
+import math
 import importlib.resources as pkg_resources
 import inspect
 import os
@@ -2284,7 +2285,10 @@ class GRPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        metrics = {  # average the metrics, skipping NaN values from sparse reward functions
+            key: (lambda v: sum(v) / len(v) if v else float("nan"))([x for x in val if not math.isnan(x)])
+            for key, val in self._metrics[mode].items()
+        }
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
