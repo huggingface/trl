@@ -303,6 +303,7 @@ class VLLMGeneration:
             )
 
         if self.mode == "server":
+            self.vllm_client = None  # initialize on all ranks; only the main process will set the actual client
             if accelerator.is_main_process:
                 if self.server_base_url is not None:
                     base_url = self.server_base_url
