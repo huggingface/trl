@@ -267,6 +267,7 @@ class VLLMGeneration:
         self.max_model_length = max_model_length
         self.max_num_seqs = max_num_seqs
         self.enable_sleep_mode = enable_sleep_mode
+        self._weights_loaded = False
         self.model_impl = model_impl
 
         # Generation configuration
@@ -440,6 +441,12 @@ class VLLMGeneration:
         if self.mode == "colocate" and self.enable_sleep_mode:
             empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
+            # Work around for https://github.com/vllm-project/vllm/issues/29341
+            try:
+                self.llm.collective_rpc("reload_weights")
+            except NotImplementedError:
+                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
+                pass
 
         model = self.model
         accelerator = self.accelerator
@@ -518,6 +525,8 @@ class VLLMGeneration:
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
 
+        self._weights_loaded = True
+
     def generate(
         self,
         prompts: list[list[int]],
@@ -565,16 +574,9 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Wake up colocated vLLM weights if needed (idempotent if already awake from sync_weights)
-        if self.mode == "colocate" and self.enable_sleep_mode:
-            empty_cache()  # required to avoid OOM in some cases
-            self.llm.wake_up(tags=["weights"])
-            # Work around for https://github.com/vllm-project/vllm/issues/29341
-            try:
-                self.llm.collective_rpc("reload_weights")
-            except NotImplementedError:
-                # Non-CUDA vLLM backends (e.g., vllm-ascend's NPUWorkerV1), don't implement reload_weights
-                pass
+        # Ensure vLLM weights are loaded before generating
+        if self.mode == "colocate" and self.enable_sleep_mode and not self._weights_loaded:
+            self.sync_weights()
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -721,5 +723,6 @@ class VLLMGeneration:
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
+                self._weights_loaded = False
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids
