@@ -707,6 +707,60 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
         assert output == expected_output
 
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_reasoning_content(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "reasoning_content": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_thinking(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "thinking": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
 
 class TestSelectiveLogSoftmax(TrlTestCase):
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
