@@ -841,6 +841,44 @@ class TestGRPOTrainer(TrlTestCase):
             "The reward metric should reflect reward_weights."
         )
 
+    def test_reward_metric_reflects_reward_weights_normalize_then_sum(self):
+        """Test that the logged 'reward' metric uses reward_weights with 'normalize_then_sum' aggregation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def constant_reward_1(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        def constant_reward_0(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+            reward_weights=[0.7, 0.3],
+            multi_objective_aggregation="normalize_then_sum",
+            max_steps=1,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[constant_reward_1, constant_reward_0],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        log = trainer.state.log_history[-1]
+        # With reward_weights=[0.7, 0.3] and constant rewards [1.0, 0.0]:
+        # weighted reward = 0.7*1.0 + 0.3*0.0 = 0.7
+        assert abs(log["reward"] - 0.7) < 1e-5, (
+            f"Expected logged reward to be ~0.7 (weighted) with 'normalize_then_sum', got {log['reward']}. "
+            "The reward metric should reflect reward_weights under all aggregation modes."
+        )
+
     def test_training_multiple_mixed_reward_funcs(self):
         # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
