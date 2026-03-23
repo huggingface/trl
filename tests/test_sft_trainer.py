@@ -1699,6 +1699,25 @@ class TestSFTTrainer(TrlTestCase):
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
+    @require_vision
+    def test_train_vlm_text_only_dataset(self):
+        """
+        Regression test for #5334: VLM processor (ProcessorMixin) called with plain text returns input_ids as a
+        list-of-lists ([[1, 2, 3]]) rather than a flat list ([1, 2, 3]). The tokenize_fn must unwrap this so the
+        collator doesn't produce 3-D input_ids and, downstream, 4-D inputs_embeds that crash models using 3-D position
+        IDs (Qwen3.5 compute_3d_position_ids). Repro: SFTTrainer with a VLM model + standard_language_modeling dataset
+        and dataset_text_field="text".
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     @pytest.mark.parametrize(
         "model_id",
         [
