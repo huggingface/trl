@@ -1055,19 +1055,18 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
         shift_labels = input_ids[..., 1:].contiguous()
         shift_completion_mask = completion_mask[..., 1:].contiguous()
 
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
+        for key in (
+            "token_type_ids",
+            "mm_token_type_ids",
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
@@ -1112,7 +1111,6 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        input_ids, attention_mask, completion_mask = self._truncate_inputs(input_ids, attention_mask, completion_mask)
 
         decoder = model.get_decoder()
         outputs = decoder(input_ids, attention_mask=attention_mask, use_cache=False)
@@ -1185,16 +1183,15 @@ class DPOTrainer(_BaseTrainer):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         completion_mask = inputs["completion_mask"]
-        # token_type_ids and mm_token_type_ids are sequence-length-aligned: truncate to match input_ids
-        extra_keys = [k for k in ("token_type_ids", "mm_token_type_ids") if k in inputs]
-        input_ids, attention_mask, completion_mask, *extra = self._truncate_inputs(
-            input_ids, attention_mask, completion_mask, *[inputs[k] for k in extra_keys]
-        )
-
         model_kwargs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        for key, val in zip(extra_keys, extra, strict=False):
-            model_kwargs[key] = val
-        for key in ("pixel_values", "pixel_attention_mask", "image_grid_thw", "image_sizes"):
+        for key in (
+            "token_type_ids",
+            "mm_token_type_ids",
+            "pixel_values",
+            "pixel_attention_mask",
+            "image_grid_thw",
+            "image_sizes",
+        ):
             if key in inputs:
                 model_kwargs[key] = inputs[key]
 
