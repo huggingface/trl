@@ -290,7 +290,12 @@ def main():
             Returns:
                 The observation after moving.
             """
-            action_id = 0 if direction == "left" else 2
+            if direction == "left":
+                action_id = 0
+            elif direction == "right":
+                action_id = 2
+            else:
+                raise ValueError(f"Invalid direction {direction!r}: must be 'left' or 'right'.")
             return self._do_action(action_id)
 
         def stay(self) -> str:

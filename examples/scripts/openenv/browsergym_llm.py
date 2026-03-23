@@ -323,7 +323,7 @@ def main() -> None:
             Returns:
                 The updated page observation.
             """
-            return self._do_action(f"click('{bid}')")
+            return self._do_action(f"click({bid!r})")
 
         def fill(self, bid: str, text: str) -> str:
             """Fill an input field with text.
@@ -335,7 +335,7 @@ def main() -> None:
             Returns:
                 The updated page observation.
             """
-            return self._do_action(f"fill('{bid}', '{text}')")
+            return self._do_action(f"fill({bid!r}, {text!r})")
 
         def send_keys(self, text: str) -> str:
             """Send keyboard input to the page.
@@ -346,7 +346,7 @@ def main() -> None:
             Returns:
                 The updated page observation.
             """
-            return self._do_action(f"send_keys('{text}')")
+            return self._do_action(f"send_keys({text!r})")
 
         def scroll(self, direction: str) -> str:
             """Scroll the page.
@@ -357,7 +357,7 @@ def main() -> None:
             Returns:
                 The updated page observation.
             """
-            return self._do_action(f"scroll('{direction}')")
+            return self._do_action(f"scroll({direction!r})")
 
         def noop(self) -> str:
             """Do nothing and observe the current page state.
