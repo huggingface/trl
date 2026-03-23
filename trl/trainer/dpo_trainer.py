@@ -445,7 +445,8 @@ class DPOTrainer(_BaseTrainer):
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
-            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model.
+            [`~trainer.dpo_trainer.DataCollatorForVisionPreference`] if the model is a vision-language model. Custom
+            collators must truncate sequences before padding; the trainer does not apply post-collation truncation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
