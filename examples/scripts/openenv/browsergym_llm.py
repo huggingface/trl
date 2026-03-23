@@ -432,6 +432,7 @@ def main() -> None:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
+        chat_template_kwargs={"enable_thinking": False},
     )
 
     grpo_config.run_name = args.run_name or f"run-{timestamp}"

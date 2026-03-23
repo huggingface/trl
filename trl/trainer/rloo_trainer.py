@@ -1446,10 +1446,12 @@ class RLOOTrainer(_BaseTrainer):
         # Average the metrics
         metrics = {}
         for key, val in self._metrics[mode].items():
-            avg = sum(val) / len(val)
-            # If a reward function returns None for all samples in a batch, its metric is NaN. Convert to None
-            # for clean serialization (e.g. JSON loggers crash on float NaN).
-            metrics[key] = None if math.isnan(avg) else avg
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

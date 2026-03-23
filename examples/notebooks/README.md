@@ -17,7 +17,7 @@ This directory contains a collection of Jupyter notebooks that demonstrate how t
 
 ## OpenEnv Notebooks
 
-These notebooks demonstrate GRPO training with [OpenEnv](https://github.com/meta-pytorch/OpenEnv) environments using `environment_factory`.
+These notebooks demonstrate GRPO training with [OpenEnv](https://github.com/meta-pytorch/OpenEnv) environments using `environment_factory`. The BrowserGym notebook uses the lower-level `rollout_func` API instead.
 
 | Notebook | Description | Open in Colab |
 | --- | --- | --- |

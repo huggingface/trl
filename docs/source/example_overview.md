@@ -42,7 +42,7 @@ These notebooks are easier to run and are designed for quick experimentation wit
 
 ### OpenEnv Notebooks
 
-These notebooks demonstrate how to train models with [OpenEnv](openenv) environments using [`GRPOTrainer`]'s `environment_factory`. See the [OpenEnv Integration](openenv) guide for more details.
+These notebooks demonstrate how to train models with [OpenEnv](openenv) environments using [`GRPOTrainer`]'s `environment_factory`. The BrowserGym notebook uses the lower-level `rollout_func` API instead. See the [OpenEnv Integration](openenv) guide for more details.
 
 | Notebook | Description | Open in Colab |
 |----------|-------------|---------------|

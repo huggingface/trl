@@ -182,7 +182,7 @@ class MultiEnv:
         if self.done:
             raise ValueError("Episode is done.")
         result = self._catch_client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
-        self.reward += result.reward or 0.0
+        self.reward = result.reward or 0.0
         self.done = result.observation.done
         return _format_catch_obs(result.observation.info_state)
 
@@ -226,7 +226,8 @@ def catch_reward(environments, **kwargs) -> list[float | None]:
         if env.active != "catch":
             rewards.append(None)
         elif env.done:
-            rewards.append(max(env.reward, 0.0))  # 1.0 if caught, 0.0 if missed
+            # Catch gives +1 for catching, -1 for missing. Clamp to [0, 1] for GRPO advantage estimation.
+            rewards.append(max(env.reward, 0.0))
         else:
             rewards.append(0.0)  # Incomplete episode
     return rewards

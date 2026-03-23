@@ -195,7 +195,8 @@ def reward_from_env(environments, **kwargs):
     rewards = []
     for env in environments:
         if env.done:
-            rewards.append(max(env.reward, 0.0))  # 1.0 if caught, 0.0 if missed
+            # Catch gives +1 for catching, -1 for missing. Clamp to [0, 1] for GRPO advantage estimation.
+            rewards.append(max(env.reward, 0.0))
         else:
             rewards.append(0.0)  # Incomplete episode
     return rewards
@@ -277,7 +278,7 @@ def main():
             if self.done:
                 raise ValueError("Episode is done.")
             env_result = self.client.step(OpenSpielAction(action_id=action_id, game_name="catch"))
-            self.reward += env_result.reward or 0.0
+            self.reward = env_result.reward or 0.0
             self.done = env_result.observation.done
             return self._format_obs(env_result.observation.info_state)
 

@@ -461,7 +461,7 @@ def main() -> None:
                 The result of the move and updated board state.
             """
             if self._done:
-                return "Game is over. No more moves allowed."
+                raise ValueError("Game is over. No more moves allowed.")
 
             self._turn += 1
             move = f"[{row} {col} {number}]"
@@ -622,7 +622,7 @@ def main() -> None:
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         logging_steps=args.logging_steps,
-        save_strategy="no",
+        save_strategy="steps",
         save_steps=args.save_interval,
         save_total_limit=args.save_total_limit,
         temperature=args.temperature,
