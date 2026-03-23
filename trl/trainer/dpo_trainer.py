@@ -652,12 +652,6 @@ class DPOTrainer(_BaseTrainer):
                 max_length=args.max_length,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
-        elif data_collator is not None and args.max_length is not None:
-            raise ValueError(
-                "Cannot use `max_length` with a custom `data_collator`. `max_length` is passed to the default "
-                "collators to control truncation; with a custom collator it has no effect. Configure truncation "
-                "directly in your collator."
-            )
 
         # Training arguments
         self.beta = args.beta
